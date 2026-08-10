@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.3.4"
+PLUGIN_VERSION="0.4.2"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -74,24 +74,40 @@ log() { # $1 = action, $2 = list_mode (optional)
 # A manual /compact that already carries a focus: the user has answered the
 # question this tool exists to ask. Log the stated focus and allow.
 if [[ "$TRIGGER" == "manual" && -n "$FOCUS" ]]; then
+  rm -f "$SENTINEL" 2>/dev/null || true
   log allow_focused
   exit 0
 fi
 
-# A pause is pending for this session. Whether it has "expired" is decided
-# by age: a recent pause means the user saw the list and did not act, so this
-# attempt is the timeout firing -> allow, visibly. A stale pause (default
-# 30 min) is an abandoned sitting -> fall through and pause fresh.
+# A pause is pending for this session. The pass-through is a single-use
+# coupon, not a time window: a fresh ticket means the user saw the menu and
+# declined, so this ONE attempt proceeds with defaults and the ticket is
+# consumed -- the next attempt, whenever it comes, menus fresh. Age only
+# distinguishes declining-now from abandoned-long-ago: a stale ticket
+# (manual 2 min / auto 30 min) re-menus instead of silently spending itself.
 if [[ -e "$SENTINEL" ]]; then
   PAUSED_AT=$(cat "$SENTINEL" 2>/dev/null | tr -cd '0-9')
   NOW=$(date +%s)
   if [[ -n "$PAUSED_AT" ]] && (( NOW - PAUSED_AT < PAUSE_TTL )); then
+    rm -f "$SENTINEL" 2>/dev/null || true
     log allow_pause_expired
     jq -nc '{systemMessage:
       "compact-focus: no focus given during the pause - compacting with the default summary."}'
     exit 0
   fi
   # stale or unreadable: treat as a fresh sitting and pause again below
+fi
+
+# Manual pause: a human just typed /compact, so the menu is one command away.
+# Skip transcript parsing and the grouping call entirely; point at the
+# interactive picker. Auto pauses below keep the full thread list.
+if [[ "$TRIGGER" == "manual" ]]; then
+  date +%s >"$SENTINEL" 2>/dev/null || true
+  log paused "pointer"
+  MSG="
+⏸ Paused. Pick what to keep:  /compact-human   ·   run /compact again for the default summary"
+  jq -nc --arg msg "$MSG" '{decision:"block", reason:$msg, systemMessage:$msg}'
+  exit 0
 fi
 
 # Extract the user's own prompt turns from the transcript, raw, one per line.
@@ -166,7 +182,7 @@ MSG="
 ${THREADS}
 
 → /compact focus on <what matters, in words>
-  (plain /compact runs the default summary)"
+  /compact-human to pick interactively  ·  plain /compact = default summary"
 
 # Hook output strings are capped at 10,000 chars; stay safely under.
 MSG=${MSG:0:9000}
