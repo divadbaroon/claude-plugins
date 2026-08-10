@@ -6,61 +6,78 @@ description: Interactively choose what a conversation compaction should preserve
 The user wants to compact this conversation but choose what the summary
 preserves in detail. Context is nearly full — keep prose terse.
 
-1. From this session's actual user requests (ignore tool output and system
-   noise), identify the distinct work threads — at most 6. Give each a
-   2-4 word label. Decide the order now and use that SAME order everywhere
-   below (prose list and picker must match by position).
+INVARIANT for the whole flow: the collapsed Bash results the user expands
+with ctrl+o must only ever contain the CURRENT selection. Never print the
+full prompt list — inline or as a tool result — before categories are
+selected.
 
-2. Put the FULL numbered listing into a collapsed block, not into your
-   prose. Do this by running the Bash tool with EXACTLY this command shape:
+All script calls below use EXACTLY this command shape (stable prefix, so
+one "Yes, and don't ask again" approval covers every mode):
 
-   ~/.claude/skills/compact-focus/scripts/compact-focus-list.sh '<LISTING>'
+   ~/.claude/skills/compact-focus/scripts/compact-focus-list.sh <mode> …
 
-   where <LISTING> is the complete numbered list — every thread as
-   "N. Label" and every one of that thread's prompts on its own line
-   beneath it, prompts trimmed to their opening words + "…". Single-quote
-   the argument and escape any single quotes inside it. This script is
-   read-only and prints its argument; its long output renders as a
-   collapsed tool result the user expands with ctrl+o.
-   - The FIRST time, the user sees one approval dialog: tell them to pick
-     "Yes, and don't ask again" so it never appears again.
-   - If the user denies the approval or the script is missing, fall back
-     to printing the same numbered list as plain text in your reply.
-   In your prose, print ONLY one line: "Full thread list above (ctrl+o to
-   expand). Pick below:" — no inline listing.
+If the user denies the approval or the script is missing, fall back to
+plain text: print category labels only, and scoped prompt lists only after
+selection, following the same steps.
 
-3. Then ask which thread(s) to preserve using the AskUserQuestion tool:
+1. LOAD CATEGORIES. Run the script with no arguments. It prints the labels
+   and counts of the thread file the PreCompact pause saved
+   (threads.json: {"threads":{"1":{"label":"…","prompts":["…",…]},…}}).
+   - If it shows 2+ categories, reuse them as-is — their numbers match the
+     pause notice the user already saw.
+   - If it shows nothing, or a single fallback category ("Recent prompts"),
+     group this session's actual user requests yourself (ignore tool output
+     and system noise) into 2-6 categories with 2-4 word labels, every
+     relevant prompt in exactly one category, prompts verbatim and
+     single-line. Store them by running:
+       …/compact-focus-list.sh save '<JSON>'
+     with the JSON in the shape above, single-quoted, any single quotes
+     inside replaced with the typographic ’. The script validates, saves,
+     and echoes the labels back.
+
+2. PICK CATEGORIES with the AskUserQuestion tool:
    - Question string, exactly: "Keep which threads? (type a number to
-     preview one · ctrl+o shows all)"
-   - One option PER THREAD, in the SAME ORDER as the numbered list, at most
-     4 (AskUserQuestion caps options). If there are more than 4 threads,
-     offer the first 4; the numbered list above already shows all of them
-     and the user can pick the "Something else" affordance for the rest.
-   - Option label = the thread's exact label from the list.
+     preview one · none = default summary)"
+   - multiSelect: true. One option PER CATEGORY, in numeric order, at most
+     4 (AskUserQuestion caps options). If there are more than 4, offer the
+     first 4 and say the rest are pickable by number via "Something else".
+   - Option label = the category's exact label.
    - Option description: REQUIRED and non-empty (an empty description makes
-     the tool call fail). Target ~60 characters of real information. The
-     visible width depends on the user's terminal — it may clip anywhere —
-     so FRONT-LOAD: put the most informative words first and let detail
-     trail, so a clip amputates the tail, never the meaning. Good:
-     "Consent gate, email + probe automation still open". Bad: "The
-     outstanding items regarding the consent gate" (meaning arrives last).
-     Not "Thread N", not filler.
-   - Multi-select is fine.
-   If the tool is unavailable, ask in plain text by number instead. The user
-   may ask to see any thread's prompts in full before choosing.
+     the tool call fail). Target ~60 characters of real information.
+     Terminal width may clip anywhere, so FRONT-LOAD: most informative
+     words first. Good: "Consent gate, email + probe automation still
+     open". Bad: "The outstanding items regarding the consent gate".
+   - PREVIEW LOOP: if the answer is just a category number (e.g. "2" or
+     "2?"), do NOT compact. Run `show 2` (that one category, collapsed;
+     ctrl+o expands it), then re-ask the SAME question. Repeat as needed.
 
-4. PREVIEW LOOP: if the user's answer is just a thread number (e.g. "2"
-   or "2?"), do NOT compact. Print only that thread's prompts inline —
-   its label, then every prompt verbatim, one per line — then show the
-   SAME picker again. Repeat for as many previews as they want. Only a
-   real selection or typed focus ends the loop.
+3. NOTHING SELECTED ("Default summary", empty pick, or "none"): do NOT run
+   the show command — there is nothing for ctrl+o to open. Output `/compact`
+   on its own line for the user to run. Done.
 
-5. On selection:
-   - "Default summary" / none: output `/compact` on its own line for the
-     user to run.
-   - Otherwise: compose a one-line focus instruction naming the chosen
-     thread(s) in the user's own words, then run `/compact focus on <that
-     instruction>` via the SlashCommand tool. If SlashCommand cannot run
-     /compact, output that exact command on its own line for the user to run.
+4. RENDER THE SELECTION. For selected categories, e.g. 1 and 3, run:
+       …/compact-focus-list.sh show 1,3
+   This collapsed result IS the review doc: every prompt of the selected
+   categories, globally numbered [1]…[N]. In prose print ONLY: "Your
+   selection is above (ctrl+o to expand) — N prompts, all kept by default."
+
+5. PER-PROMPT DESELECT with AskUserQuestion:
+   - Question: "Keep all N prompts from <labels>?"
+   - Options, exactly 3: "Keep all (Recommended)" — proceed with
+     everything shown; "Drop some" — description: "Type the [numbers] to
+     drop in Other, e.g. drop 2 5"; "None — default summary".
+   - On "Drop some" / typed numbers: re-run
+       …/compact-focus-list.sh show 1,3 drop 2,5
+     (same keys, same order — numbering stays stable). The new collapsed
+     result shows what remains; re-ask this question with updated N until
+     "Keep all" or a typed confirmation. Drops accumulate: pass ALL dropped
+     numbers each time.
+   - On "None": treat as step 3.
+
+6. COMPACT. Compose a one-line focus instruction naming the kept
+   category(ies) in the user's own words; if prompts were dropped, add
+   "; omit <what the dropped prompts covered>". Run `/compact focus on
+   <that instruction>` via the SlashCommand tool; if SlashCommand cannot
+   run /compact, output that exact command on its own line for the user.
 
 Do not re-summarize the conversation yourself — the compaction will do that.

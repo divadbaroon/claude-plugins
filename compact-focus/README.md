@@ -9,6 +9,26 @@ Validated with `claude plugin validate` on Claude Code 2.1.226.
 Requires `jq` (`brew install jq`) — without it the plugin warns once and
 disables itself; compaction is never affected.
 
+## v0.6: selection-scoped ctrl+o
+
+The grouping model now outputs JSON — categories keyed `"1"…"6"`, each
+holding ALL of its member prompts — stored as `threads.json` in the state
+dir. `compact-focus-list.sh` renders from that file instead of echoing a
+preformatted blob, so the collapsed Bash result ctrl+o expands always
+matches the current selection:
+
+- before any selection: labels + counts only, never the full prompt list
+- no categories selected: nothing is rendered at all (plain `/compact`)
+- categories selected: `show 1,3` prints every prompt of just those
+  categories, globally numbered `[1]…[N]`
+- per-prompt deselect: `show 1,3 drop 2,5` re-renders what remains
+  (numbering stays stable across drops); defaults are keep-all or none
+
+Interfaces considered and rejected: one AskUserQuestion option per prompt
+(4-option cap, labels can't hold prompt text) and one-shot exclusion
+without re-render (the expanded doc would show the pre-drop set, breaking
+the "ctrl+o = current selection" invariant).
+
 ## v0.2: grouped thread view
 
 At pause time the hook now asks a fast Claude model (one `claude -p

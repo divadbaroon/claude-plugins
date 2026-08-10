@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# compact-focus.sh — PreCompact hook (plugin, v0.2.0)
+# compact-focus.sh — PreCompact hook (plugin, v0.6.0)
 #
 # Pauses one compaction per session and shows the user their recent prompts —
 # grouped into labeled threads by a fast Claude model when possible, verbatim
@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.5.1"
+PLUGIN_VERSION="0.6.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -139,20 +139,50 @@ run_with_timeout() {
 }
 
 # Grouping: ask a fast Claude model to cluster the prompts into labeled
-# threads, individual verbatim prompts nested under each. --safe-mode skips
-# customizations in the child (including this plugin), keeping it fast.
+# threads. The model outputs JSON (categories -> ALL member prompts), which
+# is stored as threads.json for the selection-scoped renderer
+# (compact-focus-list.sh show <keys>); the block notice shows only labels +
+# the first 3 prompts per thread. --safe-mode skips customizations in the
+# child (including this plugin), keeping it fast.
 LIST_MODE="verbatim"
+THREADS_JSON=""
 if [[ -n "$RAW" && -z "${COMPACT_FOCUS_NO_GROUPING:-}" ]] && command -v claude >/dev/null 2>&1; then
   GROUP_MODEL="${COMPACT_FOCUS_GROUP_MODEL:-haiku}"
   GROUPED=$(printf '%s\n' "$RAW" | run_with_timeout 10 \
     claude -p --safe-mode --model "$GROUP_MODEL" \
-    "Below are recent user prompts from one coding session, one per line, oldest first. Group them into 2-6 topical threads. Output format, exactly: for each thread, one line with a short thread label followed by ' (N prompts)'; then up to 3 of that thread's prompts, each on its own line prefixed with '  - ', copied verbatim from the input; if the thread has more than 3 prompts, add a final line '  … (+K more)'. Output only this list: no preamble, no markdown fences, no commentary. Never invent, merge, or edit prompts." \
+    "Below are recent user prompts from one coding session, one per line, oldest first. Group them into 2-6 topical threads. Output ONLY a JSON object, no markdown fences, no commentary, of exactly this shape: {\"threads\":[{\"label\":\"<2-4 word thread label>\",\"prompts\":[\"<prompt>\",...]}]}. Every input line must appear in exactly one thread's prompts array, copied verbatim. Never invent, merge, or edit prompts." \
     2>/dev/null | sed '/^```/d') || GROUPED=""
-  if [[ -n "$GROUPED" ]] && printf '%s\n' "$GROUPED" | grep -q '^  - '; then
-    THREADS=$(printf '%s\n' "$GROUPED" | awk 'NR>1 && /^[^ -]/ {print ""} {print}')
-    LIST_MODE="grouped"
+  if [[ -n "$GROUPED" ]] && jq -e '
+      .threads | type == "array" and length >= 1
+      and all(.[]; (.label | type == "string" and length > 0)
+               and (.prompts | type == "array" and length >= 1
+                    and all(.[]; type == "string")))' <<<"$GROUPED" >/dev/null 2>&1; then
+    THREADS_JSON=$(jq -c '{threads: (.threads[:6] | to_entries
+      | map({key: ((.key + 1) | tostring),
+             value: {label: .value.label,
+                     prompts: (.value.prompts | map(gsub("\\s+"; " ")))}})
+      | from_entries)}' <<<"$GROUPED" 2>/dev/null) || THREADS_JSON=""
+  fi
+  if [[ -n "$THREADS_JSON" ]]; then
+    THREADS=$(jq -r '.threads | to_entries | sort_by(.key | tonumber)[]
+      | "\(.key). \(.value.label) (\(.value.prompts | length) prompt\(if (.value.prompts | length) == 1 then "" else "s" end))",
+        (.value.prompts[:3][] | "  - \(.)"),
+        (if (.value.prompts | length) > 3
+         then "  … (+\((.value.prompts | length) - 3) more)" else empty end),
+        ""' <<<"$THREADS_JSON" 2>/dev/null) && LIST_MODE="grouped" || THREADS_JSON=""
   fi
 fi
+
+# Whatever happened above, leave a threads.json behind: grouped when the
+# model delivered, a single "Recent prompts" category otherwise. The
+# compact-human skill reads it (regrouping only the fallback shape), so the
+# picker numbering always matches this notice.
+if [[ -z "$THREADS_JSON" && -n "$RAW" ]]; then
+  THREADS_JSON=$(printf '%s\n' "$RAW" | jq -Rsc \
+    '{threads: {"1": {label: "Recent prompts",
+                      prompts: (split("\n") | map(select(length > 0)))}}}' 2>/dev/null) || THREADS_JSON=""
+fi
+[[ -n "$THREADS_JSON" ]] && printf '%s\n' "$THREADS_JSON" >"$STATE_DIR/threads.json" 2>/dev/null
 
 [[ -z "$THREADS" ]] && THREADS="- (could not read this session's prompts)"
 
