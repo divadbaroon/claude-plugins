@@ -30,8 +30,8 @@ preserves in detail. Context is nearly full — keep prose terse.
    expand). Pick below:" — no inline listing.
 
 3. Then ask which thread(s) to preserve using the AskUserQuestion tool:
-   - Question string, exactly: "Keep which threads? (type a number to
-     preview one · ctrl+o shows all)"
+   - Question string, exactly: "Keep which threads? (ctrl+o to show
+     prompts for each thread)"
    - One option PER THREAD, in the SAME ORDER as the numbered list, at most
      4 (AskUserQuestion caps options). If there are more than 4 threads,
      offer the first 4; the numbered list above already shows all of them
@@ -49,13 +49,7 @@ preserves in detail. Context is nearly full — keep prose terse.
    If the tool is unavailable, ask in plain text by number instead. The user
    may ask to see any thread's prompts in full before choosing.
 
-4. PREVIEW LOOP: if the user's answer is just a thread number (e.g. "2"
-   or "2?"), do NOT compact. Print only that thread's prompts inline —
-   its label, then every prompt verbatim, one per line — then show the
-   SAME picker again. Repeat for as many previews as they want. Only a
-   real selection or typed focus ends the loop.
-
-5. On selection:
+4. On selection:
    - "Default summary" / none: output `/compact` on its own line for the
      user to run.
    - Otherwise: compose a one-line focus instruction naming the chosen
