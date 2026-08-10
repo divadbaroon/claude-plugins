@@ -20,13 +20,17 @@ preserves in detail. Context is nearly full — keep prose terse.
    Work threads from this session:
 
    1. <Label>
-      - "<opening words of first prompt in this thread…>"
-      - "<opening words of second prompt…>"
+   - "<opening words of first prompt in this thread…>"
+   - "<opening words of second prompt…>"
 
    2. <Label>
-      - "<…>"
+   - "<…>"
 
-   Put a blank line between every numbered thread (before each "N."). List
+   CRITICAL rendering rule: the dash lines start at the LEFT MARGIN — do
+   NOT indent them under the number. Indenting nests them into one tight
+   markdown list and the terminal swallows the blank lines. Flush-left
+   dashes + a blank line before each "N." is what renders with visible
+   spacing between threads. List
    all of a thread's prompts, not just one. Keep each quoted prompt to
    its opening words + "…". Never reproduce pasted artifacts (code, logs,
    configs) — name them instead. Numbering starts at 1 and matches the
