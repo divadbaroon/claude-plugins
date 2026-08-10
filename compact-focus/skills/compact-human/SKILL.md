@@ -19,11 +19,19 @@ preserves in detail. Context is nearly full — keep every step terse.
    thread's user prompts indented beneath it, each on its own line. Keep
    each prompt to its opening words + "…" if long. This inline list is the
    full picture; there is no separate expandable view.
-3. Then ask which thread(s) to preserve using the AskUserQuestion tool:
-   option label = the thread label, option description = a short fragment;
-   plus a "Default summary (no focus)" option. If the tool is unavailable,
-   ask in plain text. The user may ask to see any thread's prompts in full
-   before choosing.
+3. Then ask which thread(s) to preserve using the AskUserQuestion tool.
+   The tool truncates aggressively — respect these hard limits or text is
+   silently cut off:
+   - Question string: short, fits one line (e.g. "Keep which threads?").
+     Do not restate "which thread(s) should the compaction preserve".
+   - At most 4 options. If step 2 found more than 4 threads, offer the 4
+     most substantial; the plain-text list above already showed them all,
+     and the user can pick "Something else" to name others in words.
+   - Option label: 2-4 words. Option description: 8 words MAX, no trailing
+     clause that needs finishing — a fragment that reads complete when cut.
+   - Multi-select is fine (several threads can be kept).
+   If the tool is unavailable, ask in plain text instead. The user may ask
+   to see any thread's prompts in full before choosing.
 4. On selection:
    - "Default summary": output `/compact` on its own line and tell the user
      to run it.
