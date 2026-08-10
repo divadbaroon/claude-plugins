@@ -1,0 +1,11 @@
+{
+  "name": "papert-tools",
+  "owner": { "name": "David Baroon" },
+  "plugins": [
+    {
+      "name": "compact-focus",
+      "source": "./compact-focus",
+      "description": "Pause one compaction per session and steer the summary with your own focus instead of the default guess."
+    }
+  ]
+}

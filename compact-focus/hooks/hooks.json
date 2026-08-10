@@ -1,0 +1,31 @@
+{
+  "description": "Pause one compaction per session to collect a focus from the user; log stated focus and resulting summaries for review",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/compact-focus.sh",
+            "args": [],
+            "timeout": 20,
+            "statusMessage": "compact-focus: checking whether to pause\u2026"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/compact-focus-log.sh",
+            "args": [],
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
