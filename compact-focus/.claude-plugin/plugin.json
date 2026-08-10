@@ -1,7 +1,7 @@
 {
   "name": "compact-focus",
   "displayName": "Compact Focus",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Pauses one compaction per session and shows your recent prompts, so you can steer the summary with /compact focus on <what matters> instead of letting the default summarizer guess.",
   "author": {
     "name": "David Baroon"
