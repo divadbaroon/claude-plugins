@@ -19,18 +19,17 @@ preserves in detail. Context is nearly full — keep prose terse.
 
    Work threads from this session:
 
-   1. <Label>
+   **1. <Label>**
    - "<opening words of first prompt in this thread…>"
    - "<opening words of second prompt…>"
 
-   2. <Label>
+   **2. <Label>**
    - "<…>"
 
-   CRITICAL rendering rule: the dash lines start at the LEFT MARGIN — do
-   NOT indent them under the number. Indenting nests them into one tight
-   markdown list and the terminal swallows the blank lines. Flush-left
-   dashes + a blank line before each "N." is what renders with visible
-   spacing between threads. List
+   CRITICAL rendering rules: each numbered label is BOLD (**N. Label**) —
+   bold makes it a paragraph instead of a list item, which is what forces
+   visible spacing between threads in the terminal. Dash lines start at the
+   LEFT MARGIN, not indented. Blank line before every bold label. List
    all of a thread's prompts, not just one. Keep each quoted prompt to
    its opening words + "…". Never reproduce pasted artifacts (code, logs,
    configs) — name them instead. Numbering starts at 1 and matches the
@@ -44,10 +43,10 @@ preserves in detail. Context is nearly full — keep prose terse.
      and the user can pick the "Something else" affordance for the rest.
    - Option label = the thread's exact label from the list.
    - Option description: REQUIRED and non-empty (an empty description makes
-     the tool call fail). Keep it to about 5 words — a concise, self-
-     contained summary of the thread that reads complete even if the UI
-     clips it. Not "Thread N", not filler; a real mini-summary. Example
-     label "Probe scheduling" -> description "Day 6-8 booking reminder".
+     the tool call fail). HARD LIMIT 25 CHARACTERS — the UI clips at ~28,
+     so count characters, not words, and make it read complete: "Consent +
+     open items", "Invite-token accounts", "Day 6-8 booking". Not "Thread
+     N", not filler, no sentence that needs finishing.
    - Multi-select is fine.
    If the tool is unavailable, ask in plain text by number instead. The user
    may ask to see any thread's prompts in full before choosing.
