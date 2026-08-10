@@ -11,47 +11,51 @@ preserves in detail. Context is nearly full — keep prose terse.
    2-4 word label. Decide the order now and use that SAME order everywhere
    below (prose list and picker must match by position).
 
-2. Print the threads as a plain NUMBERED list in your reply — do NOT use the
-   Bash tool or any other tool for this (a tool call triggers a permission
-   prompt; plain text does not). Format, exactly — a blank line between
-   threads, and EVERY one of that thread's user prompts listed vertically
-   beneath it, one per line:
+2. Put the FULL numbered listing into a collapsed block, not into your
+   prose. Do this by running the Bash tool with EXACTLY this command shape:
 
-   Work threads from this session:
+   ~/.claude/skills/compact-focus/scripts/compact-focus-list.sh '<LISTING>'
 
-   **1. <Label>**
-   - "<opening words of first prompt in this thread…>"
-   - "<opening words of second prompt…>"
-
-   **2. <Label>**
-   - "<…>"
-
-   CRITICAL rendering rules: each numbered label is BOLD (**N. Label**) —
-   bold makes it a paragraph instead of a list item, which is what forces
-   visible spacing between threads in the terminal. Dash lines start at the
-   LEFT MARGIN, not indented. Blank line before every bold label. List
-   all of a thread's prompts, not just one. Keep each quoted prompt to
-   its opening words + "…". Never reproduce pasted artifacts (code, logs,
-   configs) — name them instead. Numbering starts at 1 and matches the
-   picker order below.
+   where <LISTING> is the complete numbered list — every thread as
+   "N. Label" and every one of that thread's prompts on its own line
+   beneath it, prompts trimmed to their opening words + "…". Single-quote
+   the argument and escape any single quotes inside it. This script is
+   read-only and prints its argument; its long output renders as a
+   collapsed tool result the user expands with ctrl+o.
+   - The FIRST time, the user sees one approval dialog: tell them to pick
+     "Yes, and don't ask again" so it never appears again.
+   - If the user denies the approval or the script is missing, fall back
+     to printing the same numbered list as plain text in your reply.
+   In your prose, print ONLY one line: "Full thread list above (ctrl+o to
+   expand). Pick below:" — no inline listing.
 
 3. Then ask which thread(s) to preserve using the AskUserQuestion tool:
-   - Question string: short, one line — "Keep which threads?"
+   - Question string, exactly: "Keep which threads? (type a number to
+     preview one · ctrl+o shows all)"
    - One option PER THREAD, in the SAME ORDER as the numbered list, at most
      4 (AskUserQuestion caps options). If there are more than 4 threads,
      offer the first 4; the numbered list above already shows all of them
      and the user can pick the "Something else" affordance for the rest.
    - Option label = the thread's exact label from the list.
    - Option description: REQUIRED and non-empty (an empty description makes
-     the tool call fail). HARD LIMIT 25 CHARACTERS — the UI clips at ~28,
-     so count characters, not words, and make it read complete: "Consent +
-     open items", "Invite-token accounts", "Day 6-8 booking". Not "Thread
-     N", not filler, no sentence that needs finishing.
+     the tool call fail). Target ~60 characters of real information. The
+     visible width depends on the user's terminal — it may clip anywhere —
+     so FRONT-LOAD: put the most informative words first and let detail
+     trail, so a clip amputates the tail, never the meaning. Good:
+     "Consent gate, email + probe automation still open". Bad: "The
+     outstanding items regarding the consent gate" (meaning arrives last).
+     Not "Thread N", not filler.
    - Multi-select is fine.
    If the tool is unavailable, ask in plain text by number instead. The user
    may ask to see any thread's prompts in full before choosing.
 
-4. On selection:
+4. PREVIEW LOOP: if the user's answer is just a thread number (e.g. "2"
+   or "2?"), do NOT compact. Print only that thread's prompts inline —
+   its label, then every prompt verbatim, one per line — then show the
+   SAME picker again. Repeat for as many previews as they want. Only a
+   real selection or typed focus ends the loop.
+
+5. On selection:
    - "Default summary" / none: output `/compact` on its own line for the
      user to run.
    - Otherwise: compose a one-line focus instruction naming the chosen

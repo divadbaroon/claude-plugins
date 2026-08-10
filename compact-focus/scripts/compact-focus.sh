@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.4.9"
+PLUGIN_VERSION="0.5.1"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -98,18 +98,6 @@ if [[ -e "$SENTINEL" ]]; then
   # stale or unreadable: treat as a fresh sitting and pause again below
 fi
 
-# Manual pause: a human just typed /compact, so the menu is one command away.
-# Skip transcript parsing and the grouping call entirely; point at the
-# interactive picker. Auto pauses below keep the full thread list.
-if [[ "$TRIGGER" == "manual" ]]; then
-  date +%s >"$SENTINEL" 2>/dev/null || true
-  log paused "pointer"
-  MSG="
-⏸ Paused. Pick what to keep:  /compact-human   ·   run /compact again for the default summary"
-  jq -nc --arg msg "$MSG" '{decision:"block", reason:$msg, systemMessage:$msg}'
-  exit 0
-fi
-
 # Extract the user's own prompt turns from the transcript, raw, one per line.
 # Tool results, command wrappers, meta lines, and prior compact summaries all
 # arrive as "user"-typed entries and are filtered out.
@@ -131,7 +119,7 @@ if [[ -n "$TRANSCRIPT" && -r "$TRANSCRIPT" ]]; then
     | map(select(startswith("<") | not))
     | map(select(startswith("/") | not))
     | .[-25:]
-    | map(if length > 100 then .[0:100] + "…" else . end)
+    | map(if length > 160 then .[0:160] + "…" else . end)
     | join("\n")
   ' "$TRANSCRIPT" 2>/dev/null) || RAW=""
 fi
@@ -158,9 +146,8 @@ if [[ -n "$RAW" && -z "${COMPACT_FOCUS_NO_GROUPING:-}" ]] && command -v claude >
   GROUP_MODEL="${COMPACT_FOCUS_GROUP_MODEL:-haiku}"
   GROUPED=$(printf '%s\n' "$RAW" | run_with_timeout 10 \
     claude -p --safe-mode --model "$GROUP_MODEL" \
-    "Below are recent user prompts from one coding session, one per line, oldest first. Group them into 2-5 topical threads. Output format, exactly: for each thread, one line with a short thread label followed by ' (N prompts)'; then up to 3 of that thread's prompts, each on its own line prefixed with '  - ', copied verbatim from the input; if the thread has more than 3 prompts, add a final line '  … (+K more)'. Output only this list: no preamble, no markdown fences, no commentary. Never invent, merge, or edit prompts." \
+    "Below are recent user prompts from one coding session, one per line, oldest first. Group them into 2-6 topical threads. Output format, exactly: for each thread, one line with a short thread label followed by ' (N prompts)'; then up to 3 of that thread's prompts, each on its own line prefixed with '  - ', copied verbatim from the input; if the thread has more than 3 prompts, add a final line '  … (+K more)'. Output only this list: no preamble, no markdown fences, no commentary. Never invent, merge, or edit prompts." \
     2>/dev/null | sed '/^```/d') || GROUPED=""
-  # Accept only output with our nested shape; anything else keeps the fallback.
   if [[ -n "$GROUPED" ]] && printf '%s\n' "$GROUPED" | grep -q '^  - '; then
     THREADS=$(printf '%s\n' "$GROUPED" | awk 'NR>1 && /^[^ -]/ {print ""} {print}')
     LIST_MODE="grouped"
@@ -182,7 +169,7 @@ MSG="
 ${THREADS}
 
 → /compact focus on <what matters, in words>
-  /compact-human to pick interactively  ·  plain /compact = default summary"
+  /compact-focus:compact-human to pick interactively · plain /compact = default summary"
 
 # Hook output strings are capped at 10,000 chars; stay safely under.
 MSG=${MSG:0:9000}
