@@ -26,7 +26,8 @@ preserves in detail. Context is nearly full — keep prose terse.
    2. <Label>
       - "<…>"
 
-   List all of a thread's prompts, not just one. Keep each quoted prompt to
+   Put a blank line between every numbered thread (before each "N."). List
+   all of a thread's prompts, not just one. Keep each quoted prompt to
    its opening words + "…". Never reproduce pasted artifacts (code, logs,
    configs) — name them instead. Numbering starts at 1 and matches the
    picker order below.
@@ -38,9 +39,11 @@ preserves in detail. Context is nearly full — keep prose terse.
      offer the first 4; the numbered list above already shows all of them
      and the user can pick the "Something else" affordance for the rest.
    - Option label = the thread's exact label from the list.
-   - Leave the option description EMPTY. Do not put "Thread N", a number, or
-     any filler in the description field — omit it entirely. The numbered
-     list above carries all the detail.
+   - Option description: REQUIRED and non-empty (an empty description makes
+     the tool call fail). Keep it to about 5 words — a concise, self-
+     contained summary of the thread that reads complete even if the UI
+     clips it. Not "Thread N", not filler; a real mini-summary. Example
+     label "Probe scheduling" -> description "Day 6-8 booking reminder".
    - Multi-select is fine.
    If the tool is unavailable, ask in plain text by number instead. The user
    may ask to see any thread's prompts in full before choosing.
