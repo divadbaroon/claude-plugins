@@ -13,17 +13,17 @@ preserves in detail. Context is nearly full — keep every step terse.
    pasted artifacts (code, logs, configs, documents) — name them instead,
    e.g. "the settings.json you pasted". Long prompts get their opening
    words + "…", never the full text.
-2. Emit the COMPLETE listing as a Bash tool call — `bash -c 'cat <<"EOF" …'`
-   printing every thread label and, under each, every one of that thread's
-   user prompts verbatim, one per line. Long output folds automatically in
-   the terminal; tell the user it's expandable (ctrl+o) if they want the
-   full list. The quote budget above applies to your prose only — this
-   block is where the unabridged prompts live.
-3. Ask which thread(s) to preserve using the AskUserQuestion tool: option
-   label = the thread label, option description = the one short fragment;
-   plus a "Default summary (no focus)" option. Mention the user can ask to
-   see more of any thread before choosing — that is the expand affordance.
-   If the tool is unavailable, ask in plain text.
+2. Print the threads as a plain text list in your reply — do NOT use the
+   Bash tool or any other tool for this (a tool call triggers a permission
+   prompt; plain text does not). One line per thread: the label, then that
+   thread's user prompts indented beneath it, each on its own line. Keep
+   each prompt to its opening words + "…" if long. This inline list is the
+   full picture; there is no separate expandable view.
+3. Then ask which thread(s) to preserve using the AskUserQuestion tool:
+   option label = the thread label, option description = a short fragment;
+   plus a "Default summary (no focus)" option. If the tool is unavailable,
+   ask in plain text. The user may ask to see any thread's prompts in full
+   before choosing.
 4. On selection:
    - "Default summary": output `/compact` on its own line and tell the user
      to run it.
