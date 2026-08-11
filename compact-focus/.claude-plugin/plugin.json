@@ -1,7 +1,7 @@
 {
   "name": "compact-focus",
   "displayName": "Compact Focus",
-  "version": "0.22.1",
+  "version": "0.22.2",
   "description": "Review source-grounded clusters, then confirm or chat-refine the exact draft before one bare /compact continues.",
   "author": {
     "name": "Hudson Mitchell-Pullman"

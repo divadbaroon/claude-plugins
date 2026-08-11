@@ -215,7 +215,7 @@ class TuiSetupTests(unittest.TestCase):
         self.assertNotIn("TOOL RESULT DELETE", rendered)
         self.assertIn("1 reviewable unit", rendered)
         self.assertEqual("submit", targets[-1].kind)
-        self.assertIn("SUBMIT REFINED CLUSTERS FOR COMPACTION", rendered)
+        self.assertIn("GENERATE COMPACTION SUMMARY", rendered)
         self.assertIn("Nothing reaches compaction until the submit row", rendered)
 
     def test_enter_on_cluster_only_expands_and_does_not_approve(self):
@@ -269,10 +269,17 @@ class TuiSetupTests(unittest.TestCase):
         }
         review = new_review(proposal)
         screen = FakeScreen([curses.KEY_DOWN, 10, 10])
-        with patch("compact_focus.tui.curses.has_colors", return_value=False):
+        with (
+            patch("compact_focus.tui.curses.has_colors", return_value=False),
+            patch(
+                "compact_focus.tui.run_summary_worker",
+                return_value={"draft": "# Generated summary\n\nKeep the active cluster."},
+            ),
+        ):
             approved = ReviewUI(screen, {"episodes": []}, proposal, review).run()
         self.assertTrue(approved)
-        self.assertIn("Active cluster", review["approved_summary"])
+        self.assertIn("Generated summary", review["approved_summary"])
+        self.assertEqual("model", review["draft_review"]["generated_by"])
         self.assertTrue(review["draft_review"]["approved"])
 
 

@@ -11,11 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 os.sys.path.insert(0, str(ROOT / "compact-focus"))
 
 from compact_focus.draft import (  # noqa: E402
+    apply_generated_summary,
     apply_revision,
     approve_draft,
     build_draft,
+    build_summary_prompt,
     ensure_draft,
     run_revision_worker,
+    run_summary_worker,
 )
 from compact_focus.finalize import finalize_cycle  # noqa: E402
 from compact_focus.review import (  # noqa: E402
@@ -81,6 +84,56 @@ def fixture(platform="claude"):
 
 
 class DraftTests(unittest.TestCase):
+    def test_generated_summary_replaces_long_fallback_without_changing_contract(self):
+        trace, proposal = fixture()
+        review = new_review(proposal)
+        state = ensure_draft(trace, review)
+        fallback = state["draft"]
+
+        generated = apply_generated_summary(
+            review,
+            {"draft": "# Current objective\n\nPreserve the latency distinction and measure tail latency."},
+        )
+
+        self.assertLess(len(generated), len(fallback))
+        self.assertEqual("model", review["draft_review"]["generated_by"])
+        self.assertEqual("preserve", review["items"][0]["retention"])
+        self.assertEqual([], review["draft_review"]["messages"])
+
+    def test_summary_prompt_requests_dense_handoff_without_raw_ledger(self):
+        trace, proposal = fixture()
+        review = new_review(proposal)
+        prompt = build_summary_prompt(trace, review)
+
+        self.assertIn("300-900 words", prompt)
+        self.assertIn("Latency is the target", prompt)
+        self.assertIn("The latency distinction must survive", prompt)
+        self.assertNotIn("An obsolete diagnostic output", prompt)
+
+    def test_claude_summary_worker_is_bounded_and_schema_driven(self):
+        trace, proposal = fixture()
+        review = new_review(proposal)
+        captured = {}
+
+        def runner(command, **kwargs):
+            captured["command"] = command
+            captured["prompt"] = kwargs["input"]
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps({"structured_output": {"draft": "# Concise handoff"}}),
+                "",
+            )
+
+        with patch("compact_focus.draft.shutil.which", return_value="/usr/local/bin/claude"):
+            result = run_summary_worker(trace, review, runner=runner)
+
+        self.assertEqual({"draft": "# Concise handoff"}, result)
+        self.assertIn("--safe-mode", captured["command"])
+        self.assertIn("--no-session-persistence", captured["command"])
+        self.assertIn("--json-schema", captured["command"])
+        self.assertIn("Write the carry-forward context summary", captured["prompt"])
+
     def test_source_override_is_visible_and_recovered_independently(self):
         trace, proposal = fixture()
         review = new_review(proposal)

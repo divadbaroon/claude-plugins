@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.2 — 2026-08-11
+
+- Generate a concise, source-grounded carry-forward summary after Submit
+  instead of initially exposing the long deterministic ledger document.
+- Show an elapsed-time generation screen, then present the summary for Enter
+  confirmation, direct editing, or repeated conversational refinement.
+- Keep the deterministic document as a safe fallback when the bounded host
+  model is unavailable, without changing recovery or approval invariants.
+
 ## 0.22.1 — 2026-08-11
 
 - Show only user prompts and subagent records as reviewable source rows. Tool

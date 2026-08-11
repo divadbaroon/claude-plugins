@@ -4,12 +4,13 @@ Compact Focus turns the native `/compact` in Claude Code and Codex into a
 human-reviewed transaction. One command opens a focused editor in a companion
 terminal before compaction: inspect source-grounded clusters, label a cluster
 or one source unit, stage clarifications, and explicitly submit. Compact Focus
-then shows the exact carry-forward draft. Confirm it immediately, edit it
-directly, or chat with a bounded model through repeated revisions. Only the
+then asks a bounded model to turn the reviewed contract into a concise
+carry-forward summary. Confirm it immediately, edit it directly, or chat with
+the model through repeated revisions. Only the
 second confirmation returns control to the pending `/compact`; there is no
 generated command to copy or second `/compact` to run.
 
-Version 0.22.1 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
+Version 0.22.2 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
 macOS. On Linux it uses tmux or a detected terminal emulator. Native Windows is
 not yet supported.
 
@@ -20,9 +21,9 @@ normal turns ── optional bounded background proposal ──┐
                                                        v
 one bare /compact ── companion terminal ── cluster/source review
                                                        |
-                                         explicit Submit freezes a draft
+                                         explicit Submit generates a summary
                                                        |
-                          b revises clusters <── exact draft ──> c chat / e edit
+                    b revises clusters <── concise summary ──> c chat / e edit
                                                        |
                          q blocks <── human decision ──> Enter confirms + returns
                                                        |
@@ -131,7 +132,8 @@ Installation is user-scoped by default, so one install applies to new local
 sessions across projects. For a meaningful test, use a conversation containing
 several decisions, a reversed assumption, and an unresolved question. Run the
 ordinary `/compact`, edit any misconstrual in the companion ledger, and approve
-from the Submit row. On the draft screen, press Enter to confirm, `c` to chat
+from the Submit row. A bounded model generates the concise summary shown on the
+next screen; press Enter to confirm, `c` to chat
 through a revision, `e` to edit it directly, or `b` to return to the clusters.
 The original chat waits at its hook status and continues automatically only
 after the draft confirmation.
@@ -193,8 +195,8 @@ default. `DELETE` removes evidence from carried context but never erases local
 recovery.
 
 No navigation key approves compaction. Enter expands a selected cluster. Only
-Enter on the final Submit row opens the exact draft, and only Enter on that
-second screen confirms it. Draft chat applies validated structured changes back
+Enter on the final Submit row generates and opens a concise carry-forward
+summary, and only Enter on that second screen confirms it. Draft chat applies validated structured changes back
 to cluster/source state as well as revising the summary; direct editing remains
 available when a model is unavailable or unwanted.
 
@@ -213,7 +215,7 @@ available when a model is unavailable or unwanted.
 | `$` | Show estimated context cost for every prompt or continuation |
 | `v` | Inspect rival problem representations |
 | `/`, `u`, `?` | Search, undo, or show help |
-| `Enter` on Submit | Open the exact carry-forward draft |
+| `Enter` on Submit | Generate and open the concise carry-forward summary |
 | Draft: `c`, `e`, `b`, `Enter` | Chat/refine, edit directly, return to clusters, or confirm |
 | `q` | Cancel compaction |
 
@@ -284,8 +286,9 @@ read-only directory, receives a strict JSON schema, and defaults to
 `gpt-5.6-luna`. Foreground `/compact` still opens immediately and preempts a
 stale worker.
 
-Draft chat is separate from background proposal analysis and runs only when the
-user presses `c` on the draft screen. It sends the current bounded contract,
+Initial summary generation and draft chat are separate from background proposal
+analysis. Generation runs once when the user presses Enter on Submit; later
+calls run only when the user presses `c` on the draft screen. They send the current bounded contract,
 source excerpts, draft, and explicit feedback to an authenticated child CLI
 with no tools or session persistence. Its schema can change only known
 cluster/source IDs and validated fields. A static elapsed-time indicator remains
@@ -299,8 +302,9 @@ available.
 | `COMPACT_FOCUS_MODEL` | `haiku` on Claude | General proposal model override |
 | `COMPACT_FOCUS_CODEX_MODEL` | `gpt-5.6-luna` | Codex proposal model |
 | `COMPACT_FOCUS_MAX_BUDGET_USD` | `0.10` | Claude worker spend cap |
-| `COMPACT_FOCUS_DRAFT_MODEL` | `haiku` | Claude model used only for explicit draft chat |
-| `COMPACT_FOCUS_DRAFT_MAX_BUDGET_USD` | `0.08` | Spend cap for one Claude draft revision |
+| `COMPACT_FOCUS_DRAFT_MODEL` | `haiku` | Claude model used for initial summary generation and draft chat |
+| `COMPACT_FOCUS_DRAFT_MAX_BUDGET_USD` | `0.08` | Spend cap for one Claude summary or revision call |
+| `COMPACT_FOCUS_GENERATED_SUMMARY_MAX_CHARS` | `9000` | Maximum initial model-generated summary length |
 | `COMPACT_FOCUS_DRAFT_MAX_CHARS` | `24000` | Maximum exact draft accepted at confirmation |
 | `COMPACT_FOCUS_WORKER_TIMEOUT` | `180` | Worker timeout in seconds |
 | `COMPACT_FOCUS_PREP_THRESHOLD_PCT` | `50` | Known-window warm threshold |
