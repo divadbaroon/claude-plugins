@@ -9,15 +9,20 @@ Text wraps: labels, notes, and the prompts behind an item render across
 as many lines as they need — nothing is truncated.
 
 Keys:
-  up/down, j/k     navigate (headers and wrapped lines are skipped)
-  space            item: toggle keep <-> drop · prompt: check/uncheck
-  tab              cycle item keep -> contested -> drop
-  right/l, enter   expand item into the verbatim prompts behind it
-  left/h           collapse
-  e                edit item label   n  edit/add a note (renders wrapped)
-  a                add a constraint ("must not be misinterpreted…")
-  q                save + finalize + quit      Q  quit WITHOUT saving
-  ?                toggle key help
+  up/down, j/k        navigate (headers and wrapped lines are skipped)
+  shift/opt/ctrl + up/down (or K/J) move the item one CATEGORY tier
+                      (up = toward preserve, down = toward remove).
+                      cmd+arrows never reach terminal apps; ctrl+arrows
+                      reach them only if macOS Mission Control shortcuts
+                      are off — shift/option always arrive.
+  left                expand item into the verbatim prompts behind it
+  right               collapse
+  space               select/deselect (item: keep<->remove · prompt: check)
+  tab                 cycle category (fallback)
+  e / n               edit label / note      a  add a constraint
+  enter               CONFIRM + submit to the compaction process
+  q                   save + quit            Q  quit WITHOUT saving
+  ?                   toggle key help
 
 Usage: compact-focus-tui.py <ledger.json> [--dump]"""
 
@@ -189,6 +194,28 @@ def main(scr, data, path):
     hdr_pair = {"keep": 1, "summarize": 4, "contested": 2, "drop": 3}
     sel, off, show_help = 0, 0, False
 
+    def read_key():
+        ch = scr.getch()
+        if ch != 27:
+            return ch
+        scr.nodelay(True)
+        seq = ""
+        while True:
+            c = scr.getch()
+            if c == -1 or len(seq) > 6:
+                break
+            seq += chr(c) if 0 <= c < 256 else ""
+        scr.nodelay(False)
+        if seq.endswith("A"):
+            return "CHORD_UP"      # ESC[1;3A / 1;9A etc: option/alt + up
+        if seq.endswith("B"):
+            return "CHORD_DOWN"
+        return 27
+
+    def move_tier(it, direction):
+        i = CATS.index(it["cat"]) + direction
+        it["cat"] = CATS[max(0, min(len(CATS) - 1, i))]
+
     while True:
         h, w = scr.getmaxyx()
         targets, display = build_display(data, w)
@@ -202,7 +229,7 @@ def main(scr, data, path):
             off = first_line - body_h + 1
         scr.erase()
         scr.addstr(0, 0,
-                   " ledger — space toggle · tab category · → expand · e/n edit · a constraint · q save "[: w - 1],
+                   " ledger — ⇧/⌥/^↑↓ move category · ← expand · space select · enter submit · e/n edit · a constraint "[: w - 1],
                    curses.A_REVERSE)
         for y, di in enumerate(range(off, min(off + body_h, len(display)))):
             tidx, text, style = display[di]
@@ -225,10 +252,21 @@ def main(scr, data, path):
                    curses.A_DIM)
         if show_help:
             scr.addstr(h - 1, 0,
-                       " space=toggle tab=cat →=expand ←=collapse e=label n=note a=constraint q=save Q=abort"[: w - 1])
+                       " ⇧/⌥↑↓ or K/J=move category · ←=expand →=collapse · space=select · enter=submit · e/n/a edit · q=save Q=abort"[: w - 1])
         scr.refresh()
 
-        ch = scr.getch()
+        ch = read_key()
+        SR = getattr(curses, "KEY_SR", -9)
+        SF = getattr(curses, "KEY_SF", -9)
+        chord_up = ch in ("CHORD_UP", SR, ord("K"))
+        chord_down = ch in ("CHORD_DOWN", SF, ord("J"))
+        if ch in (10, 13, curses.KEY_ENTER):
+            yn = footer_input(scr, "Submit ledger to the compaction process? type y to confirm:")
+            if yn.lower().startswith("y"):
+                data["finalized"] = True
+                save(path, data)
+                return True
+            continue
         if ch == ord("q"):
             data["finalized"] = True
             save(path, data)
@@ -249,7 +287,10 @@ def main(scr, data, path):
             kind, it, ci = targets[sel]
             if kind == "class":
                 states = class_states(it)
-                if ch == ord(" "):
+                if chord_up or chord_down:
+                    i = states.index(it["state"]) + (-1 if chord_up else 1)
+                    it["state"] = states[max(0, min(len(states) - 1, i))]
+                elif ch == ord(" "):
                     it["state"] = "drop" if it["state"] == "keep" else "keep"
                 elif ch == 9:
                     it["state"] = states[(states.index(it["state"]) + 1) % len(states)]
@@ -258,13 +299,17 @@ def main(scr, data, path):
                     if new.isdigit() and 0 < int(new) <= 100:
                         it["n"] = int(new)
             elif kind == "item":
-                if ch == ord(" "):
+                if chord_up:
+                    move_tier(it, -1)
+                elif chord_down:
+                    move_tier(it, +1)
+                elif ch == ord(" "):
                     it["cat"] = "drop" if it["cat"] != "drop" else "keep"
                 elif ch == 9:
                     it["cat"] = CATS[(CATS.index(it["cat"]) + 1) % len(CATS)]
-                elif ch in (curses.KEY_RIGHT, ord("l"), 10, 13):
+                elif ch == curses.KEY_LEFT:
                     it["expanded"] = bool(it["children"])
-                elif ch in (curses.KEY_LEFT, ord("h")):
+                elif ch == curses.KEY_RIGHT:
                     it["expanded"] = False
                 elif ch == ord("e"):
                     new = footer_input(scr, "label:", it["label"])
@@ -274,9 +319,11 @@ def main(scr, data, path):
                     new = footer_input(scr, "note:", it.get("note", ""))
                     it["note"] = new
             else:
-                if ch == ord(" "):
+                if chord_up or chord_down:
+                    move_tier(it, -1 if chord_up else +1)
+                elif ch == ord(" "):
                     it["children"][ci]["checked"] = not it["children"][ci]["checked"]
-                elif ch in (curses.KEY_LEFT, ord("h")):
+                elif ch == curses.KEY_RIGHT:
                     it["expanded"] = False
 
 

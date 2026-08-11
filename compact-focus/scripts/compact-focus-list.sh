@@ -458,7 +458,7 @@ SEED
     SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     [ -r "$S/transcript.path" ] || { echo "(no transcript path — run /compact once first)"; exit 0; }
     rm -f "$S/ledger-ready" "$S/ledger-failed" 2>/dev/null
-    ( COMPACT_FOCUS_STATE_DIR="$S" nohup "$SELF" prep-run >/dev/null 2>&1 & echo $! >"$S/prep-running" ) 2>/dev/null
+    ( COMPACT_FOCUS_STATE_DIR="$BASE" nohup "$SELF" prep-run >/dev/null 2>&1 & echo $! >"$S/prep-running" ) 2>/dev/null
     echo "(ledger prep running in background — keep working; it will surface when ready)"
     ;;
   prep-run)
