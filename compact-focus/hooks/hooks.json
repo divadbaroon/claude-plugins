@@ -11,6 +11,14 @@
             "args": [],
             "timeout": 20,
             "statusMessage": "compact-focus: checking whether to pause\u2026"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/compact-focus-prep-async.sh",
+            "args": [],
+            "timeout": 300,
+            "async": true,
+            "asyncRewake": true
           }
         ]
       }

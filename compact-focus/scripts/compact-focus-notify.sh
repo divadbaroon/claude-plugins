@@ -7,13 +7,12 @@
 #     wrapper's hook).
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
-S="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
+BASE="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
+SID=$(cat "$BASE/current-session" 2>/dev/null | tr -cd 'A-Za-z0-9-')
+S="$BASE/sessions/${SID:-unknown}"
 SCRIPT="$HOME/.claude/skills/compact-focus/scripts/compact-focus-list.sh"
 
 CTX=""
-if [ -r "$S/ledger-ready" ]; then
-  CTX="compact-focus: background ledger prep is DONE. Before addressing the user's message, surface the ledger: run \`$SCRIPT ledger load\`, print the ledger in the standard markdown shape with per-item context percentages, run \`$SCRIPT tui-inject\`, run \`$SCRIPT surfaced\` to clear the marker, then wait for the user's ledger reply (or handle their current message if it IS a ledger reply)."
-fi
 
 C=0
 for F in "$S/graveyard.jsonl" "$S/demoted.jsonl"; do

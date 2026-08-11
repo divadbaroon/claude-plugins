@@ -34,8 +34,25 @@
 # Stored shape: {"threads":{"1":{"label":"…","prompts":["…",…]}, …}}
 set -u
 
-S="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-F="$S/threads.json"
+# State layout (v2, namespaced):
+#   $BASE/projects/<cwd-hash>/   policy: lens.md, guidelines.md
+#   $BASE/sessions/<session-id>/ per-session: trace, ledger, costs, threads,
+#                                demoted, graveyard, triage, markers
+#   $BASE/log.jsonl              global research log (events carry ids)
+# The PreCompact hook writes $BASE/current-session; ad-hoc invocations fall
+# back to a per-project session bucket.
+BASE="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
+PHASH=$(pwd | shasum 2>/dev/null | cut -c1-12)
+PROJ="$BASE/projects/${PHASH:-default}"
+SID=$(cat "$BASE/current-session" 2>/dev/null | tr -cd 'A-Za-z0-9-')
+SESS="$BASE/sessions/${SID:-adhoc-${PHASH:-default}}"
+mkdir -p "$PROJ" "$SESS" 2>/dev/null
+# one-time policy migration from the flat layout
+for f in lens.md guidelines.md; do
+  [ -r "$BASE/$f" ] && [ ! -e "$PROJ/$f" ] && mv "$BASE/$f" "$PROJ/$f" 2>/dev/null
+done
+S="$SESS"
+F="$SESS/threads.json"
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "(jq not found — install jq to use the thread renderer)"
@@ -181,7 +198,7 @@ case "${1:-}" in
     fi
     ;;
   guidelines)
-    G="$S/guidelines.md"
+    G="$PROJ/guidelines.md"
     if [ ! -r "$G" ]; then
       mkdir -p "$S" 2>/dev/null
       cat >"$G" <<'SEED'
@@ -198,7 +215,7 @@ SEED
     cat "$G"
     ;;
   lens)
-    L="$S/lens.md"
+    L="$PROJ/lens.md"
     if [ ! -r "$L" ]; then
       mkdir -p "$S" 2>/dev/null
       cat >"$L" <<'SEED'
@@ -230,8 +247,11 @@ SEED
   record)
     if [ -n "${2:-}" ] && printf '%s' "$2" | jq -e 'type == "object"' >/dev/null 2>&1; then
       mkdir -p "$S" 2>/dev/null
+      CID=$(cat "$SESS/compaction-id" 2>/dev/null)
       printf '%s' "$2" | jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{ts: $ts, event: (.event // "signal")} + .' >>"$S/log.jsonl" 2>/dev/null \
+        --arg sid "${SID:-}" --arg pid "${PHASH:-}" --arg cid "${CID:-}" \
+        '{ts: $ts, schema_version: 2, session_id: $sid, project_id: $pid,
+          compaction_id: $cid, event: (.event // "signal")} + .' >>"$BASE/log.jsonl" 2>/dev/null \
         && echo "(recorded)" || echo "(could not write log)"
     else
       echo "usage: record '<json object>'"
@@ -406,7 +426,8 @@ SEED
     TP="${2:-}"
     [ -z "$TP" ] && [ -r "$S/transcript.path" ] && TP=$(cat "$S/transcript.path")
     [ -n "$TP" ] && [ -r "$TP" ] || { echo "(no transcript path — run /compact once, or pass the path)"; exit 0; }
-    OUT=$(python3 "$(dirname "$0")/compact-focus-costs.py" "$TP" 2>/dev/null)
+    SLF="${COMPACT_FOCUS_STATUSLINE:-$BASE/statusline-schema.json}"
+    OUT=$(python3 "$(dirname "$0")/compact-focus-costs.py" "$TP" --statusline "$SLF" 2>/dev/null)
     if printf '%s' "$OUT" | jq -e '.units' >/dev/null 2>&1; then
       mkdir -p "$S" 2>/dev/null
       printf '%s' "$OUT" >"$S/costs.json"
@@ -417,23 +438,6 @@ SEED
     else
       echo "(costs failed: $(printf '%s' "$OUT" | jq -r '.error // "unknown"'))"
     fi
-    ;;
-  web)
-    # Open the ledger in the local web editor (stdlib http server; page
-    # POSTs the edited ledger back and the server exits). The terminal
-    # cannot host this interaction; the browser can.
-    LJ="$S/ledger.json"
-    [ -r "$LJ" ] || { echo "(no ledger.json — prep runs first)"; exit 0; }
-    URLF="$S/web.url"
-    rm -f "$URLF" 2>/dev/null
-    ( nohup python3 "$(dirname "$0")/compact-focus-web.py" "$LJ" >"$URLF" 2>/dev/null & ) 2>/dev/null
-    n=0; while [ $n -lt 20 ] && ! grep -q '^http' "$URLF" 2>/dev/null; do n=$((n+1)); perl -e 'select(undef,undef,undef,0.1)' 2>/dev/null || true; done
-    URL=$(grep '^http' "$URLF" 2>/dev/null | head -1)
-    [ -n "$URL" ] || { echo "(web editor failed to start)"; exit 0; }
-    if command -v open >/dev/null 2>&1; then open "$URL" >/dev/null 2>&1
-    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1
-    fi
-    echo "(ledger editor opened in your browser: $URL — Save there, then say done)"
     ;;
   tui-inject)
     # Package-grade launch ladder only (no OS keystroke injection — that
@@ -464,7 +468,8 @@ SEED
     [ -n "$TP" ] && [ -r "$TP" ] || fail "no transcript"
     command -v claude >/dev/null 2>&1 || fail "no claude CLI"
     SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    "$SELF" costs "$TP" >/dev/null 2>&1
+    COMPACT_FOCUS_STATUSLINE="$BASE/statusline-schema.json" "$SELF" costs "$TP" >/dev/null 2>&1
+    printf '%s-%s' "${SID:-s}" "$(date -u +%Y%m%dT%H%M%SZ)" >"$SESS/compaction-id" 2>/dev/null
     COSTS=$(jq -r '.units[] | "\(.i). [\(.pct)%] \(.prompt)"' "$S/costs.json" 2>/dev/null | tail -40)
     CLS=$(jq -r '.classes | to_entries[] | "\(.key): \(.value.pct)%"' "$S/costs.json" 2>/dev/null)
     LENS=$("$SELF" lens 2>/dev/null | tail -n +2)
@@ -473,17 +478,17 @@ SEED
            elif command -v gtimeout >/dev/null 2>&1; then gtimeout 240 "$@"
            elif command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV' 240 "$@"
            else "$@"; fi; }
-    OUT=$(printf 'Prepare a compaction ledger for a coding session.\n\nUSER PROMPTS (with %% of context window each):\n%s\n\nCONTENT CLASS COSTS:\n%s\n\nPROJECT LENS:\n%s\n\nGUIDELINES:\n%s\n\nPartition the session into at most 12 items. cat rules: "keep" = critical ongoing work, recent decisions, active files; "summarize" = completed tasks, resolved issues, older discussion; "drop" = redundant information, outdated attempts; "contested" = you are genuinely unsure — the human decides. Labels use the user'\''s own words (<=120 chars). Children = the verbatim prompts behind the item with their pct. Output ONLY strict JSON, no fences: {"items":[{"id":"L1","tag":"decision|test|contradiction|dead-end|constraint|open|solved|mechanical","label":"...","cat":"keep|summarize|contested|drop","pct":0.0,"children":[{"text":"...","checked":true,"pct":0.0}]}],"classes":[{"id":"first_n","state":"keep","n":30},{"id":"file_changes","state":"keep","pct":0.0},{"id":"subagents","state":"summarize","pct":0.0},{"id":"todos","state":"keep","pct":0.0}]} — fill class pcts from the class costs above.' \
+    OUT=$(printf 'Prepare a compaction ledger for a coding session.\n\nUSER PROMPTS (with %% of context window each):\n%s\n\nCONTENT CLASS COSTS:\n%s\n\nPROJECT LENS:\n%s\n\nGUIDELINES:\n%s\n\nPartition the session into at most 12 items. cat rules: "keep" = critical ongoing work, recent decisions, active files; "summarize" = completed tasks, resolved issues, older discussion; "drop" = redundant information, outdated attempts; "contested" = you are genuinely unsure — the human decides. Labels use the user'\''s own words (<=120 chars). Children = the verbatim prompts behind the item, each carrying "u": the prompt NUMBER from the list above (this grounds every item in real sources — an item with no children is invalid). Every prompt number must appear under EXACTLY ONE item. Output ONLY strict JSON, no fences: {"items":[{"id":"L1","tag":"decision|test|contradiction|dead-end|constraint|open|solved|mechanical","label":"...","cat":"keep|summarize|contested|drop","pct":0.0,"children":[{"u":1,"text":"...","checked":true,"pct":0.0}]}],"classes":[{"id":"first_n","state":"keep","n":30},{"id":"file_changes","state":"keep","pct":0.0},{"id":"subagents","state":"summarize","pct":0.0},{"id":"todos","state":"keep","pct":0.0}]} — fill class pcts from the class costs above.' \
         "$COSTS" "$CLS" "$LENS" "$GUIDE" \
       | wt claude -p --safe-mode --model "${COMPACT_FOCUS_PREP_MODEL:-sonnet}" 2>/dev/null | sed '/^```/d') || OUT=""
     printf '%s' "$OUT" | jq -e '.items | type == "array" and length > 0' >/dev/null 2>&1 || fail "worker output invalid"
     "$SELF" ledger save "$OUT" >/dev/null 2>&1 || fail "ledger save failed"
+    cp "$SESS/ledger.json" "$SESS/ledger.initial.json" 2>/dev/null
     date -u +%Y-%m-%dT%H:%M:%SZ >"$S/ledger-ready"
     rm -f "$S/prep-running" "$S/ledger-failed" 2>/dev/null
     "$SELF" record '{"event":"prep_bg_done"}' >/dev/null 2>&1
-    "$SELF" web >/dev/null 2>&1 || true
     command -v osascript >/dev/null 2>&1 && osascript -e \
-      'display notification "Compaction ledger ready — editing in your browser; Save, then say done" with title "compact-focus"' >/dev/null 2>&1
+      'display notification "Compaction ledger ready — send any message, or ! cf to edit" with title "compact-focus"' >/dev/null 2>&1
     exit 0
     ;;
   prep-status)
@@ -495,6 +500,77 @@ SEED
   surfaced)
     rm -f "$S/ledger-ready" "$S/ledger-failed" "$S/prep-running" 2>/dev/null
     echo "(markers cleared)"
+    ;;
+  finalize)
+    # Deterministic finalization: ledger + costs -> /compact directive AND
+    # demotion/graveyard records, derived ONLY from item children (u refs
+    # into costs units). No model-mediated ID translation. Validates before
+    # writing anything; invalid ledgers change nothing.
+    LJ="$SESS/ledger.json"; CJ="$SESS/costs.json"
+    [ -r "$LJ" ] && [ -r "$CJ" ] || { echo "INVALID: missing ledger.json or costs.json"; exit 0; }
+    ERR=$(jq -rs --slurpfile costs "$CJ" '
+      .[0] as $L | ($costs[0].units // []) as $units
+      | [ ($units[] | select(.kind == "prompt") | .u) ] as $need
+      | [ $L.items[].children[]? | .u ] as $got
+      | [ ($L.items | group_by(.id)[] | select(length > 1) | .[0].id | "duplicate id \(.)"),
+          ($L.items[] | select(.cat | IN("keep","summarize","contested","drop") | not) | "illegal cat in \(.id)"),
+          ($L.items[] | select((.label // "") == "") | "empty label in \(.id)"),
+          ($L.items[] | select((.children // []) | length == 0) | "ungrounded item \(.id) (no sources)"),
+          ($L.items[].children[]? | select((.u | type) != "number") | "child without unit ref"),
+          ($got | group_by(.)[] | select(length > 1) | "unit \(.[0]) covered more than once"),
+          (($need - $got)[] | "unit \(.) uncovered"),
+          (($got - $need - [0])[] | "invented unit ref \(.)")
+        ] | .[]' "$LJ" 2>/dev/null)
+    if [ -n "$ERR" ]; then
+      printf 'INVALID:\n%s\n' "$ERR"
+      exit 0
+    fi
+    CID=$(cat "$SESS/compaction-id" 2>/dev/null)
+    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    D="$SESS/demoted.jsonl"; GY="$SESS/graveyard.jsonl"
+    BASEN=0; [ -r "$D" ] && BASEN=$(wc -l <"$D" | tr -cd '0-9')
+    # demotion set = every child of a drop item + unchecked children elsewhere
+    ROWS=$(jq -c --slurpfile costs "$CJ" '
+      ($costs[0].units // []) as $units
+      | [ .items[] as $it | $it.children[]?
+          | select(($it.cat == "drop") or (.checked == false))
+          | {u: .u, item: $it.id, label: $it.label,
+             reason: (if $it.cat == "drop" then "dropped-item" else "unchecked-prompt" end),
+             prompt: (.text // ($units[] | select(.u == .u) | .prompt))} ] | .[]' "$LJ" 2>/dev/null)
+    N=$BASEN
+    if [ -n "$ROWS" ]; then
+      TMPD=$(mktemp); TMPG=$(mktemp)
+      printf '%s\n' "$ROWS" | while IFS= read -r row; do
+        N=$((N + 1))
+        printf '%s' "$row" | jq -c --arg id "D$N" --arg ts "$TS" --arg sid "${SID:-}" --arg cid "${CID:-}" \
+          '{id: $id, ts: $ts, schema_version: 2, session_id: $sid, compaction_id: $cid} + .' >>"$TMPD"
+        printf '%s' "$row" | jq -c --arg id "G$N" --arg ts "$TS" --arg sid "${SID:-}" --arg cid "${CID:-}" \
+          '{id: $id, ts: $ts, schema_version: 2, session_id: $sid, compaction_id: $cid,
+            text: (.prompt // ""), topic: .label, source: .item}' >>"$TMPG"
+      done
+      cat "$TMPD" >>"$D" 2>/dev/null; cat "$TMPG" >>"$GY" 2>/dev/null
+      rm -f "$TMPD" "$TMPG"
+    fi
+    NDEM=$(printf '%s\n' "$ROWS" | grep -c . || true)
+    echo "── directive (verbatim for /compact focus on):"
+    jq -r '
+      def lines(cat; verb): [ .items[] | select(.cat == cat) |
+        "- [\(.tag)] \(.label)\(if .note and .note != "" then " — " + .note else "" end)" ] |
+        if length > 0 then verb, .[] else empty end;
+      lines("keep"; "PRESERVE faithfully (expand each):"),
+      lines("summarize"; "SUMMARIZE to outcome lines only:"),
+      ( [ .classes[]? | select(.state != "keep") |
+          if .id == "first_n" then "for the first \(.n // 30)% of the session keep only decisions and constraints"
+          elif .id == "file_changes" and .state == "summarize" then "compress file-change detail to which files and why"
+          elif .id == "file_changes" then "omit file-change mechanics entirely"
+          elif .id == "subagents" and .state == "summarize" then "compress each subagent run to a single outcome line"
+          elif .id == "subagents" then "omit subagent transcripts"
+          elif .id == "todos" then "omit todo bookkeeping"
+          else empty end ] | if length > 0 then "Class directives: " + join("; ") + "." else empty end ),
+      ( [ .constraints[]? ] | if length > 0 then "MUST NOT be misinterpreted: " + join("; ") + "." else empty end )
+    ' "$LJ"
+    echo "Removed context is recoverable: demoted.jsonl / graveyard.jsonl in $SESS (recall <id> / graveyard query <terms>)."
+    echo "── finalized: $NDEM unit(s) demoted+buried deterministically (D/G $((BASEN + 1))…)"
     ;;
   studymode)
     # The human-compact study wrapper launches sessions with

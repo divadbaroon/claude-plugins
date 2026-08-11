@@ -12,8 +12,9 @@ infer_window() {
   fi
   if command -v jq >/dev/null 2>&1 && [ -n "$in" ]; then
     w=$(printf '%s' "$in" | jq -r '
-      .context_window.total_tokens // .context_window.max_tokens //
-      .context.window_size // .model.context_window // empty' 2>/dev/null)
+      .context_window.context_window_size // .context_window.total_tokens //
+      .context_window.max_tokens // .context.window_size //
+      .model.context_window // empty' 2>/dev/null)
     if [ -n "$w" ] && [ "$w" -gt 0 ] 2>/dev/null; then WINDOW="$w"; return; fi
     local mid
     mid=$(printf '%s' "$in" | jq -r '.model.id // .model.display_name // empty' 2>/dev/null)

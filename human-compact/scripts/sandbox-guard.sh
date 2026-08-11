@@ -15,8 +15,13 @@ TOOL=$(printf '%s' "$IN" | jq -r '.tool_name // empty' 2>/dev/null)
 
 CMD=$(printf '%s' "$IN" | jq -r '.tool_input.command // empty' 2>/dev/null)
 
-if printf '%s' "$CMD" | grep -Eq '^[[:space:]]*[^;|&]*compact-focus-list\.sh([[:space:]]|$)' \
-   && ! printf '%s' "$CMD" | grep -q '[;|&]'; then
+# First token must literally be the instrument script (or the cf shim);
+# any shell metacharacter anywhere denies — no chaining, redirection,
+# substitution, backgrounding, or comments.
+FIRST=$(printf '%s' "$CMD" | awk '{print $1}')
+BASE1=$(basename "$FIRST" 2>/dev/null)
+if { [ "$BASE1" = "compact-focus-list.sh" ] || [ "$BASE1" = "cf" ]; } \
+   && ! printf '%s' "$CMD" | grep -q '[;&|<>`$#(){}\\]'; then
   exit 0
 fi
 

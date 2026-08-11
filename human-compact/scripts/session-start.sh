@@ -21,7 +21,7 @@ if [ -n "$T" ] && [ -r "$T" ]; then
   fi
 fi
 
-MSG="human-compact study sandbox: this is a FORK — your original chat is untouched and file changes are disabled here. Work normally, then run /compact to test the study's compaction flow."
+MSG="human-compact study sandbox: this is a FORK — your original chat is untouched and file tools are restricted here. Work normally, then run /compact to test the study's compaction flow."
 if [ -n "$PCT" ]; then
   if [ "$PCT" -lt 50 ]; then
     MSG="$MSG This chat is only at ~${PCT}% context — the study works best near the limit; consider /resume and picking a fuller conversation."

@@ -24,7 +24,7 @@ if command -v jq >/dev/null 2>&1 && [ -n "$IN" ]; then
 fi
 
 Y=$'\033[33m'; R=$'\033[31m'; G=$'\033[32m'; N=$'\033[0m'
-LINE="${Y}⚠ SANDBOX FORK${N} · original chat untouched · file changes off"
+LINE="${Y}⚠ STUDY FORK${N} · original chat untouched · file tools restricted"
 if [ -n "$PCT" ]; then
   if [ "$PCT" -lt 50 ]; then
     LINE="$LINE · ctx ${G}${PCT}%${N} — low; ${Y}/resume${N} to pick a fuller chat"

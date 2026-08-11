@@ -34,7 +34,7 @@ const sessionId = args.find((a) => !a.startsWith('-')) || null;
 
 // Per-run state dir: instrument data (log.jsonl, demoted.jsonl, lens.md,
 // threads.json) lands here, never in the participant's real plugin state.
-const label = participant || new Date().toISOString().replace(/[:.]/g, '-');
+const label = (participant || new Date().toISOString()).replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64) || 'run';
 const stateDir = path.join(os.homedir(), '.human-compact', 'state', label);
 fs.mkdirSync(stateDir, { recursive: true });
 

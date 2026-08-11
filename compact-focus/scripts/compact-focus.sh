@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.17.0"
+PLUGIN_VERSION="0.18.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -49,9 +49,13 @@ TRIGGER=$(jq -r '.trigger // empty' <<<"$INPUT")
 TRANSCRIPT=$(jq -r '.transcript_path // empty' <<<"$INPUT")
 FOCUS=$(jq -r '.custom_instructions // empty' <<<"$INPUT")
 
-# The costs analyzer (per-prompt window %) needs the transcript path, which
-# only hooks receive — persist it for the skill/instrument.
-[[ -n "$TRANSCRIPT" ]] && printf '%s' "$TRANSCRIPT" >"$STATE_DIR/transcript.path" 2>/dev/null
+# Namespaced session state (v2): persist session pointers so the skill and
+# the async prep hook resolve the same per-session bucket.
+SIDC=$(printf '%s' "${SESSION_ID:-unknown}" | tr -cd 'A-Za-z0-9-')
+SESSD="$STATE_DIR/sessions/${SIDC:-unknown}"
+mkdir -p "$SESSD" 2>/dev/null
+printf '%s' "$SIDC" >"$STATE_DIR/current-session" 2>/dev/null
+[[ -n "$TRANSCRIPT" ]] && printf '%s' "$TRANSCRIPT" >"$SESSD/transcript.path" 2>/dev/null
 
 # Trigger-aware pause expiry: a human at the keyboard revisits /compact on a
 # minutes timescale, so manual pauses expire fast (bare /compact twice in
@@ -204,7 +208,7 @@ if [[ -z "$THREADS_JSON" && -n "$RAW" ]]; then
     '{threads: {"1": {label: "Recent prompts",
                       prompts: (split("\n") | map(select(length > 0)))}}}' 2>/dev/null) || THREADS_JSON=""
 fi
-[[ -n "$THREADS_JSON" ]] && printf '%s\n' "$THREADS_JSON" >"$STATE_DIR/threads.json" 2>/dev/null
+[[ -n "$THREADS_JSON" ]] && printf '%s\n' "$THREADS_JSON" >"$SESSD/threads.json" 2>/dev/null
 
 [[ -z "$THREADS" ]] && THREADS="- (could not read this session's prompts)"
 
@@ -213,6 +217,7 @@ fi
 # call sits before the ticket on purpose: if the hook is killed mid-call, no
 # sentinel exists, so the next compaction simply retries the pause.
 date +%s >"$SENTINEL" 2>/dev/null || true
+date +%s >"$SESSD/pause-blocked" 2>/dev/null || true
 log paused "$LIST_MODE"
 
 # Notice is deliberately minimal (v0.10.1): the thread listing that used to

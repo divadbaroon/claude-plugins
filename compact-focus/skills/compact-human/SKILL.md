@@ -14,19 +14,22 @@ Script (stable prefix, one approval):
 First run `studymode`. If it prints `1`, use the STUDY FLOW (end of file).
 Otherwise run the FAST FLOW — and check `prep-status` FIRST:
 
-- `none`   → run `prep-bg`, then tell the user in two lines: prep is
-  running in the background, keep working, the ledger will interrupt when
-  ready. END YOUR TURN. Do NOT block on it.
-- `running`→ say it's still preparing, answer whatever else the user asked.
+- `none`   → run `prep-bg`, then ask the PRECOMMIT question in plain text
+  (no widget): "While it prepares — what would be catastrophic for the
+  next agent to MISINTERPRET about this session?" This lands BEFORE any
+  machine construal exists. Record any answer as
+  '{"event":"precommit","text":"…"}' and carry it into constraints.
+  END YOUR TURN. Do NOT block on prep.
+- `running`→ if precommit not yet asked, ask it now (same rule); otherwise
+  say it's still preparing and answer whatever else the user asked.
 - `failed: …` → do the preparation yourself IN-SESSION via step 1 below,
   then continue.
 - `ready`  → skip step 1: `ledger load` is your ledger (trust its
-  partition as the prior; refresh anything obviously stale). The web
-  editor already opened in the user's browser when prep finished (`web`
-  mode reopens it if needed). Print the markdown ledger for the record,
-  say "editor is open in your browser — Save there and say done, or reply
-  here", run `surfaced`, END TURN. When the user says done: `ledger load`
-  is ground truth (finalized: true) → go to step 4.
+  partition as the prior; refresh anything obviously stale). Go to step 2
+  (print + widget surface), run `surfaced` after printing. After edits via
+  any surface, `ledger load` is ground truth → step 4.
+  (The asyncRewake hook usually delivers this state right when prep
+  finishes — surface immediately on that rewake.)
 
 ## FAST FLOW
 
@@ -150,23 +153,19 @@ Otherwise run the FAST FLOW — and check `prep-status` FIRST:
    in one plain-text line, no widget. Record
    '{"event":"ledger_final","kept":"…","dropped":"…"}'.
 
-4. APPLY AND COMPACT. `demote keep <keys> drop <nums>` for the remove set;
-   `graveyard add` a trace per removed item. Contested items still
-   unresolved at this point BLOCK: ask about them in one plain-text line
-   before compacting — never silently default a contested item. Compile
-   class rules into directives and run via SlashCommand:
-     /compact focus on PRESERVE faithfully (expand each): <preserve lines +
-     constraints verbatim>. SUMMARIZE to outcome lines only: <summarize
-     items>. Class directives: <for each non-keep class rule —
-     first_n=drop/summarize: "for the first N% of the session keep only
-     decisions and constraints"; file_changes=summarize: "compress
-     file-change detail to which files and why"; file_changes=drop: "omit
-     file-change mechanics entirely"; subagents=summarize: "compress each
-     subagent run to a single outcome line"; subagents=drop: "omit subagent
-     transcripts"; todos=drop: "omit todo bookkeeping">. Also state:
-     removed context is recoverable — demoted.jsonl / graveyard.jsonl in
-     `<state-dir>`, via `compact-focus-list.sh graveyard query <terms>` or
-     `recall <id>`.
+4. APPLY AND COMPACT — deterministically. Contested items still
+   unresolved BLOCK: ask in one plain-text line first; never silently
+   default a contested item. Then: write the user's final decisions back
+   into the ledger (`ledger save '<final json>'` — categories, checked
+   flags, constraints, classes; children keep their "u" unit refs), and
+   run `finalize`. It validates the schema and coverage invariants
+   (unique ids, legal categories, every active unit covered exactly once,
+   no invented refs, no ungrounded items) and, ONLY if valid, writes the
+   demotion and graveyard records itself from the unit refs and prints
+   the compiled directive. If it prints INVALID, fix the ledger and rerun
+   — never hand-derive demote sets from thread keys or prompt numbers.
+   Run via SlashCommand:
+     /compact focus on <the finalize directive, verbatim>
    If SlashCommand cannot run /compact, print the command. Then say once:
    "If anything seems forgotten or misread, say 'the compaction lost X'."
    On that, in ANY later turn: `graveyard query`, inject findings, record

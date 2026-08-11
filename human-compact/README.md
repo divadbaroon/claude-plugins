@@ -28,10 +28,16 @@ Options: `--participant <name>` (labels the state dir), `--hook <path>`
   high, or `/resume` (pick a fuller chat) when under 50%.
 - **Session-start notice** repeats the sandbox explanation once, with the
   same under-50% redirect.
-- **Sandbox**: Edit/Write/NotebookEdit denied via permissions; Bash blocked
-  by a PreToolUse guard except single unchained invocations of
-  `compact-focus-list.sh` (the instrument script, which writes only inside
-  the study state dir).
+- **Restricted, not isolated**: Edit/Write/NotebookEdit denied via
+  permissions; Bash blocked by a PreToolUse guard except single unchained
+  invocations of the instrument script (first-token match, all shell
+  metacharacters denied). KNOWN LIMIT: `--settings` is ADDITIVE — the
+  participant's own user/project plugins, hooks, permission allows, and
+  MCP servers remain active, so this is a restriction layer, not an
+  isolation boundary. Do not distribute for adversarial or unattended use
+  until the study runs inside an OS sandbox/container with normal setting
+  sources excluded (per Anthropic's permissions guidance) and
+  instrumentation exposed via a narrow MCP API instead of Bash.
 - **`/compact` runs the study hook**: PreCompact wired to (in order)
   `--hook`/`$HUMAN_COMPACT_HOOK`, the repo-sibling
   `compact-focus/scripts/compact-focus.sh`, or a skills-dir install. Swap in
