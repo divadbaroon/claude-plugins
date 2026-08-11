@@ -1,83 +1,87 @@
 ---
 name: compact-human
-description: Interactively choose what a conversation compaction should preserve, then run the focused compaction. Use when the user wants to steer /compact, or after a compact-focus pause suggested picking a focus.
+description: Interactively steer a conversation compaction — loss-framed selection, demotion (never deletion) of the rest, then a preservation draft the user edits and approves before compaction runs. Use when the user wants to steer /compact, or after a compact-focus pause suggested picking a focus.
 ---
 
-The user wants to compact this conversation but choose what the summary
-preserves in detail. Context is nearly full — keep prose terse.
+The user wants to compact this conversation while controlling what survives.
+Context is nearly full — keep prose terse. This flow implements negotiated
+demotion: nothing is deleted, unkept content is demoted to an ID-addressable
+store; the compaction summary is drafted, edited, and approved BEFORE
+/compact runs.
 
-INVARIANT for the whole flow: the collapsed Bash results the user expands
-with ctrl+o must only ever contain the CURRENT selection. Never print the
-full prompt list — inline or as a tool result — before categories are
-selected.
+INVARIANTS:
+- Collapsed Bash results (ctrl+o) only ever contain the CURRENT selection.
+- Phase 1 selection happens BEFORE any draft is shown (draft anchors the
+  editor — never reverse the order).
+- Every signal is recorded (record mode) — this is research instrumentation.
 
-All script calls below use EXACTLY this command shape (stable prefix, so
-one "Yes, and don't ask again" approval covers every mode):
+All script calls use EXACTLY this command shape (stable prefix, one
+"don't ask again" approval covers every mode):
 
    ~/.claude/skills/compact-focus/scripts/compact-focus-list.sh <mode> …
 
-If the user denies the approval or the script is missing, fall back to
-plain text: print category labels only, and scoped prompt lists only after
-selection, following the same steps.
+If the script is missing or denied, run the same flow in plain text and
+skip recording.
 
-1. LOAD CATEGORIES. Run the script with no arguments. It prints the labels
-   and counts of the thread file the PreCompact pause saved
-   (threads.json: {"threads":{"1":{"label":"…","prompts":["…",…]},…}}).
-   - If it shows 2+ categories, reuse them as-is — their numbers match the
-     pause notice the user already saw.
-   - If it shows nothing, or a single fallback category ("Recent prompts"),
-     group this session's actual user requests yourself (ignore tool output
-     and system noise) into 2-6 categories with 2-4 word labels, every
-     relevant prompt in exactly one category, prompts verbatim and
-     single-line. Store them by running:
-       …/compact-focus-list.sh save '<JSON>'
-     with the JSON in the shape above, single-quoted, any single quotes
-     inside replaced with the typographic ’. The script validates, saves,
-     and echoes the labels back.
+1. LOAD. Run the script with no arguments (labels + counts from the
+   thread file the pause saved). If it shows <2 categories, group the
+   session's actual user requests yourself into 2-6 categories (2-4 word
+   labels, prompts verbatim, single-line) and store via:
+     …/compact-focus-list.sh save '<JSON>'
+   with {"threads":{"1":{"label":"…","prompts":["…",…]},…}}, single-quoted,
+   inner single quotes replaced with ’. Also run `guidelines` mode now and
+   keep its content in mind for step 4.
 
-2. PICK CATEGORIES with the AskUserQuestion tool:
-   - Question string, exactly: "Keep which threads? (type a number to
-     preview one · none = default summary)"
-   - multiSelect: true. One option PER CATEGORY, in numeric order, at most
-     4 (AskUserQuestion caps options). If there are more than 4, offer the
-     first 4 and say the rest are pickable by number via "Something else".
-   - Option label = the category's exact label.
-   - Option description: REQUIRED and non-empty (an empty description makes
-     the tool call fail). Target ~60 characters of real information.
-     Terminal width may clip anywhere, so FRONT-LOAD: most informative
-     words first. Good: "Consent gate, email + probe automation still
-     open". Bad: "The outstanding items regarding the consent gate".
-   - PREVIEW LOOP: if the answer is just a category number (e.g. "2" or
-     "2?"), do NOT compact. Run `show 2` (that one category, collapsed;
-     ctrl+o expands it), then re-ask the SAME question. Repeat as needed.
+2. PHASE 1 — LOSS-FRAMED SELECTION (before any draft exists).
+   AskUserQuestion, multiSelect: true:
+   - Question, exactly: "After compaction, what must the agent NOT have
+     forgotten? (unpicked threads are demoted with recall IDs, not
+     deleted · type a number to preview)"
+   - One option per category, numeric order, max 4 (more → first 4, rest
+     by number via Other). Label = category label. Description: REQUIRED,
+     ~60 chars, front-loaded with real information.
+   - Preview loop: bare number → run `show <n>`, re-ask.
+   - Per-prompt refinement: after category pick, run `show 1,3`; ask
+     "Keep all N prompts?" — "Keep all (Recommended)" / "Drop some —
+     type the [numbers]" / "None — default summary". Drops accumulate;
+     re-run `show 1,3 drop 2,5` after each round.
+   Record: …/compact-focus-list.sh record '{"event":"phase1","kept":"1,3","dropped":"2,5"}'
 
-3. NOTHING SELECTED ("Default summary", empty pick, or "none"): do NOT run
-   the show command — there is nothing for ctrl+o to open. Output `/compact`
-   on its own line for the user to run. Done.
+3. DEMOTE THE REST. Nothing selected → output `/compact` alone, record
+   {"event":"declined"}, stop. Otherwise:
+     …/compact-focus-list.sh demote keep 1,3 drop 2,5
+   The receipt (D-ids + store path) prints collapsed. Tell the user in one
+   line: "Unkept content demoted, recoverable by ID — nothing deleted."
 
-4. RENDER THE SELECTION. For selected categories, e.g. 1 and 3, run:
-       …/compact-focus-list.sh show 1,3
-   This collapsed result IS the review doc: every prompt of the selected
-   categories, globally numbered [1]…[N]. In prose print ONLY: "Your
-   selection is above (ctrl+o to expand) — N prompts, all kept by default."
+4. PHASE 2 — DRAFT, EDIT, APPROVE. Compose the preservation draft
+   yourself from the kept selection and the full session: a bullet list of
+   the concrete state the compaction summary MUST contain — decisions with
+   rationale, corrections verbatim, edited file paths, failing tests, open
+   TODOs — following the guidelines from step 1. Print the draft INLINE
+   (it is the object under review, never collapse it). Record:
+     record '{"event":"draft","text":"<the draft, compressed to one line each>"}'
+   AskUserQuestion: "Approve this preservation draft?"
+   - "Approve (Recommended)" — proceed
+   - "Edit" — description: "Say what to change/add/remove in Other"
+   - "Restore demoted" — description: "Name a D-id or topic to pull back in"
+   - "Default summary" — plain /compact instead
+   On Edit/Restore: apply, re-print the full revised draft, record
+     '{"event":"edit","text":"<user words>"}', re-ask. Loop until Approve.
 
-5. PER-PROMPT DESELECT with AskUserQuestion:
-   - Question: "Keep all N prompts from <labels>?"
-   - Options, exactly 3: "Keep all (Recommended)" — proceed with
-     everything shown; "Drop some" — description: "Type the [numbers] to
-     drop in Other, e.g. drop 2 5"; "None — default summary".
-   - On "Drop some" / typed numbers: re-run
-       …/compact-focus-list.sh show 1,3 drop 2,5
-     (same keys, same order — numbering stays stable). The new collapsed
-     result shows what remains; re-ask this question with updated N until
-     "Keep all" or a typed confirmation. Drops accumulate: pass ALL dropped
-     numbers each time.
-   - On "None": treat as step 3.
+5. COMPACT. Record '{"event":"approved","text":"<final draft one-lined>"}'.
+   Run via SlashCommand:
+     /compact focus on Preserve exactly this state summary, expanding each
+     bullet faithfully: <final draft bullets, semicolon-separated>. Also
+     state in the summary: additional context was demoted, recoverable via
+     `<state-dir>/demoted.jsonl` by ID (D1…), readable with
+     `compact-focus-list.sh recall <id>`.
+   If SlashCommand cannot run /compact, print that command for the user.
 
-6. COMPACT. Compose a one-line focus instruction naming the kept
-   category(ies) in the user's own words; if prompts were dropped, add
-   "; omit <what the dropped prompts covered>". Run `/compact focus on
-   <that instruction>` via the SlashCommand tool; if SlashCommand cannot
-   run /compact, output that exact command on its own line for the user.
+6. REVEALED LOSS (standing instruction, mention once after compacting):
+   "If you notice the summary lost something, say 'the compaction lost X'
+   — I'll log it and restore from the demoted store." When that happens,
+   in ANY later turn: run `recall all`, restore the relevant content into
+   context, and record '{"event":"revealed_loss","text":"<what was lost>"}'.
 
-Do not re-summarize the conversation yourself — the compaction will do that.
+Do not re-summarize the conversation yourself — the compaction does that;
+your draft only pins what it must contain.

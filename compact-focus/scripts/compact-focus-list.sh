@@ -12,6 +12,18 @@
 #                                globally numbered; drop omits those numbers
 #   show                         no keys selected -> prints nothing useful,
 #                                on purpose
+#   demote keep <keys> [drop <nums>]
+#                                write everything NOT kept (unselected
+#                                categories + dropped numbers, resolved
+#                                against show's numbering over <keys>) to
+#                                demoted.jsonl with stable IDs D1,D2,…;
+#                                print a receipt. Demotion, never deletion:
+#                                entries are recoverable by ID.
+#   recall <id|all>              print a demoted entry by ID (or all)
+#   guidelines                   print guidelines.md (+ its path), seeding
+#                                a starter file on first use
+#   record '<json>'              append one instrumentation event to
+#                                log.jsonl (ts + event fields preserved)
 #   (no args)                    labels + counts of the stored file
 #
 # Stored shape: {"threads":{"1":{"label":"…","prompts":["…",…]}, …}}
@@ -107,6 +119,88 @@ case "${1:-}" in
         if (!started && !miss) print "(no matching categories)"
       }
     '
+    ;;
+  demote)
+    shift
+    [ "${1:-}" = "keep" ] || { echo "usage: demote keep <keys> [drop <nums>]"; exit 0; }
+    KEYS="${2:-}"
+    DROP=""
+    [ "${3:-}" = "drop" ] && DROP="${4:-}"
+    if [ -z "$KEYS" ]; then
+      echo "(nothing kept — demote refuses to demote everything; use plain /compact instead)"
+      exit 0
+    fi
+    [ -r "$F" ] || { echo "(no saved thread list — save one first)"; exit 0; }
+    D="$S/demoted.jsonl"
+    BASE=0
+    [ -r "$D" ] && BASE=$(wc -l <"$D" | tr -cd '0-9')
+    # Demoted set = every prompt of unselected categories, plus prompts of
+    # kept categories whose global show-numbering index is in the drop list.
+    ROWS=$(jq -c --arg keys "$KEYS" --arg drop "$DROP" '
+      ($keys | split(",") | map(gsub("\\s"; "") | select(length > 0))) as $ks
+      | ($drop | split(",") | map(gsub("\\s"; "") | select(length > 0) | tonumber)) as $ds
+      | .threads as $t
+      | ([ $ks[] | select($t[.] != null) ]) as $kept
+      | ([ $kept[] | . as $k | $t[$k].prompts[] | {k: $k, p: .} ]
+         | to_entries
+         | map(select((.key + 1) as $n | $ds | index($n) != null))
+         | map({thread: .value.k, label: $t[.value.k].label, prompt: .value.p, reason: "dropped"})) as $droppedRows
+      | ([ .threads | to_entries[] | select(.key as $k | $kept | index($k) | not)
+           | .key as $k | .value.label as $l | .value.prompts[]
+           | {thread: $k, label: $l, prompt: ., reason: "unselected"} ]) as $unselRows
+      | ($droppedRows + $unselRows)[]
+    ' "$F" 2>/dev/null)
+    if [ -z "$ROWS" ]; then
+      echo "(nothing to demote — everything is kept)"
+      exit 0
+    fi
+    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    N=$BASE
+    printf '%s\n' "$ROWS" | while IFS= read -r row; do
+      N=$((N + 1))
+      jq -nc --arg id "D$N" --arg ts "$TS" --argjson r "$row" \
+        '{id: $id, ts: $ts} + $r' >>"$D"
+    done
+    COUNT=$(printf '%s\n' "$ROWS" | wc -l | tr -cd '0-9')
+    echo "Demoted $COUNT item(s): D$((BASE + 1))–D$((BASE + COUNT)) → $D"
+    echo "(recoverable: … recall D<n> — demotion, never deletion)"
+    ;;
+  recall)
+    D="$S/demoted.jsonl"
+    [ -r "$D" ] || { echo "(no demoted store yet)"; exit 0; }
+    if [ "${2:-all}" = "all" ]; then
+      jq -r '"[\(.id)] (\(.label)) \(.prompt)"' "$D" 2>/dev/null
+    else
+      jq -r --arg id "${2}" 'select(.id == $id) | "[\(.id)] (\(.label)) \(.prompt)"' "$D" 2>/dev/null \
+        | grep . || echo "(no entry ${2})"
+    fi
+    ;;
+  guidelines)
+    G="$S/guidelines.md"
+    if [ ! -r "$G" ]; then
+      mkdir -p "$S" 2>/dev/null
+      cat >"$G" <<'SEED'
+# Compaction guidelines (per-project, evolves via /compact-focus:compact-learn)
+
+- Preserve verbatim: user corrections, decisions with rationale, and any
+  constraint stated once and relied on later.
+- Preserve: file paths that were edited, failing test names, open TODOs.
+- Compress freely: tool output, exploration that ended in a decision.
+- Never silently drop a constraint — demote it with an ID instead.
+SEED
+    fi
+    echo "── $G"
+    cat "$G"
+    ;;
+  record)
+    if [ -n "${2:-}" ] && printf '%s' "$2" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      mkdir -p "$S" 2>/dev/null
+      printf '%s' "$2" | jq -c --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{ts: $ts, event: (.event // "signal")} + .' >>"$S/log.jsonl" 2>/dev/null \
+        && echo "(recorded)" || echo "(could not write log)"
+    else
+      echo "usage: record '<json object>'"
+    fi
     ;;
   *)
     labels

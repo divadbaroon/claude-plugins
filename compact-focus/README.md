@@ -9,6 +9,40 @@ Validated with `claude plugin validate` on Claude Code 2.1.226.
 Requires `jq` (`brew install jq`) — without it the plugin warns once and
 disables itself; compaction is never affected.
 
+## v0.7 (MVP): negotiated demotion
+
+Implements the core of the "Compaction as Negotiated Demotion" proposal
+(Linear: Human-Driven Compaction project). Design thesis: make human error
+cheap, not human judgment accurate.
+
+- **Demotion, never deletion** — everything not kept goes to
+  `demoted.jsonl` with stable IDs (`D1…`); `recall <id>` reads it back.
+  The compaction summary itself names the store, so the post-compaction
+  agent knows losses are recoverable.
+- **Two-phase elicitation** — Phase 1: loss-framed selection ("what must
+  the agent NOT have forgotten?") happens *before* any draft exists, so
+  the machine draft can't anchor it. Phase 2: the model drafts the
+  preservation summary; the user edits/approves; only then does
+  `/compact focus` run. This is the preview-with-approval loop no shipped
+  tool has (see ecosystem survey).
+- **Guidelines document** — `guidelines.md` per state dir conditions every
+  draft; `/compact-focus:compact-learn` converts logged signals (draft
+  edits > selections; revealed losses > everything) into proposed
+  guideline diffs the user approves. The automation ramp: ask less over
+  time.
+- **Instrumentation** — every phase-1 selection, draft, edit, approval,
+  demotion, and revealed-loss report is appended to `log.jsonl`. This is
+  the S1 study corpus: {signal → compaction → downstream outcome}.
+- **Revealed loss** — say "the compaction lost X" any time; the agent logs
+  it and restores from the demoted store.
+
+New script modes (same stable command prefix, approve once):
+`demote keep <keys> [drop <nums>]` · `recall <id|all>` · `guidelines` ·
+`record '<json>'`.
+
+Not in the MVP (research, not plumbing): uncertainty-gated asking,
+automatic revealed-loss detection, breakpoint detection for timing.
+
 ## v0.6: selection-scoped ctrl+o
 
 The grouping model now outputs JSON — categories keyed `"1"…"6"`, each
