@@ -9,6 +9,45 @@ Validated with `claude plugin validate` on Claude Code 2.1.226.
 Requires `jq` (`brew install jq`) — without it the plugin warns once and
 disables itself; compaction is never affected.
 
+## v0.10: Context Prism
+
+VISTA-adjacent positioning: visual context tools expose what context
+*exists*; Context Prism exposes what the context *means*. (Visual-workspace
+summarization: arXiv:2409.17289; VISTA: arXiv:2606.30005.)
+
+**Three-level lens** (replaces the flat frames/taxonomy split — the episode
+taxonomy alone was a grammar, not a lens):
+
+1. **Universal grammar** (fixed): decision · test · contradiction ·
+   dead-end · constraint.
+2. **Domain lens** (the expert layer): project-specific interpretive
+   vocabulary — e.g. timestamp basis, offset vs drift, source-of-truth
+   transcript, alignment pipeline stages. This is where expert knowledge
+   lives and what compact-learn revises.
+3. **Active task model** (volatile): what is currently favored, what gets
+   compared next.
+
+**Prism interaction** (compact-human):
+
+- **Precommit before anchoring** — "What would be catastrophic for the next
+  agent to MISINTERPRET?" asked before any machine construal is shown;
+  misconstrual, not omission, is the dominant failure.
+- **Rival chunkings** — the same trace construed through 2-3 problem
+  representations (progress/state · causal-debugging ·
+  constraint/coordination); the user adjudicates ONLY the spans where
+  rivals disagree — choose, merge, split, relabel — never the full trace.
+- **Provenance** — every chunk carries [threads · D-ids · G-ids] tags and
+  expands back to the prompts/tool results behind it; unselected material
+  demotes as before.
+- **Race, don't proofread** — `race '<default>' '<lensed>' ['<continuation>']`
+  gives both summaries the same ambiguous continuation ("continue fixing
+  it") and prints each agent's first three proposed actions side by side:
+  semantic loss made observable before it costs an hour.
+- **Learning record** — raw trace → rival representations → human
+  adjudication → compacted state → downstream behavior; substantially
+  richer than summary-preference data, because it captures what the expert
+  perceived that the generic construal did not.
+
 ## v0.8 (experimental): two-pass lens
 
 A **lens** is an encoding schema, not an inclusion rule. `guidelines.md`

@@ -202,24 +202,26 @@ SEED
     if [ ! -r "$L" ]; then
       mkdir -p "$S" 2>/dev/null
       cat >"$L" <<'SEED'
-# Compaction lens (encoding schema, evolves via /compact-focus:compact-learn)
-<!-- compact-focus seed: unedited template. Replace Subject and Active frames
-     with this project's real frames (compact-human PASS 1 does this);
-     the lens stays inactive until this marker line is removed. -->
+# Compaction lens — three levels (evolves via /compact-focus:compact-learn)
+<!-- compact-focus seed: unedited template. Fill Domain lens and Active task
+     model with this project's real content (compact-human's lens pass does
+     this); the lens stays inactive until this marker line is removed.
+     Level 1 is fixed vocabulary; expert knowledge lives in level 2; level 3
+     changes every few sessions. -->
 
-## Subject
-(one line: what this project is / what it studies)
+## Universal grammar
+decision · test · contradiction · dead-end · constraint
+(fixed episode vocabulary — every chunk in a draft is labeled with one)
 
-## Active frames
-- (interpretive frames or hypotheses to construe sessions through —
-  e.g. "compression vs probe accuracy is the core tradeoff")
+## Domain lens
+- (the project-specific interpretive layer — the concepts an expert uses to
+  construe events that a generic reader would miss. e.g. for a clock-sync
+  project: timestamp basis; offset vs drift; source-of-truth transcript;
+  alignment pipeline stages)
 
-## Episode taxonomy
-- hypothesis-test — an idea was tried against evidence; keep claim + verdict
-- decision — a choice was made; keep the alternatives and the rationale
-- dead-end — tried and falsified; keep why, so it is never retried
-- detour-with-insight — off-goal work that produced something reusable
-- mechanical — routine steps with no interpretive content; compress hard
+## Active task model
+- (what is currently favored and what gets compared next. e.g.: cumulative
+  drift currently favored; compare beginning/end anchors next)
 SEED
     fi
     echo "── $L"
@@ -316,6 +318,37 @@ SEED
         ;;
       *) echo "usage: graveyard add '<json>' | query <terms> | count";;
     esac
+    ;;
+  race)
+    # Future-preview: instead of proofreading summary prose, race two
+    # candidate compactions. Each becomes the sole context of a fresh model
+    # call given the SAME ambiguous continuation; their first three proposed
+    # actions render side by side, making semantic loss observable before it
+    # costs an hour. Usage:
+    #   race '<default-summary>' '<lensed-summary>' ['<continuation>']
+    A_SUM="${2:-}"; B_SUM="${3:-}"; CONT="${4:-continue fixing it}"
+    if [ -z "$A_SUM" ] || [ -z "$B_SUM" ]; then
+      echo "usage: race '<default-summary>' '<lensed-summary>' ['<continuation>']"
+      exit 0
+    fi
+    command -v claude >/dev/null 2>&1 || { echo "(claude CLI not found — cannot race)"; exit 0; }
+    RACE_MODEL="${COMPACT_FOCUS_RACE_MODEL:-haiku}"
+    with_timeout() {
+      if command -v timeout >/dev/null 2>&1; then timeout 30 "$@"
+      elif command -v gtimeout >/dev/null 2>&1; then gtimeout 30 "$@"
+      elif command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV' 30 "$@"
+      else "$@"; fi
+    }
+    ask() { # $1 = summary
+      printf 'You are resuming a coding session. This summary is your ONLY context:\n\n%s\n\nThe user now says: "%s". Reply with EXACTLY your first three concrete actions, numbered 1-3, one line each, no preamble.' "$1" "$CONT" \
+        | with_timeout claude -p --safe-mode --model "$RACE_MODEL" 2>/dev/null
+    }
+    echo "── race: \"$CONT\""
+    echo "── A (default summary):"
+    ask "$A_SUM" || echo "(A failed)"
+    echo ""
+    echo "── B (lensed summary):"
+    ask "$B_SUM" || echo "(B failed)"
     ;;
   *)
     labels

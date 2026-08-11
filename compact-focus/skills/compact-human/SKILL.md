@@ -1,99 +1,99 @@
 ---
 name: compact-human
-description: Interactively steer a conversation compaction — triage the session into open/solved/unclear items, let the user VETO rather than select, demote (never delete) the removed, then draft-edit-approve the preservation summary through the project lens before compaction runs. Use when the user wants to steer /compact, or after a compact-focus pause suggested picking a focus.
+description: Context Prism — interactively steer a compaction. Precommit what must not be misinterpreted, triage and veto (never select), construe the session through rival lenses and adjudicate only their disagreements, optionally race default vs lensed summaries on the same continuation, then compact. Use when the user wants to steer /compact, or after a compact-focus pause.
 ---
 
-The user wants to compact this conversation while controlling what survives.
-Context is nearly full — keep prose terse. Default is KEEP: the user vetoes
-what to remove; nothing vetoed is deleted, only demoted to recoverable
-stores.
+The user wants to compact while controlling what survives — and, more
+importantly, what it MEANS. Context is nearly full; keep prose terse.
+Default is KEEP: the user vetoes. Nothing vetoed is deleted — demoted and
+recoverable. The dominant failure mode is misconstrual, not omission.
 
 INVARIANTS:
-- Veto, not selection: never ask "what do you want to keep?" — ask what to
-  resolve, remove, or deprioritize. Unvetoed content survives.
-- Collapsed Bash results (ctrl+o) only ever show the current working set.
-- The lens pass precedes the draft; the draft precedes /compact.
-- Every signal is recorded (record mode) — research instrumentation.
-- When YOU are unsure whether to keep or remove an item: ask directly, one
-  item at a time. When unsure which of TWO chunks matters more: A/B it —
-  AskUserQuestion with exactly those two as options ("Which matters more?"),
-  record '{"event":"ab_choice","a":"…","b":"…","chose":"…"}'.
+- Veto, not selection. Unvetoed content survives.
+- Precommit comes FIRST, before the user sees any machine construal.
+- Adjudicate lens DISAGREEMENTS only — never make the user review spans
+  the rivals agree on.
+- Collapsed Bash results (ctrl+o) show only the current working set.
+- Record every signal (record mode). Unsure keep/remove → ask directly,
+  one item. Unsure which of two chunks matters more → A/B them, record
+  '{"event":"ab_choice","a":"…","b":"…","chose":"…"}'.
 
-All script calls use EXACTLY this command shape (stable prefix, one
-approval):
+Script (stable prefix, one approval):
    ~/.claude/skills/compact-focus/scripts/compact-focus-list.sh <mode> …
-If the script is missing/denied, run the same flow in plain text, skip
-recording.
+Missing/denied → same flow in plain text, no recording.
 
-1. LOAD. Run with no args (thread labels). If <2 categories, group the
-   session's user requests into 2-6 categories and `save` them (shape:
-   {"threads":{"1":{"label":"…","prompts":["…"]}}}, quotes → ’). Run
-   `guidelines` and `lens` modes; keep both in mind.
+1. LOAD. No-args (thread labels; <2 → group and `save`). Run `guidelines`
+   and `lens`.
 
-2. TRIAGE LEDGER. From the whole session, extract the semantic items — new
-   ideas, features, side questions, decisions, bugs — and categorize each as
-   open (unresolved, still matters), solved (resolved, artifact exists), or
-   unclear (you cannot tell). Link each to its thread key(s). Store:
-     …/compact-focus-list.sh triage save '{"items":[{"id":"T1","label":"…","category":"open","threads":"1"}…]}'
-   Then run `triage list` (collapsed; ctrl+o shows the ledger). Record
+2. PRECOMMIT (before any construal is shown). AskUserQuestion: "What would
+   be catastrophic for the next agent to MISINTERPRET about this session?"
+   — options "Nothing special — proceed" / "Let me say it" (Other, free
+   text). Record '{"event":"precommit","text":"…"}'. The answer is a hard
+   constraint on every construal below.
+
+3. TRIAGE. Extract semantic items (ideas, features, side questions,
+   decisions, bugs) → open | solved | unclear, linked to thread keys.
+   `triage save '…'`, then `triage list` (collapsed). Record
    '{"event":"triage","open":N,"solved":N,"unclear":N}'.
 
-3. RESOLVE UNCLEAR — one by one. For each unclear item, AskUserQuestion:
-   "Is '<label>' still open, or solved?" — options: "Open" / "Solved" /
-   "Remove — not worth carrying". Apply with `triage set <id> <category>`.
-   Record each as '{"event":"unclear_resolved","id":"T…","to":"…"}'.
+4. RESOLVE UNCLEAR, one by one: "Is '<label>' still open, or solved?" —
+   Open / Solved / Remove. `triage set <id> …`; record each.
 
-4. VETO PASS. Show the resolved ledger (`triage list`). AskUserQuestion,
-   multiSelect: "Anything here you deliberately want REMOVED or
-   recategorized before compaction? (default: everything stays)" — options
-   are up to 4 item labels you judge most removal-worthy (solved things
-   fully captured in files/commits first), plus Other for ids/words. Apply
-   via `triage set <id> removed` (or category changes). If you are unsure
-   about an item, ask directly; if two items compete for priority, A/B them
-   (see invariants). Record '{"event":"veto","removed":"T2,T7"}'.
+5. VETO PASS. `triage list`; AskUserQuestion multiSelect: "Anything you
+   deliberately want REMOVED or recategorized? (default: everything
+   stays)". Apply; record '{"event":"veto","removed":"…"}'.
 
-5. DEMOTE THE REMOVED. Removed items' threads/prompts (and any thread with
-   no surviving items) go to the demoted store:
-     …/compact-focus-list.sh demote keep <surviving-thread-keys> drop <nums>
-   For each removed item also bury a message-level trace:
-     …/compact-focus-list.sh graveyard add '{"text":"<the user message(s) behind it, verbatim-ish>","topic":"<label>","source":"T<id>"}'
-   One line to the user: "Removed items are demoted + buried, recoverable —
-   nothing deleted."
+6. DEMOTE + BURY the removed: `demote keep <keys> drop <nums>`; per removed
+   item `graveyard add '{"text":"<user msgs behind it>","topic":"…","source":"T…"}'`.
+   One line: "Removed items demoted + buried — recoverable, not deleted."
 
-6. WHAT MUST SURVIVE (optional, one question). AskUserQuestion: "What should
-   NOT be forgotten during compaction? (optional — skip if the ledger covers
-   it)" — options "The ledger covers it (Recommended)" / "Let me add
-   something" (free text via Other). Record any answer as
-   '{"event":"preserve_request","text":"…"}'; it becomes a hard constraint
-   on the draft.
+7. LENS (three levels — maintain before constructing anything). Run `lens`.
+   Level 1 (universal grammar: decision · test · contradiction · dead-end ·
+   constraint) is fixed. If Domain lens or Active task model are seed or
+   stale, derive them from session + MEMORY.md/CLAUDE.md — the Domain lens
+   is the expert vocabulary (project-specific concepts a generic reader
+   would miss); the Active task model is what's currently favored and what
+   gets compared next. Show 2-4 lines, update lens.md, record
+   '{"event":"lens","text":"…"}'.
 
-7. LENS PASS (before drafting). Run `lens`; if seed/stale, derive the
-   project frames from session + MEMORY.md/CLAUDE.md, show 2-4 lines,
-   update lens.md, record '{"event":"lens","text":"…"}'.
+8. RIVAL CHUNKINGS. Construe the surviving content through 2-3 rival
+   problem representations — default set: progress/state lens,
+   causal-debugging lens, constraint/coordination lens (swap per Domain
+   lens when obvious). Find the spans where rivals produce DIFFERENT
+   interpretations. Present ONLY those disagreements, one at a time:
+   "Span: <what happened>. A construes it as <…>, B as <…>." — options A /
+   B / "Merge — both" / "Neither" (relabel via Other). Record each as
+   '{"event":"rival_adjudication","span":"…","a":"…","b":"…","chose":"…"}'.
+   Spans the rivals agree on pass through silently.
 
-8. DRAFT THROUGH THE LENS. Compose the preservation draft: surviving OPEN
-   items first (with state + next step), then solved items' one-line
-   outcomes, chunked into taxonomy-labeled episodes per the lens; honor
-   every preserve_request verbatim. Print INLINE. Record
-   '{"event":"draft","text":"…"}'. AskUserQuestion: "Approve this
-   preservation draft?" — Approve / Edit (Other) / Restore demoted (name a
-   D/G id or topic) / Default summary. Loop on edits (record each); on
-   Approve record '{"event":"approved","text":"…"}'.
+9. MERGED DRAFT. Compose the preservation draft from the adjudicated
+   construal: surviving OPEN items first (state + next step per the Active
+   task model), solved outcomes one line each; every chunk labeled with
+   universal-grammar type and tagged with provenance
+   [threads 1,3 · D2 · G1] so it can expand back to prompts, tool results,
+   diffs. Honor the precommit verbatim. Print INLINE; record draft.
+   AskUserQuestion: Approve / Edit / Race it / Restore demoted / Default
+   summary.
+   RACE (on request or when the user hesitates): build a brief
+   default-style summary (neutral, no lens), then:
+     …/compact-focus-list.sh race '<default-summary>' '<merged-draft>' 'continue fixing it'
+   Show both agents' first three actions side by side; record
+   '{"event":"race","winner":"…","divergence":"…"}'. Loop edits until
+   Approve; record approved.
 
-9. COMPACT. Via SlashCommand:
-     /compact focus on Preserve exactly this state summary, expanding each
-     labeled episode faithfully: <final draft>. Also state in the summary:
-     removed context is recoverable — demoted.jsonl and graveyard.jsonl in
-     `<state-dir>`, searchable with `compact-focus-list.sh graveyard query
-     <terms>` and `recall <id>`.
-   If SlashCommand cannot run /compact, print the command for the user.
+10. COMPACT via SlashCommand:
+      /compact focus on Preserve exactly this state summary, expanding each
+      labeled episode faithfully: <merged draft>. Also state: removed
+      context is recoverable — demoted.jsonl and graveyard.jsonl in
+      `<state-dir>`, searchable via `compact-focus-list.sh graveyard query
+      <terms>` / `recall <id>`.
+    If SlashCommand cannot run /compact, print the command.
 
-10. AFTER COMPACTION (standing instruction, say once): "If anything seems
-    forgotten, say 'the compaction lost X' — I'll query the graveyard and
-    restore it." When that happens in ANY later turn: run
-    `graveyard query <terms>` (and `recall all` if needed), inject the
-    findings back into context, record
-    '{"event":"revealed_loss","text":"…","recovered":"G…/D…"}'.
+11. AFTER (say once): "If anything seems forgotten or misread, say 'the
+    compaction lost X' — I'll query the graveyard and restore." On that, in
+    ANY later turn: `graveyard query <terms>` (+ `recall all` if needed),
+    inject findings, record '{"event":"revealed_loss","text":"…",
+    "recovered":"…","kind":"omitted|mis-encoded"}'.
 
 Do not re-summarize the conversation yourself — the compaction does that;
-your draft only pins what it must contain.
+your draft pins what it must contain and what it must mean.

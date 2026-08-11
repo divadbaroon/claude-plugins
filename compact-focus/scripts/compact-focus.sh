@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.9.0"
+PLUGIN_VERSION="0.10.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -86,7 +86,7 @@ if [[ "$TRIGGER" == "manual" && -n "$FOCUS" ]]; then
   if [[ "${COMPACT_FOCUS_LENS_STDOUT:-}" == "1" ]]; then
     LENS_FILE="$STATE_DIR/lens.md"
     if [[ -r "$LENS_FILE" ]] && ! grep -q 'compact-focus seed:' "$LENS_FILE" 2>/dev/null; then
-      LENS_FRAMES=$(awk '/^## (Active frames|Episode taxonomy)/ {p=1; print; next}
+      LENS_FRAMES=$(awk '/^## (Universal grammar|Domain lens|Active task model)/ {p=1; print; next}
                          /^## / {p=0} p' "$LENS_FILE" 2>/dev/null) || LENS_FRAMES=""
       if [[ -n "$LENS_FRAMES" ]]; then
         { printf 'Interpret and summarize this session through these frames:\n%s\n' \
