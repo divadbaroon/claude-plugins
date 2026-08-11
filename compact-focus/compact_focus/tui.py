@@ -63,6 +63,8 @@ KIND_LABEL = {
     "compact_summary": "PRIOR SUMMARY",
     "message": "MESSAGE",
 }
+VISIBLE_SOURCE_KINDS = {"user_prompt"}
+VISIBLE_SOURCE_CLASSES = {"subagents"}
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,21 @@ def _wrapped(value: str, width: int, initial: str = "", subsequent: str = "") ->
         break_long_words=False,
         break_on_hyphens=False,
     ) or [initial.rstrip()]
+
+
+def _is_delete_key(key: int) -> bool:
+    """Recognize delete variants emitted by common terminal/terminfo pairs."""
+    if key in (ord("d"), 4, 8, 127, curses.KEY_DC):
+        return True
+    try:
+        name = curses.keyname(key)
+    except (curses.error, ValueError):
+        return False
+    return bool(name and (name == b"KEY_DC" or name.startswith(b"kDC")))
+
+
+def _is_visible_source(source: Dict[str, Any]) -> bool:
+    return source.get("kind") in VISIBLE_SOURCE_KINDS or source.get("class") in VISIBLE_SOURCE_CLASSES
 
 
 class ReviewUI:
@@ -258,10 +275,14 @@ class ReviewUI:
         counts: Dict[str, int] = {}
         for source_id in item.get("source_ids", []):
             source = self.sources.get(source_id, {})
+            if not _is_visible_source(source):
+                continue
             label = self._source_kind(source).lower()
             counts[label] = counts.get(label, 0) + 1
         parts = [f"{value} {key}{'' if value == 1 else 's'}" for key, value in counts.items()]
-        return f"{len(item.get('source_ids', []))} units" + (" · " + " · ".join(parts) if parts else "")
+        visible_count = sum(counts.values())
+        unit_label = "unit" if visible_count == 1 else "units"
+        return f"{visible_count} reviewable {unit_label}" + (" · " + " · ".join(parts) if parts else "")
 
     def build_lines(self, width: int) -> Tuple[List[Target], List[Tuple[Optional[int], str, str]]]:
         targets: List[Target] = []
@@ -278,12 +299,13 @@ class ReviewUI:
         worker = self.proposal.get("worker") or {}
         worker_status = str(worker.get("status") or self.proposal.get("generator") or "ready").upper()
         low = sum(1 for item in self.review.get("items", []) if item.get("confidence") == "low")
-        source_count = len(self.sources)
+        source_count = sum(_is_visible_source(source) for source in self.sources.values())
         lines.append((None, " COMPACTION ANALYSIS", "agent-label"))
+        source_label = "unit" if source_count == 1 else "units"
         lines.append(
             (
                 None,
-                f" {worker_status} · {len(self.review.get('items', []))} clusters · {source_count} source units · {low} low-confidence",
+                f" {worker_status} · {len(self.review.get('items', []))} clusters · {source_count} reviewable {source_label} · {low} low-confidence",
                 "agent",
             )
         )
@@ -331,6 +353,8 @@ class ReviewUI:
             if item_id in self.expanded:
                 for source_index, source_id in enumerate(item.get("source_ids", [])):
                     source = self.sources.get(source_id, {"id": source_id, "text": "(source unavailable)"})
+                    if not _is_visible_source(source):
+                        continue
                     source_review = self.review.get("source_reviews", {}).get(source_id) or {}
                     source_retention = effective_source_retention(self.review, item, source_id)
                     source_work = str(source_review.get("work_state") or work_state)
@@ -676,11 +700,17 @@ class ReviewUI:
     def _set_retention(self, target: Target, value: str) -> None:
         if target.item is None:
             return
+        before_actions = len(self.review.get("actions", []))
         source_id = self._source_id(target)
         if source_id:
             self.mutate(lambda: set_source_retention(self.review, target.item or 0, source_id, value))
         else:
             self.mutate(lambda: set_item_field(self.review, target.item or 0, "retention", value))
+        if len(self.review.get("actions", [])) > before_actions:
+            target_label = "Source" if source_id else "Cluster"
+            retention_label = RETENTION_LABEL.get(value, value.upper())
+            suffix = "; evidence remains recoverable" if value == "demote" else ""
+            self.status = f"{target_label} marked {retention_label}{suffix}."
 
     def _cycle_work_state(self, target: Target) -> None:
         if target.item is None:
@@ -985,7 +1015,7 @@ class ReviewUI:
             footer = (
                 " " + self.status
                 if self.status
-                else " ↑↓ navigate · Space expand · p preserve · c compact · Ctrl+Delete delete · x state · e clarify · r rules · ? help"
+                else " ↑↓ navigate · Space expand · p preserve · c compact · Delete/Ctrl-D/d delete · x state · e clarify · r rules · ? help"
             )
             _safe_add(self.screen, height - 2, 0, footer, width - 1, self.colors.get("warning", 0) if self.status else 0)
             _safe_add(
@@ -1047,7 +1077,7 @@ class ReviewUI:
                 record_action(self.review, "cancel")
                 self.save()
                 return False
-            elif key in (ord("p"), ord("c"), ord("d"), 4, curses.KEY_DC) and target and target.kind in {"cluster", "source"}:
+            elif (key in (ord("p"), ord("c")) or _is_delete_key(key)) and target and target.kind in {"cluster", "source"}:
                 value = "preserve" if key == ord("p") else "summarize" if key == ord("c") else "demote"
                 self._set_retention(target, value)
             elif key == ord("x") and target and target.kind in {"cluster", "source"}:

@@ -1,6 +1,6 @@
 {
   "name": "compact-focus",
-  "version": "0.22.0+codex.20260811203804",
+  "version": "0.22.1+codex.20260811204804",
   "description": "Review source-grounded clusters, then confirm or chat-refine the exact draft before Codex compacts.",
   "author": {
     "name": "Hudson Mitchell-Pullman",

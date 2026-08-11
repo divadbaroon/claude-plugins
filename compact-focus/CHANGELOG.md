@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.1 — 2026-08-11
+
+- Show only user prompts and subagent records as reviewable source rows. Tool
+  calls/results, file changes, and assistant narration remain in state and keep
+  their existing retention, persistence, and compaction behavior.
+- Recognize the delete sequences emitted by common terminals, including
+  Ctrl-Delete variants, and show immediate confirmation after marking context
+  for deletion.
+
 ## 0.22.0 — 2026-08-11
 
 - Replace retention-bucket navigation with the cluster-first hierarchy from
