@@ -101,7 +101,23 @@ Otherwise run the FAST FLOW — and check `prep-status` FIRST:
    - Q4 (multiSelect, if any contested): "Contested — select what to
      PRESERVE (unselected → summarize):" — the contested items. The
      user's explicit selection here IS the human decision.
-   Apply all answers; if "Adjust below first" or anything ambiguous, the
+   CAP RULES (AskUserQuestion holds 4 options × 4 questions — never let
+   the cap silently decide anything):
+   - CONTESTED OUTRANKS EVERYTHING for widget slots. If contested items
+     exceed one question's 4 options, give contested a second question
+     (drop Q2/Q3 to make room); if they exceed 8, skip the widget path for
+     contested entirely and require the editor or typed replies — contested
+     is never resolved by omission, and compaction still blocks on it.
+   - Overflow elsewhere is safe by construction: items not shown in the
+     widget keep their model-assigned tier, are fully visible in the
+     printed ledger (which has no cap), and stay addressable by number in
+     the typed grammar and both editors. When a question shows a subset,
+     SAY SO in its description ("4 costliest of 7 — others by number or
+     editor"), always chosen by context cost, never arbitrarily.
+   - Never add a 5th option or 5th question; the call fails. Q1's fixed
+     action options already fill one question.
+   Apply all answers; record which items were widget-visible vs overflow
+   in ledger_final. If "Adjust below first" or anything ambiguous, the
    typed grammar still works in the next message: numbers flip
    (`5, not 2`) · text → constraint · `? 3` provenance · `race` ·
    `window` · `ok`. If "Full editor": run `tui-inject` (tmux split when
