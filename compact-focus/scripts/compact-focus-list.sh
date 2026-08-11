@@ -412,34 +412,22 @@ SEED
       printf '%s' "$OUT" >"$S/costs.json"
       printf '%s' "$OUT" | jq -r '.units[] | "\(.i)\t\(.pct)%\t\(.prompt)"' \
         | awk -F'\t' '{printf " %2s. %-72s %6s\n", $1, substr($3,1,72), $2}'
+      printf '%s' "$OUT" | jq -r '.classes | to_entries[] | select(.value.tokens > 0) | "  class \(.key): ~\(.value.pct)%"'
       printf '%s' "$OUT" | jq -r '"(window \(.window) tokens · total \(([.units[].pct] | add // 0) * 10 | round / 10)% across \(.units | length) prompts → costs.json)"'
     else
       echo "(costs failed: $(printf '%s' "$OUT" | jq -r '.error // "unknown"'))"
     fi
     ;;
   tui-inject)
-    # Zero-typing launch ladder: (1) tmux → split a pane running the editor
-    # beside the chat, no input box involved; (2) macOS System Events →
-    # type "! cf" + return into this terminal for the user (needs
-    # Accessibility permission; only fires when a terminal is frontmost);
-    # (3) fallback → print the two-letter line to type.
+    # Package-grade launch ladder only (no OS keystroke injection — that
+    # needs per-machine Accessibility permission and cannot ship in a
+    # package): (1) tmux → split a pane running the editor beside the chat,
+    # zero typing, race-free; (2) fallback → print the two-letter line.
     if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
       tmux split-window -h "COMPACT_FOCUS_STATE_DIR='$S' '$HOME/.local/bin/cf' 2>/dev/null || COMPACT_FOCUS_STATE_DIR='$S' '$(dirname "$0")/cf'" 2>/dev/null \
         && { echo "(editor opened in a tmux split beside the chat)"; exit 0; }
     fi
-    if command -v osascript >/dev/null 2>&1 && [ "${COMPACT_FOCUS_INJECT:-keystroke}" = "keystroke" ]; then
-      FRONT=$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null)
-      case "$FRONT" in
-        Terminal|iTerm2|iTerm|Alacritty|kitty|WezTerm|Ghostty)
-          osascript -e 'delay 1.2' \
-                    -e 'tell application "System Events" to keystroke "! cf"' \
-                    -e 'delay 0.3' \
-                    -e 'tell application "System Events" to key code 36' >/dev/null 2>&1 \
-            && { echo "(typed ! cf into the terminal for you — editor opening)"; exit 0; }
-          ;;
-      esac
-    fi
-    echo "(auto-launch unavailable — type:  ! cf  )"
+    echo "(type  ! cf  to open the editor here)"
     ;;
   studymode)
     # The human-compact study wrapper launches sessions with

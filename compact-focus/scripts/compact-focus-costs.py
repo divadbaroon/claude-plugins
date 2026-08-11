@@ -57,9 +57,26 @@ def prompt_text(entry):
     return " ".join(content.split())
 
 
+FILE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+AGENT_TOOLS = {"Task", "Agent"}
+TODO_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "TaskOutput"}
+
+
+def classify(name):
+    if name in FILE_TOOLS:
+        return "file_changes"
+    if name in AGENT_TOOLS:
+        return "subagents"
+    if name in TODO_TOOLS:
+        return "todos"
+    return "other"
+
+
 def main(path):
     window = int(os.environ.get("COMPACT_FOCUS_WINDOW", 0)) or None
     units, chars, model_1m = [], 0, False
+    classes = {"file_changes": 0, "subagents": 0, "todos": 0, "other": 0}
+    toolmap = {}
     with open(path) as f:
         for line in f:
             try:
@@ -79,7 +96,25 @@ def main(path):
                     units[-1]["chars"] = chars
                 chars = 0
                 units.append({"i": len(units) + 1, "prompt": prompt_text(e)[:100]})
-            chars += est_chars(msg.get("content"))
+            content = msg.get("content")
+            chars += est_chars(content)
+            # class accounting: tool_use blocks by name; tool_result blocks
+            # by the id of the tool_use they answer
+            if isinstance(content, list):
+                for b in content:
+                    if not isinstance(b, dict):
+                        continue
+                    if b.get("type") == "tool_use":
+                        cls = classify(str(b.get("name", "")))
+                        toolmap[b.get("id")] = cls
+                        classes[cls] += est_chars(b)
+                    elif b.get("type") == "tool_result":
+                        cls = toolmap.get(b.get("tool_use_id"), "other")
+                        classes[cls] += est_chars(b)
+                    else:
+                        classes["other"] += est_chars(b)
+            else:
+                classes["other"] += est_chars(content)
     if units:
         units[-1]["chars"] = chars
     if window is None:
@@ -87,7 +122,9 @@ def main(path):
     for u in units:
         u["tokens"] = u.pop("chars") // 4
         u["pct"] = round(u["tokens"] * 100.0 / window, 1)
-    print(json.dumps({"window": window, "units": units}))
+    cls_out = {k: {"tokens": v // 4, "pct": round(v / 4 * 100.0 / window, 1)}
+               for k, v in classes.items()}
+    print(json.dumps({"window": window, "units": units, "classes": cls_out}))
 
 
 if __name__ == "__main__":

@@ -31,22 +31,33 @@ typed reply, compact.
 2. PRINT THE LEDGER — formatted markdown, INLINE (never collapsed), exactly
    this shape (Obsidian-style: headings, task-list checkboxes, bold tags,
    the item's OWN words from the transcript — never paraphrased labels, no
-   invented descriptions):
+   invented descriptions). DEFAULT PARTITION RULE: preserve = critical
+   ongoing work, recent decisions, active files; summarize = completed
+   tasks, resolved issues, older discussion; remove = redundant
+   information, outdated attempts. Anything you cannot confidently place →
+   contested: the human decides those, never you.
 
    ## ⏸ Compaction ledger
    > One typed reply handles everything · `ok` accepts as shown
 
-   ### Keep
-   - [x] **1 · open** — <item in the user's own words> → *next:* <step>
-   - [x] **2 · decision** — <choice + rationale> `[threads 1]`
-   - [x] **3 · dead-end** — <what was falsified>; *do not retry*
+   ### Class rules
+   - [x] first **30**% of session — keep decisions only *(edit N in editor)*
+   - [x] file-change detail · ~N% — keep / summarize / drop
+   - [~] subagent transcripts · ~N% — *summarize to outcome lines*
+   - [x] todo bookkeeping · ~N%
 
-   ### ⚡ Contested
-   - [ ] **4** — <span>: <construal A> *(lens A)* **or** <construal B> *(lens B)*?
+   ### Preserve — ongoing work, recent decisions, active files
+   - [x] **1 · open** — <item in the user's own words> → *next:* <step> · ~N%
 
-   ### Drop → demoted, recoverable
-   - [ ] **5 · mechanical** — <item> 
-   - [ ] **6** — <superseded item>
+   ### Summarize — completed, resolved, older
+   - [~] **2 · decision** — <choice + rationale> `[threads 1]` · ~N%
+   - [~] **3 · dead-end** — <what was falsified>; *do not retry* · ~N%
+
+   ### ⚡ Contested — you decide
+   - [?] **4** — <span>: <construal A> *(lens A)* **or** <construal B> *(lens B)*?
+
+   ### Remove — redundant, outdated → demoted, recoverable
+   - [ ] **5 · mechanical** — <item> · ~N%
 
    > **Anything the next agent must not MISINTERPRET?** Say it in your reply.
 
@@ -65,10 +76,13 @@ typed reply, compact.
 
    BEFORE printing, also persist the same ledger for the interactive
    editor: `ledger save '<json>'` with each item as {"id","tag","label",
-   "cat":"keep|contested|drop","prov","pct":<summed>,
+   "cat":"keep|summarize|contested|drop","prov","pct":<summed>,
    "children":[{"text":"<the actual prompt, verbatim>","checked":true,
-   "pct":<from costs>}]} — children un-collapse in the TUI with their
-   individual percentages, so match each prompt to its costs entry.
+   "pct":<from costs>}]}, plus "classes":[{"id":"first_n","state":"keep",
+   "n":30},{"id":"file_changes","state":"keep","pct":<from costs
+   classes>},{"id":"subagents","state":"summarize","pct":…},{"id":"todos",
+   "state":"keep","pct":…}] — class pcts come from the `costs` classes
+   table; subagents default to summarize.
    Then run `tui-inject` as your LAST tool call — it opens the editor with
    zero typing (tmux split, or macOS types `! cf` into this terminal for
    the user). Relay its output line under the printed ledger, plus:
@@ -104,13 +118,23 @@ typed reply, compact.
    in one plain-text line, no widget. Record
    '{"event":"ledger_final","kept":"…","dropped":"…"}'.
 
-4. APPLY AND COMPACT. `demote keep <keys> drop <nums>` for the drop set;
-   `graveyard add` a trace per dropped item. Then via SlashCommand:
-     /compact focus on Preserve exactly this state, expanding each labeled
-     item faithfully: <kept ledger lines + constraints verbatim>. Also
-     state: removed context is recoverable — demoted.jsonl / graveyard.jsonl
-     in `<state-dir>`, via `compact-focus-list.sh graveyard query <terms>`
-     or `recall <id>`.
+4. APPLY AND COMPACT. `demote keep <keys> drop <nums>` for the remove set;
+   `graveyard add` a trace per removed item. Contested items still
+   unresolved at this point BLOCK: ask about them in one plain-text line
+   before compacting — never silently default a contested item. Compile
+   class rules into directives and run via SlashCommand:
+     /compact focus on PRESERVE faithfully (expand each): <preserve lines +
+     constraints verbatim>. SUMMARIZE to outcome lines only: <summarize
+     items>. Class directives: <for each non-keep class rule —
+     first_n=drop/summarize: "for the first N% of the session keep only
+     decisions and constraints"; file_changes=summarize: "compress
+     file-change detail to which files and why"; file_changes=drop: "omit
+     file-change mechanics entirely"; subagents=summarize: "compress each
+     subagent run to a single outcome line"; subagents=drop: "omit subagent
+     transcripts"; todos=drop: "omit todo bookkeeping">. Also state:
+     removed context is recoverable — demoted.jsonl / graveyard.jsonl in
+     `<state-dir>`, via `compact-focus-list.sh graveyard query <terms>` or
+     `recall <id>`.
    If SlashCommand cannot run /compact, print the command. Then say once:
    "If anything seems forgotten or misread, say 'the compaction lost X'."
    On that, in ANY later turn: `graveyard query`, inject findings, record

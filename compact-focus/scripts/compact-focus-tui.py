@@ -26,9 +26,35 @@ import json
 import sys
 import textwrap
 
-CATS = ["keep", "contested", "drop"]
-CAT_TITLES = {"keep": "KEEP", "contested": "⚡ CONTESTED", "drop": "DROP → demoted, recoverable"}
+CATS = ["keep", "summarize", "contested", "drop"]
+CAT_TITLES = {
+    "keep": "PRESERVE — critical ongoing work, recent decisions, active files",
+    "summarize": "SUMMARIZE — completed tasks, resolved issues, older discussion",
+    "contested": "⚡ CONTESTED — you decide",
+    "drop": "REMOVE — redundant / outdated → demoted, recoverable",
+}
+CAT_MARK = {"keep": "[x]", "summarize": "[~]", "contested": "[?]", "drop": "[ ]"}
 CHECK = {True: "[x]", False: "[ ]"}
+
+
+DEFAULT_CLASSES = [
+    {"id": "first_n", "label": "first {n}% of session (detail beyond decisions)", "state": "keep", "n": 30},
+    {"id": "file_changes", "label": "file-change detail (diffs, edit contents)", "state": "keep"},
+    {"id": "subagents", "label": "subagent transcripts", "state": "keep"},
+    {"id": "todos", "label": "todo/task bookkeeping", "state": "keep"},
+]
+CLASS_STATES = {"todos": ["keep", "drop"]}
+
+
+def class_states(c):
+    return CLASS_STATES.get(c["id"], ["keep", "summarize", "drop"])
+
+
+def class_line(c):
+    label = c["label"].replace("{n}", str(c.get("n", "")))
+    pct = f"  ~{c['pct']:.1f}%" if isinstance(c.get("pct"), (int, float)) else ""
+    extra = "  (e edits N)" if c["id"] == "first_n" else ""
+    return f"[{c['state']:^9}] {label}{pct}{extra}"
 
 
 def load(path):
@@ -36,6 +62,8 @@ def load(path):
         data = json.load(f)
     data.setdefault("constraints", [])
     data.setdefault("finalized", False)
+    if not data.get("classes"):
+        data["classes"] = [dict(c) for c in DEFAULT_CLASSES]
     for it in data.get("items", []):
         it.setdefault("cat", "keep")
         it.setdefault("tag", "")
@@ -58,7 +86,7 @@ def pct_of(x):
 
 
 def item_head(it):
-    mark = CHECK[it["cat"] != "drop"]
+    mark = CAT_MARK.get(it["cat"], "[ ]")
     exp = "▾" if it["expanded"] else ("▸" if it["children"] else "·")
     tag = f"{it['tag']} · " if it["tag"] else ""
     prov = f"  [{it.get('prov')}]" if it.get("prov") else ""
@@ -83,6 +111,13 @@ def build_display(data, width):
                               subsequent_indent=cont_indent) or [first_indent]
         for ln in lines:
             display.append((tidx, ln, style))
+
+    if data.get("classes"):
+        display.append((None, "── CLASS RULES (whole categories of content) ", "hdr:contested"))
+        for c in data["classes"]:
+            tidx = len(targets)
+            targets.append(("class", c, None))
+            emit(tidx, class_line(c), "item", " ", "            ")
 
     for cat in CATS:
         items = [it for it in data["items"] if it["cat"] == cat]
@@ -144,7 +179,7 @@ def main(scr, data, path):
     curses.init_pair(2, curses.COLOR_YELLOW, -1)
     curses.init_pair(3, curses.COLOR_RED, -1)
     curses.init_pair(4, curses.COLOR_CYAN, -1)
-    hdr_pair = {"keep": 1, "contested": 2, "drop": 3}
+    hdr_pair = {"keep": 1, "summarize": 4, "contested": 2, "drop": 3}
     sel, off, show_help = 0, 0, False
 
     while True:
@@ -175,10 +210,11 @@ def main(scr, data, path):
                 scr.addstr(y + 1, 0, text[: w - 1], attr | curses.color_pair(4))
             else:
                 scr.addstr(y + 1, 0, text[: w - 1], attr)
-        keep_n = sum(1 for i in data["items"] if i["cat"] != "drop")
-        drop_n = sum(1 for i in data["items"] if i["cat"] == "drop")
+        counts = {c: sum(1 for i in data["items"] if i["cat"] == c) for c in CATS}
         scr.addstr(h - 2, 0,
-                   f" {keep_n} keep · {drop_n} drop · {len(data['constraints'])} constraint(s)"[: w - 1],
+                   f" {counts['keep']} preserve · {counts['summarize']} summarize · "
+                   f"{counts['contested']} contested · {counts['drop']} remove · "
+                   f"{len(data['constraints'])} constraint(s)"[: w - 1],
                    curses.A_DIM)
         if show_help:
             scr.addstr(h - 1, 0,
@@ -204,7 +240,17 @@ def main(scr, data, path):
                 data["constraints"].append(con)
         elif targets:
             kind, it, ci = targets[sel]
-            if kind == "item":
+            if kind == "class":
+                states = class_states(it)
+                if ch == ord(" "):
+                    it["state"] = "drop" if it["state"] == "keep" else "keep"
+                elif ch == 9:
+                    it["state"] = states[(states.index(it["state"]) + 1) % len(states)]
+                elif ch == ord("e") and it["id"] == "first_n":
+                    new = footer_input(scr, "N (percent of session):", str(it.get("n", 30)))
+                    if new.isdigit() and 0 < int(new) <= 100:
+                        it["n"] = int(new)
+            elif kind == "item":
                 if ch == ord(" "):
                     it["cat"] = "drop" if it["cat"] != "drop" else "keep"
                 elif ch == 9:
@@ -242,11 +288,16 @@ if __name__ == "__main__":
         sys.exit(0)
     finalized = curses.wrapper(main, state, ledger_path)
     if finalized:
-        keep = sum(1 for i in state["items"] if i["cat"] != "drop")
+        keep = sum(1 for i in state["items"] if i["cat"] in ("keep", "contested"))
+        summ = sum(1 for i in state["items"] if i["cat"] == "summarize")
         drop = sum(1 for i in state["items"] if i["cat"] == "drop")
         unchecked = sum(1 for i in state["items"] for c in i["children"]
                         if i["cat"] != "drop" and not c["checked"])
-        print(f"ledger finalized: {keep} keep · {drop} drop · {unchecked} prompts unchecked · "
-              f"{len(state['constraints'])} constraint(s) — tell Claude to proceed")
+        rules = [f"{c['id']}={c['state']}" + (f"(n={c['n']})" if c["id"] == "first_n" else "")
+                 for c in state.get("classes", []) if c["state"] != "keep"]
+        rtxt = f" · class rules: {', '.join(rules)}" if rules else ""
+        print(f"ledger finalized: {keep} preserve · {summ} summarize · {drop} remove · "
+              f"{unchecked} prompts unchecked · "
+              f"{len(state['constraints'])} constraint(s){rtxt} — tell Claude to proceed")
     else:
         print("ledger NOT saved (aborted) — tell Claude to re-show or proceed with the previous state")
