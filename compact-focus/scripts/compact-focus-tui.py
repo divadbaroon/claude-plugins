@@ -52,12 +52,23 @@ def save(path, data):
         json.dump(data, f, indent=1)
 
 
+def pct_of(x):
+    p = x.get("pct")
+    return f"  {p:.1f}%" if isinstance(p, (int, float)) else ""
+
+
 def item_head(it):
     mark = CHECK[it["cat"] != "drop"]
     exp = "▾" if it["expanded"] else ("▸" if it["children"] else "·")
     tag = f"{it['tag']} · " if it["tag"] else ""
     prov = f"  [{it.get('prov')}]" if it.get("prov") else ""
-    return f"{mark} {exp} {tag}{it['label']}{prov}"
+    pct = it.get("pct")
+    if pct is None and it["children"]:
+        vals = [c.get("pct") for c in it["children"] if isinstance(c.get("pct"), (int, float))]
+        if vals:
+            pct = round(sum(vals), 1)
+    ptxt = f"  ~{pct:.1f}% ctx" if isinstance(pct, (int, float)) else ""
+    return f"{mark} {exp} {tag}{it['label']}{prov}{ptxt}"
 
 
 def build_display(data, width):
@@ -88,7 +99,7 @@ def build_display(data, width):
                 for ci, c in enumerate(it["children"]):
                     ctidx = len(targets)
                     targets.append(("child", it, ci))
-                    emit(ctidx, f"{CHECK[c['checked']]} {c['text']}", "child",
+                    emit(ctidx, f"{CHECK[c['checked']]}{pct_of(c)} {c['text']}", "child",
                          "        ", "            ")
     return targets, display
 

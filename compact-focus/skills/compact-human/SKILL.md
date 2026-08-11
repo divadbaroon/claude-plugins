@@ -18,12 +18,15 @@ typed reply, compact.
 ## FAST FLOW
 
 1. PREPARE SILENTLY (no listings, no questions). Load threads (no-args
-   call; if <2 categories, group and `save`). Derive triage items (open /
-   solved / unclear) and `triage save` them. Run `lens` and `guidelines`;
-   refresh Domain lens / Active task model in lens.md if seed or stale.
-   Construe the session through two rival representations (progress/state
-   vs causal-debugging, or better per the Domain lens) and note where they
-   DISAGREE. Record '{"event":"ledger_prep","items":N,"contested":N}'.
+   call; if <2 categories, group and `save`). Run `costs` — it prints each
+   real user prompt with its context-window percentage (prompt + response +
+   tool results); use it for the pct fields below. Derive triage items
+   (open / solved / unclear) and `triage save` them. Run `lens` and
+   `guidelines`; refresh Domain lens / Active task model in lens.md if seed
+   or stale. Construe the session through two rival representations
+   (progress/state vs causal-debugging, or better per the Domain lens) and
+   note where they DISAGREE. Record
+   '{"event":"ledger_prep","items":N,"contested":N}'.
 
 2. PRINT THE LEDGER — formatted markdown, INLINE (never collapsed), exactly
    this shape (Obsidian-style: headings, task-list checkboxes, bold tags,
@@ -56,17 +59,23 @@ typed reply, compact.
    the whole ledger under ~25 lines — merge aggressively, this is a
    partition, not an inventory.
 
+   Every ledger line ends with its context share (`· ~8.0%` — sum of its
+   prompts' pcts from `costs`); order Drop candidates by pct descending so
+   the expensive removals are visible first.
+
    BEFORE printing, also persist the same ledger for the interactive
    editor: `ledger save '<json>'` with each item as {"id","tag","label",
-   "cat":"keep|contested|drop","prov","children":[{"text":"<the actual
-   prompt(s) behind this item, verbatim>","checked":true}]} — children are
-   what un-collapses in the TUI, so populate them from threads.json.
-   Then, under the printed ledger, say only:
+   "cat":"keep|contested|drop","prov","pct":<summed>,
+   "children":[{"text":"<the actual prompt, verbatim>","checked":true,
+   "pct":<from costs>}]} — children un-collapse in the TUI with their
+   individual percentages, so match each prompt to its costs entry.
+   Then run `tui-inject` as your LAST tool call — it opens the editor with
+   zero typing (tmux split, or macOS types `! cf` into this terminal for
+   the user). Relay its output line under the printed ledger, plus:
 
-   > ✏️ Type `! cf` to edit right here — full-screen editor takes over this
-   > terminal (space check/uncheck · tab recategorize · → expand into the
-   > prompts behind an item · e/n edit label/note · a constraint · q saves
-   > and returns you to this chat). Then say **done**.
+   > ✏️ In the editor: space check/uncheck · tab recategorize · → expand an
+   > item into its prompts (each with its context %) · e/n edit · a
+   > constraint · q saves and returns here — then say **done**.
    > Or reply in text: numbers flip (`5, not 2`) · text → constraint ·
    > `? 3` provenance · `race` · `window` (separate-window editor) · `ok`
 

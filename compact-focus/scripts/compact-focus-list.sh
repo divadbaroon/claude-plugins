@@ -400,6 +400,47 @@ SEED
     fi
     echo "(could not auto-open — run manually:  ! $SELF tui  )"
     ;;
+  costs)
+    # Per-prompt context cost (#7821's cost-annotated pick list). Reads the
+    # transcript path the hook persisted (or takes one as an argument).
+    TP="${2:-}"
+    [ -z "$TP" ] && [ -r "$S/transcript.path" ] && TP=$(cat "$S/transcript.path")
+    [ -n "$TP" ] && [ -r "$TP" ] || { echo "(no transcript path — run /compact once, or pass the path)"; exit 0; }
+    OUT=$(python3 "$(dirname "$0")/compact-focus-costs.py" "$TP" 2>/dev/null)
+    if printf '%s' "$OUT" | jq -e '.units' >/dev/null 2>&1; then
+      mkdir -p "$S" 2>/dev/null
+      printf '%s' "$OUT" >"$S/costs.json"
+      printf '%s' "$OUT" | jq -r '.units[] | "\(.i)\t\(.pct)%\t\(.prompt)"' \
+        | awk -F'\t' '{printf " %2s. %-72s %6s\n", $1, substr($3,1,72), $2}'
+      printf '%s' "$OUT" | jq -r '"(window \(.window) tokens · total \(([.units[].pct] | add // 0) * 10 | round / 10)% across \(.units | length) prompts → costs.json)"'
+    else
+      echo "(costs failed: $(printf '%s' "$OUT" | jq -r '.error // "unknown"'))"
+    fi
+    ;;
+  tui-inject)
+    # Zero-typing launch ladder: (1) tmux → split a pane running the editor
+    # beside the chat, no input box involved; (2) macOS System Events →
+    # type "! cf" + return into this terminal for the user (needs
+    # Accessibility permission; only fires when a terminal is frontmost);
+    # (3) fallback → print the two-letter line to type.
+    if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+      tmux split-window -h "COMPACT_FOCUS_STATE_DIR='$S' '$HOME/.local/bin/cf' 2>/dev/null || COMPACT_FOCUS_STATE_DIR='$S' '$(dirname "$0")/cf'" 2>/dev/null \
+        && { echo "(editor opened in a tmux split beside the chat)"; exit 0; }
+    fi
+    if command -v osascript >/dev/null 2>&1 && [ "${COMPACT_FOCUS_INJECT:-keystroke}" = "keystroke" ]; then
+      FRONT=$(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null)
+      case "$FRONT" in
+        Terminal|iTerm2|iTerm|Alacritty|kitty|WezTerm|Ghostty)
+          osascript -e 'delay 1.2' \
+                    -e 'tell application "System Events" to keystroke "! cf"' \
+                    -e 'delay 0.3' \
+                    -e 'tell application "System Events" to key code 36' >/dev/null 2>&1 \
+            && { echo "(typed ! cf into the terminal for you — editor opening)"; exit 0; }
+          ;;
+      esac
+    fi
+    echo "(auto-launch unavailable — type:  ! cf  )"
+    ;;
   studymode)
     # The human-compact study wrapper launches sessions with
     # COMPACT_FOCUS_STUDY=1; the skill asks this mode which flow to run.

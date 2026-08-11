@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.13.0"
+PLUGIN_VERSION="0.14.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -48,6 +48,10 @@ SESSION_ID=$(jq -r '.session_id // empty' <<<"$INPUT")
 TRIGGER=$(jq -r '.trigger // empty' <<<"$INPUT")
 TRANSCRIPT=$(jq -r '.transcript_path // empty' <<<"$INPUT")
 FOCUS=$(jq -r '.custom_instructions // empty' <<<"$INPUT")
+
+# The costs analyzer (per-prompt window %) needs the transcript path, which
+# only hooks receive — persist it for the skill/instrument.
+[[ -n "$TRANSCRIPT" ]] && printf '%s' "$TRANSCRIPT" >"$STATE_DIR/transcript.path" 2>/dev/null
 
 # Trigger-aware pause expiry: a human at the keyboard revisits /compact on a
 # minutes timescale, so manual pauses expire fast (bare /compact twice in
