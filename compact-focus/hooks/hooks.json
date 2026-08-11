@@ -1,5 +1,5 @@
 {
-  "description": "Prepare a grounded proposal, review it inline, and pass the approved contract into the pending compaction",
+  "description": "Prepare a grounded proposal, review it in a companion terminal, and pass the approved contract into the pending compaction",
   "hooks": {
     "SessionStart": [
       {
@@ -23,7 +23,7 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook precompact",
             "timeout": 3600,
-            "statusMessage": "compact focus: preparing the inline review…"
+            "statusMessage": "compact focus: waiting for the companion review…"
           }
         ]
       }
@@ -56,7 +56,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook feedback",
-            "timeout": 15
+            "timeout": 15,
+            "additionalContextLimit": 9000
           }
         ]
       }

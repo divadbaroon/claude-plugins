@@ -6,15 +6,16 @@ import os
 import shutil
 import sqlite3
 import sys
+from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from . import VERSION
+from .companion import CompanionError, terminal_launch_command
 from .finalize import recall as recall_record
 from .finalize import search as search_records
 from .host import HOST_CODEX, detect_host
 from .review import new_review
 from .state import StatePaths, atomic_write_json, load_json, project_id, state_root
-from .terminal import TerminalError, find_terminal
 from .tui import run_review
 from .workflow import (
     WorkflowError,
@@ -175,28 +176,44 @@ def _recent_events(path: Any, limit: int = 20) -> list[Dict[str, Any]]:
 
 def _review(args: argparse.Namespace) -> int:
     paths = _paths_for_cwd(args.session)
-    latest = paths.latest_cycle_id()
+    latest = args.cycle or paths.latest_cycle_id()
+    result_file = Path(args.result_file).expanduser().resolve() if args.result_file else None
+
+    def finish(approved: bool, error: str = "") -> int:
+        if result_file is not None:
+            atomic_write_json(
+                result_file,
+                {
+                    "approved": approved,
+                    "cycle_id": latest,
+                    "error": error,
+                },
+            )
+        if error:
+            print(f"compact focus: {error}", file=sys.stderr)
+            return 1
+        print("review approved" if approved else "review cancelled")
+        return 0 if approved else 1
+
     if not latest:
-        print("compact focus: no prepared cycle for this project", file=sys.stderr)
-        return 1
+        return finish(False, "no prepared cycle for this project")
     cycle = paths.cycle(latest)
     trace = load_json(cycle / "trace.json", {})
     proposal = load_json(cycle / "proposal.initial.json", {})
     review = load_json(cycle / "review.draft.json", None) or new_review(proposal)
     if not trace or not proposal:
-        print("compact focus: the latest cycle is incomplete", file=sys.stderr)
-        return 1
+        return finish(False, "the requested cycle is incomplete")
 
     def save(value: Dict[str, Any]) -> None:
         atomic_write_json(cycle / "review.draft.json", value)
 
     try:
         approved = run_review(trace, proposal, review, save)
+    except KeyboardInterrupt:
+        return finish(False, "review interrupted")
     except Exception as exc:
-        print(f"compact focus: editor failed: {exc}", file=sys.stderr)
-        return 1
-    print("review approved" if approved else "review cancelled")
-    return 0 if approved else 1
+        return finish(False, f"editor failed: {exc}")
+    return finish(approved)
 
 
 def _recall(args: argparse.Namespace) -> int:
@@ -259,15 +276,13 @@ def _doctor(_args: argparse.Namespace) -> int:
         state_detail = str(exc)
     checks.append(("state directory", state_ok, state_detail))
     try:
-        target = find_terminal()
+        command, launcher = terminal_launch_command(root / ".doctor-review.command")
         terminal_ok = True
-        terminal_detail = target.path + (
-            f" · {target.host_name} pid {target.host_pid}" if target.host_pid else ""
-        )
-    except TerminalError as exc:
+        terminal_detail = f"{launcher} · {command[0]}"
+    except CompanionError as exc:
         terminal_ok = False
         terminal_detail = str(exc)
-    checks.append(("inline terminal", terminal_ok, terminal_detail))
+    checks.append(("review terminal", terminal_ok, terminal_detail))
     try:
         connection = sqlite3.connect(":memory:")
         connection.execute("CREATE VIRTUAL TABLE f USING fts5(text)")
@@ -318,6 +333,8 @@ def parser() -> argparse.ArgumentParser:
 
     review = commands.add_parser("review", help="reopen the latest prepared review")
     review.add_argument("--session")
+    review.add_argument("--cycle")
+    review.add_argument("--result-file", help=argparse.SUPPRESS)
 
     recall = commands.add_parser(
         "recall",

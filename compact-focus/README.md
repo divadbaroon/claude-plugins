@@ -1,23 +1,24 @@
 # Compact Focus
 
 Compact Focus turns the native `/compact` in Claude Code and Codex into a
-human-reviewed transaction. One command opens an inline editor before
-compaction: state what must not be misconstrued, inspect the source-grounded
-ledger, change its meaning or retention, and press Enter. There is no generated
-command to copy and no second confirmation dialog.
+human-reviewed transaction. One command opens a focused editor in a companion
+terminal before compaction: state what must not be misconstrued, inspect the
+source-grounded ledger, change its meaning or retention, and press Enter. The
+pending `/compact` continues automatically; there is no generated command to
+copy and no second confirmation dialog.
 
-Version 0.20.7 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
-macOS. Linux uses the same POSIX terminal path. Native Windows is not yet
-supported.
+Version 0.21.0 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
+macOS. On Linux it uses tmux or a detected terminal emulator. Native Windows is
+not yet supported.
 
 ## Transaction model
 
 ```text
 normal turns ── optional bounded background proposal ──┐
                                                        v
-one bare /compact ── unanchored precommit ── inline editable ledger
+one bare /compact ── companion terminal ── unanchored precommit + editable ledger
                                                        |
-                         q blocks <── human decision ──> Enter approves
+                         q blocks <── human decision ──> Enter approves + returns
                                                        |
                 ┌──────────────────────────────────────┴─────────────────────┐
                 v                                                            v
@@ -26,7 +27,7 @@ one bare /compact ── unanchored precommit ── inline editable ledger
                 |                                                            |
                 └──────────────────────┬─────────────────────────────────────┘
                                        v
-                    SessionStart restores the contract
+                    host-supported context restores the contract
                                        |
                                        v
                   first prompts reinforce the precommit
@@ -46,25 +47,25 @@ The host capabilities are not identical:
 | Capability | Claude Code | Codex |
 | --- | --- | --- |
 | Intercept one native `/compact` | Yes | Yes |
-| Inline precommit and full ledger editor | Yes | Yes |
+| Automatic precommit and full ledger editor | Companion terminal | Companion terminal |
 | Cancel before compaction | Yes | Yes |
 | Feed the approved contract into the native summarizer | Yes, best-effort and audited | No |
-| Restore the contract into the immediate continuation | `SessionStart` + bounded precommit reinforcement | `SessionStart` + bounded precommit reinforcement |
+| Restore the contract into the immediate continuation | `SessionStart` + bounded precommit reinforcement | Full contract beside first prompt + bounded precommit reinforcement |
 | Inspect and lexically audit the generated summary | Yes | No; remote summary text is encrypted |
 | Recover demoted evidence and learn from explicit feedback | Yes | Yes |
 
 Claude's native summarizer receives the contract but can still violate it.
 Compact Focus audits the plaintext result and independently restores the full
 contract after compaction, then reinforces only the contradiction-free
-precommit beside the first three continuation prompts. Codex preserves the same
-downstream contract without
-pretending to control or inspect a summarizer interface that Codex does not
-expose.
+precommit beside the first three continuation prompts. Codex restores the full
+contract as developer context beside the first post-compaction prompt, then the
+minimal precommit beside the next two, without pretending to control or inspect
+a summarizer interface that Codex does not expose.
 
 ## Install for Claude Code
 
-Requirements: Claude Code with plugin hooks, Python 3.9+, and a macOS or Linux
-terminal.
+Requirements: Claude Code with plugin hooks, Python 3.9+, and either macOS
+Terminal.app, tmux, or a supported Linux terminal emulator.
 
 ```bash
 claude plugin marketplace add divadbaroon/claude-plugins
@@ -92,7 +93,7 @@ claude plugin update compact-focus@papert-tools
 ## Install for Codex
 
 Requirements: Codex CLI 0.147.0+ with lifecycle hooks enabled, Python 3.9+,
-and a macOS or Linux terminal.
+and either macOS Terminal.app, tmux, or a supported Linux terminal emulator.
 
 ```bash
 codex plugin marketplace add divadbaroon/claude-plugins
@@ -108,16 +109,18 @@ codex plugin marketplace upgrade papert-tools
 codex plugin add compact-focus@papert-tools
 ```
 
-Codex background model analysis is off by default. The deterministic editor is
-the complete foreground workflow.
+Codex background model analysis is off by default. The deterministic companion
+editor is the complete foreground workflow. It runs outside Codex's rendering
+surface because Codex redraws its hook status until `PreCompact` returns.
 
 ## Friend beta
 
 Installation is user-scoped by default, so one install applies to new local
 sessions across projects. For a meaningful test, use a conversation containing
 several decisions, a reversed assumption, and an unresolved question. Run the
-ordinary `/compact`, edit any misconstrual in the inline ledger, and approve
-with Enter or cancel with `q`.
+ordinary `/compact`, edit any misconstrual in the companion ledger, and approve
+with Enter or cancel with `q`. The original chat waits at its hook status and
+continues automatically when the review window returns.
 
 Report friction through the
 [Compact Focus beta feedback form](https://github.com/divadbaroon/claude-plugins/issues/new?template=compact-focus-beta.yml).
@@ -159,6 +162,13 @@ An independently installed CLI needs `--state-root` when inspecting the private
 state directory owned by a marketplace installation.
 
 ## Review interface
+
+`/compact` opens the review in a new Terminal.app window on macOS or a new tmux
+pane when the session is already inside tmux. Linux falls back to
+`x-terminal-emulator`, GNOME Terminal, Konsole, or xterm. This separation is a
+safety boundary: both chat hosts continue repainting their own terminal while a
+compaction hook is running, so a curses editor cannot share that surface
+without either corrupting the display or suspending the host process.
 
 The first screen asks what the next agent must not misinterpret. It appears
 before any proposal so the proposal cannot anchor the answer. Empty Enter skips
@@ -267,6 +277,9 @@ stale worker.
 | `COMPACT_FOCUS_ASYNC_AUDIT` | `1` | Reconcile Claude's provisional audit against the carried transcript summary |
 | `COMPACT_FOCUS_PROMPT_REINFORCEMENTS` | `3` | Number of early continuation prompts that receive the minimal precommit cue |
 | `COMPACT_FOCUS_STATE_DIR` | plugin data directory | Explicit state override |
+| `COMPACT_FOCUS_REVIEW_TIMEOUT_SECONDS` | `3300` | Maximum wait for a companion review decision |
+| `COMPACT_FOCUS_TERMINAL_LAUNCHER` | auto-detected | Custom launcher command; use `{script}` where the review command should appear |
+| `COMPACT_FOCUS_MAC_TERMINAL` | `Terminal` | macOS application used for the companion window |
 
 ## Privacy and failure semantics
 
@@ -280,11 +293,11 @@ With background analysis enabled, bounded textual evidence is sent through a
 child CLI authenticated as the current user. Compact Focus has no telemetry,
 analytics endpoint, or independent network client.
 
-- `q`, invalid coverage, or an unavailable inline terminal blocks that
+- `q`, invalid coverage, or an unavailable companion terminal blocks that
   compaction attempt.
 - If a proposal worker fails, the deterministic ledger preserves every source.
-- A watchdog resumes the host if the editor process dies while the host is
-  suspended.
+- The editor never sends job-control signals to the host; a failed editor
+  blocks only that compaction attempt instead of suspending the chat process.
 - Foreground compaction never waits for the background lock or worker.
 - Transcript JSONL is an internal and unstable interface on both hosts;
   unsupported Codex records are counted and unknown Claude blocks are retained
@@ -303,10 +316,10 @@ uv run --with pyyaml python ~/.codex/skills/.system/plugin-creator/scripts/valid
 python3 -m build ./compact-focus
 ```
 
-Manual platform probes live in `tests/manual/`. The automated suite covers both
-rollout formats, compaction boundaries, media privacy, proposal grounding,
-editor mutations, exact coverage, recovery, worker cancellation, contract
-restoration, stale proposal rebasing, and hook control responses.
+The automated suite covers both rollout formats, compaction boundaries, media
+privacy, proposal grounding, companion-terminal handoff, editor mutations,
+exact coverage, recovery, worker cancellation, contract restoration, stale
+proposal rebasing, and hook control responses.
 
 Compact Focus is MIT licensed. See [CHANGELOG.md](./CHANGELOG.md) and
 [CONTRIBUTING.md](../CONTRIBUTING.md).

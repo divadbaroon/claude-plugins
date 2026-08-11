@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.21.0 — 2026-08-11
+
+- Replace same-terminal file-descriptor theft with a companion terminal review
+  launched automatically by the ordinary `/compact`. Claude Code and Codex
+  keep rendering their hook status in the original terminal while the reviewer
+  gets exclusive input and output in the companion surface.
+- Remove every `SIGSTOP`/`SIGCONT` path and the obsolete terminal-lease probe.
+  Compact Focus can no longer suspend the host, strand zsh in job-control mode,
+  or leave an orphaned curses process competing with the chat renderer.
+- Fail closed when the review window is closed, mismatched, unavailable, or
+  timed out; compaction proceeds only after an explicit approval result.
+- Restore the full Codex contract beside the first post-compaction prompt.
+  Codex 0.147.0 defers `SessionStart` until that prompt; `UserPromptSubmit`
+  supplies the user-authored precommit without duplicating the full contract,
+  and remains the full-contract fallback if the lifecycle event never arrives.
+
 ## 0.20.7 — 2026-08-11
 
 - Correct the friend-facing Claude Code install flow: source review happens at
