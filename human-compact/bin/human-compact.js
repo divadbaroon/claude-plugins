@@ -86,6 +86,7 @@ const env = {
   ...process.env,
   COMPACT_FOCUS_STATE_DIR: stateDir,
   HUMAN_COMPACT: '1',
+  COMPACT_FOCUS_STUDY: '1',
 };
 
 if (dryRun) {

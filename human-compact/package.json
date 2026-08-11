@@ -1,6 +1,6 @@
 {
   "name": "@papertlab/human-compact",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Sandbox-forked Claude Code sessions for human-in-the-loop compaction studies: pick any past chat, work in a fork (original untouched), file changes disabled, /compact runs the study hook.",
   "bin": {
     "human-compact": "bin/human-compact.js"

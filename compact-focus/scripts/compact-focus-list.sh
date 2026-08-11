@@ -350,6 +350,11 @@ SEED
     echo "── B (lensed summary):"
     ask "$B_SUM" || echo "(B failed)"
     ;;
+  studymode)
+    # The human-compact study wrapper launches sessions with
+    # COMPACT_FOCUS_STUDY=1; the skill asks this mode which flow to run.
+    echo "${COMPACT_FOCUS_STUDY:-off}"
+    ;;
   *)
     labels
     ;;
