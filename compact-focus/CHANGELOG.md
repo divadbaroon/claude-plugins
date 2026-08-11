@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.7 — 2026-08-11
+
+- Correct the friend-facing Claude Code install flow: plugin trust happens at
+  installation, while `/hooks` is a read-only verification screen.
+- Add a minimal external-beta path and an explicit, privacy-preserving feedback
+  route.
+
 ## 0.20.6 — 2026-08-11
 
 - Label the host-only lifecycle subcommand explicitly instead of leaking

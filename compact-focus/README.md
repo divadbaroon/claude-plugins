@@ -6,7 +6,7 @@ compaction: state what must not be misconstrued, inspect the source-grounded
 ledger, change its meaning or retention, and press Enter. There is no generated
 command to copy and no second confirmation dialog.
 
-Version 0.20.6 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
+Version 0.20.7 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
 macOS. Linux uses the same POSIX terminal path. Native Windows is not yet
 supported.
 
@@ -77,8 +77,10 @@ For deterministic foreground review with no background model call:
 claude plugin install compact-focus@papert-tools --config background_analysis=false
 ```
 
-Restart Claude Code, review and trust the plugin hooks with `/hooks`, then use
-the ordinary `/compact`.
+Review and accept Claude Code's plugin-source warning during installation,
+then start a new Claude Code session and use the ordinary `/compact`. The
+`/hooks` menu can verify that Compact Focus loaded, but it is read-only and is
+not a separate trust step.
 
 Update with:
 
@@ -108,6 +110,20 @@ codex plugin add compact-focus@papert-tools
 
 Codex background model analysis is off by default. The deterministic editor is
 the complete foreground workflow.
+
+## Friend beta
+
+Installation is user-scoped by default, so one install applies to new local
+sessions across projects. For a meaningful test, use a conversation containing
+several decisions, a reversed assumption, and an unresolved question. Run the
+ordinary `/compact`, edit any misconstrual in the inline ledger, and approve
+with Enter or cancel with `q`.
+
+Report friction through the
+[Compact Focus beta feedback form](https://github.com/divadbaroon/claude-plugins/issues/new?template=compact-focus-beta.yml).
+Compact Focus has no telemetry, so review corrections and transcript evidence
+stay on the tester's machine unless they deliberately include redacted details
+in a report.
 
 ## Local development and standalone CLI
 

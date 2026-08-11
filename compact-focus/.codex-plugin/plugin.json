@@ -1,6 +1,6 @@
 {
   "name": "compact-focus",
-  "version": "0.20.6+codex.20260811115559",
+  "version": "0.20.7+codex.20260811173430",
   "description": "Review, edit, recover, and carry forward the context Codex preserves across compaction.",
   "author": {
     "name": "Hudson Mitchell-Pullman",

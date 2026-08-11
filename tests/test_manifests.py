@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -31,10 +32,18 @@ class ManifestTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        claude_plugin = json.loads(
+            (ROOT / "compact-focus" / ".claude-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
         entry = marketplace["plugins"][0]
         self.assertEqual("compact-focus", entry["name"])
         self.assertEqual("./compact-focus", entry["source"]["path"])
-        self.assertRegex(plugin["version"], r"^0\.20\.6\+codex\.\d{14}$")
+        self.assertRegex(
+            plugin["version"],
+            rf"^{re.escape(claude_plugin['version'])}\+codex\.\d{{14}}$",
+        )
 
 
 if __name__ == "__main__":
