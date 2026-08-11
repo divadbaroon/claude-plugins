@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 os.sys.path.insert(0, str(ROOT / "compact-focus"))
 
 from compact_focus.review import new_review  # noqa: E402
-from compact_focus.tui import ReviewUI  # noqa: E402
+from compact_focus.tui import ReviewUI, _is_delete_key  # noqa: E402
 
 
 class FakeScreen:
@@ -65,6 +65,87 @@ class TuiSetupTests(unittest.TestCase):
         ):
             ui.setup()
         self.assertEqual(0, ui.colors["preserve"])
+
+    def test_delete_key_recognizes_terminal_variants(self):
+        for key in (ord("d"), 4, 8, 127, curses.KEY_DC):
+            self.assertTrue(_is_delete_key(key))
+        with patch("compact_focus.tui.curses.keyname", return_value=b"kDC5"):
+            self.assertTrue(_is_delete_key(9999))
+
+    def test_only_prompts_and_subagents_render_while_other_sources_stay_saved(self):
+        trace = {
+            "episodes": [
+                {
+                    "sources": [
+                        {
+                            "id": "s-file",
+                            "kind": "tool_result",
+                            "class": "file_changes",
+                            "text": "very large diff that should not render",
+                        },
+                        {
+                            "id": "s-prompt",
+                            "kind": "user_prompt",
+                            "class": "other",
+                            "text": "keep this visible",
+                        },
+                        {
+                            "id": "s-tool",
+                            "kind": "tool_call",
+                            "class": "other",
+                            "text": "tool call should not render",
+                        },
+                        {
+                            "id": "s-assistant",
+                            "kind": "assistant_text",
+                            "class": "other",
+                            "text": "assistant narration should not render",
+                        },
+                        {
+                            "id": "s-agent",
+                            "kind": "tool_call",
+                            "class": "subagents",
+                            "text": "subagent task should remain visible",
+                        },
+                    ]
+                }
+            ]
+        }
+        proposal = {
+            "items": [
+                {
+                    "id": "cluster",
+                    "title": "Active cluster",
+                    "summary": "Continue the active work.",
+                    "type": "constraint",
+                    "status": "active",
+                    "retention": "preserve",
+                    "confidence": "high",
+                    "needs_review": False,
+                    "source_ids": ["s-file", "s-prompt", "s-tool", "s-assistant", "s-agent"],
+                    "rationale": "ongoing",
+                    "next_step": "",
+                    "rival_interpretations": [],
+                }
+            ],
+            "class_rules": [],
+        }
+        review = new_review(proposal)
+        targets, lines = ReviewUI(Mock(), trace, proposal, review).build_lines(120)
+        rendered = "\n".join(value for _target, value, _style in lines)
+
+        self.assertNotIn("very large diff", rendered)
+        self.assertNotIn("tool call should not render", rendered)
+        self.assertNotIn("assistant narration should not render", rendered)
+        self.assertIn("keep this visible", rendered)
+        self.assertIn("subagent task should remain visible", rendered)
+        self.assertEqual(
+            ["s-file", "s-prompt", "s-tool", "s-assistant", "s-agent"],
+            review["items"][0]["source_ids"],
+        )
+        self.assertEqual("preserve", review["source_reviews"]["s-file"]["retention"])
+        self.assertEqual("preserve", review["source_reviews"]["s-tool"]["retention"])
+        self.assertEqual(2, sum(target.kind == "source" for target in targets))
 
     def test_cluster_first_document_keeps_nested_units_and_explicit_submit(self):
         trace = {
@@ -131,7 +212,8 @@ class TuiSetupTests(unittest.TestCase):
 
         self.assertEqual([0, 1], [target.item for target in cluster_targets])
         self.assertLess(rendered.index("Older cluster"), rendered.index("Active cluster"))
-        self.assertIn("TOOL RESULT DELETE", rendered)
+        self.assertNotIn("TOOL RESULT DELETE", rendered)
+        self.assertIn("1 reviewable unit", rendered)
         self.assertEqual("submit", targets[-1].kind)
         self.assertIn("SUBMIT REFINED CLUSTERS FOR COMPACTION", rendered)
         self.assertIn("Nothing reaches compaction until the submit row", rendered)
