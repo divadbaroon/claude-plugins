@@ -2,8 +2,9 @@
 
 ## 0.20.7 — 2026-08-11
 
-- Correct the friend-facing Claude Code install flow: plugin trust happens at
-  installation, while `/hooks` is a read-only verification screen.
+- Correct the friend-facing Claude Code install flow: source review happens at
+  installation when prompted, while `/hooks` is a read-only verification
+  screen.
 - Add a minimal external-beta path and an explicit, privacy-preserving feedback
   route.
 

@@ -16,8 +16,8 @@ claude plugin marketplace add divadbaroon/claude-plugins
 claude plugin install compact-focus@papert-tools
 ```
 
-Review and accept Claude Code's plugin-source warning during installation,
-then start a new Claude Code session and use the ordinary `/compact`.
+If Claude Code shows a plugin-source warning, review and accept it. Then start
+a new Claude Code session and use the ordinary `/compact`.
 Claude's `/hooks` menu is useful for verifying that the plugin hooks loaded,
 but it is read-only and is not a separate trust step.
 
