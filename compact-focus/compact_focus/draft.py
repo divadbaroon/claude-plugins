@@ -121,6 +121,15 @@ REVISION_SCHEMA: Dict[str, Any] = {
     },
 }
 
+SUMMARY_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["draft"],
+    "properties": {
+        "draft": {"type": "string", "minLength": 1, "maxLength": 12000},
+    },
+}
+
 
 class DraftError(RuntimeError):
     pass
@@ -231,8 +240,9 @@ def ensure_draft(trace: Dict[str, Any], review: Dict[str, Any]) -> Dict[str, Any
         state["draft"] = build_draft(trace, review)
         state["stale"] = False
         state["approved"] = False
-        state.setdefault("messages", [])
-        state.setdefault("revision_count", 0)
+        state["messages"] = []
+        state["revision_count"] = 0
+        state["generated_by"] = "deterministic"
         state["generated_at"] = utc_now()
     return state
 
@@ -263,6 +273,7 @@ def edit_draft(review: Dict[str, Any], value: str) -> None:
     state["stale"] = False
     state["approved"] = False
     state["revision_count"] = int(state.get("revision_count") or 0) + 1
+    state["generated_by"] = "human"
     state.setdefault("messages", []).append(
         {"ts": utc_now(), "role": "assistant", "text": "Draft edited directly by the user."}
     )
@@ -311,6 +322,60 @@ def _revision_context(trace: Dict[str, Any], review: Dict[str, Any]) -> Dict[str
     }
 
 
+def _summary_context(trace: Dict[str, Any], review: Dict[str, Any]) -> Dict[str, Any]:
+    sources = _source_map(trace)
+    clusters: List[Dict[str, Any]] = []
+    for item in review.get("items", []):
+        evidence: List[Dict[str, Any]] = []
+        for source_id in item.get("source_ids", []):
+            source = sources.get(source_id, {})
+            if source.get("kind") != "user_prompt" and source.get("class") != "subagents":
+                continue
+            source_review = review.get("source_reviews", {}).get(source_id) or {}
+            evidence.append(
+                {
+                    "kind": source.get("kind"),
+                    "class": source.get("class"),
+                    "retention": effective_source_retention(review, item, source_id),
+                    "work_state": source_review.get("work_state"),
+                    "clarifications": source_review.get("clarifications", []),
+                    "text": str(source.get("text") or "")[:1600],
+                }
+            )
+        clusters.append(
+            {
+                key: item.get(key)
+                for key in (
+                    "title",
+                    "summary",
+                    "retention",
+                    "work_state",
+                    "confidence",
+                    "next_step",
+                    "clarifications",
+                )
+            }
+            | {"reviewable_evidence": evidence}
+        )
+    return {
+        "global_constraint": review.get("precommit", ""),
+        "clusters": clusters,
+    }
+
+
+def build_summary_prompt(trace: Dict[str, Any], review: Dict[str, Any]) -> str:
+    maximum = int(os.environ.get("COMPACT_FOCUS_GENERATED_SUMMARY_MAX_CHARS", "9000"))
+    return f"""Write the carry-forward context summary that a coding agent should receive after compaction.
+
+The reviewed contract below is ground truth. Preserve every non-negotiable constraint and the semantics of every PRESERVE cluster. Compress COMPACT clusters to decisions, outcomes, and consequences. Do not carry DELETE clusters into active context except when one short warning is required to prevent a live task from becoming incoherent. Preserve active work state, unresolved blockers, user corrections, exact next actions, and important file or commit references already present in cluster summaries. Never invent facts.
+
+Produce concise, self-contained Markdown, normally 300-900 words and no more than {maximum:,} characters. Prefer dense sections such as Current objective, Binding decisions, Current state, and Next actions. Do not reproduce the ledger, confidence scores, source IDs, raw tool logs, file diffs, recovery mechanics, or a catalog of deleted material. Write the summary itself, without a preamble about what you did.
+
+REVIEWED CONTRACT:
+{json.dumps(_summary_context(trace, review), ensure_ascii=False)}
+"""
+
+
 def build_revision_prompt(trace: Dict[str, Any], review: Dict[str, Any], feedback: str) -> str:
     state = ensure_draft(trace, review)
     history = list(state.get("messages", []))[-8:]
@@ -335,7 +400,7 @@ USER FEEDBACK:
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
-def _parse_revision(stdout: str) -> Dict[str, Any]:
+def _parse_worker_output(stdout: str) -> Dict[str, Any]:
     try:
         envelope = json.loads(stdout)
     except json.JSONDecodeError as exc:
@@ -357,13 +422,14 @@ def _parse_revision(stdout: str) -> Dict[str, Any]:
                 return value
         if "draft" in envelope:
             return envelope
-    raise DraftError("draft worker returned no structured revision")
+    raise DraftError("draft worker returned no structured output")
 
 
-def run_revision_worker(
+def _run_schema_worker(
     trace: Dict[str, Any],
-    review: Dict[str, Any],
-    feedback: str,
+    prompt: str,
+    schema: Dict[str, Any],
+    worker_role: str,
     *,
     runner: Runner = subprocess.run,
     timeout: int = 180,
@@ -382,9 +448,9 @@ def run_revision_worker(
         )
         temporary = tempfile.TemporaryDirectory(prefix="compact-focus-draft-")
         workdir = Path(temporary.name)
-        schema_path = workdir / "revision.schema.json"
-        output_path = workdir / "revision.json"
-        schema_path.write_text(json.dumps(REVISION_SCHEMA, separators=(",", ":")), encoding="utf-8")
+        schema_path = workdir / "draft.schema.json"
+        output_path = workdir / "draft.json"
+        schema_path.write_text(json.dumps(schema, separators=(",", ":")), encoding="utf-8")
         command = [
             executable,
             "exec",
@@ -405,7 +471,7 @@ def run_revision_worker(
             "-c",
             f'model_reasoning_effort="{effort}"',
             "-c",
-            'developer_instructions="Return only the requested JSON. Do not call tools or use external context."',
+            f'developer_instructions="You are a bounded {worker_role}. Return only the requested JSON. Do not call tools or use external context."',
             "--output-schema",
             str(schema_path),
             "--output-last-message",
@@ -432,19 +498,19 @@ def run_revision_worker(
             "",
             "--disable-slash-commands",
             "--system-prompt",
-            "You are a bounded compaction-draft revision worker. Return only schema-valid JSON. Do not use tools, skills, or external context.",
+            f"You are a bounded {worker_role}. Return only schema-valid JSON. Do not use tools, skills, or external context.",
             "--no-session-persistence",
             "--max-budget-usd",
             budget,
             "--json-schema",
-            json.dumps(REVISION_SCHEMA, separators=(",", ":")),
+            json.dumps(schema, separators=(",", ":")),
             "--output-format",
             "json",
         ]
     try:
         result = runner(
             command,
-            input=build_revision_prompt(trace, review, feedback),
+            input=prompt,
             text=True,
             capture_output=True,
             timeout=timeout,
@@ -456,12 +522,71 @@ def run_revision_worker(
         output = result.stdout
         if output_path is not None and output_path.is_file():
             output = output_path.read_text(encoding="utf-8")
-        return _parse_revision(output)
+        return _parse_worker_output(output)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise DraftError(f"draft worker failed: {exc}") from exc
     finally:
         if temporary is not None:
             temporary.cleanup()
+
+
+def run_summary_worker(
+    trace: Dict[str, Any],
+    review: Dict[str, Any],
+    *,
+    runner: Runner = subprocess.run,
+    timeout: int = 180,
+) -> Dict[str, Any]:
+    result = _run_schema_worker(
+        trace,
+        build_summary_prompt(trace, review),
+        SUMMARY_SCHEMA,
+        "context-compaction summary writer",
+        runner=runner,
+        timeout=timeout,
+    )
+    draft = str(result.get("draft") or "").strip()
+    if not draft:
+        raise DraftError("summary worker returned an empty draft")
+    maximum = int(os.environ.get("COMPACT_FOCUS_GENERATED_SUMMARY_MAX_CHARS", "9000"))
+    if len(draft) > maximum:
+        raise DraftError(f"generated summary exceeded {maximum:,} characters")
+    return {"draft": draft}
+
+
+def run_revision_worker(
+    trace: Dict[str, Any],
+    review: Dict[str, Any],
+    feedback: str,
+    *,
+    runner: Runner = subprocess.run,
+    timeout: int = 180,
+) -> Dict[str, Any]:
+    return _run_schema_worker(
+        trace,
+        build_revision_prompt(trace, review, feedback),
+        REVISION_SCHEMA,
+        "compaction-draft revision worker",
+        runner=runner,
+        timeout=timeout,
+    )
+
+
+def apply_generated_summary(review: Dict[str, Any], result: Dict[str, Any]) -> str:
+    draft = str(result.get("draft") or "").strip()
+    if not draft:
+        raise DraftError("summary worker returned an empty draft")
+    state = review.setdefault("draft_review", {})
+    state["draft"] = draft + "\n"
+    state["stale"] = False
+    state["approved"] = False
+    state["messages"] = []
+    state["revision_count"] = 0
+    state["generated_by"] = "model"
+    state["generated_at"] = utc_now()
+    review["approved_summary"] = ""
+    record_action(review, "generate_summary", chars=len(draft))
+    return state["draft"]
 
 
 def apply_revision(
@@ -516,6 +641,7 @@ def apply_revision(
     state["stale"] = False
     state["approved"] = False
     state["revision_count"] = int(state.get("revision_count") or 0) + 1
+    state["generated_by"] = "model"
     messages = state.setdefault("messages", [])
     messages.append({"ts": utc_now(), "role": "user", "text": feedback.strip()[:8000]})
     reply = _one_line(revision.get("reply"))[:1000] or "Revised the draft."

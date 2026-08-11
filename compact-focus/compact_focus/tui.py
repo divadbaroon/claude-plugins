@@ -10,11 +10,13 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from .draft import (
     DraftError,
+    apply_generated_summary,
     apply_revision,
     approve_draft,
     edit_draft,
     ensure_draft,
     run_revision_worker,
+    run_summary_worker,
 )
 from .proposal import first_fraction_source_ids
 from .review import (
@@ -407,8 +409,8 @@ class ReviewUI:
 
         submit = target(Target("submit"))
         lines.append((submit, " ┌────────────────────────────────────────────────────────────────────┐", "submit"))
-        lines.append((submit, " │  SUBMIT REFINED CLUSTERS FOR COMPACTION                         │", "submit"))
-        lines.append((submit, " │  Enter opens the exact draft for chat, editing, or confirmation. │", "submit"))
+        lines.append((submit, " │  GENERATE COMPACTION SUMMARY                                    │", "submit"))
+        lines.append((submit, " │  Enter generates a concise draft for chat, editing, or approval. │", "submit"))
         lines.append((submit, " └────────────────────────────────────────────────────────────────────┘", "submit"))
         return targets, lines
 
@@ -809,7 +811,11 @@ class ReviewUI:
                 wrapped = _wrapped(str(message.get("text") or ""), width - 10, initial=f" {role} · ", subsequent="       ")
                 lines.extend((value, "chat") for value in wrapped)
             lines.append(("", "dim"))
-        lines.append((" EXACT CARRY-FORWARD DRAFT", "draft-head"))
+        heading = {
+            "model": " GENERATED COMPACTION SUMMARY",
+            "human": " EDITED COMPACTION SUMMARY",
+        }.get(str(state.get("generated_by") or ""), " FALLBACK COMPACTION DRAFT")
+        lines.append((heading, "draft-head"))
         for raw in str(state.get("draft") or "").splitlines():
             if raw.startswith("#"):
                 style = "draft-heading"
@@ -833,7 +839,8 @@ class ReviewUI:
         offset = max(0, min(offset, max(0, len(lines) - body_height)))
         self.screen.erase()
         revisions = int((self.review.get("draft_review") or {}).get("revision_count") or 0)
-        title = f" compact focus · review compaction draft · {revisions} revision{'s' if revisions != 1 else ''} "
+        chars = len(str((self.review.get("draft_review") or {}).get("draft") or "").strip())
+        title = f" compact focus · review generated summary · {chars:,} chars · {revisions} revision{'s' if revisions != 1 else ''} "
         _safe_add(self.screen, 0, 0, title.ljust(width - 1), width - 1, curses.A_REVERSE)
         for y, (value, style) in enumerate(lines[offset : offset + body_height], 1):
             attr = 0
@@ -849,6 +856,58 @@ class ReviewUI:
         _safe_add(self.screen, height - 1, 0, " No context is cleared until Enter confirms this screen.", width - 1, curses.A_DIM)
         self.screen.refresh()
         return offset
+
+    def _draw_summary_generation(self, elapsed: int, frame: int) -> None:
+        height, width = self.screen.getmaxyx()
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        self.screen.erase()
+        title = " compact focus · generating compaction summary "
+        _safe_add(self.screen, 0, 0, title.ljust(width - 1), width - 1, curses.A_REVERSE)
+        _safe_add(
+            self.screen,
+            3,
+            2,
+            f"{spinner[frame % len(spinner)]} Compressing the reviewed contract into a concise carry-forward summary…",
+            width - 4,
+            curses.A_BOLD | self.colors.get("accent", 0),
+        )
+        _safe_add(self.screen, 5, 2, f"{elapsed}s elapsed", width - 4, curses.A_DIM)
+        _safe_add(
+            self.screen,
+            height - 1,
+            0,
+            " The generated summary will appear here for chat refinement before anything is cleared.",
+            width - 1,
+            curses.A_DIM,
+        )
+        self.screen.refresh()
+
+    def _generate_summary_with_progress(self) -> Tuple[bool, str]:
+        result: Dict[str, Any] = {}
+
+        def worker() -> None:
+            try:
+                result["summary"] = run_summary_worker(self.trace, self.review)
+            except Exception as exc:
+                result["error"] = str(exc)
+
+        thread = threading.Thread(target=worker, name="compact-focus-summary-generation", daemon=True)
+        thread.start()
+        started = time.monotonic()
+        frame = 0
+        while thread.is_alive():
+            self._draw_summary_generation(int(time.monotonic() - started), frame)
+            frame += 1
+            time.sleep(0.12)
+        thread.join()
+        if result.get("error"):
+            return False, str(result["error"])
+        try:
+            apply_generated_summary(self.review, result["summary"])
+        except Exception as exc:
+            return False, str(exc)
+        self.save()
+        return True, "Generated a concise summary from the reviewed context."
 
     def _refine_with_progress(self, feedback: str, offset: int) -> Tuple[bool, str]:
         result: Dict[str, Any] = {}
@@ -883,10 +942,13 @@ class ReviewUI:
         return True, reply
 
     def draft_review(self) -> str:
-        ensure_draft(self.trace, self.review)
+        state = ensure_draft(self.trace, self.review)
         self.save()
         offset = 0
         status = ""
+        if state.get("generated_by") not in {"model", "human"}:
+            generated, detail = self._generate_summary_with_progress()
+            status = detail if generated else "Summary generation failed; showing the safe fallback. " + detail
         while True:
             height, _width = self.screen.getmaxyx()
             offset = self._draw_draft(offset, status=status)
