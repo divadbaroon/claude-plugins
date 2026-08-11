@@ -144,7 +144,16 @@ class ProposalError(RuntimeError):
 
 def _clip(value: Any, limit: int, fallback: str = "") -> str:
     text = " ".join(str(value or "").split())
-    return text[:limit] or fallback
+    if not text:
+        return fallback
+    if len(text) <= limit:
+        return text
+    head = text[: max(1, limit - 1)]
+    if " " in head:
+        candidate = head.rsplit(" ", 1)[0].rstrip(".,:;")
+        if len(candidate) >= max(12, limit // 2):
+            return candidate + "…"
+    return head + "…"
 
 
 def _source_index(trace: Dict[str, Any]) -> Tuple[List[str], Dict[str, Dict[str, Any]], Dict[str, str]]:

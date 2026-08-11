@@ -68,6 +68,23 @@ class AuditTests(unittest.TestCase):
         self.assertGreater(reworded["precommit"]["lexical_coverage"], 0.5)
         self.assertTrue(reworded["precommit"]["possible_omission"])
 
+    def test_approved_draft_reports_exact_carriage_separately(self):
+        review = {
+            "approved_summary": "Latency is binding; throughput stays out of scope.",
+            "items": [],
+        }
+        exact = audit_summary(
+            review,
+            "Latency is binding; throughput stays out of scope.",
+        )
+        paraphrased = audit_summary(
+            review,
+            "Keep latency as the metric and exclude throughput.",
+        )
+        self.assertTrue(exact["approved_draft"]["exact_present"])
+        self.assertFalse(paraphrased["approved_draft"]["exact_present"])
+        self.assertTrue(paraphrased["checked_approved_draft"])
+
 
 if __name__ == "__main__":
     unittest.main()

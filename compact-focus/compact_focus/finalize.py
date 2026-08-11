@@ -6,10 +6,16 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional
 
 from . import SCHEMA_VERSION
-from .review import review_delta, review_errors, review_hash
+from .review import (
+    effective_source_retention,
+    ensure_review_shape,
+    review_delta,
+    review_errors,
+    review_hash,
+)
 from .state import StatePaths, append_jsonl, atomic_write_json, atomic_write_text, load_json, utc_now
 
 
@@ -26,15 +32,6 @@ def _source_map(trace: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     }
 
 
-def _artifacts(item: Dict[str, Any], sources: Dict[str, Dict[str, Any]]) -> List[str]:
-    values = set()
-    for source_id in item.get("source_ids", []):
-        source = sources.get(source_id) or {}
-        for key in ("paths", "commits"):
-            values.update(source.get("artifacts", {}).get(key, []))
-    return sorted(values)
-
-
 def recovery_id(session_id: str, cycle_id: str, source_id: str) -> str:
     digest = hashlib.sha1(f"{session_id}:{cycle_id}:{source_id}".encode("utf-8")).hexdigest()[:12]
     return "d-" + digest
@@ -49,9 +46,9 @@ def build_recovery_records(
     sources = _source_map(trace)
     records: List[Dict[str, Any]] = []
     for item in review.get("items", []):
-        if item.get("retention") != "demote":
-            continue
         for source_id in item.get("source_ids", []):
+            if effective_source_retention(review, item, source_id) != "demote":
+                continue
             source = sources[source_id]
             records.append(
                 {
@@ -84,37 +81,60 @@ def compile_directive(
 ) -> str:
     sources = _source_map(trace)
     recovery_by_source = {record["source_id"]: record["id"] for record in recovery_records}
+    approved_summary = str(review.get("approved_summary") or "").strip()
     lines = [
         "HUMAN-REVIEWED COMPACTION CONTRACT",
-        "Treat the following interpretation and retention decisions as binding. Preserve distinctions; do not silently reinterpret item status.",
+        "ADOPTION RULE: the user reviewed the draft between the markers below. Reproduce it verbatim as the carried summary core; do not paraphrase, expand, omit, or silently reinterpret its claims, work states, or retention boundaries. If the host requires additional scaffolding, the marked draft remains authoritative and must appear intact.",
+        "",
+        "BEGIN USER-APPROVED CARRY-FORWARD DRAFT",
+        approved_summary,
+        "END USER-APPROVED CARRY-FORWARD DRAFT",
+        "",
+        "STRUCTURED EVIDENCE BOUNDARIES",
     ]
-    precommit = str(review.get("precommit") or "").strip()
-    if precommit:
-        lines.extend(["", "DO NOT MISINTERPRET", precommit])
-    for retention, heading in (
-        ("preserve", "PRESERVE FAITHFULLY"),
-        ("summarize", "SUMMARIZE TO OUTCOMES"),
-        ("demote", "DEMOTED — DO NOT CARRY FORWARD"),
-    ):
-        matching = [item for item in review.get("items", []) if item.get("retention") == retention]
-        if not matching:
-            continue
-        lines.extend(["", heading])
-        for item in matching:
-            label = f"[{item.get('type')}/{item.get('status')}] {item.get('title')}"
-            summary = str(item.get("summary") or "").strip()
-            if retention == "demote":
-                ids = [recovery_by_source[source_id] for source_id in item.get("source_ids", []) if source_id in recovery_by_source]
-                suffix = f" (recover: {', '.join(ids)})" if ids else ""
-                lines.append(f"- {label}{suffix}")
+    lines.extend(["", "CLUSTER DECISIONS · machine-checkable index; the approved draft above contains their meaning"])
+    for item in review.get("items", []):
+        retention = str(item.get("retention") or "preserve")
+        recoveries = [
+            recovery_by_source[source_id]
+            for source_id in item.get("source_ids", [])
+            if source_id in recovery_by_source
+        ]
+        recovery = f" · recover {', '.join(recoveries)}" if recoveries else ""
+        lines.append(
+            f"- {item.get('id')} · {retention} · {item.get('work_state', 'todo')} · "
+            f"{item.get('title')}{recovery}"
+        )
+    overrides: List[str] = []
+    for item in review.get("items", []):
+        cluster_retention = str(item.get("retention") or "preserve")
+        cluster_work_state = str(item.get("work_state") or "todo")
+        for source_id in item.get("source_ids", []):
+            source_review = review.get("source_reviews", {}).get(source_id) or {}
+            retention = effective_source_retention(review, item, source_id)
+            work_state = str(source_review.get("work_state") or cluster_work_state)
+            clarifications = [
+                str(value).strip()
+                for value in source_review.get("clarifications", [])
+                if str(value).strip()
+            ]
+            if retention == cluster_retention and work_state == cluster_work_state and not clarifications:
                 continue
-            lines.append(f"- {label}: {summary}")
-            next_step = str(item.get("next_step") or "").strip()
-            if next_step:
-                lines.append(f"  Next: {next_step}")
-            artifacts = _artifacts(item, sources)
-            if artifacts:
-                lines.append("  Artifacts: " + ", ".join(artifacts[:20]))
+            source = sources.get(source_id) or {}
+            excerpt = " ".join(str(source.get("text") or "").split())
+            if retention == "preserve":
+                evidence = excerpt[:1600]
+            elif retention == "summarize":
+                evidence = excerpt[:500]
+            else:
+                recovery = recovery_by_source.get(source_id)
+                evidence = f"recover: {recovery}" if recovery else "omit from active context"
+            overrides.append(
+                f"- {source_id}: {retention} / {work_state} — {evidence}"
+            )
+            overrides.extend(f"  User clarification: {value}" for value in clarifications)
+    if overrides:
+        lines.extend(["", "SOURCE-LEVEL OVERRIDES", *overrides])
     lines.extend(
         [
             "",
@@ -204,9 +224,12 @@ def finalize_cycle(
     proposal: Dict[str, Any],
     review: Dict[str, Any],
 ) -> Dict[str, Any]:
+    ensure_review_shape(review)
     errors = review_errors(trace, review)
     if errors:
         raise FinalizeError("; ".join(errors))
+    if not str(review.get("approved_summary") or "").strip():
+        raise FinalizeError("the compaction draft was not reviewed and confirmed")
     cycle = paths.cycle(cycle_id)
     current_hash = review_hash(review)
     prior = load_json(cycle / "finalization.json", {})

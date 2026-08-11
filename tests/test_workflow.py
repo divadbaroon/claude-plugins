@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 os.sys.path.insert(0, str(ROOT / "compact-focus"))
 
 from compact_focus.cli import main, parser  # noqa: E402
+from compact_focus import SCHEMA_VERSION  # noqa: E402
+from compact_focus.draft import approve_draft, ensure_draft  # noqa: E402
 from compact_focus.state import (  # noqa: E402
     StatePaths,
     append_jsonl,
@@ -39,7 +41,7 @@ def raw_proposal(trace):
         for source in episode["sources"]
     ]
     return {
-        "schema_version": 3,
+        "schema_version": SCHEMA_VERSION,
         "source_hash": trace["source_hash"],
         "created_at": "now",
         "generator": "test",
@@ -127,10 +129,14 @@ class WorkflowTests(unittest.TestCase):
 
     def reviewer(self, approved=True, precommit=""):
         def run(paths, cycle_id):
-            if precommit:
+            if approved:
                 draft = paths.cycle(cycle_id) / "review.draft.json"
                 review = load_json(draft, {})
-                review["precommit"] = precommit
+                trace = load_json(paths.cycle(cycle_id) / "trace.json", {})
+                if precommit:
+                    review["precommit"] = precommit
+                ensure_draft(trace, review)
+                approve_draft(review)
                 atomic_write_json(draft, review)
             return approved, "test"
 
