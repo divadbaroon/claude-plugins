@@ -77,8 +77,8 @@ For deterministic foreground review with no background model call:
 claude plugin install compact-focus@papert-tools --config background_analysis=false
 ```
 
-Review and accept Claude Code's plugin-source warning during installation,
-then start a new Claude Code session and use the ordinary `/compact`. The
+If Claude Code shows a plugin-source warning, review and accept it. Then start
+a new Claude Code session and use the ordinary `/compact`. The
 `/hooks` menu can verify that Compact Focus loaded, but it is read-only and is
 not a separate trust step.
 
