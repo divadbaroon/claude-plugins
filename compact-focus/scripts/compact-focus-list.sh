@@ -429,6 +429,58 @@ SEED
     fi
     echo "(type  ! cf  to open the editor here)"
     ;;
+  prep-bg)
+    # Launch ledger preparation as a DETACHED worker so the user keeps
+    # using the session while it runs. Surfacing on completion: ready
+    # marker (picked up by the UserPromptSubmit hook at the next turn),
+    # macOS notification, tmux auto-split into the editor.
+    SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    [ -r "$S/transcript.path" ] || { echo "(no transcript path — run /compact once first)"; exit 0; }
+    rm -f "$S/ledger-ready" "$S/ledger-failed" 2>/dev/null
+    ( COMPACT_FOCUS_STATE_DIR="$S" nohup "$SELF" prep-run >/dev/null 2>&1 & echo $! >"$S/prep-running" ) 2>/dev/null
+    echo "(ledger prep running in background — keep working; it will surface when ready)"
+    ;;
+  prep-run)
+    # The worker body (invoked detached by prep-bg). Fails to a marker.
+    fail() { printf '%s' "$1" >"$S/ledger-failed"; rm -f "$S/prep-running"; exit 0; }
+    TP=$(cat "$S/transcript.path" 2>/dev/null)
+    [ -n "$TP" ] && [ -r "$TP" ] || fail "no transcript"
+    command -v claude >/dev/null 2>&1 || fail "no claude CLI"
+    SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    "$SELF" costs "$TP" >/dev/null 2>&1
+    COSTS=$(jq -r '.units[] | "\(.i). [\(.pct)%] \(.prompt)"' "$S/costs.json" 2>/dev/null | tail -40)
+    CLS=$(jq -r '.classes | to_entries[] | "\(.key): \(.value.pct)%"' "$S/costs.json" 2>/dev/null)
+    LENS=$("$SELF" lens 2>/dev/null | tail -n +2)
+    GUIDE=$("$SELF" guidelines 2>/dev/null | tail -n +2)
+    wt() { if command -v timeout >/dev/null 2>&1; then timeout 240 "$@"
+           elif command -v gtimeout >/dev/null 2>&1; then gtimeout 240 "$@"
+           elif command -v perl >/dev/null 2>&1; then perl -e 'alarm shift; exec @ARGV' 240 "$@"
+           else "$@"; fi; }
+    OUT=$(printf 'Prepare a compaction ledger for a coding session.\n\nUSER PROMPTS (with %% of context window each):\n%s\n\nCONTENT CLASS COSTS:\n%s\n\nPROJECT LENS:\n%s\n\nGUIDELINES:\n%s\n\nPartition the session into at most 12 items. cat rules: "keep" = critical ongoing work, recent decisions, active files; "summarize" = completed tasks, resolved issues, older discussion; "drop" = redundant information, outdated attempts; "contested" = you are genuinely unsure — the human decides. Labels use the user'\''s own words (<=120 chars). Children = the verbatim prompts behind the item with their pct. Output ONLY strict JSON, no fences: {"items":[{"id":"L1","tag":"decision|test|contradiction|dead-end|constraint|open|solved|mechanical","label":"...","cat":"keep|summarize|contested|drop","pct":0.0,"children":[{"text":"...","checked":true,"pct":0.0}]}],"classes":[{"id":"first_n","state":"keep","n":30},{"id":"file_changes","state":"keep","pct":0.0},{"id":"subagents","state":"summarize","pct":0.0},{"id":"todos","state":"keep","pct":0.0}]} — fill class pcts from the class costs above.' \
+        "$COSTS" "$CLS" "$LENS" "$GUIDE" \
+      | wt claude -p --safe-mode --model "${COMPACT_FOCUS_PREP_MODEL:-sonnet}" 2>/dev/null | sed '/^```/d') || OUT=""
+    printf '%s' "$OUT" | jq -e '.items | type == "array" and length > 0' >/dev/null 2>&1 || fail "worker output invalid"
+    "$SELF" ledger save "$OUT" >/dev/null 2>&1 || fail "ledger save failed"
+    date -u +%Y-%m-%dT%H:%M:%SZ >"$S/ledger-ready"
+    rm -f "$S/prep-running" "$S/ledger-failed" 2>/dev/null
+    "$SELF" record '{"event":"prep_bg_done"}' >/dev/null 2>&1
+    if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
+      tmux split-window -h "COMPACT_FOCUS_STATE_DIR='$S' '$SELF' tui" 2>/dev/null && exit 0
+    fi
+    command -v osascript >/dev/null 2>&1 && osascript -e \
+      'display notification "Compaction ledger ready — send any message, or ! cf to edit now" with title "compact-focus"' >/dev/null 2>&1
+    exit 0
+    ;;
+  prep-status)
+    if   [ -r "$S/ledger-ready" ];  then echo ready
+    elif [ -r "$S/prep-running" ] && kill -0 "$(cat "$S/prep-running" 2>/dev/null)" 2>/dev/null; then echo running
+    elif [ -r "$S/ledger-failed" ]; then echo "failed: $(cat "$S/ledger-failed")"
+    else echo none; fi
+    ;;
+  surfaced)
+    rm -f "$S/ledger-ready" "$S/ledger-failed" "$S/prep-running" 2>/dev/null
+    echo "(markers cleared)"
+    ;;
   studymode)
     # The human-compact study wrapper launches sessions with
     # COMPACT_FOCUS_STUDY=1; the skill asks this mode which flow to run.

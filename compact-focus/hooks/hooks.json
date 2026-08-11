@@ -26,6 +26,18 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/compact-focus-notify.sh",
+            "args": [],
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

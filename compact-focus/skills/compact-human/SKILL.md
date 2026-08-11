@@ -12,21 +12,26 @@ Script (stable prefix, one approval):
    ~/.claude/skills/compact-focus/scripts/compact-focus-list.sh <mode> …
 
 First run `studymode`. If it prints `1`, use the STUDY FLOW (end of file).
-Otherwise run the FAST FLOW — total interaction target: ONE ledger, ONE
-typed reply, compact.
+Otherwise run the FAST FLOW — and check `prep-status` FIRST:
+
+- `none`   → run `prep-bg`, then tell the user in two lines: prep is
+  running in the background, keep working, the ledger will interrupt when
+  ready. END YOUR TURN. Do NOT block on it.
+- `running`→ say it's still preparing, answer whatever else the user asked.
+- `failed: …` → do the preparation yourself IN-SESSION via step 1 below,
+  then continue.
+- `ready`  → skip step 1: `ledger load` is your ledger (trust its
+  partition as the prior; refresh anything obviously stale), go to step 2,
+  and run `surfaced` after printing.
 
 ## FAST FLOW
 
-1. PREPARE SILENTLY (no listings, no questions). Load threads (no-args
-   call; if <2 categories, group and `save`). Run `costs` — it prints each
-   real user prompt with its context-window percentage (prompt + response +
-   tool results); use it for the pct fields below. Derive triage items
-   (open / solved / unclear) and `triage save` them. Run `lens` and
-   `guidelines`; refresh Domain lens / Active task model in lens.md if seed
-   or stale. Construe the session through two rival representations
-   (progress/state vs causal-debugging, or better per the Domain lens) and
-   note where they DISAGREE. Record
-   '{"event":"ledger_prep","items":N,"contested":N}'.
+1. PREPARE IN-SESSION (only when background prep failed or study mode
+   needs it). Load threads (no-args call; if <2 categories, group and
+   `save`). Run `costs` for per-prompt percentages. Derive triage items
+   and `triage save`. Run `lens` and `guidelines`; refresh if stale.
+   Construe through two rival representations and note DISAGREEMENTS.
+   Record '{"event":"ledger_prep","items":N,"contested":N}'.
 
 2. PRINT THE LEDGER — formatted markdown, INLINE (never collapsed), exactly
    this shape (Obsidian-style: headings, task-list checkboxes, bold tags,
@@ -83,18 +88,25 @@ typed reply, compact.
    classes>},{"id":"subagents","state":"summarize","pct":…},{"id":"todos",
    "state":"keep","pct":…}] — class pcts come from the `costs` classes
    table; subagents default to summarize.
-   Then run `tui-inject` as your LAST tool call — it opens the editor with
-   zero typing (tmux split, or macOS types `! cf` into this terminal for
-   the user). Relay its output line under the printed ledger, plus:
-
-   > ✏️ In the editor: space check/uncheck · tab recategorize · → expand an
-   > item into its prompts (each with its context %) · e/n edit · a
-   > constraint · q saves and returns here — then say **done**.
-   > Or reply in text: numbers flip (`5, not 2`) · text → constraint ·
-   > `? 3` provenance · `race` · `window` (separate-window editor) · `ok`
-
-   END YOUR TURN there. No AskUserQuestion in the fast flow. A `window`
-   reply → run `tui-open` (separate terminal window) and wait for done. If the user
+   Then present the NO-TYPING SURFACE: one single AskUserQuestion call
+   (the only widget call allowed in the fast flow — it is one round-trip),
+   with up to 4 questions built from the ledger:
+   - Q1 (single): "Compact as shown?" — "Yes — compact (Recommended)" /
+     "Adjust below first" / "Full editor" (description: "line editor in
+     this terminal via ! cf, or tmux split") / "Race the summaries first".
+   - Q2 (multiSelect, if any non-drop items): "Demote one tier
+     (preserve→summarize→remove):" — top-4 costliest non-drop items.
+   - Q3 (multiSelect, if any dropped items): "Rescue from Remove:" — the
+     dropped items.
+   - Q4 (multiSelect, if any contested): "Contested — select what to
+     PRESERVE (unselected → summarize):" — the contested items. The
+     user's explicit selection here IS the human decision.
+   Apply all answers; if "Adjust below first" or anything ambiguous, the
+   typed grammar still works in the next message: numbers flip
+   (`5, not 2`) · text → constraint · `? 3` provenance · `race` ·
+   `window` · `ok`. If "Full editor": run `tui-inject` (tmux split when
+   available, else it prints `! cf` — the editor now runs line-mode in
+   this terminal, no TTY needed) and wait for **done**. If the user
    ran the TUI (their next message follows a "ledger finalized:" line in
    the transcript, or they say so): `ledger load`, and treat it as ground
    truth — cat=drop items and unchecked children are the drop set;

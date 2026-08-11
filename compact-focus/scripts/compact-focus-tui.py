@@ -64,6 +64,13 @@ def load(path):
     data.setdefault("finalized", False)
     if not data.get("classes"):
         data["classes"] = [dict(c) for c in DEFAULT_CLASSES]
+    defaults = {c["id"]: c for c in DEFAULT_CLASSES}
+    for c in data["classes"]:
+        d = defaults.get(c.get("id"), {})
+        for k, v in d.items():
+            c.setdefault(k, v)
+        c.setdefault("label", c.get("id", "?"))
+        c.setdefault("state", "keep")
     for it in data.get("items", []):
         it.setdefault("cat", "keep")
         it.setdefault("tag", "")
@@ -273,6 +280,98 @@ def main(scr, data, path):
                     it["expanded"] = False
 
 
+def render_lines(data, width=78):
+    """Line-mode render: numbered, wrapped, with classes as C1.., items 1..,
+    children i.j — the multiline view for TTY-less shells."""
+    out = []
+    for i, c in enumerate(data.get("classes", []), 1):
+        out += textwrap.wrap(f"C{i} {class_line(c)}", width, subsequent_indent="      ")
+    for cat in CATS:
+        items = [(n, it) for n, it in enumerate(data["items"], 1) if it["cat"] == cat]
+        if not items and cat == "contested":
+            continue
+        out.append(f"── {CAT_TITLES[cat]}")
+        for n, it in items:
+            out += textwrap.wrap(f"{n:>2} {item_head(it)}", width, subsequent_indent="      ")
+            if it.get("note"):
+                out += textwrap.wrap(f"   ↳ {it['note']}", width, subsequent_indent="     ")
+            if it["expanded"]:
+                for j, ch in enumerate(it["children"], 1):
+                    out += textwrap.wrap(f"   {n}.{j} {CHECK[ch['checked']]}{pct_of(ch)} {ch['text']}",
+                                         width, subsequent_indent="        ")
+    for con in data["constraints"]:
+        out.append(f"> constraint: {con}")
+    return "\n".join(out)
+
+
+def line_mode(data, path):
+    """Interactive editor over plain stdin/stdout — works in Claude Code's
+    bang shell, which pipes stdio (no TTY, so curses cannot run there).
+    Commands: 3=cycle category · 3k/3s/3c/3d=set · x3=expand · 3.2=toggle
+    prompt · e3 <label> · n3 <note> · a <constraint> · N <pct> · C2=cycle
+    class · p=reprint · q=save · Q=abort"""
+    print(render_lines(data))
+    print("commands: 3=cycle · 3k/3s/3c/3d=set · x3=expand · 3.2=toggle prompt · "
+          "e3/n3 <text> · a <text> · N <pct> · C2=class · p=print · q=save · Q=abort")
+    setcat = {"k": "keep", "s": "summarize", "c": "contested", "d": "drop"}
+    while True:
+        try:
+            cmd = input("ledger> ").strip()
+        except EOFError:
+            print("(stdin closed — saving as-is)")
+            data["finalized"] = True
+            save(path, data)
+            return True
+        if not cmd:
+            continue
+        if cmd == "q":
+            data["finalized"] = True
+            save(path, data)
+            return True
+        if cmd == "Q":
+            return False
+        if cmd == "p":
+            print(render_lines(data))
+            continue
+        try:
+            if cmd.startswith("a "):
+                data["constraints"].append(cmd[2:].strip())
+            elif cmd.startswith("N "):
+                n = int(cmd[2:].strip())
+                for c in data["classes"]:
+                    if c["id"] == "first_n" and 0 < n <= 100:
+                        c["n"] = n
+            elif cmd[0] == "C" and cmd[1:].isdigit():
+                c = data["classes"][int(cmd[1:]) - 1]
+                states = class_states(c)
+                c["state"] = states[(states.index(c["state"]) + 1) % len(states)]
+            elif cmd[0] == "x" and cmd[1:].isdigit():
+                it = data["items"][int(cmd[1:]) - 1]
+                it["expanded"] = not it["expanded"] and bool(it["children"])
+            elif cmd[0] in "en" and " " in cmd and cmd[1:cmd.index(" ")].isdigit():
+                idx, text = int(cmd[1:cmd.index(" ")]) - 1, cmd[cmd.index(" ") + 1:].strip()
+                key = "label" if cmd[0] == "e" else "note"
+                data["items"][idx][key] = text
+                if cmd[0] == "e":
+                    data["items"][idx]["edited"] = True
+            elif "." in cmd:
+                a, b = cmd.split(".", 1)
+                ch = data["items"][int(a) - 1]["children"][int(b) - 1]
+                ch["checked"] = not ch["checked"]
+            elif cmd[:-1].isdigit() and cmd[-1] in setcat:
+                data["items"][int(cmd[:-1]) - 1]["cat"] = setcat[cmd[-1]]
+            elif cmd.isdigit():
+                it = data["items"][int(cmd) - 1]
+                it["cat"] = CATS[(CATS.index(it["cat"]) + 1) % len(CATS)]
+            else:
+                print("(?)  3=cycle · 3s=set · x3 · 3.2 · e3/n3 <text> · a <text> · N <pct> · C2 · p · q · Q")
+                continue
+        except (ValueError, IndexError):
+            print("(no such number)")
+            continue
+        print(render_lines(data))
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("usage: compact-focus-tui.py <ledger.json> [--dump]")
@@ -286,7 +385,13 @@ if __name__ == "__main__":
     if "--dump" in sys.argv:
         print(dump(state))
         sys.exit(0)
-    finalized = curses.wrapper(main, state, ledger_path)
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        finalized = line_mode(state, ledger_path)
+    else:
+        try:
+            finalized = curses.wrapper(main, state, ledger_path)
+        except curses.error:
+            finalized = line_mode(state, ledger_path)
     if finalized:
         keep = sum(1 for i in state["items"] if i["cat"] in ("keep", "contested"))
         summ = sum(1 for i in state["items"] if i["cat"] == "summarize")
