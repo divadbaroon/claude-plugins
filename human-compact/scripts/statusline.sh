@@ -6,6 +6,7 @@
 set -u
 
 IN=$(cat 2>/dev/null || true)
+. "$(dirname "$0")/lib-window.sh"
 PCT=""
 if command -v jq >/dev/null 2>&1 && [ -n "$IN" ]; then
   T=$(printf '%s' "$IN" | jq -r '.transcript_path // empty' 2>/dev/null)
@@ -15,7 +16,8 @@ if command -v jq >/dev/null 2>&1 && [ -n "$IN" ]; then
         | (.input_tokens // 0) + (.cache_creation_input_tokens // 0)
           + (.cache_read_input_tokens // 0) ] | last // 0' 2>/dev/null)
     if [ -n "$TOK" ] && [ "$TOK" -gt 0 ] 2>/dev/null; then
-      PCT=$(( TOK / 2000 ))
+      infer_window "$IN" "$T"
+      PCT=$(( TOK * 100 / WINDOW ))
       [ "$PCT" -gt 100 ] && PCT=100
     fi
   fi

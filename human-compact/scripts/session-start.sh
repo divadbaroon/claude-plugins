@@ -8,13 +8,17 @@ IN=$(cat 2>/dev/null || true)
 command -v jq >/dev/null 2>&1 || exit 0
 
 T=$(printf '%s' "$IN" | jq -r '.transcript_path // empty' 2>/dev/null)
+. "$(dirname "$0")/lib-window.sh"
 PCT=""
 if [ -n "$T" ] && [ -r "$T" ]; then
   TOK=$(tail -80 "$T" | jq -rs '
     [ .[] | select(.message.usage?) | .message.usage
       | (.input_tokens // 0) + (.cache_creation_input_tokens // 0)
         + (.cache_read_input_tokens // 0) ] | last // 0' 2>/dev/null)
-  [ -n "$TOK" ] && [ "$TOK" -gt 0 ] 2>/dev/null && PCT=$(( TOK / 2000 ))
+  if [ -n "$TOK" ] && [ "$TOK" -gt 0 ] 2>/dev/null; then
+    infer_window "$IN" "$T"
+    PCT=$(( TOK * 100 / WINDOW ))
+  fi
 fi
 
 MSG="human-compact study sandbox: this is a FORK — your original chat is untouched and file changes are disabled here. Work normally, then run /compact to test the study's compaction flow."

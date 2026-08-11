@@ -235,6 +235,88 @@ SEED
       echo "usage: record '<json object>'"
     fi
     ;;
+  triage)
+    # Semantic ledger over the session: items (ideas, features, side
+    # questions, decisions) in categories open | solved | unclear | removed.
+    # The veto flow asks the user to resolve unclear items and deliberately
+    # remove/recategorize the rest — default is keep.
+    TF="$S/triage.json"
+    case "${2:-list}" in
+      save)
+        if [ -n "${3:-}" ] && printf '%s' "$3" | jq -e '
+            .items | type == "array" and length > 0
+            and all(.[]; (.id | type == "string") and (.label | type == "string")
+                     and (.category | IN("open","solved","unclear","removed")))' >/dev/null 2>&1; then
+          mkdir -p "$S" 2>/dev/null
+          printf '%s' "$3" | jq '{items}' >"$TF" 2>/dev/null \
+            && echo "(triage saved: $(jq '.items|length' "$TF") items)" || echo "(could not write $TF)"
+        else
+          echo "usage: triage save '{\"items\":[{\"id\":\"T1\",\"label\":\"…\",\"category\":\"open|solved|unclear|removed\",\"threads\":\"1,3\"}]}'"
+        fi
+        ;;
+      list)
+        [ -r "$TF" ] || { echo "(no triage ledger — save one first)"; exit 0; }
+        jq -r '.items | group_by(.category)[] |
+               "## \(.[0].category)",
+               (.[] | "  [\(.id)] \(.label)\(if .threads then "  (threads \(.threads))" else "" end)"),
+               ""' "$TF" 2>/dev/null
+        ;;
+      set)
+        ID="${3:-}"; CAT="${4:-}"
+        case "$CAT" in open|solved|unclear|removed) ;; *) echo "usage: triage set <id> open|solved|unclear|removed"; exit 0;; esac
+        [ -r "$TF" ] || { echo "(no triage ledger)"; exit 0; }
+        if jq -e --arg id "$ID" '.items | any(.id == $id)' "$TF" >/dev/null 2>&1; then
+          T=$(jq --arg id "$ID" --arg c "$CAT" \
+               '.items |= map(if .id == $id then .category = $c else . end)' "$TF" 2>/dev/null) \
+            && printf '%s' "$T" >"$TF" && echo "($ID → $CAT)"
+        else
+          echo "(no item $ID)"
+        fi
+        ;;
+      *) echo "usage: triage save '<json>' | list | set <id> <category>";;
+    esac
+    ;;
+  graveyard)
+    # Message-level store the post-compaction agent can query when it senses
+    # missing context. Entries come from demotion (demoted.jsonl) and from
+    # explicit adds (agent notices a user message it may lose track of).
+    GY="$S/graveyard.jsonl"
+    case "${2:-}" in
+      add)
+        if [ -n "${3:-}" ] && printf '%s' "$3" | jq -e 'type == "object" and (.text | type == "string")' >/dev/null 2>&1; then
+          mkdir -p "$S" 2>/dev/null
+          BASE=0; [ -r "$GY" ] && BASE=$(wc -l <"$GY" | tr -cd '0-9')
+          printf '%s' "$3" | jq -c --arg id "G$((BASE + 1))" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: $id, ts: $ts} + .' >>"$GY" \
+            && echo "(buried as G$((BASE + 1)))" || echo "(could not write $GY)"
+        else
+          echo "usage: graveyard add '{\"text\":\"<user message or context>\",\"topic\":\"…\",\"source\":\"…\"}'"
+        fi
+        ;;
+      query)
+        shift 2 2>/dev/null || true
+        TERMS="$*"
+        [ -n "$TERMS" ] || { echo "usage: graveyard query <terms>"; exit 0; }
+        FOUND=0
+        for F in "$GY" "$S/demoted.jsonl"; do
+          [ -r "$F" ] || continue
+          while IFS= read -r hit; do
+            FOUND=1
+            printf '%s\n' "$hit" | jq -r '"[\(.id)] (\(.topic // .label // "-")) \(.text // .prompt)"' 2>/dev/null
+          done < <(grep -i -- "$TERMS" "$F" 2>/dev/null || true)
+        done
+        [ "$FOUND" -eq 0 ] && echo "(nothing in the graveyard matches: $TERMS)"
+        ;;
+      count)
+        C=0
+        for F in "$GY" "$S/demoted.jsonl"; do
+          [ -r "$F" ] && C=$((C + $(wc -l <"$F" | tr -cd '0-9')))
+        done
+        echo "$C"
+        ;;
+      *) echo "usage: graveyard add '<json>' | query <terms> | count";;
+    esac
+    ;;
   *)
     labels
     ;;

@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.8.0"
+PLUGIN_VERSION="0.9.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -216,7 +216,8 @@ MSG="
 
 ${THREADS}
 
-→ /compact focus on <what matters, in words>
+What should NOT be forgotten during compaction?
+→ /compact focus on <your answer, in words>
   /compact-focus:compact-human to pick interactively · plain /compact = default summary"
 
 # Hook output strings are capped at 10,000 chars; stay safely under.

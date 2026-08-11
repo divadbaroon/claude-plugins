@@ -69,6 +69,9 @@ const settings = {
     PreToolUse: [
       { matcher: 'Bash', hooks: [{ type: 'command', command: sh('sandbox-guard.sh'), timeout: 10 }] },
     ],
+    UserPromptSubmit: [
+      { hooks: [{ type: 'command', command: sh('graveyard-reminder.sh'), timeout: 10 }] },
+    ],
   },
 };
 
