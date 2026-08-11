@@ -21,8 +21,12 @@ Otherwise run the FAST FLOW — and check `prep-status` FIRST:
 - `failed: …` → do the preparation yourself IN-SESSION via step 1 below,
   then continue.
 - `ready`  → skip step 1: `ledger load` is your ledger (trust its
-  partition as the prior; refresh anything obviously stale), go to step 2,
-  and run `surfaced` after printing.
+  partition as the prior; refresh anything obviously stale). The web
+  editor already opened in the user's browser when prep finished (`web`
+  mode reopens it if needed). Print the markdown ledger for the record,
+  say "editor is open in your browser — Save there and say done, or reply
+  here", run `surfaced`, END TURN. When the user says done: `ledger load`
+  is ground truth (finalized: true) → go to step 4.
 
 ## FAST FLOW
 

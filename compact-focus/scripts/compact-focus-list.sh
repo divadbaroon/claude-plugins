@@ -418,6 +418,23 @@ SEED
       echo "(costs failed: $(printf '%s' "$OUT" | jq -r '.error // "unknown"'))"
     fi
     ;;
+  web)
+    # Open the ledger in the local web editor (stdlib http server; page
+    # POSTs the edited ledger back and the server exits). The terminal
+    # cannot host this interaction; the browser can.
+    LJ="$S/ledger.json"
+    [ -r "$LJ" ] || { echo "(no ledger.json — prep runs first)"; exit 0; }
+    URLF="$S/web.url"
+    rm -f "$URLF" 2>/dev/null
+    ( nohup python3 "$(dirname "$0")/compact-focus-web.py" "$LJ" >"$URLF" 2>/dev/null & ) 2>/dev/null
+    n=0; while [ $n -lt 20 ] && ! grep -q '^http' "$URLF" 2>/dev/null; do n=$((n+1)); perl -e 'select(undef,undef,undef,0.1)' 2>/dev/null || true; done
+    URL=$(grep '^http' "$URLF" 2>/dev/null | head -1)
+    [ -n "$URL" ] || { echo "(web editor failed to start)"; exit 0; }
+    if command -v open >/dev/null 2>&1; then open "$URL" >/dev/null 2>&1
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$URL" >/dev/null 2>&1
+    fi
+    echo "(ledger editor opened in your browser: $URL — Save there, then say done)"
+    ;;
   tui-inject)
     # Package-grade launch ladder only (no OS keystroke injection — that
     # needs per-machine Accessibility permission and cannot ship in a
@@ -464,11 +481,9 @@ SEED
     date -u +%Y-%m-%dT%H:%M:%SZ >"$S/ledger-ready"
     rm -f "$S/prep-running" "$S/ledger-failed" 2>/dev/null
     "$SELF" record '{"event":"prep_bg_done"}' >/dev/null 2>&1
-    if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
-      tmux split-window -h "COMPACT_FOCUS_STATE_DIR='$S' '$SELF' tui" 2>/dev/null && exit 0
-    fi
+    "$SELF" web >/dev/null 2>&1 || true
     command -v osascript >/dev/null 2>&1 && osascript -e \
-      'display notification "Compaction ledger ready — send any message, or ! cf to edit now" with title "compact-focus"' >/dev/null 2>&1
+      'display notification "Compaction ledger ready — editing in your browser; Save, then say done" with title "compact-focus"' >/dev/null 2>&1
     exit 0
     ;;
   prep-status)

@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.16.0"
+PLUGIN_VERSION="0.17.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
