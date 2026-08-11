@@ -1,16 +1,27 @@
 {
   "name": "compact-focus",
   "displayName": "Compact Focus",
-  "version": "0.4.12",
-  "description": "Pauses one compaction per session and shows your recent prompts, so you can steer the summary with /compact focus on <what matters> instead of letting the default summarizer guess.",
+  "version": "0.19.0",
+  "description": "Review and edit what Claude Code will preserve, summarize, or demote before one bare /compact continues.",
   "author": {
-    "name": "David Baroon"
+    "name": "Hudson Mitchell-Pullman"
   },
+  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/compact-focus",
+  "repository": "https://github.com/divadbaroon/claude-plugins",
   "license": "MIT",
   "keywords": [
     "compaction",
     "context",
     "hooks",
-    "memory"
-  ]
+    "memory",
+    "human-in-the-loop"
+  ],
+  "userConfig": {
+    "background_analysis": {
+      "type": "boolean",
+      "title": "Background proposal analysis",
+      "description": "Let a bounded Claude worker prepare richer groupings before compaction. Cold /compact remains instant when disabled or unfinished.",
+      "default": true
+    }
+  }
 }

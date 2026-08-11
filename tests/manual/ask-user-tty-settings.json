@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/hudsonmitchell-pullman/claude-plugins/tests/manual/ask-user-tty-probe.py",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

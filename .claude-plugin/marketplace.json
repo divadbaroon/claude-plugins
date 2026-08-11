@@ -1,11 +1,12 @@
 {
   "name": "papert-tools",
-  "owner": { "name": "David Baroon" },
+  "description": "Human-centered Claude Code tools with inspectable state and reversible decisions.",
+  "owner": { "name": "Hudson Mitchell-Pullman" },
   "plugins": [
     {
       "name": "compact-focus",
       "source": "./compact-focus",
-      "description": "Pause one compaction per session and steer the summary with your own focus instead of the default guess."
+      "description": "Inline, human-reviewed Claude Code compaction with provenance, recovery, and feedback-aware proposals."
     }
   ]
 }

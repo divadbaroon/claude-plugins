@@ -1,5 +1,5 @@
 {
-  "description": "Pause one compaction per session to collect a focus from the user; log stated focus and resulting summaries for review",
+  "description": "Prepare a grounded proposal, review it inline, and pass the approved contract into the pending compaction",
   "hooks": {
     "PreCompact": [
       {
@@ -7,10 +7,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/compact-focus.sh",
-            "args": [],
-            "timeout": 20,
-            "statusMessage": "compact-focus: checking whether to pause\u2026"
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
+            "args": ["hook", "precompact"],
+            "timeout": 3600,
+            "statusMessage": "compact focus: preparing the inline review…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
+            "args": ["hook", "prepare"],
+            "timeout": 300,
+            "async": true
           }
         ]
       }
@@ -20,8 +33,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/compact-focus-log.sh",
-            "args": [],
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
+            "args": ["hook", "postcompact"],
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
+            "args": ["hook", "feedback"],
             "timeout": 15
           }
         ]

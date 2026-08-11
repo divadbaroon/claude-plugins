@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/hudsonmitchell-pullman/claude-plugins/tests/manual/precompact-stdout-probe.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

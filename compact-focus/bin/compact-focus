@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -eu
+
+PLUGIN_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="$PLUGIN_ROOT:$PYTHONPATH"
+else
+  export PYTHONPATH="$PLUGIN_ROOT"
+fi
+exec python3 -m compact_focus.cli "$@"
