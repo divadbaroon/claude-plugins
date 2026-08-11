@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-compact-focus"
+version = "0.19.0"
+description = "Human-reviewed, recoverable compaction for Claude Code"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Hudson Mitchell-Pullman"},
+]
+keywords = ["claude-code", "compaction", "context", "human-in-the-loop"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Homepage = "https://github.com/divadbaroon/claude-plugins/tree/main/compact-focus"
+Repository = "https://github.com/divadbaroon/claude-plugins"
+
+[project.scripts]
+compact-focus = "compact_focus.cli:main"
+
+[tool.setuptools]
+packages = ["compact_focus"]

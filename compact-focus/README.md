@@ -1,231 +1,227 @@
-# compact-focus (plugin)
+# Compact Focus
 
-Pauses one Claude Code compaction per session and shows your own recent
-prompts, so you can rerun `/compact focus on <what matters>` instead of
-letting the default summarizer guess. Logs every {stated focus → resulting
-summary} pair for later analysis.
+Compact Focus makes Claude Code's `/compact` a reviewable transaction. You
+state the failure that would be costly, inspect a grounded proposal, edit its
+meaning and retention, and press Enter. The original pending compaction then
+continues with the approved contract—no generated command to paste and no
+second dialog.
 
-Validated with `claude plugin validate` on Claude Code 2.1.226.
-Requires `jq` (`brew install jq`) — without it the plugin warns once and
-disables itself; compaction is never affected.
+Version 0.19.0 is tested against Claude Code 2.1.227 on macOS. Linux uses the
+same POSIX terminal path. Native Windows is not yet supported.
 
-## v0.10: Context Prism
+## What happens
 
-VISTA-adjacent positioning: visual context tools expose what context
-*exists*; Context Prism exposes what the context *means*. (Visual-workspace
-summarization: arXiv:2409.17289; VISTA: arXiv:2606.30005.)
-
-**Three-level lens** (replaces the flat frames/taxonomy split — the episode
-taxonomy alone was a grammar, not a lens):
-
-1. **Universal grammar** (fixed): decision · test · contradiction ·
-   dead-end · constraint.
-2. **Domain lens** (the expert layer): project-specific interpretive
-   vocabulary — e.g. timestamp basis, offset vs drift, source-of-truth
-   transcript, alignment pipeline stages. This is where expert knowledge
-   lives and what compact-learn revises.
-3. **Active task model** (volatile): what is currently favored, what gets
-   compared next.
-
-**Prism interaction** (compact-human):
-
-- **Precommit before anchoring** — "What would be catastrophic for the next
-  agent to MISINTERPRET?" asked before any machine construal is shown;
-  misconstrual, not omission, is the dominant failure.
-- **Rival chunkings** — the same trace construed through 2-3 problem
-  representations (progress/state · causal-debugging ·
-  constraint/coordination); the user adjudicates ONLY the spans where
-  rivals disagree — choose, merge, split, relabel — never the full trace.
-- **Provenance** — every chunk carries [threads · D-ids · G-ids] tags and
-  expands back to the prompts/tool results behind it; unselected material
-  demotes as before.
-- **Race, don't proofread** — `race '<default>' '<lensed>' ['<continuation>']`
-  gives both summaries the same ambiguous continuation ("continue fixing
-  it") and prints each agent's first three proposed actions side by side:
-  semantic loss made observable before it costs an hour.
-- **Learning record** — raw trace → rival representations → human
-  adjudication → compacted state → downstream behavior; substantially
-  richer than summary-preference data, because it captures what the expert
-  perceived that the generic construal did not.
-
-## v0.8 (experimental): two-pass lens
-
-A **lens** is an encoding schema, not an inclusion rule. `guidelines.md`
-says *what to keep*; the lens says *how to construe it* — the project's
-subject, its active frames/hypotheses, and an episode taxonomy
-(hypothesis-test · decision · dead-end · detour-with-insight ·
-mechanical). This is perceptual chunking (Chase & Simon) applied to
-compaction: an expert's schema is what lets many events collapse into one
-labeled chunk ("dead-end: X, falsified by Y — do not retry") without
-losing meaning, so a good lens licenses far more aggressive compression
-than any list of keep-rules can.
-
-**Two passes.** `compact-human` now derives/loads the lens FIRST (PASS 1),
-then composes the preservation draft THROUGH it (PASS 2) — kept content is
-chunked into taxonomy-labeled episodes, not a flat bullet list. The
-ordering is the point: Koedinger's group found an LLM only produced good
-knowledge-component analyses when first asked "what would someone need to
-know," then given the target task. Same structure here: frames before
-content.
-
-- **New script mode** — `lens` prints `lens.md` (+ path) from the state
-  dir, seeding a template (Subject / Active frames / Episode taxonomy) on
-  first use, exactly like `guidelines`. The seed carries a marker comment;
-  the lens is inactive until PASS 1 or the user replaces it.
-- **Learn loop distinguishes mis-encoding from omission** — a
-  revealed_loss whose content was *present in the summary but wrongly
-  construed* is lens evidence, not guideline evidence, and weighs
-  highest; approved changes log `lens_revision` events.
-- **Auto lens injection (opt-in, fragile)** — `COMPACT_FOCUS_LENS_STDOUT=1`
-  makes the hook print "Interpret and summarize this session through
-  these frames:" + the Active frames and Episode taxonomy sections on the
-  one allow path that emits no JSON (manual `/compact focus on …`). This
-  exploits the undocumented PreCompact-stdout→summarizer channel: it may
-  stop working on any CLI update, is default OFF, never touches the
-  JSON-output paths, and fails open.
-
-**Falsifiable prediction.** Lens-conditioned compaction should reach
-higher compression at equal probe accuracy than guideline-only
-compaction. Failure mode of a *wrong* lens: confident mis-encoding —
-silent loss the user only discovers downstream — which is exactly why
-`lens_revision` events exist and outweigh every other signal.
-
-## v0.7 (MVP): negotiated demotion
-
-Implements the core of the "Compaction as Negotiated Demotion" proposal
-(Linear: Human-Driven Compaction project). Design thesis: make human error
-cheap, not human judgment accurate.
-
-- **Demotion, never deletion** — everything not kept goes to
-  `demoted.jsonl` with stable IDs (`D1…`); `recall <id>` reads it back.
-  The compaction summary itself names the store, so the post-compaction
-  agent knows losses are recoverable.
-- **Two-phase elicitation** — Phase 1: loss-framed selection ("what must
-  the agent NOT have forgotten?") happens *before* any draft exists, so
-  the machine draft can't anchor it. Phase 2: the model drafts the
-  preservation summary; the user edits/approves; only then does
-  `/compact focus` run. This is the preview-with-approval loop no shipped
-  tool has (see ecosystem survey).
-- **Guidelines document** — `guidelines.md` per state dir conditions every
-  draft; `/compact-focus:compact-learn` converts logged signals (draft
-  edits > selections; revealed losses > everything) into proposed
-  guideline diffs the user approves. The automation ramp: ask less over
-  time.
-- **Instrumentation** — every phase-1 selection, draft, edit, approval,
-  demotion, and revealed-loss report is appended to `log.jsonl`. This is
-  the S1 study corpus: {signal → compaction → downstream outcome}.
-- **Revealed loss** — say "the compaction lost X" any time; the agent logs
-  it and restores from the demoted store.
-
-New script modes (same stable command prefix, approve once):
-`demote keep <keys> [drop <nums>]` · `recall <id|all>` · `guidelines` ·
-`record '<json>'`.
-
-Not in the MVP (research, not plumbing): uncertainty-gated asking,
-automatic revealed-loss detection, breakpoint detection for timing.
-
-## v0.6: selection-scoped ctrl+o
-
-The grouping model now outputs JSON — categories keyed `"1"…"6"`, each
-holding ALL of its member prompts — stored as `threads.json` in the state
-dir. `compact-focus-list.sh` renders from that file instead of echoing a
-preformatted blob, so the collapsed Bash result ctrl+o expands always
-matches the current selection:
-
-- before any selection: labels + counts only, never the full prompt list
-- no categories selected: nothing is rendered at all (plain `/compact`)
-- categories selected: `show 1,3` prints every prompt of just those
-  categories, globally numbered `[1]…[N]`
-- per-prompt deselect: `show 1,3 drop 2,5` re-renders what remains
-  (numbering stays stable across drops); defaults are keep-all or none
-
-Interfaces considered and rejected: one AskUserQuestion option per prompt
-(4-option cap, labels can't hold prompt text) and one-shot exclusion
-without re-render (the expanded doc would show the pre-drop set, breaking
-the "ctrl+o = current selection" invariant).
-
-## v0.2: grouped thread view
-
-At pause time the hook now asks a fast Claude model (one `claude -p
---safe-mode --model haiku` child call, 10s cap, ~fractions of a cent, billed
-to your account) to cluster the last 25 prompts into 2–5 labeled threads,
-with up to 3 verbatim prompts nested under each. The model only *sorts and
-labels* — every prompt shown is your untouched text. On ANY failure (no CLI,
-timeout, auth error, malformed output) the pause falls back to the flat
-verbatim list from v0.1. Each `paused` log line records `list_mode`
-(`grouped` | `verbatim`) and the plugin version, so the two presentations
-can be compared later.
-
-- `COMPACT_FOCUS_NO_GROUPING=1` — disable the child call entirely
-- `COMPACT_FOCUS_GROUP_MODEL=<alias>` — use a different model (default `haiku`)
-
-**Upgrading:** replace the folder (`cp -R compact-focus
-~/.claude/skills/`), re-run the `chmod`, then restart your session —
-skills-dir hook changes load on restart or `/reload-plugins`, not live.
-
-## Install for yourself (no marketplace needed)
-
-Copy this folder to your personal skills directory:
-
-```bash
-cp -R compact-focus ~/.claude/skills/compact-focus
-chmod +x ~/.claude/skills/compact-focus/scripts/*.sh
+```text
+normal turns ── optional background proposal ──┐
+                                               v
+one bare /compact ── precommit ── inline ledger ── approved contract
+                                                        |
+                                                        v
+                                             original Claude compactor
+                                                        |
+                                                        v
+                                      feedback + recoverable demotions
 ```
 
-On the next session it loads as `compact-focus@skills-dir` in **every
-project**. Confirm with `claude plugin list` or `/hooks` (both PreCompact and
-PostCompact should show Plugin Hooks entries).
+The foreground path never waits for the proposal model. If background analysis
+is absent, stale, or still running, Compact Focus opens an immediate,
+loss-averse episode view. A foreground `/compact` preempts and terminates any
+background worker.
 
-**If you previously installed the project-level version** (hooks in a repo's
-`.claude/settings.json`): remove those entries from that repo, or the pause
-fires twice there — plugin and project copies of a hook run separately, and
-they keep separate sentinels in different state dirs.
+The ledger partitions every reconstructed source exactly once. Its validator
+blocks approval if a source is missing, duplicated, invented, or attached to an
+unresolved contested item.
 
-## Distribute to others (marketplace)
+## Install
 
-1. Create a git repo (e.g. `claude-plugins`) containing `compact-focus/` and
-   a `.claude-plugin/marketplace.json` at the repo root — adapt
-   `marketplace.example.json` (the `source` path is relative to the repo root).
-2. Others then run, inside Claude Code:
-   ```
-   /plugin marketplace add <github-user>/claude-plugins
-   /plugin install compact-focus@papert-tools
-   ```
-3. Updates: bump `version` in `.claude-plugin/plugin.json` per release, or
-   omit it to ship on every commit. `claude plugin validate ./compact-focus
-   --strict` in CI catches schema drift.
+Requirements:
 
-## Where things live
+- Claude Code with plugin hooks and `${CLAUDE_PLUGIN_DATA}` support
+- Python 3.9 or newer
+- macOS or Linux terminal
 
-- **State + log**: `~/.claude/plugins/data/<plugin-id>/log.jsonl` when
-  installed as a plugin (survives updates); `~/.claude/compact-focus/`
-  for a bare project-level install; `COMPACT_FOCUS_STATE_DIR` overrides both.
-- **Sentinels**: `paused-<session_id>` files beside the log — delete one to
-  re-arm the pause for that session (`rm .../paused-*`).
+Install from the public marketplace:
 
-## How it behaves (v0.3 semantics)
+```bash
+claude plugin marketplace add divadbaroon/claude-plugins
+claude plugin install compact-focus@papert-tools
+```
 
-- The pause covers **one compaction attempt**. If you don't act, the next
-  attempt (usually triggered by your next message) proceeds automatically,
-  with a visible "no focus given" notice — never silently.
-- A pause older than 30 minutes is treated as abandoned: the next attempt
-  pauses fresh instead of expiring. Expiry is trigger-aware: manual pauses expire after
-  `COMPACT_FOCUS_PAUSE_TTL_MANUAL` (default 120s), auto pauses after
-  `COMPACT_FOCUS_PAUSE_TTL` (default 1800s).
-- A manual `/compact focus on X` always passes through (and X is logged).
-- Fails **open** on every error: missing jq, unreadable transcript,
-  unwritable state — compaction proceeds untouched, worst case silently.
-- The prompt list is verbatim (last 8 user prompts, 100-char truncation),
-  filtered to exclude tool results, command wrappers, meta lines, and prior
-  summaries.
+To use only the deterministic foreground ledger and make no background model
+call:
 
-## Known limits
+```bash
+claude plugin install compact-focus@papert-tools --config background_analysis=false
+```
 
-- The auto-trigger path is wired identically to manual but has had less live
-  testing; pair with `/autocompact` set well below your model's limit so any
-  block lands in the proactive branch (blocking a compaction that is
-  recovering from a context-limit error fails that request).
-- Only the first compaction per session gets steered by the pause; later
-  ones run the default template unless you `/compact focus` manually.
-- Transcript parsing is defensive but the JSONL schema is undocumented and
-  may shift across CLI versions.
+Restart Claude Code after installation. Confirm the four plugin hooks with
+`/hooks`, then run the normal `/compact` command when you want to compact.
+
+Update later with:
+
+```bash
+claude plugin marketplace update papert-tools
+claude plugin update compact-focus@papert-tools
+```
+
+For a one-session development load:
+
+```bash
+git clone https://github.com/divadbaroon/claude-plugins.git
+cd claude-plugins
+claude --plugin-dir ./compact-focus
+```
+
+Do not install both the marketplace copy and a project-level copy of the hooks;
+both would fire.
+
+## Review interface
+
+The first screen asks what the next agent must not misinterpret. This happens
+before the proposal is visible, so the proposal cannot anchor the answer. An
+empty Enter skips it.
+
+The main document separates `preserve`, `summarize`, and `demote`. Knowledge
+type, status, retention, confidence, and contested meaning remain separate
+fields.
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓`, `j` / `k` | Navigate |
+| `←` / `→` | Collapse or expand source provenance |
+| `p`, `s`, `d`, `Space` | Change retention |
+| `x`, `t` | Change status or knowledge type |
+| `e`, `E`, `N` | Edit title, multiline summary, or next action |
+| `m`, `S`, `M`, `n` | Move evidence, split, merge, or create an item |
+| `r` | Resolve a contested interpretation |
+| `g`, `[` / `]` | Show class rules or change the first-context percentage |
+| `c` | Show estimated context cost for every prompt/turn |
+| `v` | Inspect rival problem representations |
+| `/`, `u`, `?` | Search, undo, or show help |
+| `Enter` | Approve and continue the pending compaction |
+| `q` | Cancel compaction |
+
+Class rules are defaults, not decisions. Explicit item edits win. “First 30%”
+is calculated from cumulative attributable tokens, not the number of messages.
+
+## Recovery and feedback
+
+Demoted evidence is written to a project-local SQLite/FTS index and JSONL with
+stable IDs. The approved compaction contract tells the next Claude session how
+to recover it.
+
+In Claude Code, report failures naturally:
+
+```text
+the compaction lost the nonlinear drift constraint
+the compaction misread the failed test as resolved
+```
+
+The first form is recorded as an omission; the second as a misconstrual. The
+hook searches both demoted evidence and the preserved source trace, injects
+matching evidence into the turn, and stores the correction for future
+proposals. Approved review edits are also stored as project feedback examples;
+they are evidence, not automatically promoted into universal rules.
+
+After compaction, a deterministic lexical audit checks whether each approved
+preserve/summarize item left any anchors in Claude's resulting summary. It is a
+triage signal exposed by `compact-focus status`, not semantic verification.
+
+The plugin executable is available to Claude as `compact-focus`. From a cloned
+repository, the same commands are available at `./compact-focus/bin/compact-focus`:
+
+```bash
+compact-focus status
+compact-focus search nonlinear drift
+compact-focus recall d-0123456789ab
+compact-focus doctor
+```
+
+An independently installed Python CLI can point at marketplace state with
+`--state-root ~/.claude/plugins/data/compact-focus-papert-tools`.
+
+## Context accounting
+
+Claude Code transcripts expose message usage but not a fully attributable
+breakdown of system prompts, tool schemas, startup context, or host-side
+micro-compaction. Compact Focus therefore shows two separate facts:
+
+- estimated tokens and percentage for each prompt-led episode;
+- how much observed context cannot honestly be attributed to an episode.
+
+It reads an explicit context-window value from hook status or environment when
+available. It does not invent a generic 200k denominator for unknown models.
+
+## Background analysis and cost
+
+Background analysis is configurable when the plugin is installed. It starts at
+50% of a known window, or at 80k observed tokens when the window is unknown. A
+fresh worker is not launched until at least 40k more tokens or 12 more episodes
+have arrived. The worker uses the authenticated `claude` CLI, no tools, low
+effort, a $0.10 cap, and bounded transcript evidence. Its measured duration and
+reported cost are stored in the cycle metadata.
+
+Set `COMPACT_FOCUS_BACKGROUND=0` to disable it entirely. Other controls:
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `COMPACT_FOCUS_MODEL` | `haiku` | Proposal model |
+| `COMPACT_FOCUS_MAX_BUDGET_USD` | `0.10` | Per-worker spend cap |
+| `COMPACT_FOCUS_WORKER_TIMEOUT` | `180` | Worker timeout in seconds |
+| `COMPACT_FOCUS_PREP_THRESHOLD_PCT` | `50` | Known-window warm threshold |
+| `COMPACT_FOCUS_PREP_USED_TOKENS` | `80000` | Unknown-window warm threshold |
+| `COMPACT_FOCUS_PREP_REFRESH_TOKENS` | `40000` | Token drift before refresh |
+| `COMPACT_FOCUS_PREP_REFRESH_EPISODES` | `12` | Episode drift before refresh |
+| `COMPACT_FOCUS_AUTO` | `review` | Set `allow` to bypass review for auto-compaction |
+| `COMPACT_FOCUS_STATE_DIR` | plugin data directory | State override |
+
+## Privacy and state
+
+Installed state lives under `${CLAUDE_PLUGIN_DATA}`, normally
+`~/.claude/plugins/data/compact-focus-papert-tools/`, and survives plugin
+updates. Files are written atomically with user-only permissions where the
+platform permits it.
+
+Compact Focus stores reconstructed source text, review actions, demoted
+evidence, and explicit feedback locally. Raw base64 image/document payloads are
+never copied into proposal or recovery files; only metadata, dimensions, byte
+counts, and cryptographic digests are retained. Prior-turn private thinking is
+excluded.
+
+With background analysis enabled, bounded textual evidence is sent through a
+child Claude CLI process using the same account and provider configuration as
+the parent session. Compact Focus has no independent telemetry or network
+client.
+
+## Failure semantics
+
+- `q`, an invalid ledger, or an unavailable inline terminal blocks that
+  compaction attempt rather than silently compacting without review.
+- Focused commands such as `/compact focus on ...` pass through untouched.
+- If the proposal worker fails, the deterministic ledger preserves every
+  reconstructed source.
+- A watchdog resumes Claude if the inline editor process dies while Claude is
+  suspended.
+- Transcript JSONL is an internal Claude Code format and may change. The parser
+  records unsupported blocks as bounded metadata instead of silently dropping
+  them.
+
+Run `compact-focus doctor` to check Python, Claude CLI discovery, terminal
+ownership, writable state, and SQLite search support.
+
+## Development and release
+
+```bash
+python3 -W error::ResourceWarning -m unittest discover -s tests -v
+python3 -m py_compile compact-focus/compact_focus/*.py
+claude plugin validate . --strict
+python3 -m pip install ./compact-focus
+compact-focus --version
+```
+
+Manual platform probes live in `tests/manual/`; the automated suite covers
+trace boundaries, media privacy, proposal grounding, review mutations,
+recovery, worker cancellation, stale-proposal rebasing, and hook transactions.
+
+See [CHANGELOG.md](./CHANGELOG.md) and the repository
+[CONTRIBUTING.md](../CONTRIBUTING.md).
