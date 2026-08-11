@@ -61,16 +61,17 @@ typed reply, compact.
    "cat":"keep|contested|drop","prov","children":[{"text":"<the actual
    prompt(s) behind this item, verbatim>","checked":true}]} — children are
    what un-collapses in the TUI, so populate them from threads.json.
-   Then LAUNCH THE EDITOR YOURSELF: run `tui-open` (it opens the full-screen
-   ledger editor in a new terminal window; on failure it prints the manual
-   `!` line — relay that line if so). Under the printed ledger say only:
+   Then, under the printed ledger, say only:
 
-   > ✏️ Editor opened in a separate window — check/uncheck, tab to
-   > recategorize, → to expand an item into its prompts, q to save. Say
-   > **done** when finished — or skip the window and reply here: numbers
-   > flip (`5, not 2`) · text → constraint · `? 3` provenance · `race` · `ok`
+   > ✏️ Type `! cf` to edit right here — full-screen editor takes over this
+   > terminal (space check/uncheck · tab recategorize · → expand into the
+   > prompts behind an item · e/n edit label/note · a constraint · q saves
+   > and returns you to this chat). Then say **done**.
+   > Or reply in text: numbers flip (`5, not 2`) · text → constraint ·
+   > `? 3` provenance · `race` · `window` (separate-window editor) · `ok`
 
-   END YOUR TURN there. No AskUserQuestion in the fast flow. If the user
+   END YOUR TURN there. No AskUserQuestion in the fast flow. A `window`
+   reply → run `tui-open` (separate terminal window) and wait for done. If the user
    ran the TUI (their next message follows a "ledger finalized:" line in
    the transcript, or they say so): `ledger load`, and treat it as ground
    truth — cat=drop items and unchecked children are the drop set;
