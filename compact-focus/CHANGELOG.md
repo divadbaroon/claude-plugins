@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.22.0 — 2026-08-11
+
+- Replace retention-bucket navigation with the cluster-first hierarchy from
+  the terminal prototype: each cluster now carries a retention label, work
+  state, confidence, rationale, source inventory, and append-only user
+  clarifications; expanding it exposes independently editable source units.
+- Make source-level labels real transaction data. Explicit unit choices win
+  over cluster defaults, finalization honors them, and a deleted unit enters
+  local recovery even when its parent cluster remains preserved.
+- Add a mandatory pre-adoption draft stage. Enter on an ordinary row can no
+  longer approve compaction; only the explicit Submit row opens the exact
+  carry-forward draft, and a second Enter confirms it.
+- Add iterative draft chat through a bounded, tool-free, schema-constrained
+  child Claude/Codex worker. Natural-language revisions update both the draft
+  and validated cluster/source fields; direct draft editing and return-to-
+  clusters remain available without a model.
+- Store the confirmed draft in the review transaction, require it during
+  finalization, make it the native Claude summarizer's summary core, restore it
+  after compaction, carry it into later opaque Codex cycles, and audit its
+  lexical carriage without double-counting item-level omissions.
+- Show source timestamps when present, persist draft chat and revisions for
+  local inspection, expose confirmation state in `compact-focus status`, and
+  bump the state schema to version 4.
+
 ## 0.21.0 — 2026-08-11
 
 - Replace same-terminal file-descriptor theft with a companion terminal review

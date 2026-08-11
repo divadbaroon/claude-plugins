@@ -1,7 +1,7 @@
 {
   "name": "compact-focus",
-  "version": "0.21.0+codex.20260811194117",
-  "description": "Review, edit, recover, and carry forward the context Codex preserves across compaction.",
+  "version": "0.22.0+codex.20260811203804",
+  "description": "Review source-grounded clusters, then confirm or chat-refine the exact draft before Codex compacts.",
   "author": {
     "name": "Hudson Mitchell-Pullman",
     "url": "https://github.com/divadbaroon"
@@ -18,8 +18,8 @@
   ],
   "interface": {
     "displayName": "Compact Focus",
-    "shortDescription": "Edit what survives context compaction",
-    "longDescription": "Turns Codex's native /compact into a companion-terminal, human-reviewed transaction with source provenance, reversible demotion, feedback recovery, and automatic post-compaction contract restoration.",
+    "shortDescription": "Review the exact compaction draft",
+    "longDescription": "Turns Codex's native /compact into a companion-terminal transaction with cluster/source controls, an exact pre-adoption draft, iterative chat refinement, reversible deletion from active context, and automatic contract restoration.",
     "developerName": "Hudson Mitchell-Pullman",
     "category": "Productivity",
     "capabilities": [
