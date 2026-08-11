@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.22.3 — 2026-08-11
+
+- Remove the oversized-draft approval dead end. Enter now automatically
+  recompresses legacy or deterministic drafts above the normal 24,000-character
+  limit and returns the concise result for review.
+- If the bounded compression worker fails, arm the next Enter as an explicit
+  approval of the oversized fallback so users are never forced to manually
+  delete tens of thousands of characters.
+
 ## 0.22.2 — 2026-08-11
 
 - Generate a concise, source-grounded carry-forward summary after Submit

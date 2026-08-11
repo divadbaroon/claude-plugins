@@ -84,6 +84,19 @@ def fixture(platform="claude"):
 
 
 class DraftTests(unittest.TestCase):
+    def test_oversized_draft_can_be_explicitly_approved(self):
+        _trace, proposal = fixture()
+        review = new_review(proposal)
+        review["draft_review"] = {"draft": "x" * 24001, "revision_count": 0}
+
+        with self.assertRaisesRegex(Exception, "explicitly approve"):
+            approve_draft(review)
+        approved = approve_draft(review, allow_oversized=True)
+
+        self.assertEqual(24002, len(approved))
+        self.assertTrue(review["draft_review"]["approved"])
+        self.assertTrue(review["actions"][-1]["oversized"])
+
     def test_generated_summary_replaces_long_fallback_without_changing_contract(self):
         trace, proposal = fixture()
         review = new_review(proposal)

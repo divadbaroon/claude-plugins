@@ -282,6 +282,53 @@ class TuiSetupTests(unittest.TestCase):
         self.assertEqual("model", review["draft_review"]["generated_by"])
         self.assertTrue(review["draft_review"]["approved"])
 
+    def test_oversized_draft_is_recompressed_before_approval(self):
+        proposal = {
+            "items": [],
+            "class_rules": [],
+        }
+        review = new_review(proposal)
+        review["draft_review"] = {
+            "draft": "x" * 60905,
+            "generated_by": "model",
+            "stale": False,
+            "approved": False,
+            "messages": [],
+            "revision_count": 0,
+        }
+        screen = FakeScreen([10, 10])
+        with patch(
+            "compact_focus.tui.run_summary_worker",
+            return_value={"draft": "# Concise summary\n\nKeep the active decisions."},
+        ):
+            outcome = ReviewUI(screen, {"episodes": []}, proposal, review).draft_review()
+
+        self.assertEqual("approved", outcome)
+        self.assertLess(len(review["approved_summary"]), 24000)
+        self.assertIn("Concise summary", review["approved_summary"])
+
+    def test_oversized_draft_can_be_approved_if_recompression_fails(self):
+        proposal = {
+            "items": [],
+            "class_rules": [],
+        }
+        review = new_review(proposal)
+        review["draft_review"] = {
+            "draft": "x" * 60905,
+            "generated_by": "model",
+            "stale": False,
+            "approved": False,
+            "messages": [],
+            "revision_count": 0,
+        }
+        screen = FakeScreen([10, 10])
+        with patch("compact_focus.tui.run_summary_worker", side_effect=RuntimeError("worker unavailable")):
+            outcome = ReviewUI(screen, {"episodes": []}, proposal, review).draft_review()
+
+        self.assertEqual("approved", outcome)
+        self.assertGreater(len(review["approved_summary"]), 24000)
+        self.assertTrue(review["actions"][-2]["oversized"] or review["actions"][-1]["oversized"])
+
 
 if __name__ == "__main__":
     unittest.main()

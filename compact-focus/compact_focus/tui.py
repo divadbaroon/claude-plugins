@@ -13,6 +13,7 @@ from .draft import (
     apply_generated_summary,
     apply_revision,
     approve_draft,
+    draft_max_chars,
     edit_draft,
     ensure_draft,
     run_revision_worker,
@@ -983,8 +984,25 @@ class ReviewUI:
             elif key == ord("q"):
                 return "cancel"
             elif key in (10, 13, curses.KEY_ENTER):
+                state = self.review.get("draft_review") or {}
+                draft_chars = len(str(state.get("draft") or "").strip())
+                maximum = draft_max_chars()
+                allow_oversized = bool(state.get("oversized_approval_armed"))
+                if draft_chars > maximum and not allow_oversized:
+                    generated, detail = self._generate_summary_with_progress()
+                    if generated:
+                        status = f"Compressed {draft_chars:,} characters into a concise summary; review it, then press Enter again."
+                        offset = 0
+                    else:
+                        state["oversized_approval_armed"] = True
+                        self.save()
+                        status = (
+                            f"Automatic compression failed: {detail}. "
+                            f"Press Enter again to approve all {draft_chars:,} characters anyway."
+                        )
+                    continue
                 try:
-                    approve_draft(self.review)
+                    approve_draft(self.review, allow_oversized=allow_oversized)
                 except DraftError as exc:
                     status = str(exc)
                     continue
