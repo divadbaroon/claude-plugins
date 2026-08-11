@@ -14,14 +14,23 @@ Script (stable prefix, one approval):
 First run `studymode`. If it prints `1`, use the STUDY FLOW (end of file).
 Otherwise run the FAST FLOW — and check `prep-status` FIRST:
 
-- `none`   → run `prep-bg`, then ask the PRECOMMIT question in plain text
-  (no widget): "While it prepares — what would be catastrophic for the
-  next agent to MISINTERPRET about this session?" This lands BEFORE any
-  machine construal exists. Record any answer as
-  '{"event":"precommit","text":"…"}' and carry it into constraints.
-  END YOUR TURN. Do NOT block on prep.
-- `running`→ if precommit not yet asked, ask it now (same rule); otherwise
-  say it's still preparing and answer whatever else the user asked.
+- `none`   → run `prep-bg`, then ask the PRECOMMIT question via
+  AskUserQuestion (the native dialog — this widget call is allowed in
+  addition to the ledger surface call, since it happens in the kick turn):
+  - Question, exactly: "While it prepares — what would be catastrophic
+    for the next agent to MISINTERPRET about this session?"
+  - Exactly 2 options, NO content suggestions (proposing candidate
+    misinterpretations would anchor the very judgment this question
+    exists to capture un-anchored): "Skip — the ledger will surface on
+    its own" (description: "Nothing stands out right now") / "I'll say
+    it" (description: "Not what to keep — what, construed wrongly after
+    compaction, would cost you the most. Type it in Other."). The real
+    answer arrives via the Other free-text affordance.
+  Record any answer as '{"event":"precommit","text":"…"}' and carry it
+  into constraints. END YOUR TURN. Do NOT block on prep.
+- `running`→ if precommit not yet asked, ask it now (same widget rule);
+  otherwise say it's still preparing and answer whatever else the user
+  asked.
 - `failed: …` → do the preparation yourself IN-SESSION via step 1 below,
   then continue.
 - `ready`  → skip step 1: `ledger load` is your ledger (trust its
