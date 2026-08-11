@@ -6,6 +6,7 @@ import os
 import signal
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -259,20 +260,24 @@ def _fallback_items(trace: Dict[str, Any]) -> List[Dict[str, Any]]:
             summary_parts.append("Latest conclusion: " + conclusion)
         if artifacts:
             summary_parts.append("Artifacts: " + ", ".join(artifacts[:12]))
+        carried = episode.get("carry_forward") if isinstance(episode.get("carry_forward"), dict) else {}
+        carried_retention = str(carried.get("retention") or "preserve")
+        if carried_retention not in RETENTIONS:
+            carried_retention = "preserve"
         items.append(
             {
                 "id": _item_id(source_ids, title),
                 "title": title,
-                "summary": "\n\n".join(summary_parts),
-                "type": "context",
-                "status": "unclear",
-                "retention": "preserve",
-                "model_retention": "preserve",
-                "confidence": "low",
+                "summary": str(carried.get("summary") or "\n\n".join(summary_parts)),
+                "type": str(carried.get("type") or "context"),
+                "status": str(carried.get("status") or "unclear"),
+                "retention": carried_retention,
+                "model_retention": carried_retention,
+                "confidence": str(carried.get("confidence") or "low"),
                 "needs_review": False,
                 "source_ids": source_ids,
                 "rationale": "Conservative fallback: the proposal worker was unavailable or invalid.",
-                "next_step": "",
+                "next_step": str(carried.get("next_step") or ""),
                 "rival_interpretations": [],
                 "rule_floor": "preserve",
                 "user_touched": False,
@@ -459,7 +464,7 @@ def normalize_proposal(
         "schema_version": SCHEMA_VERSION,
         "source_hash": trace.get("source_hash"),
         "created_at": utc_now(),
-        "generator": "claude",
+        "generator": f"{trace.get('platform') or 'claude'}-model",
         "representations": representations,
         "items": items,
         "class_rules": rules,
@@ -473,7 +478,8 @@ def build_prompt(trace: Dict[str, Any], guidelines: str = "", lens: str = "") ->
         policy += "\nPROJECT RETENTION POLICY:\n" + guidelines.strip()[:12000]
     if lens.strip():
         policy += "\nPROJECT INTERPRETIVE LENS:\n" + lens.strip()[:12000]
-    return f"""You are proposing a human-reviewed compaction ledger for one Claude Code session.
+    host = "Codex" if trace.get("platform") == "codex" else "Claude Code"
+    return f"""You are proposing a human-reviewed compaction ledger for one {host} session.
 
 Your output is a proposal, never a decision. Partition EVERY SOURCE id exactly once across items. Copy source ids exactly; invent none. Preserve the user's language where it carries distinctions. Include assistant conclusions, tool outcomes, tests, diffs, artifacts, failed approaches, and constraints—not merely user prompts.
 
@@ -582,33 +588,82 @@ def run_worker(
     timeout: int = 180,
     cancelled: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
-    executable = shutil.which("claude")
-    if not executable:
-        raise ProposalError("Claude CLI is unavailable")
-    model = os.environ.get("COMPACT_FOCUS_MODEL", "haiku")
-    budget = os.environ.get("COMPACT_FOCUS_MAX_BUDGET_USD", "0.10")
+    host = str(trace.get("platform") or "claude")
     effort = os.environ.get("COMPACT_FOCUS_EFFORT", "low")
-    command = [
-        executable,
-        "-p",
-        "--safe-mode",
-        "--model",
-        model,
-        "--effort",
-        effort,
-        "--tools",
-        "",
-        "--disable-slash-commands",
-        "--system-prompt",
-        "You are a bounded JSON transformation worker. Follow the user prompt and its JSON schema exactly. Do not use tools, skills, or external context.",
-        "--no-session-persistence",
-        "--max-budget-usd",
-        budget,
-        "--json-schema",
-        json.dumps(PROPOSAL_SCHEMA, separators=(",", ":")),
-        "--output-format",
-        "json",
-    ]
+    temporary: Optional[tempfile.TemporaryDirectory[str]] = None
+    output_path: Optional[Path] = None
+    if host == "codex":
+        executable = shutil.which("codex")
+        if not executable:
+            raise ProposalError("Codex CLI is unavailable")
+        model = os.environ.get(
+            "COMPACT_FOCUS_CODEX_MODEL",
+            os.environ.get("COMPACT_FOCUS_MODEL", "gpt-5.6-luna"),
+        )
+        temporary = tempfile.TemporaryDirectory(prefix="compact-focus-worker-")
+        temporary_path = Path(temporary.name)
+        schema_path = temporary_path / "proposal.schema.json"
+        output_path = temporary_path / "proposal.json"
+        schema_path.write_text(
+            json.dumps(PROPOSAL_SCHEMA, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        command = [
+            executable,
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "-C",
+            str(temporary_path),
+            "-s",
+            "read-only",
+            "-a",
+            "never",
+            "-c",
+            "features.hooks=false",
+            "-c",
+            "features.plugins=false",
+            "-c",
+            f'model_reasoning_effort="{effort}"',
+            "-c",
+            'developer_instructions="Return only the requested JSON. Do not call tools or use external context."',
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(output_path),
+            "--model",
+            model,
+            "-",
+        ]
+    else:
+        executable = shutil.which("claude")
+        if not executable:
+            raise ProposalError("Claude CLI is unavailable")
+        model = os.environ.get("COMPACT_FOCUS_MODEL", "haiku")
+        budget = os.environ.get("COMPACT_FOCUS_MAX_BUDGET_USD", "0.10")
+        command = [
+            executable,
+            "-p",
+            "--safe-mode",
+            "--model",
+            model,
+            "--effort",
+            effort,
+            "--tools",
+            "",
+            "--disable-slash-commands",
+            "--system-prompt",
+            "You are a bounded JSON transformation worker. Follow the user prompt and its JSON schema exactly. Do not use tools, skills, or external context.",
+            "--no-session-persistence",
+            "--max-budget-usd",
+            budget,
+            "--json-schema",
+            json.dumps(PROPOSAL_SCHEMA, separators=(",", ":")),
+            "--output-format",
+            "json",
+        ]
     started = time.monotonic()
     try:
         prompt = build_prompt(trace, guidelines, lens)
@@ -624,21 +679,31 @@ def run_worker(
                 check=False,
             )
     except (OSError, subprocess.TimeoutExpired) as exc:
+        if temporary is not None:
+            temporary.cleanup()
         raise ProposalError(f"proposal worker failed: {exc}") from exc
-    if result.returncode != 0:
-        detail = _clip(result.stderr or result.stdout, 500, f"exit {result.returncode}")
-        raise ProposalError(f"proposal worker exited {result.returncode}: {detail}")
-    parsed = parse_worker_output(result.stdout)
+    worker_output = result.stdout
+    try:
+        if result.returncode != 0:
+            detail = _clip(result.stderr or result.stdout, 500, f"exit {result.returncode}")
+            raise ProposalError(f"proposal worker exited {result.returncode}: {detail}")
+        if output_path is not None and output_path.is_file():
+            worker_output = output_path.read_text(encoding="utf-8")
+        parsed = parse_worker_output(worker_output)
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
     normalized = normalize_proposal(parsed, trace)
     if not normalized["items"] and trace.get("episodes"):
         raise ProposalError("proposal worker produced no grounded items")
     elapsed_ms = round((time.monotonic() - started) * 1000)
     try:
-        envelope = json.loads(result.stdout)
+        envelope = json.loads(worker_output)
     except json.JSONDecodeError:
         envelope = {}
     metadata: Dict[str, Any] = {
         "status": "success",
+        "host": host,
         "model": model,
         "effort": effort,
         "elapsed_ms": elapsed_ms,

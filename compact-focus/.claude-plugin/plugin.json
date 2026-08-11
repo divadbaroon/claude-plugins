@@ -1,8 +1,8 @@
 {
   "name": "compact-focus",
   "displayName": "Compact Focus",
-  "version": "0.19.0",
-  "description": "Review and edit what Claude Code will preserve, summarize, or demote before one bare /compact continues.",
+  "version": "0.20.7",
+  "description": "Review and edit what Claude Code or Codex will preserve, summarize, or demote when one bare /compact continues.",
   "author": {
     "name": "Hudson Mitchell-Pullman"
   },

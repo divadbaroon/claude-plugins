@@ -1,12 +1,12 @@
 {
   "name": "papert-tools",
-  "description": "Human-centered Claude Code tools with inspectable state and reversible decisions.",
+  "description": "Human-centered Claude Code and Codex tools with inspectable state and reversible decisions.",
   "owner": { "name": "Hudson Mitchell-Pullman" },
   "plugins": [
     {
       "name": "compact-focus",
       "source": "./compact-focus",
-      "description": "Inline, human-reviewed Claude Code compaction with provenance, recovery, and feedback-aware proposals."
+      "description": "Inline, human-reviewed compaction for Claude Code and Codex with provenance, recovery, and feedback-aware proposals."
     }
   ]
 }

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 
 WORD_RE = re.compile(r"[A-Za-z0-9_.-]{3,}")
@@ -47,6 +47,27 @@ def audit_summary(review: Dict[str, Any], summary: str) -> Dict[str, Any]:
     summary_terms = _terms(summary)
     items: List[Dict[str, Any]] = []
     possible = 0
+    precommit_text = " ".join(str(review.get("precommit") or "").split())
+    precommit: Optional[Dict[str, Any]] = None
+    if precommit_text:
+        anchors = _terms(precommit_text)
+        matched = sorted(anchors & summary_terms)
+        coverage = len(matched) / max(1, len(anchors))
+        exact_present = precommit_text.lower() in " ".join(summary.lower().split())
+        # The precommit is the user's unanchored catastrophic constraint. A
+        # lexical heuristic cannot certify a rewording, so only exact carriage
+        # clears the human-inspection flag.
+        possible_omission = not exact_present
+        if possible_omission:
+            possible += 1
+        precommit = {
+            "text": precommit_text,
+            "anchor_count": len(anchors),
+            "matched_anchors": matched[:20],
+            "lexical_coverage": round(coverage, 3),
+            "exact_present": exact_present,
+            "possible_omission": possible_omission,
+        }
     for item in review.get("items", []):
         if item.get("retention") == "demote":
             continue
@@ -82,6 +103,8 @@ def audit_summary(review: Dict[str, Any], summary: str) -> Dict[str, Any]:
         "method": "conservative lexical anchors; not semantic verification",
         "summary_chars": len(summary),
         "checked_items": len(items),
+        "checked_precommit": bool(precommit),
         "possible_omissions": possible,
+        "precommit": precommit,
         "items": items,
     }

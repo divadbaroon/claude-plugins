@@ -44,6 +44,30 @@ class AuditTests(unittest.TestCase):
         self.assertTrue(next(item for item in result["items"] if item["item_id"] == "missing")["possible_omission"])
         self.assertIn("not semantic verification", result["method"])
 
+    def test_binding_precommit_is_audited_independently(self):
+        review = {
+            "precommit": "CATACLYSM-SENTINEL-7Q9 means latency, never throughput.",
+            "items": [],
+        }
+        missing = audit_summary(review, "The reviewed items were retained.")
+        self.assertTrue(missing["checked_precommit"])
+        self.assertTrue(missing["precommit"]["possible_omission"])
+        self.assertEqual(1, missing["possible_omissions"])
+
+        present = audit_summary(
+            review,
+            "CATACLYSM-SENTINEL-7Q9 means latency, never throughput.",
+        )
+        self.assertTrue(present["precommit"]["exact_present"])
+        self.assertEqual(0, present["possible_omissions"])
+
+        reworded = audit_summary(
+            review,
+            "CATACLYSM-SENTINEL-7Q9 means latency rather than throughput.",
+        )
+        self.assertGreater(reworded["precommit"]["lexical_coverage"], 0.5)
+        self.assertTrue(reworded["precommit"]["possible_omission"])
+
 
 if __name__ == "__main__":
     unittest.main()

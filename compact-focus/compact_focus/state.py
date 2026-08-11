@@ -30,6 +30,7 @@ def project_id(cwd: str) -> str:
 def state_root() -> Path:
     configured = (
         os.environ.get("COMPACT_FOCUS_STATE_DIR")
+        or os.environ.get("PLUGIN_DATA")
         or os.environ.get("CLAUDE_PLUGIN_DATA")
         or os.path.join(Path.home(), ".claude", "compact-focus")
     )
@@ -67,7 +68,13 @@ def load_json(path: Path, default: Any = None) -> Any:
 def file_lock(path: Path, blocking: bool = True) -> Iterator[bool]:
     """Cross-process advisory lock; yields False for a busy nonblocking lock."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.chmod(path, 0o600)
+        handle = os.fdopen(fd, "a+", encoding="utf-8")
+    except Exception:
+        os.close(fd)
+        raise
     acquired = False
     try:
         if os.name == "nt":

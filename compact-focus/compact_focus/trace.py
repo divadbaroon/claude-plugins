@@ -14,9 +14,24 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from . import SCHEMA_VERSION
 
 
-FILE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
-AGENT_TOOLS = {"Task", "Agent", "TaskOutput", "SendMessage"}
-TODO_TOOLS = {"TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet"}
+FILE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit", "apply_patch"}
+AGENT_TOOLS = {
+    "Task",
+    "Agent",
+    "TaskOutput",
+    "SendMessage",
+    "spawn_agent",
+    "followup_task",
+    "send_message",
+}
+TODO_TOOLS = {
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+    "update_plan",
+}
 TEST_WORDS = re.compile(r"\b(?:test|tests|pytest|jest|vitest|cargo test|go test|npm test)\b", re.I)
 PATH_RE = re.compile(r'''(?<![\w.:-])(?:~?/|\.{1,2}/)[^\s"'`<>|,;:(){}\[\]]+''')
 QUOTED_PATH_RE = re.compile(r'''["'`]((?:~?/|\.{1,2}/)[^"'`]{2,})["'`]''')
@@ -537,6 +552,13 @@ def _latest_usage(records: Sequence[Tuple[Dict[str, Any], int, int, int]]) -> Op
 
 
 def build_trace(transcript: Path, status: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from .host import HOST_CODEX, detect_host
+
+    if detect_host(transcript=transcript) == HOST_CODEX:
+        from .codex_trace import build_codex_trace
+
+        return build_codex_trace(transcript, status)
+
     records: List[Tuple[Dict[str, Any], int, int, int]] = []
     position = 0
     with transcript.open("rb") as handle:
@@ -650,6 +672,7 @@ def build_trace(transcript: Path, status: Optional[Dict[str, Any]] = None) -> Di
     cwd = next((str(entry.get("cwd")) for entry, *_ in reversed(records) if entry.get("cwd")), "")
     return {
         "schema_version": SCHEMA_VERSION,
+        "platform": "claude",
         "session_id": session_id,
         "cwd": cwd,
         "transcript_path": str(transcript),

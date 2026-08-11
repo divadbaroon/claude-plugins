@@ -1,14 +1,27 @@
 {
   "description": "Prepare a grounded proposal, review it inline, and pass the approved contract into the pending compaction",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook session-start",
+            "timeout": 15,
+            "statusMessage": "compact focus: restoring the approved contract…",
+            "additionalContextLimit": 9000
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "matcher": "manual|auto",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
-            "args": ["hook", "precompact"],
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook precompact",
             "timeout": 3600,
             "statusMessage": "compact focus: preparing the inline review…"
           }
@@ -20,10 +33,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
-            "args": ["hook", "prepare"],
-            "timeout": 300,
-            "async": true
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook prepare-dispatch",
+            "timeout": 10
           }
         ]
       }
@@ -33,8 +44,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
-            "args": ["hook", "postcompact"],
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook postcompact",
             "timeout": 30
           }
         ]
@@ -45,8 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/bin/compact-focus",
-            "args": ["hook", "feedback"],
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/compact-focus\" hook feedback",
             "timeout": 15
           }
         ]

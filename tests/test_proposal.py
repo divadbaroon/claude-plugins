@@ -179,6 +179,57 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(1234, proposal["worker"]["duration_ms"])
         self.assertEqual(0.01, proposal["worker"]["total_cost_usd"])
 
+    def test_codex_worker_is_ephemeral_hook_free_and_schema_bounded(self):
+        trace = copy.deepcopy(self.trace)
+        trace["platform"] = "codex"
+        raw = {
+            "representations": [],
+            "items": [
+                {
+                    "title": "all evidence",
+                    "summary": "keep it",
+                    "type": "context",
+                    "status": "active",
+                    "retention": "preserve",
+                    "confidence": "high",
+                    "needs_review": False,
+                    "source_ids": ["s1", "s2", "s3"],
+                    "rationale": "",
+                    "next_step": "",
+                    "rival_interpretations": [],
+                }
+            ],
+        }
+        captured = {}
+
+        def runner(command, **kwargs):
+            captured["command"] = command
+            captured["input"] = kwargs["input"]
+
+            class Result:
+                returncode = 0
+                stdout = __import__("json").dumps(raw)
+                stderr = ""
+
+            return Result()
+
+        with (
+            unittest.mock.patch("compact_focus.proposal.shutil.which", return_value="/bin/codex"),
+            unittest.mock.patch.dict(
+                os.environ,
+                {"COMPACT_FOCUS_CODEX_MODEL": "gpt-test", "COMPACT_FOCUS_EFFORT": "low"},
+            ),
+        ):
+            proposal = run_worker(trace, runner=runner)
+        command = captured["command"]
+        self.assertEqual("exec", command[1])
+        self.assertIn("--ephemeral", command)
+        self.assertIn("--ignore-user-config", command)
+        self.assertIn("features.hooks=false", command)
+        self.assertIn("--output-schema", command)
+        self.assertIn("gpt-test", command)
+        self.assertEqual("codex", proposal["worker"]["host"])
+
     def test_cancellable_runner_terminates_superseded_process(self):
         with self.assertRaisesRegex(ProposalError, "superseded"):
             _run_cancellable(

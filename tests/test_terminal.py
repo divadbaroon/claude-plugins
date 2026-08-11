@@ -24,7 +24,24 @@ class TerminalTests(unittest.TestCase):
         ):
             target = find_terminal()
         self.assertEqual("/dev/ttys009", target.path)
-        self.assertEqual(20, target.claude_pid)
+        self.assertEqual(20, target.host_pid)
+        self.assertEqual("Claude", target.host_name)
+
+    def test_finds_codex_and_ancestor_terminal(self):
+        rows = {
+            30: (20, "?", "/bin/sh /plugin/bin/compact-focus hook precompact"),
+            20: (10, "ttys010", "/opt/homebrew/bin/codex --no-alt-screen"),
+            10: (1, "ttys010", "-zsh"),
+        }
+        with (
+            patch("compact_focus.terminal.os.isatty", return_value=False),
+            patch("compact_focus.terminal.os.getppid", return_value=30),
+            patch("compact_focus.terminal._process_row", side_effect=lambda pid: rows.get(pid)),
+        ):
+            target = find_terminal()
+        self.assertEqual("/dev/ttys010", target.path)
+        self.assertEqual(20, target.host_pid)
+        self.assertEqual("Codex", target.host_name)
 
 
 if __name__ == "__main__":

@@ -119,7 +119,7 @@ def compile_directive(
         [
             "",
             "RECOVERY",
-            f"Demoted evidence remains local and searchable. Use `cf recall <id>` or `cf search <terms>`; session={paths.session_id}, cycle={cycle_id}.",
+            f"Demoted evidence remains local and searchable. Use `compact-focus recall <id>` or `compact-focus search <terms>`; session={paths.session_id}, cycle={cycle_id}.",
         ]
     )
     directive = "\n".join(lines).strip() + "\n"
