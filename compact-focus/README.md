@@ -10,7 +10,7 @@ the model through repeated revisions. Only the
 second confirmation returns control to the pending `/compact`; there is no
 generated command to copy or second `/compact` to run.
 
-Version 0.22.2 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
+Version 0.22.3 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
 macOS. On Linux it uses tmux or a detected terminal emulator. Native Windows is
 not yet supported.
 
@@ -199,6 +199,11 @@ Enter on the final Submit row generates and opens a concise carry-forward
 summary, and only Enter on that second screen confirms it. Draft chat applies validated structured changes back
 to cluster/source state as well as revising the summary; direct editing remains
 available when a model is unavailable or unwanted.
+
+If a legacy or deterministic fallback draft exceeds the normal confirmation
+limit, Enter first attempts to regenerate it as a concise summary. If that
+bounded worker is unavailable, the next Enter explicitly approves the
+oversized fallback; size can no longer make a reviewed draft unapprovable.
 
 | Key | Action |
 | --- | --- |

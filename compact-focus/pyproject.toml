@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-compact-focus"
-version = "0.22.2"
+version = "0.22.3"
 description = "Human-reviewed, recoverable compaction for Claude Code and Codex"
 readme = "README.md"
 requires-python = ">=3.9"

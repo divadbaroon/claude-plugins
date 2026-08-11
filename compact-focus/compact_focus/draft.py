@@ -240,6 +240,7 @@ def ensure_draft(trace: Dict[str, Any], review: Dict[str, Any]) -> Dict[str, Any
         state["draft"] = build_draft(trace, review)
         state["stale"] = False
         state["approved"] = False
+        state["oversized_approval_armed"] = False
         state["messages"] = []
         state["revision_count"] = 0
         state["generated_by"] = "deterministic"
@@ -247,20 +248,30 @@ def ensure_draft(trace: Dict[str, Any], review: Dict[str, Any]) -> Dict[str, Any
     return state
 
 
-def approve_draft(review: Dict[str, Any]) -> str:
+def draft_max_chars() -> int:
+    return int(os.environ.get("COMPACT_FOCUS_DRAFT_MAX_CHARS", "24000"))
+
+
+def approve_draft(review: Dict[str, Any], *, allow_oversized: bool = False) -> str:
     state = review.get("draft_review") or {}
     draft = str(state.get("draft") or "").strip()
     if not draft:
         raise DraftError("the compaction draft is empty")
-    maximum = int(os.environ.get("COMPACT_FOCUS_DRAFT_MAX_CHARS", "24000"))
-    if len(draft) > maximum:
+    maximum = draft_max_chars()
+    if len(draft) > maximum and not allow_oversized:
         raise DraftError(
-            f"the compaction draft is {len(draft):,} characters; chat or edit it below {maximum:,} before confirming"
+            f"the compaction draft is {len(draft):,} characters; compress it below {maximum:,} or explicitly approve the oversized fallback"
         )
     review["approved_summary"] = draft + "\n"
     state["approved"] = True
     state["approved_at"] = utc_now()
-    record_action(review, "approve_draft", revision_count=int(state.get("revision_count") or 0))
+    state["oversized_approval_armed"] = False
+    record_action(
+        review,
+        "approve_draft",
+        revision_count=int(state.get("revision_count") or 0),
+        oversized=len(draft) > maximum,
+    )
     return review["approved_summary"]
 
 
@@ -272,6 +283,7 @@ def edit_draft(review: Dict[str, Any], value: str) -> None:
     state["draft"] = draft + "\n"
     state["stale"] = False
     state["approved"] = False
+    state["oversized_approval_armed"] = False
     state["revision_count"] = int(state.get("revision_count") or 0) + 1
     state["generated_by"] = "human"
     state.setdefault("messages", []).append(
@@ -583,6 +595,7 @@ def apply_generated_summary(review: Dict[str, Any], result: Dict[str, Any]) -> s
     state["messages"] = []
     state["revision_count"] = 0
     state["generated_by"] = "model"
+    state["oversized_approval_armed"] = False
     state["generated_at"] = utc_now()
     review["approved_summary"] = ""
     record_action(review, "generate_summary", chars=len(draft))
@@ -642,6 +655,7 @@ def apply_revision(
     state["approved"] = False
     state["revision_count"] = int(state.get("revision_count") or 0) + 1
     state["generated_by"] = "model"
+    state["oversized_approval_armed"] = False
     messages = state.setdefault("messages", [])
     messages.append({"ts": utc_now(), "role": "user", "text": feedback.strip()[:8000]})
     reply = _one_line(revision.get("reply"))[:1000] or "Revised the draft."
