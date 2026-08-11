@@ -31,7 +31,7 @@ COMPACT_FOCUS_STATE_DIR="$BASE" "$SCRIPT" prep-run >/dev/null 2>&1
 
 if [ -r "$SESSD/ledger-ready" ]; then
   jq -nc --arg s "$SCRIPT" '{hookSpecificOutput: {hookEventName: "PreCompact",
-    additionalContext: ("compact-focus: background ledger prep is DONE (async hook). Surface it NOW: run `" + $s + " ledger load`, print the markdown ledger with per-item context percentages, offer the checkbox widget / typed replies / `! cf` editor, run `" + $s + " surfaced`, then wait for the user'\''s decision.")}}'
+    additionalContext: ("compact-focus: background ledger prep is DONE (async hook). Do NOT print the ledger in chat. Launch the interactive editor NOW: run `" + $s + " tui-inject`; if it prints OPENED, tell the user in ONE line where the editor is and to press enter there to submit (then say done here). Only if it prints FALLBACK, print the markdown ledger and accept typed replies. Then run `" + $s + " surfaced` and wait.")}}'
 else
   jq -nc '{hookSpecificOutput: {hookEventName: "PreCompact",
     additionalContext: "compact-focus: background ledger prep FAILED — prepare the ledger in-session via the compact-human skill (step 1) when the user next engages."}}'

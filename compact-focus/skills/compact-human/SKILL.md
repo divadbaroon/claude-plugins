@@ -35,7 +35,7 @@ Otherwise run the FAST FLOW — and check `prep-status` FIRST:
   then continue.
 - `ready`  → skip step 1: `ledger load` is your ledger (trust its
   partition as the prior; refresh anything obviously stale). Go to step 2
-  (print + widget surface), run `surfaced` after printing. After edits via
+  (editor surface — chat prints nothing), run `surfaced` after routing. After edits via
   any surface, `ledger load` is ground truth → step 4.
   (The asyncRewake hook usually delivers this state right when prep
   finishes — surface immediately on that rewake.)
@@ -49,104 +49,38 @@ Otherwise run the FAST FLOW — and check `prep-status` FIRST:
    Construe through two rival representations and note DISAGREEMENTS.
    Record '{"event":"ledger_prep","items":N,"contested":N}'.
 
-2. PRINT THE LEDGER — formatted markdown, INLINE (never collapsed), exactly
-   this shape (Obsidian-style: headings, task-list checkboxes, bold tags,
-   the item's OWN words from the transcript — never paraphrased labels, no
-   invented descriptions). DEFAULT PARTITION RULE: preserve = critical
-   ongoing work, recent decisions, active files; summarize = completed
-   tasks, resolved issues, older discussion; remove = redundant
-   information, outdated attempts. Anything you cannot confidently place →
-   contested: the human decides those, never you.
+2. SURFACE THE EDITOR — never the ledger as chat text. The interactive
+   curses editor IS the surface; the chat only routes to it.
 
-   ## ⏸ Compaction ledger
-   > One typed reply handles everything · `ok` accepts as shown
+   First persist the ledger for the editor: `ledger save '<json>'` with
+   each item as {"id","tag","label","cat":"keep|summarize|contested|drop",
+   "prov","pct":<summed>,"children":[{"u":<unit number from costs>,
+   "text":"<the actual prompt, verbatim>","checked":true,"pct":<from
+   costs>}]}, plus "classes":[{"id":"first_n","state":"keep","n":30},
+   {"id":"file_changes","state":"keep","pct":…},{"id":"subagents",
+   "state":"summarize","pct":…},{"id":"todos","state":"keep","pct":…}] —
+   class pcts from the `costs` classes table; every child MUST carry its
+   "u" ref (finalize rejects ungrounded items). Apply the DEFAULT
+   PARTITION RULE when composing: preserve = critical ongoing work, recent
+   decisions, active files; summarize = completed tasks, resolved issues,
+   older discussion; drop = redundant, outdated; cannot confidently place
+   → contested (the human decides, never you). Items in the user's OWN
+   words; never paraphrased labels.
 
-   ### Class rules
-   - [x] first **30**% of session — keep decisions only *(edit N in editor)*
-   - [x] file-change detail · ~N% — keep / summarize / drop
-   - [~] subagent transcripts · ~N% — *summarize to outcome lines*
-   - [x] todo bookkeeping · ~N%
+   Then run `tui-inject` and branch on its output:
+   - `OPENED: …` → say ONE line only, e.g. "Ledger editor open in <where>
+     — ⇧↑↓ moves categories, ← expands into prompts, space selects, enter
+     submits. Say **done** here when finished." NOTHING else in chat — no
+     ledger, no widget, no summary of items.
+   - `FALLBACK: …` → only now print the markdown ledger (headings,
+     checkboxes, grammar tags, per-item ~%, drop candidates cost-first,
+     under ~25 lines) and accept the typed grammar: numbers flip
+     (`5, not 2`) · text → constraint · `? 3` provenance · `race` · `ok`.
+   Record '{"event":"ledger_surfaced","via":"tmux|window|fallback"}'.
 
-   ### Preserve — ongoing work, recent decisions, active files
-   - [x] **1 · open** — <item in the user's own words> → *next:* <step> · ~N%
-
-   ### Summarize — completed, resolved, older
-   - [~] **2 · decision** — <choice + rationale> `[threads 1]` · ~N%
-   - [~] **3 · dead-end** — <what was falsified>; *do not retry* · ~N%
-
-   ### ⚡ Contested — you decide
-   - [?] **4** — <span>: <construal A> *(lens A)* **or** <construal B> *(lens B)*?
-
-   ### Remove — redundant, outdated → demoted, recoverable
-   - [ ] **5 · mechanical** — <item> · ~N%
-
-   > **Anything the next agent must not MISINTERPRET?** Say it in your reply.
-
-   `reply:` numbers flip (`5, not 2`) · free text → constraint · `? 3` = provenance · `race` · `ok`
-
-   Rules: grammar tags from the universal grammar (decision · test ·
-   contradiction · dead-end · constraint; open/solved/mechanical allowed as
-   states); open items first, mechanical last; contested = rival-lens
-   disagreements + unresolved unclear triage items; stable numbering; keep
-   the whole ledger under ~25 lines — merge aggressively, this is a
-   partition, not an inventory.
-
-   Every ledger line ends with its context share (`· ~8.0%` — sum of its
-   prompts' pcts from `costs`); order Drop candidates by pct descending so
-   the expensive removals are visible first.
-
-   BEFORE printing, also persist the same ledger for the interactive
-   editor: `ledger save '<json>'` with each item as {"id","tag","label",
-   "cat":"keep|summarize|contested|drop","prov","pct":<summed>,
-   "children":[{"text":"<the actual prompt, verbatim>","checked":true,
-   "pct":<from costs>}]}, plus "classes":[{"id":"first_n","state":"keep",
-   "n":30},{"id":"file_changes","state":"keep","pct":<from costs
-   classes>},{"id":"subagents","state":"summarize","pct":…},{"id":"todos",
-   "state":"keep","pct":…}] — class pcts come from the `costs` classes
-   table; subagents default to summarize.
-   Then present the NO-TYPING SURFACE: one single AskUserQuestion call
-   (the only widget call allowed in the fast flow — it is one round-trip),
-   with up to 4 questions built from the ledger:
-   - Q1 (single): "Compact as shown?" — "Yes — compact (Recommended)" /
-     "Adjust below first" / "Full editor" (description: "line editor in
-     this terminal via ! cf, or tmux split") / "Race the summaries first".
-   - Q2 (multiSelect, if any non-drop items): "Demote one tier
-     (preserve→summarize→remove):" — top-4 costliest non-drop items.
-   - Q3 (multiSelect, if any dropped items): "Rescue from Remove:" — the
-     dropped items.
-   - Q4 (multiSelect, if any contested): "Contested — select what to
-     PRESERVE (unselected → summarize):" — the contested items. The
-     user's explicit selection here IS the human decision.
-   CAP RULES (AskUserQuestion holds 4 options × 4 questions — never let
-   the cap silently decide anything):
-   - CONTESTED OUTRANKS EVERYTHING for widget slots. If contested items
-     exceed one question's 4 options, give contested a second question
-     (drop Q2/Q3 to make room); if they exceed 8, skip the widget path for
-     contested entirely and require the editor or typed replies — contested
-     is never resolved by omission, and compaction still blocks on it.
-   - Overflow elsewhere is safe by construction: items not shown in the
-     widget keep their model-assigned tier, are fully visible in the
-     printed ledger (which has no cap), and stay addressable by number in
-     the typed grammar and both editors. When a question shows a subset,
-     SAY SO in its description ("4 costliest of 7 — others by number or
-     editor"), always chosen by context cost, never arbitrarily.
-   - Never add a 5th option or 5th question; the call fails. Q1's fixed
-     action options already fill one question.
-   Apply all answers; record which items were widget-visible vs overflow
-   in ledger_final. If "Adjust below first" or anything ambiguous, the
-   typed grammar still works in the next message: numbers flip
-   (`5, not 2`) · text → constraint · `? 3` provenance · `race` ·
-   `window` · `ok`. If "Full editor": run `tui-inject` (tmux split when
-   available, else it prints `! cf` — the editor now runs line-mode in
-   this terminal, no TTY needed) and wait for **done**. If the user
-   ran the TUI (their next message follows a "ledger finalized:" line in
-   the transcript, or they say so): `ledger load`, and treat it as ground
-   truth — cat=drop items and unchecked children are the drop set;
-   constraints[] are precommit constraints; items with "edited":true are
-   relabels (record '{"event":"tui_edit","id":"…"}' each). Record
-   '{"event":"ledger_final","via":"tui|reply","kept":"…","dropped":"…"}'.
-
-3. PARSE THE REPLY (tolerate prose and typos; apply ALL parts of a mixed
+3. HANDLE THE RETURN. "done" (or the editor's finalized line) →
+   `ledger load` is ground truth → step 4. Typed replies (fallback path
+   or impatient users — tolerate prose and typos; apply ALL parts of a mixed
    reply):
    - numbers / "not N" → flip between keep and drop; `triage set` to match;
      record '{"event":"veto","flips":"…"}'. Unaddressed contested items

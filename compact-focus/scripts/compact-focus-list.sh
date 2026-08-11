@@ -440,15 +440,32 @@ SEED
     fi
     ;;
   tui-inject)
-    # Package-grade launch ladder only (no OS keystroke injection — that
-    # needs per-machine Accessibility permission and cannot ship in a
-    # package): (1) tmux → split a pane running the editor beside the chat,
-    # zero typing, race-free; (2) fallback → print the two-letter line.
+    # The curses editor is ALWAYS the surface — the chat never prints the
+    # ledger. Ladder (all package-safe): (1) tmux split beside the chat;
+    # (2) a terminal window via osascript "do script" (Apple Events —
+    # Automation prompt once, no Accessibility needed); (3) only then the
+    # ! cf line (line-mode editor) as last resort.
+    BASEDIR="$BASE"
     if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
-      tmux split-window -h "COMPACT_FOCUS_STATE_DIR='$S' '$HOME/.local/bin/cf' 2>/dev/null || COMPACT_FOCUS_STATE_DIR='$S' '$(dirname "$0")/cf'" 2>/dev/null \
-        && { echo "(editor opened in a tmux split beside the chat)"; exit 0; }
+      tmux split-window -h "COMPACT_FOCUS_STATE_DIR='$BASEDIR' '$HOME/.local/bin/cf' 2>/dev/null || COMPACT_FOCUS_STATE_DIR='$BASEDIR' '$(dirname "$0")/cf'" 2>/dev/null \
+        && { echo "OPENED: tmux split beside the chat"; exit 0; }
     fi
-    echo "(type  ! cf  to open the editor here)"
+    SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    if command -v osascript >/dev/null 2>&1; then
+      APP="${COMPACT_FOCUS_TERMINAL:-Terminal}"
+      if [ "$APP" = "iTerm" ] || [ "$APP" = "iTerm2" ]; then
+        osascript -e "tell application \"iTerm\"
+          create window with default profile command \"env COMPACT_FOCUS_STATE_DIR='$BASEDIR' '$SELF' tui\"
+          activate
+        end tell" >/dev/null 2>&1 && { echo "OPENED: iTerm window"; exit 0; }
+      else
+        osascript -e "tell application \"Terminal\"
+          do script \"exec env COMPACT_FOCUS_STATE_DIR='$BASEDIR' '$SELF' tui\"
+          activate
+        end tell" >/dev/null 2>&1 && { echo "OPENED: Terminal window"; exit 0; }
+      fi
+    fi
+    echo "FALLBACK: no TTY surface — type  ! cf  (line-mode editor)"
     ;;
   prep-bg)
     # Launch ledger preparation as a DETACHED worker so the user keeps
