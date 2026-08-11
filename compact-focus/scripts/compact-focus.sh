@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.10.0"
+PLUGIN_VERSION="0.10.1"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -211,17 +211,11 @@ fi
 date +%s >"$SENTINEL" 2>/dev/null || true
 log paused "$LIST_MODE"
 
-MSG="
-⏸ Paused — this attempt only; auto-resumes on the next.
-
-${THREADS}
-
-What should NOT be forgotten during compaction?
-→ /compact focus on <your answer, in words>
-  /compact-focus:compact-human to pick interactively · plain /compact = default summary"
-
-# Hook output strings are capped at 10,000 chars; stay safely under.
-MSG=${MSG:0:9000}
+# Notice is deliberately minimal (v0.10.1): the thread listing that used to
+# render here is redundant — threads.json is still saved and the skill flow
+# presents everything interactively. The notice only has to route the user.
+MSG="⏸ compact-focus: paused this one attempt.
+→ /compact-focus:compact-human — steer what survives · /compact again = default summary"
 
 # Exit 0 + JSON is required: JSON on stdout is only processed on exit 0.
 # reason carries the list because it provably renders in the block notice;
