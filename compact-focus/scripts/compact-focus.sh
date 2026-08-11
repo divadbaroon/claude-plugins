@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# compact-focus.sh — PreCompact hook (plugin, v0.6.0)
+# compact-focus.sh — PreCompact hook (plugin, v0.8.0)
 #
 # Pauses one compaction per session and shows the user their recent prompts —
 # grouped into labeled threads by a fast Claude model when possible, verbatim
@@ -31,7 +31,7 @@ set -uo pipefail
 INPUT=$(cat)
 
 STATE_DIR="${COMPACT_FOCUS_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-$HOME/.claude/compact-focus}}"
-PLUGIN_VERSION="0.7.0"
+PLUGIN_VERSION="0.8.0"
 
 # No jq -> warn once (hand-written JSON, no dependencies), then fail open forever.
 if ! command -v jq >/dev/null 2>&1; then
@@ -76,6 +76,24 @@ log() { # $1 = action, $2 = list_mode (optional)
 if [[ "$TRIGGER" == "manual" && -n "$FOCUS" ]]; then
   rm -f "$SENTINEL" 2>/dev/null || true
   log allow_focused
+  # EXPERIMENTAL (v0.8, opt-in via COMPACT_FOCUS_LENS_STDOUT=1): inject the
+  # lens frames into the summarizer through the undocumented
+  # PreCompact-stdout channel. ONLY valid on this path — it is the one
+  # allow path that emits no JSON, and plain text must NEVER mix with the
+  # JSON-output paths (block / pause-expired). Requires a lens.md the user
+  # or PASS 1 has actually written (seed marker absent). Every step is
+  # guarded so failure cannot change the exit path: fail open, exit 0.
+  if [[ "${COMPACT_FOCUS_LENS_STDOUT:-}" == "1" ]]; then
+    LENS_FILE="$STATE_DIR/lens.md"
+    if [[ -r "$LENS_FILE" ]] && ! grep -q 'compact-focus seed:' "$LENS_FILE" 2>/dev/null; then
+      LENS_FRAMES=$(awk '/^## (Active frames|Episode taxonomy)/ {p=1; print; next}
+                         /^## / {p=0} p' "$LENS_FILE" 2>/dev/null) || LENS_FRAMES=""
+      if [[ -n "$LENS_FRAMES" ]]; then
+        { printf 'Interpret and summarize this session through these frames:\n%s\n' \
+            "$LENS_FRAMES" && log lens_stdout; } 2>/dev/null || true
+      fi
+    fi
+  fi
   exit 0
 fi
 

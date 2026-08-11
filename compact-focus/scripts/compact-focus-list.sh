@@ -22,6 +22,11 @@
 #   recall <id|all>              print a demoted entry by ID (or all)
 #   guidelines                   print guidelines.md (+ its path), seeding
 #                                a starter file on first use
+#   lens                         print lens.md (+ its path), seeding a
+#                                starter template on first use. The lens is
+#                                an ENCODING SCHEMA (how to construe the
+#                                session), distinct from guidelines
+#                                (inclusion rules: what to keep)
 #   record '<json>'              append one instrumentation event to
 #                                log.jsonl (ts + event fields preserved)
 #   (no args)                    labels + counts of the stored file
@@ -191,6 +196,34 @@ SEED
     fi
     echo "── $G"
     cat "$G"
+    ;;
+  lens)
+    L="$S/lens.md"
+    if [ ! -r "$L" ]; then
+      mkdir -p "$S" 2>/dev/null
+      cat >"$L" <<'SEED'
+# Compaction lens (encoding schema, evolves via /compact-focus:compact-learn)
+<!-- compact-focus seed: unedited template. Replace Subject and Active frames
+     with this project's real frames (compact-human PASS 1 does this);
+     the lens stays inactive until this marker line is removed. -->
+
+## Subject
+(one line: what this project is / what it studies)
+
+## Active frames
+- (interpretive frames or hypotheses to construe sessions through —
+  e.g. "compression vs probe accuracy is the core tradeoff")
+
+## Episode taxonomy
+- hypothesis-test — an idea was tried against evidence; keep claim + verdict
+- decision — a choice was made; keep the alternatives and the rationale
+- dead-end — tried and falsified; keep why, so it is never retried
+- detour-with-insight — off-goal work that produced something reusable
+- mechanical — routine steps with no interpretive content; compress hard
+SEED
+    fi
+    echo "── $L"
+    cat "$L"
     ;;
   record)
     if [ -n "${2:-}" ] && printf '%s' "$2" | jq -e 'type == "object"' >/dev/null 2>&1; then

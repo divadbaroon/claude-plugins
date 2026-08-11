@@ -9,6 +9,48 @@ Validated with `claude plugin validate` on Claude Code 2.1.226.
 Requires `jq` (`brew install jq`) — without it the plugin warns once and
 disables itself; compaction is never affected.
 
+## v0.8 (experimental): two-pass lens
+
+A **lens** is an encoding schema, not an inclusion rule. `guidelines.md`
+says *what to keep*; the lens says *how to construe it* — the project's
+subject, its active frames/hypotheses, and an episode taxonomy
+(hypothesis-test · decision · dead-end · detour-with-insight ·
+mechanical). This is perceptual chunking (Chase & Simon) applied to
+compaction: an expert's schema is what lets many events collapse into one
+labeled chunk ("dead-end: X, falsified by Y — do not retry") without
+losing meaning, so a good lens licenses far more aggressive compression
+than any list of keep-rules can.
+
+**Two passes.** `compact-human` now derives/loads the lens FIRST (PASS 1),
+then composes the preservation draft THROUGH it (PASS 2) — kept content is
+chunked into taxonomy-labeled episodes, not a flat bullet list. The
+ordering is the point: Koedinger's group found an LLM only produced good
+knowledge-component analyses when first asked "what would someone need to
+know," then given the target task. Same structure here: frames before
+content.
+
+- **New script mode** — `lens` prints `lens.md` (+ path) from the state
+  dir, seeding a template (Subject / Active frames / Episode taxonomy) on
+  first use, exactly like `guidelines`. The seed carries a marker comment;
+  the lens is inactive until PASS 1 or the user replaces it.
+- **Learn loop distinguishes mis-encoding from omission** — a
+  revealed_loss whose content was *present in the summary but wrongly
+  construed* is lens evidence, not guideline evidence, and weighs
+  highest; approved changes log `lens_revision` events.
+- **Auto lens injection (opt-in, fragile)** — `COMPACT_FOCUS_LENS_STDOUT=1`
+  makes the hook print "Interpret and summarize this session through
+  these frames:" + the Active frames and Episode taxonomy sections on the
+  one allow path that emits no JSON (manual `/compact focus on …`). This
+  exploits the undocumented PreCompact-stdout→summarizer channel: it may
+  stop working on any CLI update, is default OFF, never touches the
+  JSON-output paths, and fails open.
+
+**Falsifiable prediction.** Lens-conditioned compaction should reach
+higher compression at equal probe accuracy than guideline-only
+compaction. Failure mode of a *wrong* lens: confident mis-encoding —
+silent loss the user only discovers downstream — which is exactly why
+`lens_revision` events exist and outweigh every other signal.
+
 ## v0.7 (MVP): negotiated demotion
 
 Implements the core of the "Compaction as Negotiated Demotion" proposal
