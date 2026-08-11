@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import curses
 import json
 import os
 import re
@@ -11,6 +10,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from . import SCHEMA_VERSION, VERSION
 from .audit import audit_summary
+from .companion import CompanionError, run_companion_review
 from .finalize import FinalizeError, finalize_cycle, search
 from .host import HOST_CODEX, detect_host
 from .proposal import load_policy, normalize_proposal, prepare_proposal, rebase_proposal
@@ -25,10 +25,8 @@ from .state import (
     safe_component,
     utc_now,
 )
-from .terminal import TerminalError, terminal_lease
 from .trace import build_trace
 from .codex_trace import add_review_contract
-from .tui import run_review
 
 
 LOSS_RE = re.compile(
@@ -234,6 +232,19 @@ def _pending_prompt_contract(paths: StatePaths) -> Tuple[Optional[str], str, int
         count, limit = 0, 3
     if count >= limit:
         return None, "", count
+    if (
+        str(pending.get("platform") or "") == HOST_CODEX
+        and count == 0
+        and not pending.get("continuation_started_at")
+    ):
+        try:
+            directive = (paths.cycle(identifier) / "instructions.txt").read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            directive = ""
+        if directive:
+            return identifier, directive, count
     review = load_json(paths.cycle(identifier) / "review.json", {})
     precommit = " ".join(str(review.get("precommit") or "").split())
     if precommit:
@@ -527,20 +538,25 @@ def precompact(payload: Dict[str, Any]) -> int:
             generator=proposal.get("generator"),
         )
 
-        def save_draft(value: Dict[str, Any]) -> None:
-            atomic_write_json(cycle / "review.draft.json", value)
-
         try:
-            with terminal_lease():
-                approved = run_review(trace, proposal, review, save_draft)
-        except (TerminalError, curses.error) as exc:
+            approved, launcher = run_companion_review(paths, identifier)
+            review = load_json(cycle / "review.draft.json", None)
+            if not isinstance(review, dict):
+                raise CompanionError("review editor returned without a valid draft")
+            paths.record(
+                "review_returned",
+                cycle_id=identifier,
+                launcher=launcher,
+                approved=approved,
+            )
+        except CompanionError as exc:
             paths.record("review_failed", cycle_id=identifier, error=str(exc)[:1000])
             raise WorkflowError(
-                f"inline review could not open ({exc}). Run `compact-focus doctor`; compaction was not performed"
+                f"review terminal failed ({exc}). Run `compact-focus doctor`; compaction was not performed"
             ) from exc
         except Exception as exc:
             paths.record("review_failed", cycle_id=identifier, error=str(exc)[:1000])
-            raise WorkflowError(f"inline review failed ({exc}); compaction was not performed") from exc
+            raise WorkflowError(f"review terminal failed ({exc}); compaction was not performed") from exc
         if not approved:
             paths.record("review_cancelled", cycle_id=identifier, trigger=trigger)
             raise WorkflowError("compaction cancelled in the review editor")
@@ -795,13 +811,20 @@ def postcompact(payload: Dict[str, Any]) -> int:
         if possible
         else ""
     )
-    message = (
-        f"compact focus: applied {len(review.get('items', []))} reviewed items; "
-        "the approved contract is restored into the immediate continuation. "
-        f"{finalization.get('demoted_count', 0)} evidence record(s) remain recoverable."
-        + audit_note
-    )
-    if host != HOST_CODEX:
+    if host == HOST_CODEX:
+        message = (
+            f"compact focus: applied {len(review.get('items', []))} reviewed items; "
+            "the approved contract will be restored beside your next prompt. "
+            f"{finalization.get('demoted_count', 0)} evidence record(s) remain recoverable."
+            + audit_note
+        )
+    else:
+        message = (
+            f"compact focus: applied {len(review.get('items', []))} reviewed items; "
+            "the approved contract is restored into the immediate continuation. "
+            f"{finalization.get('demoted_count', 0)} evidence record(s) remain recoverable."
+            + audit_note
+        )
         message += " If something was lost or misconstrued, say `the compaction lost <what>`."
     sys.stdout.write(json.dumps({"systemMessage": message}, ensure_ascii=False) + "\n")
     if host != HOST_CODEX and summary_source != "transcript" and transcript_path:

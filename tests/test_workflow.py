@@ -13,7 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 os.sys.path.insert(0, str(ROOT / "compact-focus"))
 
 from compact_focus.cli import main, parser  # noqa: E402
-from compact_focus.state import StatePaths, append_jsonl  # noqa: E402
+from compact_focus.state import (  # noqa: E402
+    StatePaths,
+    append_jsonl,
+    atomic_write_json,
+    load_json,
+)
 from compact_focus.workflow import (  # noqa: E402
     WorkflowError,
     ensure_cycle,
@@ -119,6 +124,17 @@ class WorkflowTests(unittest.TestCase):
         with self.transcript.open("w", encoding="utf-8") as handle:
             for row in self.rows:
                 handle.write(json.dumps(row) + "\n")
+
+    def reviewer(self, approved=True, precommit=""):
+        def run(paths, cycle_id):
+            if precommit:
+                draft = paths.cycle(cycle_id) / "review.draft.json"
+                review = load_json(draft, {})
+                review["precommit"] = precommit
+                atomic_write_json(draft, review)
+            return approved, "test"
+
+        return run
 
     def test_cli_help_labels_internal_hook_without_argparse_sentinel(self):
         stream = io.StringIO()
@@ -294,8 +310,7 @@ class WorkflowTests(unittest.TestCase):
         with (
             patch("compact_focus.workflow.file_lock", side_effect=busy_lock),
             patch("compact_focus.workflow.prepare_proposal") as prepare,
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", return_value=True),
+            patch("compact_focus.workflow.run_companion_review", side_effect=self.reviewer()),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -378,8 +393,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_postcompact_records_lexical_adherence_audit(self):
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", return_value=True),
+            patch("compact_focus.workflow.run_companion_review", side_effect=self.reviewer()),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -401,11 +415,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(1, post["adherence_audit"]["possible_omissions"])
 
     def test_postcompact_audits_new_carried_summary_not_hook_planning(self):
-        def approve(_trace, _proposal, review, save):
-            review["precommit"] = "CATACLYSM-SENTINEL-7Q9 means latency, never throughput."
-            save(review)
-            return True
-
         # Establish a pre-existing summary so the transaction cannot audit stale state.
         self.rows.append(
             {
@@ -416,8 +425,12 @@ class WorkflowTests(unittest.TestCase):
         )
         self.write_rows()
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", side_effect=approve),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(
+                    precommit="CATACLYSM-SENTINEL-7Q9 means latency, never throughput."
+                ),
+            ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -458,14 +471,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(post["adherence_audit"]["possible_omissions"], 1)
 
     def test_late_transcript_summary_replaces_provisional_hook_audit(self):
-        def approve(_trace, _proposal, review, save):
-            review["precommit"] = "LATE-SENTINEL-Q2 means scope, never ambition."
-            save(review)
-            return True
-
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", side_effect=approve),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(
+                    precommit="LATE-SENTINEL-Q2 means scope, never ambition."
+                ),
+            ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -526,15 +538,14 @@ class WorkflowTests(unittest.TestCase):
     def test_one_invocation_approves_and_emits_directive(self):
         output = io.StringIO()
 
-        def approve(_trace, _proposal, review, save):
-            review["precommit"] = "Do not confuse throughput with latency."
-            save(review)
-            return True
-
         with (
             patch("compact_focus.workflow.prepare_proposal") as prepare,
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", side_effect=approve),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(
+                    precommit="Do not confuse throughput with latency."
+                ),
+            ),
             contextlib.redirect_stdout(output),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -554,14 +565,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("Do not confuse throughput with latency", context)
 
     def test_passthrough_compaction_clears_stale_contract(self):
-        def approve(_trace, _proposal, review, save):
-            review["precommit"] = "Stale sentinel"
-            save(review)
-            return True
-
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", side_effect=approve),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(precommit="Stale sentinel"),
+            ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -576,14 +584,13 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual("", start_output.getvalue())
 
     def test_first_postcompact_prompts_reinforce_minimal_precommit_with_budget(self):
-        def approve(_trace, _proposal, review, save):
-            review["precommit"] = "PROMPT-SENTINEL-V3 means precision, never verbosity."
-            save(review)
-            return True
-
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", side_effect=approve),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(
+                    precommit="PROMPT-SENTINEL-V3 means precision, never verbosity."
+                ),
+            ),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -621,8 +628,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_failed_compaction_does_not_reinforce_uncommitted_prompt(self):
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", return_value=True),
+            patch("compact_focus.workflow.run_companion_review", side_effect=self.reviewer()),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -638,8 +644,10 @@ class WorkflowTests(unittest.TestCase):
         output = io.StringIO()
         with (
             patch("compact_focus.workflow.prepare_proposal", side_effect=lambda trace, **_kwargs: raw_proposal(trace)),
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", return_value=False),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(approved=False),
+            ),
             contextlib.redirect_stdout(output),
         ):
             with self.assertRaisesRegex(WorkflowError, "cancelled"):
@@ -653,18 +661,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertIn("transcript is unavailable", stderr.getvalue())
 
-    def test_codex_approval_emits_hook_json_and_session_start_injects_contract(self):
+    def test_codex_approval_restores_contract_on_first_prompt(self):
         self.use_codex_rows()
         pre_output = io.StringIO()
 
-        def approve(_trace, _proposal, review, save):
-            review["precommit"] = "Do not confuse throughput with latency."
-            save(review)
-            return True
-
         with (
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", side_effect=approve),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(
+                    precommit="Do not confuse throughput with latency."
+                ),
+            ),
             contextlib.redirect_stdout(pre_output),
         ):
             self.assertEqual(0, precompact(self.payload))
@@ -674,7 +681,20 @@ class WorkflowTests(unittest.TestCase):
         with contextlib.redirect_stdout(post_output):
             self.assertEqual(0, postcompact(self.payload))
         post_message = json.loads(post_output.getvalue())
-        self.assertIn("immediate continuation", post_message["systemMessage"])
+        self.assertIn("next prompt", post_message["systemMessage"])
+        self.assertNotIn("hookSpecificOutput", post_message)
+
+        prompt_output = io.StringIO()
+        with contextlib.redirect_stdout(prompt_output):
+            self.assertEqual(
+                0,
+                prompt_feedback({**self.payload, "prompt": "What survived?"}),
+            )
+        prompt_context = json.loads(prompt_output.getvalue())["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        self.assertIn("HUMAN-REVIEWED COMPACTION CONTRACT", prompt_context)
+        self.assertIn("Do not confuse throughput with latency", prompt_context)
 
         start_output = io.StringIO()
         with contextlib.redirect_stdout(start_output):
@@ -689,13 +709,50 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(post["summary_available"])
         self.assertEqual("unavailable", post["adherence_audit"]["status"])
 
+    def test_codex_delayed_session_start_avoids_duplicate_full_contract(self):
+        self.use_codex_rows()
+        with (
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(
+                    precommit="TMUX_SENTINEL means latency, never throughput."
+                ),
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(0, precompact(self.payload))
+            self.assertEqual(0, postcompact(self.payload))
+
+        start_output = io.StringIO()
+        with contextlib.redirect_stdout(start_output):
+            self.assertEqual(0, session_start({**self.payload, "source": "compact"}))
+        start_context = json.loads(start_output.getvalue())["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        self.assertIn("HUMAN-REVIEWED COMPACTION CONTRACT", start_context)
+
+        prompt_output = io.StringIO()
+        with contextlib.redirect_stdout(prompt_output):
+            self.assertEqual(
+                0,
+                prompt_feedback({**self.payload, "prompt": "What survived?"}),
+            )
+        prompt_context = json.loads(prompt_output.getvalue())["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        self.assertIn("TMUX_SENTINEL means latency, never throughput.", prompt_context)
+        self.assertIn("CURRENT GROUND TRUTH", prompt_context)
+        self.assertNotIn("HUMAN-REVIEWED COMPACTION CONTRACT", prompt_context)
+
     def test_codex_cancel_returns_continue_false_instead_of_hook_failure(self):
         self.use_codex_rows()
         output = io.StringIO()
         with (
             patch("sys.stdin", io.StringIO(json.dumps(self.payload))),
-            patch("compact_focus.workflow.terminal_lease", return_value=contextlib.nullcontext()),
-            patch("compact_focus.workflow.run_review", return_value=False),
+            patch(
+                "compact_focus.workflow.run_companion_review",
+                side_effect=self.reviewer(approved=False),
+            ),
             contextlib.redirect_stdout(output),
         ):
             self.assertEqual(0, main(["hook", "precompact"]))

@@ -1,6 +1,6 @@
 {
   "name": "compact-focus",
-  "version": "0.20.7+codex.20260811173430",
+  "version": "0.21.0+codex.20260811194117",
   "description": "Review, edit, recover, and carry forward the context Codex preserves across compaction.",
   "author": {
     "name": "Hudson Mitchell-Pullman",
@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Compact Focus",
     "shortDescription": "Edit what survives context compaction",
-    "longDescription": "Turns Codex's native /compact into an inline, human-reviewed transaction with source provenance, reversible demotion, feedback recovery, and automatic post-compaction contract restoration.",
+    "longDescription": "Turns Codex's native /compact into a companion-terminal, human-reviewed transaction with source provenance, reversible demotion, feedback recovery, and automatic post-compaction contract restoration.",
     "developerName": "Hudson Mitchell-Pullman",
     "category": "Productivity",
     "capabilities": [
