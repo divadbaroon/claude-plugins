@@ -470,7 +470,7 @@ SEED
     SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     COMPACT_FOCUS_STATUSLINE="$BASE/statusline-schema.json" "$SELF" costs "$TP" >/dev/null 2>&1
     printf '%s-%s' "${SID:-s}" "$(date -u +%Y%m%dT%H%M%SZ)" >"$SESS/compaction-id" 2>/dev/null
-    COSTS=$(jq -r '.units[] | "\(.i). [\(.pct)%] \(.prompt)"' "$S/costs.json" 2>/dev/null | tail -40)
+    COSTS=$(jq -r '.units[] | "\(.u). [\(.pct)%] \(.prompt)"' "$S/costs.json" 2>/dev/null | tail -120)
     CLS=$(jq -r '.classes | to_entries[] | "\(.key): \(.value.pct)%"' "$S/costs.json" 2>/dev/null)
     LENS=$("$SELF" lens 2>/dev/null | tail -n +2)
     GUIDE=$("$SELF" guidelines 2>/dev/null | tail -n +2)
