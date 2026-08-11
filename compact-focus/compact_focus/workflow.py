@@ -570,6 +570,8 @@ def precompact(payload: Dict[str, Any]) -> int:
             cycle_id=identifier,
             trigger=trigger,
             action_count=len(review.get("actions", [])),
+            draft_revisions=int((review.get("draft_review") or {}).get("revision_count") or 0),
+            approved_draft_chars=len(str(review.get("approved_summary") or "")),
             demoted_count=result.get("demoted_count"),
             instruction_chars=result.get("instruction_chars"),
         )

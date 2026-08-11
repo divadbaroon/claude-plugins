@@ -40,7 +40,10 @@ def _identity(row: Dict[str, Any]) -> str:
 
 
 def _entry(row: Dict[str, Any]) -> Dict[str, Any]:
-    return {"uuid": _identity(row)}
+    return {
+        "uuid": _identity(row),
+        "timestamp": row.get("timestamp") or (row.get("payload") or {}).get("timestamp"),
+    }
 
 
 def _content_text(content: Any) -> str:
@@ -327,6 +330,41 @@ def add_review_contract(
 ) -> None:
     """Make the previous human contract explicit when Codex's summary is opaque."""
     episodes: List[Dict[str, Any]] = []
+    approved_summary = str(review.get("approved_summary") or "").strip()
+    if approved_summary:
+        source_id = "s-" + hashlib.sha1(
+            f"{cycle_id}:approved-draft:{approved_summary}".encode("utf-8")
+        ).hexdigest()[:12]
+        episodes.append(
+            {
+                "id": "e-" + hashlib.sha1(source_id.encode("utf-8")).hexdigest()[:12],
+                "kind": "reviewed_contract",
+                "title": "Prior human-approved compaction draft",
+                "sources": [
+                    {
+                        "id": source_id,
+                        "kind": "reviewed_contract",
+                        "role": "developer",
+                        "tool_name": None,
+                        "class": "other",
+                        "text": approved_summary,
+                        "truncated": False,
+                        "tokens_estimate": max(1, len(approved_summary) // 4),
+                        "entry_uuid": f"carry:{cycle_id}:approved-draft",
+                        "byte_range": None,
+                        "artifacts": _artifacts(approved_summary),
+                    }
+                ],
+                "carry_forward": {
+                    "type": "context",
+                    "status": "active",
+                    "retention": "preserve",
+                    "confidence": "high",
+                    "summary": approved_summary,
+                    "next_step": "",
+                },
+            }
+        )
     precommit = str(review.get("precommit") or "").strip()
     if precommit:
         source_id = "s-" + hashlib.sha1(f"{cycle_id}:precommit:{precommit}".encode("utf-8")).hexdigest()[:12]

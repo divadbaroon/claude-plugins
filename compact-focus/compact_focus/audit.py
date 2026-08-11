@@ -49,6 +49,21 @@ def audit_summary(review: Dict[str, Any], summary: str) -> Dict[str, Any]:
     possible = 0
     precommit_text = " ".join(str(review.get("precommit") or "").split())
     precommit: Optional[Dict[str, Any]] = None
+    approved_draft_text = " ".join(str(review.get("approved_summary") or "").split())
+    approved_draft: Optional[Dict[str, Any]] = None
+    if approved_draft_text:
+        anchors = _terms(approved_draft_text)
+        matched = sorted(anchors & summary_terms)
+        coverage = len(matched) / max(1, len(anchors))
+        exact_present = approved_draft_text.lower() in " ".join(summary.lower().split())
+        possible_omission = bool(anchors) and coverage < 0.2
+        approved_draft = {
+            "anchor_count": len(anchors),
+            "matched_anchors": matched[:30],
+            "lexical_coverage": round(coverage, 3),
+            "exact_present": exact_present,
+            "possible_omission": possible_omission,
+        }
     if precommit_text:
         anchors = _terms(precommit_text)
         matched = sorted(anchors & summary_terms)
@@ -99,12 +114,19 @@ def audit_summary(review: Dict[str, Any], summary: str) -> Dict[str, Any]:
                 "possible_omission": possible_omission,
             }
         )
+    # The approved draft restates the item/precommit contract, so do not count
+    # the same likely omission twice. It still contributes one signal when its
+    # direct human edits are the only missing material.
+    if approved_draft and approved_draft["possible_omission"] and possible == 0:
+        possible = 1
     return {
         "method": "conservative lexical anchors; not semantic verification",
         "summary_chars": len(summary),
         "checked_items": len(items),
         "checked_precommit": bool(precommit),
+        "checked_approved_draft": bool(approved_draft),
         "possible_omissions": possible,
         "precommit": precommit,
+        "approved_draft": approved_draft,
         "items": items,
     }

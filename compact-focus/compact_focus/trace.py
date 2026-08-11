@@ -380,6 +380,7 @@ def _source(
         "truncated": truncated,
         "tokens_estimate": max(1, tokens_estimate),
         "entry_uuid": entry.get("uuid"),
+        "timestamp": entry.get("timestamp") or entry.get("created_at"),
         "byte_range": [start, end],
         "artifacts": _artifacts(text),
     }

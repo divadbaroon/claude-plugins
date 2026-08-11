@@ -139,7 +139,9 @@ def _status(args: argparse.Namespace) -> int:
             )
             print(
                 f"review: {review.get('outcome', 'not started')} · "
-                f"{len(review.get('actions', []))} actions"
+                f"{len(review.get('actions', []))} actions · "
+                f"{int((review.get('draft_review') or {}).get('revision_count') or 0)} draft revisions · "
+                f"draft {'confirmed' if review.get('approved_summary') else 'unconfirmed'}"
             )
             print(f"finalized: {'yes' if finalization.get('finalized_at') else 'no'}")
             audit = postcompact.get("adherence_audit") or {}

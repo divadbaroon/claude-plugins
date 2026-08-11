@@ -3,12 +3,28 @@ from __future__ import annotations
 import copy
 import curses
 import textwrap
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from .draft import (
+    DraftError,
+    apply_revision,
+    approve_draft,
+    edit_draft,
+    ensure_draft,
+    run_revision_worker,
+)
+from .proposal import first_fraction_source_ids
 from .review import (
+    WORK_STATES,
+    add_clarification,
     change_first_percent,
     create_item,
+    effective_source_retention,
+    ensure_review_shape,
+    invalidate_draft,
     merge_items,
     move_source,
     record_action,
@@ -16,33 +32,37 @@ from .review import (
     review_errors,
     set_item_field,
     set_precommit,
+    set_source_retention,
+    set_work_state,
     split_source,
     toggle_rule,
 )
-from .proposal import first_fraction_source_ids
 from .state import utc_now
 
 
 RETENTION_ORDER = ("preserve", "summarize", "demote")
-RETENTION_TITLE = {
-    "preserve": "PRESERVE — ongoing work, decisions, constraints, active artifacts",
-    "summarize": "SUMMARIZE — completed or resolved work, outcome only",
-    "demote": "DEMOTE — redundant or outdated; kept in searchable recovery",
+RETENTION_LABEL = {
+    "preserve": "PRESERVE",
+    "summarize": "COMPACT",
+    "demote": "DELETE",
 }
 RETENTION_MARK = {"preserve": "●", "summarize": "◐", "demote": "○"}
-TYPE_ORDER = (
-    "decision",
-    "constraint",
-    "hypothesis",
-    "test",
-    "result",
-    "dead_end",
-    "open_question",
-    "artifact",
-    "mechanical",
-    "context",
-)
-STATUS_ORDER = ("active", "resolved", "unclear")
+WORK_STATE_LABEL = {
+    "todo": "TODO",
+    "in_progress": "IN PROGRESS",
+    "done": "DONE",
+    "blocked": "BLOCKED",
+}
+KIND_LABEL = {
+    "user_prompt": "PROMPT",
+    "assistant_text": "ASSISTANT",
+    "tool_use": "TOOL CALL",
+    "tool_result": "TOOL RESULT",
+    "subagent": "SUBAGENT",
+    "subagent_transcript": "SUBAGENT",
+    "compact_summary": "PRIOR SUMMARY",
+    "message": "MESSAGE",
+}
 
 
 @dataclass(frozen=True)
@@ -98,12 +118,13 @@ class ReviewUI:
         self.trace = trace
         self.proposal = proposal
         self.review = review
+        ensure_review_shape(self.review)
         self.save_callback = save_callback
-        self.expanded: set[str] = set()
+        first = next(iter(self.review.get("items", [])), {})
+        self.expanded: set[str] = {str(first.get("id"))} if first.get("id") else set()
+        self.expanded_sources: set[str] = set()
         self.selection = 0
         self.offset = 0
-        self.show_rules = True
-        self.show_help = False
         self.status = ""
         self.history: List[Dict[str, Any]] = []
         self.sources = {
@@ -143,6 +164,8 @@ class ReviewUI:
             "warning": (curses.COLOR_YELLOW, -1),
             "danger": (curses.COLOR_RED, -1),
             "accent": (curses.COLOR_MAGENTA, -1),
+            "done": (curses.COLOR_GREEN, -1),
+            "blocked": (curses.COLOR_RED, -1),
         }
         for number, (name, values) in enumerate(pairs.items(), 1):
             if number >= max_pairs:
@@ -157,10 +180,17 @@ class ReviewUI:
         if self.save_callback:
             self.save_callback(self.review)
 
-    def snapshot(self) -> None:
-        self.history.append(copy.deepcopy(self.review))
+    def mutate(self, callback: Callable[[], None]) -> None:
+        before = copy.deepcopy(self.review)
+        try:
+            callback()
+        except (ValueError, IndexError, DraftError) as exc:
+            self.status = str(exc)
+            return
+        self.history.append(before)
         if len(self.history) > 80:
             self.history.pop(0)
+        self.save()
 
     def undo(self) -> None:
         if not self.history:
@@ -169,6 +199,7 @@ class ReviewUI:
         current_actions = len(self.review.get("actions", []))
         self.review.clear()
         self.review.update(self.history.pop())
+        ensure_review_shape(self.review)
         record_action(self.review, "undo", prior_action_count=current_actions)
         self.status = "Undid the last edit."
         self.save()
@@ -185,7 +216,10 @@ class ReviewUI:
         denominator, _basis = self.percentage_denominator()
         if not denominator:
             return None
-        tokens = sum((self.sources.get(source_id) or {}).get("tokens_estimate", 0) for source_id in item.get("source_ids", []))
+        tokens = sum(
+            (self.sources.get(source_id) or {}).get("tokens_estimate", 0)
+            for source_id in item.get("source_ids", [])
+        )
         return round(tokens * 100.0 / denominator, 2)
 
     def source_pct(self, source: Dict[str, Any]) -> Optional[float]:
@@ -209,7 +243,25 @@ class ReviewUI:
             source_list = [source for source in source_list if source.get("id") in selected]
         else:
             source_list = [source for source in source_list if source.get("class") == rule.get("id")]
-        return round(sum(source.get("tokens_estimate", 0) for source in source_list) * 100.0 / denominator, 2)
+        return round(
+            sum(source.get("tokens_estimate", 0) for source in source_list) * 100.0 / denominator,
+            2,
+        )
+
+    def _source_kind(self, source: Dict[str, Any]) -> str:
+        if source.get("class") == "file_changes":
+            return "FILE CHANGE"
+        kind = str(source.get("kind") or "source")
+        return KIND_LABEL.get(kind, kind.replace("_", " ").upper())
+
+    def _inventory(self, item: Dict[str, Any]) -> str:
+        counts: Dict[str, int] = {}
+        for source_id in item.get("source_ids", []):
+            source = self.sources.get(source_id, {})
+            label = self._source_kind(source).lower()
+            counts[label] = counts.get(label, 0) + 1
+        parts = [f"{value} {key}{'' if value == 1 else 's'}" for key, value in counts.items()]
+        return f"{len(item.get('source_ids', []))} units" + (" · " + " · ".join(parts) if parts else "")
 
     def build_lines(self, width: int) -> Tuple[List[Target], List[Tuple[Optional[int], str, str]]]:
         targets: List[Target] = []
@@ -223,67 +275,117 @@ class ReviewUI:
             for value in values:
                 lines.append((target_index, value, style))
 
-        if self.show_rules:
-            lines.append((None, "── CLASS RULES · defaults only; explicit item edits win ", "header:warning"))
-            for rule_index, rule in enumerate(self.review.get("class_rules", [])):
-                tid = target(Target("rule", rule=rule_index))
-                mark = "[x]" if rule.get("enabled") else "[ ]"
-                _denominator, basis = self.percentage_denominator()
-                basis_label = "window" if basis == "window" else "used"
-                percent = f" · ~{self.class_pct(rule):.2f}% {basis_label}" if self.class_pct(rule) is not None else ""
-                parameter = f" · {rule.get('percent', 30)}%" if rule.get("id") == "first_n" else ""
-                label = f" {mark} {rule.get('label')} → {rule.get('retention')}{parameter}{percent}"
-                emit(tid, _wrapped(label, width - 1, subsequent="       "), "rule")
+        worker = self.proposal.get("worker") or {}
+        worker_status = str(worker.get("status") or self.proposal.get("generator") or "ready").upper()
+        low = sum(1 for item in self.review.get("items", []) if item.get("confidence") == "low")
+        source_count = len(self.sources)
+        lines.append((None, " COMPACTION ANALYSIS", "agent-label"))
+        lines.append(
+            (
+                None,
+                f" {worker_status} · {len(self.review.get('items', []))} clusters · {source_count} source units · {low} low-confidence",
+                "agent",
+            )
+        )
+        lines.append(
+            (
+                None,
+                " Review clusters, expand evidence, and stage clarifications. Nothing reaches compaction until the submit row.",
+                "intro",
+            )
+        )
+        lines.append((None, "", "dim"))
 
-        for retention in RETENTION_ORDER:
-            lines.append((None, "── " + RETENTION_TITLE[retention] + " ", "header:" + retention))
-            matching = [(index, item) for index, item in enumerate(self.review.get("items", [])) if item.get("retention") == retention]
-            if not matching:
-                lines.append((None, "   (empty)", "dim"))
-            for item_index, item in matching:
-                tid = target(Target("item", item=item_index))
-                item_id = str(item.get("id"))
-                arrow = "▾" if item_id in self.expanded else "▸"
-                warning = " ⚠ REVIEW" if item.get("needs_review") and not item.get("reviewed") else ""
-                touched = " ✎" if item.get("user_touched") else ""
-                percent = self.item_pct(item)
-                _denominator, basis = self.percentage_denominator()
-                basis_label = "window" if basis == "window" else "used"
-                pct = f" · ~{percent:.2f}% {basis_label}" if percent is not None else ""
-                head = (
-                    f" {RETENTION_MARK[retention]} {arrow} [{item.get('type')} · {item.get('status')}] "
-                    f"{item.get('title')}{pct}{warning}{touched}"
+        for item_index, item in enumerate(self.review.get("items", [])):
+            tid = target(Target("cluster", item=item_index))
+            item_id = str(item.get("id") or "")
+            retention = str(item.get("retention") or "preserve")
+            work_state = str(item.get("work_state") or "todo")
+            arrow = "▾" if item_id in self.expanded else "▸"
+            confidence = str(item.get("confidence") or "low").upper()
+            review_flag = " · NEEDS REVIEW" if item.get("needs_review") and not item.get("reviewed") else ""
+            head = (
+                f" {arrow} {RETENTION_MARK.get(retention, '●')} {RETENTION_LABEL.get(retention, retention.upper())}"
+                f"  {WORK_STATE_LABEL.get(work_state, work_state.upper())}  {confidence}{review_flag}  "
+                f"{item.get('title')}"
+            )
+            emit(tid, _wrapped(head, width - 1, subsequent="      "), "cluster:" + retention)
+            rationale = str(item.get("rationale") or item.get("summary") or "").strip()
+            if rationale:
+                emit(tid, _wrapped(rationale, width - 7, initial="      ", subsequent="      "), "rationale")
+            percent = self.item_pct(item)
+            inventory = "      " + self._inventory(item)
+            if percent is not None:
+                inventory += f" · ~{percent:.2f}% context"
+            clarifications = [str(value).strip() for value in item.get("clarifications", []) if str(value).strip()]
+            if clarifications:
+                inventory += f" · {len(clarifications)} staged clarification{'s' if len(clarifications) != 1 else ''}"
+            emit(tid, [inventory], "inventory")
+            for clarification in clarifications:
+                emit(
+                    tid,
+                    _wrapped(clarification, width - 13, initial="      ↳ user · ", subsequent="               "),
+                    "clarification",
                 )
-                emit(tid, _wrapped(head, width - 1, subsequent="       "), "item:" + retention)
-                summary = str(item.get("summary") or "").strip()
-                if summary:
-                    emit(tid, _wrapped(summary, width - 8, initial="       ", subsequent="       "), "summary")
-                if item.get("next_step"):
-                    emit(
-                        tid,
-                        _wrapped(str(item["next_step"]), width - 12, initial="       next · ", subsequent="              "),
-                        "next",
+
+            if item_id in self.expanded:
+                for source_index, source_id in enumerate(item.get("source_ids", [])):
+                    source = self.sources.get(source_id, {"id": source_id, "text": "(source unavailable)"})
+                    source_review = self.review.get("source_reviews", {}).get(source_id) or {}
+                    source_retention = effective_source_retention(self.review, item, source_id)
+                    source_work = str(source_review.get("work_state") or work_state)
+                    source_target = target(Target("source", item=item_index, source=source_index))
+                    body = _one_line(source.get("text"))
+                    source_arrow = "▾" if source_id in self.expanded_sources else "▸"
+                    source_head = (
+                        f"{source_arrow} {self._source_kind(source)}  {RETENTION_LABEL.get(source_retention, source_retention.upper())}"
+                        f"  {WORK_STATE_LABEL.get(source_work, source_work.upper())}  {body[:110]}"
                     )
-                if item_id in self.expanded:
-                    rivals = item.get("rival_interpretations") or []
-                    for rival_index, rival in enumerate(rivals, 1):
-                        emit(
-                            tid,
-                            _wrapped(str(rival), width - 15, initial=f"       rival {rival_index} · ", subsequent="                 "),
-                            "rival",
-                        )
-                    for source_index, source_id in enumerate(item.get("source_ids", [])):
-                        source = self.sources.get(source_id, {"id": source_id, "text": "(source unavailable)"})
-                        source_target = target(Target("source", item=item_index, source=source_index))
-                        percent = self.source_pct(source)
-                        pct = f" · ~{percent:.3f}%" if percent is not None else ""
-                        meta = f"       ├─ {source_id} · {source.get('kind')} · {source.get('class')}{pct}"
-                        emit(source_target, [meta], "source-meta")
+                    emit(
+                        source_target,
+                        _wrapped(source_head, width - 10, initial="      ├─ ", subsequent="      │  "),
+                        "source-head:" + source_retention,
+                    )
+                    if body:
+                        body_limit = 1800 if source_id in self.expanded_sources else 320
                         emit(
                             source_target,
-                            _wrapped(str(source.get("text") or ""), width - 12, initial="       │  ", subsequent="       │  "),
-                            "source",
+                            _wrapped(body[:body_limit], width - 12, initial="      │  ", subsequent="      │  "),
+                            "source-body",
                         )
+                        if len(body) > body_limit:
+                            emit(
+                                source_target,
+                                ["      │  … Space to inspect the full source excerpt"],
+                                "source-meta",
+                            )
+                    pct = self.source_pct(source)
+                    meta = f"      │  {source_id} · {source.get('class') or 'other'}"
+                    timestamp = source.get("timestamp")
+                    if timestamp:
+                        meta += f" · {timestamp}"
+                    if pct is not None:
+                        meta += f" · ~{pct:.3f}% context"
+                    emit(source_target, [meta], "source-meta")
+                    for clarification in source_review.get("clarifications", []):
+                        if str(clarification).strip():
+                            emit(
+                                source_target,
+                                _wrapped(
+                                    str(clarification),
+                                    width - 15,
+                                    initial="      │  ↳ user · ",
+                                    subsequent="                   ",
+                                ),
+                                "clarification",
+                            )
+            lines.append((None, "", "dim"))
+
+        submit = target(Target("submit"))
+        lines.append((submit, " ┌────────────────────────────────────────────────────────────────────┐", "submit"))
+        lines.append((submit, " │  SUBMIT REFINED CLUSTERS FOR COMPACTION                         │", "submit"))
+        lines.append((submit, " │  Enter opens the exact draft for chat, editing, or confirmation. │", "submit"))
+        lines.append((submit, " └────────────────────────────────────────────────────────────────────┘", "submit"))
         return targets, lines
 
     def _editor_layout(self, text: str, width: int) -> Tuple[List[str], List[Tuple[int, int]]]:
@@ -382,18 +484,6 @@ class ReviewUI:
         finally:
             _set_cursor(0)
 
-    def precommit(self) -> None:
-        title = "BEFORE THE DRAFT · what would be catastrophic for the next agent to misinterpret?"
-        saved, value = self.edit_text(
-            title,
-            str(self.review.get("precommit") or ""),
-            multiline=True,
-            empty_enter_saves=True,
-        )
-        if saved:
-            set_precommit(self.review, value)
-            self.save()
-
     def choose(self, title: str, options: Sequence[str], initial: int = 0) -> Optional[int]:
         selected = max(0, min(initial, len(options) - 1))
         offset = 0
@@ -405,7 +495,10 @@ class ReviewUI:
             for index, option in enumerate(options):
                 for line in _wrapped(option, width - 7, initial=f" {index + 1}. ", subsequent="    "):
                     rendered.append((index, line))
-            first = next((index for index, (option_index, _line) in enumerate(rendered) if option_index == selected), 0)
+            first = next(
+                (index for index, (option_index, _line) in enumerate(rendered) if option_index == selected),
+                0,
+            )
             body = max(1, height - 3)
             if first < offset:
                 offset = first
@@ -445,10 +538,56 @@ class ReviewUI:
                 offset = min(max(0, len(lines) - (height - 2)), offset + 1)
             elif key in (curses.KEY_UP, ord("k")):
                 offset = max(0, offset - 1)
-            elif key in (curses.KEY_NPAGE,):
+            elif key == curses.KEY_NPAGE:
                 offset = min(max(0, len(lines) - (height - 2)), offset + height - 3)
-            elif key in (curses.KEY_PPAGE,):
+            elif key == curses.KEY_PPAGE:
                 offset = max(0, offset - height + 3)
+            elif key in (27, ord("q"), 10, 13):
+                return
+
+    def class_rules_view(self) -> None:
+        selected = 0
+        while True:
+            rules = self.review.get("class_rules", [])
+            if not rules:
+                self.show_document("CLASS RULES", ["No class rules are configured."])
+                return
+            selected = max(0, min(selected, len(rules) - 1))
+            height, width = self.screen.getmaxyx()
+            self.screen.erase()
+            _safe_add(self.screen, 0, 0, " CLASS RULES · defaults only; explicit labels win ".ljust(width - 1), width - 1, curses.A_REVERSE)
+            _safe_add(self.screen, 2, 2, "These are priors for untouched clusters and source units.", width - 4, curses.A_DIM)
+            for index, rule in enumerate(rules):
+                mark = "[x]" if rule.get("enabled") else "[ ]"
+                pct = self.class_pct(rule)
+                parameter = f" · first {rule.get('percent', 30)}%" if rule.get("id") == "first_n" else ""
+                context = f" · ~{pct:.2f}% context" if pct is not None else ""
+                line = (
+                    f" {mark} {rule.get('label')} → "
+                    f"{RETENTION_LABEL.get(str(rule.get('retention')), str(rule.get('retention')).upper())}"
+                    f"{parameter}{context}"
+                )
+                _safe_add(
+                    self.screen,
+                    4 + index,
+                    1,
+                    line,
+                    width - 2,
+                    curses.A_REVERSE if index == selected else 0,
+                )
+            _safe_add(self.screen, height - 2, 0, " Space toggle · [ ] adjust first percentage · Esc return", width - 1)
+            _safe_add(self.screen, height - 1, 0, " Explicit cluster/source choices are never overwritten.", width - 1, curses.A_DIM)
+            self.screen.refresh()
+            key = self.screen.getch()
+            if key in (curses.KEY_DOWN, ord("j")):
+                selected = min(len(rules) - 1, selected + 1)
+            elif key in (curses.KEY_UP, ord("k")):
+                selected = max(0, selected - 1)
+            elif key == ord(" "):
+                self.mutate(lambda: toggle_rule(self.review, selected, self.trace))
+            elif key in (ord("["), ord("]")) and rules[selected].get("id") == "first_n":
+                delta = -5 if key == ord("[") else 5
+                self.mutate(lambda: change_first_percent(self.review, delta, self.trace))
             elif key in (27, ord("q"), 10, 13):
                 return
 
@@ -471,7 +610,7 @@ class ReviewUI:
         else:
             basis = "estimated visible transcript only"
         paragraphs = [
-            f"Each row attributes a full conversational episode—prompt plus its assistant/tool aftermath—to the prompt that started it. Percentages use {basis}.",
+            f"Each row attributes a full conversational episode—prompt plus assistant/tool aftermath—to the prompt that started it. Percentages use {basis}."
         ]
         for episode in self.trace.get("episodes", []):
             if self.window and episode.get("window_pct_estimate") is not None:
@@ -484,23 +623,19 @@ class ReviewUI:
             paragraphs.append(
                 f"{int(episode.get('ordinal') or 0):>3}. {share} · ~{int(episode.get('tokens_estimate') or 0):,} tokens · {episode.get('title')}"
             )
-        visible_share = context.get("visible_share_of_used_pct_estimate")
-        if isinstance(visible_share, (int, float)) and visible_share < 95:
-            paragraphs.append(
-                f"Only ~{visible_share:.2f}% of observed used context is attributable to transcript episodes. The remainder is system instructions, tool schemas, host-side context, or other hidden material; it is not assigned to a prompt."
-            )
         self.show_document("PROMPT / TURN CONTEXT COSTS", paragraphs)
 
     def help_view(self) -> None:
         self.show_document(
             "KEYS",
             [
-                "↑↓ / j k navigate. ←→ collapse or expand provenance. PgUp/PgDn scroll.",
-                "p / s / d move an item to preserve, summarize, or demote. Space cycles. x changes status; t changes knowledge type.",
-                "e edits a title. E edits the multiline summary. N edits the next action. r resolves a contested interpretation and offers rival readings when present.",
-                "On evidence: m moves it to another item; S splits it into a new item. On an item: n creates a new item; M merges with another item; K/J reorders.",
-                "g shows or hides class rules. On a rule: Space toggles it; [ and ] adjust the first-part percentage. Explicit item edits override class defaults.",
-                "c shows context cost per prompt/turn. v shows rival representations. / searches the visible ledger. u undoes. Enter approves without a confirmation phrase. q cancels compaction.",
+                "↑↓ / j k navigate. Space or Enter expands a cluster or source excerpt. PgUp/PgDn scroll.",
+                "p preserves, c compacts to an outcome, and Delete / Ctrl-D / d removes from active context. The same keys work on a cluster or one source unit.",
+                "x cycles TODO → IN PROGRESS → DONE → BLOCKED. e stages a clarification without rewriting original evidence. T edits a cluster title; E edits its summary.",
+                "f accepts or resolves a low-confidence interpretation. r opens class-rule priors. Explicit cluster/source labels win over rules.",
+                "! edits the global non-negotiable interpretation. / searches. u undoes. $ shows context cost. v shows rival representations.",
+                "Only Enter on the final Submit row advances. The next screen shows the exact draft; c chats with the model, e edits directly, b returns here, and Enter confirms.",
+                "q cancels the pending compaction. DELETE means remove from carried context; recovery retains the source locally.",
             ],
         )
 
@@ -510,11 +645,14 @@ class ReviewUI:
         self.selection = max(0, min(self.selection, len(targets) - 1))
         return targets[self.selection]
 
-    def item_target(self, target: Target) -> Optional[int]:
-        return target.item if target.kind in {"item", "source"} else None
+    def _source_id(self, target: Target) -> Optional[str]:
+        if target.kind != "source" or target.item is None or target.source is None:
+            return None
+        source_ids = self.review["items"][target.item].get("source_ids", [])
+        return str(source_ids[target.source]) if target.source < len(source_ids) else None
 
     def find_text(self, targets: Sequence[Target]) -> None:
-        saved, query = self.edit_text("SEARCH LEDGER", "", multiline=False)
+        saved, query = self.edit_text("SEARCH CLUSTERS AND SOURCES", "", multiline=False)
         if not saved or not query:
             return
         lowered = query.lower()
@@ -525,9 +663,9 @@ class ReviewUI:
             if target.item is None:
                 continue
             item = self.review["items"][target.item]
-            haystack = item.get("title", "") + " " + item.get("summary", "")
-            if target.kind == "source" and target.source is not None:
-                source_id = item.get("source_ids", [])[target.source]
+            haystack = str(item.get("title", "")) + " " + str(item.get("summary", ""))
+            source_id = self._source_id(target)
+            if source_id:
                 haystack += " " + str((self.sources.get(source_id) or {}).get("text", ""))
             if lowered in haystack.lower():
                 self.selection = index
@@ -535,102 +673,267 @@ class ReviewUI:
                 return
         self.status = f"No match for “{query}”."
 
-    def mutate(self, callback: Callable[[], None]) -> None:
-        before = copy.deepcopy(self.review)
-        try:
-            callback()
-        except (ValueError, IndexError) as exc:
-            self.status = str(exc)
-            return
-        self.history.append(before)
-        if len(self.history) > 80:
-            self.history.pop(0)
-        self.save()
-
-    def handle_item_key(self, key: int, target: Target) -> None:
+    def _set_retention(self, target: Target, value: str) -> None:
         if target.item is None:
             return
+        source_id = self._source_id(target)
+        if source_id:
+            self.mutate(lambda: set_source_retention(self.review, target.item or 0, source_id, value))
+        else:
+            self.mutate(lambda: set_item_field(self.review, target.item or 0, "retention", value))
+
+    def _cycle_work_state(self, target: Target) -> None:
+        if target.item is None:
+            return
+        item = self.review["items"][target.item]
+        source_id = self._source_id(target)
+        if source_id:
+            current = str((self.review.get("source_reviews", {}).get(source_id) or {}).get("work_state") or item.get("work_state") or "todo")
+        else:
+            current = str(item.get("work_state") or "todo")
+        index = WORK_STATES.index(current) if current in WORK_STATES else 0
+        value = WORK_STATES[(index + 1) % len(WORK_STATES)]
+        self.mutate(lambda: set_work_state(self.review, target.item or 0, value, source_id=source_id))
+
+    def _clarify(self, target: Target) -> None:
+        if target.item is None:
+            return
+        source_id = self._source_id(target)
+        title = "CLARIFY SOURCE · staged context, original evidence stays unchanged" if source_id else "CLARIFY CLUSTER · staged context, original evidence stays unchanged"
+        saved, value = self.edit_text(title, "", multiline=True)
+        if saved and value:
+            self.mutate(lambda: add_clarification(self.review, target.item or 0, value, source_id=source_id))
+
+    def _resolve(self, target: Target) -> None:
+        if target.item is None:
+            return
+        item = self.review["items"][target.item]
+        rivals = item.get("rival_interpretations") or []
+        options = [str(value) for value in rivals] + ["Accept the current interpretation"]
+        choice = self.choose("RESOLVE LOW-CONFIDENCE INTERPRETATION", options, len(rivals))
+        if choice is not None:
+            rival = choice if choice < len(rivals) else None
+            self.mutate(lambda: resolve_item(self.review, target.item or 0, rival))
+
+    def _advanced_key(self, key: int, target: Target) -> bool:
+        if target.item is None:
+            return False
         index = target.item
         item = self.review["items"][index]
-        if target.kind == "source" and target.source is not None:
-            source_ids = item.get("source_ids", [])
-            if target.source >= len(source_ids):
-                return
-            source_id = source_ids[target.source]
-            if key == ord("m"):
-                options = [f"{candidate.get('retention')} · {candidate.get('title')}" for candidate in self.review["items"]]
-                chosen = self.choose("MOVE EVIDENCE TO", options, index)
-                if chosen is not None:
-                    self.mutate(lambda: move_source(self.review, source_id, chosen))
-            elif key == ord("S"):
-                saved, title = self.edit_text("NEW ITEM TITLE", str(item.get("title") or "") + " — split", multiline=False)
-                if saved and title:
-                    self.mutate(lambda: split_source(self.review, source_id, title, index))
-            return
-
-        if key in (ord("p"), ord("s"), ord("d"), ord(" ")):
-            if key == ord(" "):
-                current = RETENTION_ORDER.index(item.get("retention", "preserve"))
-                value = RETENTION_ORDER[(current + 1) % len(RETENTION_ORDER)]
-            else:
-                value = {ord("p"): "preserve", ord("s"): "summarize", ord("d"): "demote"}[key]
-            self.mutate(lambda: set_item_field(self.review, index, "retention", value))
-        elif key == ord("x"):
-            current = STATUS_ORDER.index(item.get("status", "unclear"))
-            value = STATUS_ORDER[(current + 1) % len(STATUS_ORDER)]
-            self.mutate(lambda: set_item_field(self.review, index, "status", value))
-        elif key == ord("t"):
-            current = TYPE_ORDER.index(item.get("type", "context"))
-            value = TYPE_ORDER[(current + 1) % len(TYPE_ORDER)]
-            self.mutate(lambda: set_item_field(self.review, index, "type", value))
-        elif key == ord("r"):
-            rivals = item.get("rival_interpretations") or []
-            choice = self.choose("RESOLVE INTERPRETATION", [str(value) for value in rivals] + ["Keep the current summary"], len(rivals))
-            if choice is not None:
-                rival = choice if choice < len(rivals) else None
-                self.mutate(lambda: resolve_item(self.review, index, rival))
-        elif key == ord("e"):
-            saved, value = self.edit_text("EDIT TITLE", str(item.get("title") or ""), multiline=False)
+        source_id = self._source_id(target)
+        if key == ord("T") and not source_id:
+            saved, value = self.edit_text("EDIT CLUSTER TITLE", str(item.get("title") or ""), multiline=False)
             if saved and value:
                 self.mutate(lambda: set_item_field(self.review, index, "title", value))
-        elif key == ord("E"):
-            saved, value = self.edit_text("EDIT COMPACTION SUMMARY", str(item.get("summary") or ""), multiline=True)
+            return True
+        if key == ord("E") and not source_id:
+            saved, value = self.edit_text("EDIT CLUSTER COMPACTION SUMMARY", str(item.get("summary") or ""), multiline=True)
             if saved:
                 self.mutate(lambda: set_item_field(self.review, index, "summary", value))
-        elif key == ord("N"):
+            return True
+        if key == ord("N") and not source_id:
             saved, value = self.edit_text("EDIT NEXT ACTION", str(item.get("next_step") or ""), multiline=True)
             if saved:
                 self.mutate(lambda: set_item_field(self.review, index, "next_step", value))
-        elif key == ord("n"):
-            saved, title = self.edit_text("CREATE ITEM", "", multiline=False)
+            return True
+        if key == ord("m") and source_id:
+            options = [f"{candidate.get('retention')} · {candidate.get('title')}" for candidate in self.review["items"]]
+            chosen = self.choose("MOVE SOURCE TO CLUSTER", options, index)
+            if chosen is not None:
+                self.mutate(lambda: move_source(self.review, source_id, chosen))
+            return True
+        if key == ord("S") and source_id:
+            saved, title = self.edit_text("NEW CLUSTER TITLE", str(item.get("title") or "") + " — split", multiline=False)
+            if saved and title:
+                self.mutate(lambda: split_source(self.review, source_id, title, index))
+            return True
+        if key == ord("n") and not source_id:
+            saved, title = self.edit_text("CREATE CLUSTER", "", multiline=False)
             if saved and title:
                 self.mutate(lambda: create_item(self.review, title, retention=item.get("retention", "preserve"), after=index))
-        elif key == ord("M") and len(self.review["items"]) > 1:
-            candidates = [(candidate_index, candidate) for candidate_index, candidate in enumerate(self.review["items"]) if candidate_index != index]
-            chosen = self.choose("MERGE CURRENT ITEM INTO", [f"{candidate.get('retention')} · {candidate.get('title')}" for _candidate_index, candidate in candidates])
+            return True
+        if key == ord("M") and not source_id and len(self.review["items"]) > 1:
+            candidates = [
+                (candidate_index, candidate)
+                for candidate_index, candidate in enumerate(self.review["items"])
+                if candidate_index != index
+            ]
+            chosen = self.choose(
+                "MERGE CURRENT CLUSTER INTO",
+                [f"{candidate.get('retention')} · {candidate.get('title')}" for _candidate_index, candidate in candidates],
+            )
             if chosen is not None:
                 other = candidates[chosen][0]
                 self.mutate(lambda: merge_items(self.review, index, other))
-        elif key in (ord("K"), ord("J")):
-            other = index - 1 if key == ord("K") else index + 1
-            if 0 <= other < len(self.review["items"]):
-                def reorder() -> None:
-                    self.review["items"][index], self.review["items"][other] = self.review["items"][other], self.review["items"][index]
-                    record_action(self.review, "reorder_items", first=index, second=other)
-                self.mutate(reorder)
+            return True
+        return False
+
+    def _draft_lines(self, width: int) -> List[Tuple[str, str]]:
+        state = ensure_draft(self.trace, self.review)
+        lines: List[Tuple[str, str]] = []
+        messages = list(state.get("messages", []))[-6:]
+        if messages:
+            lines.append((" REVIEW CHAT", "chat-head"))
+            for message in messages:
+                role = "YOU" if message.get("role") == "user" else "MODEL"
+                wrapped = _wrapped(str(message.get("text") or ""), width - 10, initial=f" {role} · ", subsequent="       ")
+                lines.extend((value, "chat") for value in wrapped)
+            lines.append(("", "dim"))
+        lines.append((" EXACT CARRY-FORWARD DRAFT", "draft-head"))
+        for raw in str(state.get("draft") or "").splitlines():
+            if raw.startswith("#"):
+                style = "draft-heading"
+                value = raw.lstrip("# ")
+            elif raw.startswith("-"):
+                style = "draft-item"
+                value = raw
+            else:
+                style = "draft"
+                value = raw
+            if value:
+                lines.extend((line, style) for line in _wrapped(value, width - 4, initial="  ", subsequent="  "))
+            else:
+                lines.append(("", "dim"))
+        return lines
+
+    def _draw_draft(self, offset: int, *, progress: str = "", status: str = "") -> int:
+        height, width = self.screen.getmaxyx()
+        lines = self._draft_lines(width)
+        body_height = max(1, height - 4)
+        offset = max(0, min(offset, max(0, len(lines) - body_height)))
+        self.screen.erase()
+        revisions = int((self.review.get("draft_review") or {}).get("revision_count") or 0)
+        title = f" compact focus · review compaction draft · {revisions} revision{'s' if revisions != 1 else ''} "
+        _safe_add(self.screen, 0, 0, title.ljust(width - 1), width - 1, curses.A_REVERSE)
+        for y, (value, style) in enumerate(lines[offset : offset + body_height], 1):
+            attr = 0
+            if style in {"chat-head", "draft-head", "draft-heading"}:
+                attr = curses.A_BOLD | self.colors.get("accent", 0)
+            elif style == "chat":
+                attr = self.colors.get("warning", 0)
+            elif style == "draft":
+                attr = curses.A_DIM
+            _safe_add(self.screen, y, 0, value, width - 1, attr)
+        footer = progress or status or " Enter confirm · c chat/refine · e edit exact draft · b back to clusters · q cancel"
+        _safe_add(self.screen, height - 2, 0, " " + footer, width - 1, self.colors.get("warning", 0) if progress or status else 0)
+        _safe_add(self.screen, height - 1, 0, " No context is cleared until Enter confirms this screen.", width - 1, curses.A_DIM)
+        self.screen.refresh()
+        return offset
+
+    def _refine_with_progress(self, feedback: str, offset: int) -> Tuple[bool, str]:
+        result: Dict[str, Any] = {}
+
+        def worker() -> None:
+            try:
+                result["revision"] = run_revision_worker(self.trace, self.review, feedback)
+            except Exception as exc:  # surfaced inside the review instead of killing the hook
+                result["error"] = str(exc)
+
+        thread = threading.Thread(target=worker, name="compact-focus-draft-review", daemon=True)
+        thread.start()
+        started = time.monotonic()
+        spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        frame = 0
+        while thread.is_alive():
+            elapsed = int(time.monotonic() - started)
+            self._draw_draft(
+                offset,
+                progress=f"{spinner[frame % len(spinner)]} Model is refining the draft · {elapsed}s elapsed",
+            )
+            frame += 1
+            time.sleep(0.12)
+        thread.join()
+        if result.get("error"):
+            return False, result["error"]
+        try:
+            reply = apply_revision(self.trace, self.review, feedback, result["revision"])
+        except Exception as exc:
+            return False, str(exc)
+        self.save()
+        return True, reply
+
+    def draft_review(self) -> str:
+        ensure_draft(self.trace, self.review)
+        self.save()
+        offset = 0
+        status = ""
+        while True:
+            height, _width = self.screen.getmaxyx()
+            offset = self._draw_draft(offset, status=status)
+            status = ""
+            key = self.screen.getch()
+            if key in (curses.KEY_DOWN, ord("j")):
+                offset += 1
+            elif key in (curses.KEY_UP, ord("k")):
+                offset = max(0, offset - 1)
+            elif key == curses.KEY_NPAGE:
+                offset += max(1, height - 6)
+            elif key == curses.KEY_PPAGE:
+                offset = max(0, offset - max(1, height - 6))
+            elif key == ord("c"):
+                saved, feedback = self.edit_text(
+                    "CHAT WITH THE COMPACTION DRAFT · state the correction or refinement",
+                    "",
+                    multiline=True,
+                )
+                if saved and feedback:
+                    ok, detail = self._refine_with_progress(feedback, offset)
+                    status = detail if not ok else "Applied: " + detail
+                    offset = 0
+            elif key == ord("e"):
+                state = ensure_draft(self.trace, self.review)
+                saved, value = self.edit_text("EDIT EXACT CARRY-FORWARD DRAFT", str(state.get("draft") or ""), multiline=True)
+                if saved:
+                    self.mutate(lambda: edit_draft(self.review, value))
+                    offset = 0
+            elif key == ord("b") or key == 27:
+                return "back"
+            elif key == ord("q"):
+                return "cancel"
+            elif key in (10, 13, curses.KEY_ENTER):
+                try:
+                    approve_draft(self.review)
+                except DraftError as exc:
+                    status = str(exc)
+                    continue
+                self.review["outcome"] = "approved"
+                self.review["completed_at"] = utc_now()
+                record_action(self.review, "approve")
+                self.save()
+                return "approved"
+
+    def _select_error(self, targets: Sequence[Target], error: str) -> None:
+        if "item " not in error:
+            return
+        try:
+            item_number = int(error.split("item ", 1)[1].split(" ", 1)[0]) - 1
+            self.selection = next(
+                index
+                for index, value in enumerate(targets)
+                if value.item == item_number and value.kind == "cluster"
+            )
+        except (ValueError, StopIteration):
+            return
+
+    def _context_label(self) -> str:
+        context = self.trace.get("context", {})
+        observed = context.get("used_pct_observed")
+        if isinstance(observed, (int, float)):
+            return f" · {observed:.1f}% context used"
+        if context.get("used_tokens_observed"):
+            return f" · {int(context['used_tokens_observed']) / 1000:.0f}k tokens · window unknown"
+        return " · context size unavailable"
 
     def run(self) -> bool:
         self.setup()
-        self.precommit()
         while True:
             height, width = self.screen.getmaxyx()
-            if height < 12 or width < 54:
+            if height < 12 or width < 60:
                 self.screen.erase()
                 _safe_add(self.screen, 0, 0, " compact focus · terminal too small", width - 1, curses.A_REVERSE)
-                _safe_add(self.screen, 2, 1, "Resize to at least 54×12. q cancels compaction.", width - 2)
+                _safe_add(self.screen, 2, 1, "Resize to at least 60×12. q cancels compaction.", width - 2)
                 self.screen.refresh()
-                key = self.screen.getch()
-                if key == ord("q"):
+                if self.screen.getch() == ord("q"):
                     self.review["outcome"] = "cancelled"
                     self.save()
                     return False
@@ -638,7 +941,10 @@ class ReviewUI:
 
             targets, lines = self.build_lines(width)
             target = self.selected_target(targets)
-            first_line = next((index for index, (target_index, _text, _style) in enumerate(lines) if target_index == self.selection), 0)
+            first_line = next(
+                (index for index, (target_index, _text, _style) in enumerate(lines) if target_index == self.selection),
+                0,
+            )
             body_height = height - 4
             if first_line < self.offset:
                 self.offset = first_line
@@ -647,68 +953,48 @@ class ReviewUI:
             self.offset = max(0, min(self.offset, max(0, len(lines) - body_height)))
 
             self.screen.erase()
-            context = self.trace.get("context", {})
-            observed = context.get("used_pct_observed")
-            if isinstance(observed, (int, float)):
-                context_label = f" · {observed:.1f}% window used"
-            elif context.get("used_tokens_observed"):
-                context_label = f" · {int(context['used_tokens_observed']) / 1000:.0f}k tokens · window unknown"
-            else:
-                context_label = " · context size unavailable"
-            title = " compact focus · review before this /compact" + context_label
+            title = " compact focus · refine the compaction input" + self._context_label()
             _safe_add(self.screen, 0, 0, title.ljust(width - 1), width - 1, curses.A_REVERSE)
-            for y, (target_index, text, style) in enumerate(lines[self.offset : self.offset + body_height], 1):
+            for y, (target_index, value, style) in enumerate(lines[self.offset : self.offset + body_height], 1):
                 selected = target_index is not None and target_index == self.selection
                 attr = curses.A_REVERSE if selected else 0
-                if style.startswith("header:"):
-                    name = style.split(":", 1)[1]
-                    attr = self.colors.get(name, 0) | curses.A_BOLD
-                    text = text.ljust(width - 1, "─")
-                elif style.startswith("item:"):
+                if style.startswith("cluster:"):
                     attr |= self.colors.get(style.split(":", 1)[1], 0) | curses.A_BOLD
-                elif style in {"summary", "next", "dim"}:
-                    attr |= curses.A_DIM
-                elif style in {"rival", "rule"}:
+                elif style.startswith("source-head:"):
+                    attr |= self.colors.get(style.split(":", 1)[1], 0)
+                elif style in {"agent-label", "submit"}:
+                    attr |= self.colors.get("accent", 0) | curses.A_BOLD
+                elif style == "agent":
                     attr |= self.colors.get("warning", 0)
-                elif style.startswith("source"):
-                    attr |= self.colors.get("accent", 0)
-                _safe_add(self.screen, y, 0, text, width - 1, attr)
+                elif style in {"intro", "rationale", "inventory", "source-body", "source-meta", "dim"}:
+                    attr |= curses.A_DIM
+                elif style == "clarification":
+                    attr |= self.colors.get("warning", 0)
+                _safe_add(self.screen, y, 0, value, width - 1, attr)
 
             errors = review_errors(self.trace, self.review)
-            unresolved = sum(1 for error in errors if "contested" in error)
-            counts = {retention: sum(1 for item in self.review["items"] if item.get("retention") == retention) for retention in RETENTION_ORDER}
+            counts = {
+                retention: sum(1 for item in self.review["items"] if item.get("retention") == retention)
+                for retention in RETENTION_ORDER
+            }
             summary = (
-                f" {counts['preserve']} preserve · {counts['summarize']} summarize · {counts['demote']} demote"
-                f" · {unresolved} unresolved · {len(self.review.get('actions', []))} edits"
+                f" {counts['preserve']} preserve · {counts['summarize']} compact · {counts['demote']} delete"
+                f" · {sum(1 for error in errors if 'contested' in error)} unresolved · {len(self.review.get('actions', []))} edits"
             )
             _safe_add(self.screen, height - 3, 0, summary, width - 1, curses.A_DIM)
-            if self.status:
-                footer = " " + self.status
-            elif self.show_help:
-                footer = " p/s/d retain · e/E edit · ←/→ provenance · m move · S split · M merge · c costs · Enter approve"
-            else:
-                footer = " ↑↓ navigate · ←/→ evidence · p/s/d retain · e/E edit · c costs · ? keys · Enter approve · q cancel"
-            _safe_add(self.screen, height - 2, 0, footer, width - 1)
-            warning = self.proposal.get("warnings", [])
-            visible_share = context.get("visible_share_of_used_pct_estimate")
-            if isinstance(visible_share, (int, float)) and visible_share < 95:
-                bottom_text = (
-                    f"Ledger attributes ~{visible_share:.2f}% of used tokens; system prompts, tools, and host compaction are outside item shares."
-                )
-                warning_style = True
-            elif warning:
-                bottom_text = str(warning[0])
-                warning_style = True
-            else:
-                bottom_text = "Nothing is deleted; demoted evidence remains searchable."
-                warning_style = False
+            footer = (
+                " " + self.status
+                if self.status
+                else " ↑↓ navigate · Space expand · p preserve · c compact · Ctrl+Delete delete · x state · e clarify · r rules · ? help"
+            )
+            _safe_add(self.screen, height - 2, 0, footer, width - 1, self.colors.get("warning", 0) if self.status else 0)
             _safe_add(
                 self.screen,
                 height - 1,
                 0,
-                " " + bottom_text,
+                " Enter only advances on Submit · deleted evidence remains locally recoverable",
                 width - 1,
-                self.colors.get("warning", 0) if warning_style else curses.A_DIM,
+                curses.A_DIM,
             )
             self.screen.refresh()
             self.status = ""
@@ -723,56 +1009,97 @@ class ReviewUI:
             elif key == curses.KEY_PPAGE:
                 self.selection = max(0, self.selection - max(1, body_height // 2))
             elif key == curses.KEY_RIGHT and target and target.item is not None:
-                self.expanded.add(str(self.review["items"][target.item].get("id")))
+                source_id = self._source_id(target)
+                if source_id:
+                    self.expanded_sources.add(source_id)
+                else:
+                    self.expanded.add(str(self.review["items"][target.item].get("id")))
             elif key == curses.KEY_LEFT and target and target.item is not None:
-                self.expanded.discard(str(self.review["items"][target.item].get("id")))
-            elif key == ord("g"):
-                self.show_rules = not self.show_rules
+                source_id = self._source_id(target)
+                if source_id:
+                    self.expanded_sources.discard(source_id)
+                else:
+                    self.expanded.discard(str(self.review["items"][target.item].get("id")))
             elif key == ord("?"):
                 self.help_view()
+            elif key == ord("r"):
+                self.class_rules_view()
             elif key == ord("v"):
                 self.representation_view()
-            elif key == ord("c"):
+            elif key == ord("$"):
                 self.context_cost_view()
             elif key == ord("/"):
                 self.find_text(targets)
             elif key == ord("u"):
                 self.undo()
+            elif key == ord("!"):
+                saved, value = self.edit_text(
+                    "NON-NEGOTIABLE INTERPRETATION · what would be catastrophic to misconstrue?",
+                    str(self.review.get("precommit") or ""),
+                    multiline=True,
+                    empty_enter_saves=True,
+                )
+                if saved:
+                    self.mutate(lambda: set_precommit(self.review, value))
             elif key == ord("q"):
                 self.review["outcome"] = "cancelled"
                 self.review["completed_at"] = utc_now()
                 record_action(self.review, "cancel")
                 self.save()
                 return False
-            elif key == 27:
-                self.status = "Escape ignored here; press q to cancel compaction."
-            elif key in (10, 13, curses.KEY_ENTER):
-                errors = review_errors(self.trace, self.review)
-                if errors:
-                    contested = next((error for error in errors if "contested" in error), errors[0])
-                    self.status = "Cannot compact: " + contested
-                    if "item " in contested:
-                        try:
-                            item_number = int(contested.split("item ", 1)[1].split(" ", 1)[0]) - 1
-                            self.selection = next(
-                                index for index, value in enumerate(targets) if value.item == item_number and value.kind == "item"
-                            )
-                        except (ValueError, StopIteration):
-                            pass
+            elif key in (ord("p"), ord("c"), ord("d"), 4, curses.KEY_DC) and target and target.kind in {"cluster", "source"}:
+                value = "preserve" if key == ord("p") else "summarize" if key == ord("c") else "demote"
+                self._set_retention(target, value)
+            elif key == ord("x") and target and target.kind in {"cluster", "source"}:
+                self._cycle_work_state(target)
+            elif key == ord("e") and target and target.kind in {"cluster", "source"}:
+                self._clarify(target)
+            elif key == ord("f") and target and target.item is not None:
+                self._resolve(target)
+            elif key == ord(" ") and target and target.kind == "cluster" and target.item is not None:
+                item_id = str(self.review["items"][target.item].get("id"))
+                if item_id in self.expanded:
+                    self.expanded.remove(item_id)
                 else:
-                    self.review["outcome"] = "approved"
-                    self.review["completed_at"] = utc_now()
-                    record_action(self.review, "approve")
-                    self.save()
-                    return True
-            elif target and target.kind == "rule" and target.rule is not None:
-                if key == ord(" "):
-                    self.mutate(lambda: toggle_rule(self.review, target.rule or 0, self.trace))
-                elif key in (ord("["), ord("]")) and self.review["class_rules"][target.rule].get("id") == "first_n":
-                    delta = -5 if key == ord("[") else 5
-                    self.mutate(lambda: change_first_percent(self.review, delta, self.trace))
-            elif target:
-                self.handle_item_key(key, target)
+                    self.expanded.add(item_id)
+            elif key == ord(" ") and target and target.kind == "source":
+                source_id = self._source_id(target)
+                if source_id in self.expanded_sources:
+                    self.expanded_sources.remove(str(source_id))
+                elif source_id:
+                    self.expanded_sources.add(source_id)
+            elif key in (10, 13, curses.KEY_ENTER) and target:
+                if target.kind == "submit":
+                    errors = review_errors(self.trace, self.review)
+                    if errors:
+                        error = next((value for value in errors if "contested" in value), errors[0])
+                        self.status = "Cannot submit: " + error + ". Clarify or press f to accept."
+                        self._select_error(targets, error)
+                    else:
+                        outcome = self.draft_review()
+                        if outcome == "approved":
+                            return True
+                        if outcome == "cancel":
+                            self.review["outcome"] = "cancelled"
+                            self.review["completed_at"] = utc_now()
+                            record_action(self.review, "cancel_from_draft")
+                            self.save()
+                            return False
+                        self.status = "Returned to clusters; the prior draft will regenerate after any edit."
+                elif target.kind == "cluster" and target.item is not None:
+                    item_id = str(self.review["items"][target.item].get("id"))
+                    if item_id in self.expanded:
+                        self.expanded.remove(item_id)
+                    else:
+                        self.expanded.add(item_id)
+                elif target.kind == "source":
+                    source_id = self._source_id(target)
+                    if source_id in self.expanded_sources:
+                        self.expanded_sources.remove(str(source_id))
+                    elif source_id:
+                        self.expanded_sources.add(source_id)
+            elif target and self._advanced_key(key, target):
+                pass
 
 
 class suppress_curses:

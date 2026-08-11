@@ -2,12 +2,14 @@
 
 Compact Focus turns the native `/compact` in Claude Code and Codex into a
 human-reviewed transaction. One command opens a focused editor in a companion
-terminal before compaction: state what must not be misconstrued, inspect the
-source-grounded ledger, change its meaning or retention, and press Enter. The
-pending `/compact` continues automatically; there is no generated command to
-copy and no second confirmation dialog.
+terminal before compaction: inspect source-grounded clusters, label a cluster
+or one source unit, stage clarifications, and explicitly submit. Compact Focus
+then shows the exact carry-forward draft. Confirm it immediately, edit it
+directly, or chat with a bounded model through repeated revisions. Only the
+second confirmation returns control to the pending `/compact`; there is no
+generated command to copy or second `/compact` to run.
 
-Version 0.21.0 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
+Version 0.22.0 is tested against Claude Code 2.1.227 and Codex CLI 0.147.0 on
 macOS. On Linux it uses tmux or a detected terminal emulator. Native Windows is
 not yet supported.
 
@@ -16,9 +18,13 @@ not yet supported.
 ```text
 normal turns ── optional bounded background proposal ──┐
                                                        v
-one bare /compact ── companion terminal ── unanchored precommit + editable ledger
+one bare /compact ── companion terminal ── cluster/source review
                                                        |
-                         q blocks <── human decision ──> Enter approves + returns
+                                         explicit Submit freezes a draft
+                                                       |
+                          b revises clusters <── exact draft ──> c chat / e edit
+                                                       |
+                         q blocks <── human decision ──> Enter confirms + returns
                                                        |
                 ┌──────────────────────────────────────┴─────────────────────┐
                 v                                                            v
@@ -47,14 +53,20 @@ The host capabilities are not identical:
 | Capability | Claude Code | Codex |
 | --- | --- | --- |
 | Intercept one native `/compact` | Yes | Yes |
-| Automatic precommit and full ledger editor | Companion terminal | Companion terminal |
+| Cluster/source editor and exact draft review | Companion terminal | Companion terminal |
+| Conversational draft refinement before compaction | Bounded Claude child, on demand | Bounded Codex child, on demand |
 | Cancel before compaction | Yes | Yes |
 | Feed the approved contract into the native summarizer | Yes, best-effort and audited | No |
 | Restore the contract into the immediate continuation | `SessionStart` + bounded precommit reinforcement | Full contract beside first prompt + bounded precommit reinforcement |
 | Inspect and lexically audit the generated summary | Yes | No; remote summary text is encrypted |
 | Recover demoted evidence and learn from explicit feedback | Yes | Yes |
 
-Claude's native summarizer receives the contract but can still violate it.
+Neither host exposes a supported plan-style conversational turn inside its main
+chat while `PreCompact` is blocked. Claude creates its native summary only
+after `PreCompact` returns, and `PostCompact` cannot replace that summary.
+Compact Focus therefore performs the iterative review in the companion window
+and passes the confirmed draft into Claude as the binding summary core. Claude's
+native summarizer receives that contract but can still violate it.
 Compact Focus audits the plaintext result and independently restores the full
 contract after compaction, then reinforces only the contradiction-free
 precommit beside the first three continuation prompts. Codex restores the full
@@ -119,8 +131,10 @@ Installation is user-scoped by default, so one install applies to new local
 sessions across projects. For a meaningful test, use a conversation containing
 several decisions, a reversed assumption, and an unresolved question. Run the
 ordinary `/compact`, edit any misconstrual in the companion ledger, and approve
-with Enter or cancel with `q`. The original chat waits at its hook status and
-continues automatically when the review window returns.
+from the Submit row. On the draft screen, press Enter to confirm, `c` to chat
+through a revision, `e` to edit it directly, or `b` to return to the clusters.
+The original chat waits at its hook status and continues automatically only
+after the draft confirmation.
 
 Report friction through the
 [Compact Focus beta feedback form](https://github.com/divadbaroon/claude-plugins/issues/new?template=compact-focus-beta.yml).
@@ -170,31 +184,40 @@ safety boundary: both chat hosts continue repainting their own terminal while a
 compaction hook is running, so a curses editor cannot share that surface
 without either corrupting the display or suspending the host process.
 
-The first screen asks what the next agent must not misinterpret. It appears
-before any proposal so the proposal cannot anchor the answer. Empty Enter skips
-it.
+The document follows the cluster-first hierarchy in the interaction prototype:
+each cluster shows one of `PRESERVE`, `COMPACT`, or `DELETE`; an independent
+`TODO`, `IN PROGRESS`, `DONE`, or `BLOCKED` state; confidence; rationale; source
+inventory; and staged user clarifications. Expanding it exposes every source
+unit with its own label and work state. A source choice overrides its cluster
+default. `DELETE` removes evidence from carried context but never erases local
+recovery.
 
-The document keeps knowledge type, status, retention, confidence, and contested
-meaning independent. Preserve, summarize, and demote are editable sections;
-every item can expose its exact transcript provenance.
+No navigation key approves compaction. Enter expands a selected cluster. Only
+Enter on the final Submit row opens the exact draft, and only Enter on that
+second screen confirms it. Draft chat applies validated structured changes back
+to cluster/source state as well as revising the summary; direct editing remains
+available when a model is unavailable or unwanted.
 
 | Key | Action |
 | --- | --- |
 | `↑` / `↓`, `j` / `k` | Navigate |
-| `←` / `→` | Collapse or expand source provenance |
-| `p`, `s`, `d`, `Space` | Change retention |
-| `x`, `t` | Change status or knowledge type |
-| `e`, `E`, `N` | Edit title, multiline summary, or next action |
+| `Space`, `←` / `→`, `Enter` | Collapse or expand a cluster (`Enter` does not approve it) |
+| `p`, `c`, `Delete` / `Ctrl-D` / `d` | Preserve, compact, or remove a cluster/source from active context |
+| `x` | Cycle TODO, IN PROGRESS, DONE, BLOCKED |
+| `e` | Stage a clarification without rewriting original evidence |
+| `T`, `E`, `N` | Edit cluster title, multiline summary, or next action |
 | `m`, `S`, `M`, `n` | Move evidence, split, merge, or create an item |
-| `r` | Resolve a contested interpretation |
-| `g`, `[` / `]` | Show class rules or change the first-context percentage |
-| `c` | Show estimated context cost for every prompt or continuation |
+| `f` | Accept or resolve a contested interpretation |
+| `r`, then `Space`, `[` / `]` | Open class rules, toggle one, or change the first-context percentage |
+| `!` | Edit the global non-negotiable interpretation |
+| `$` | Show estimated context cost for every prompt or continuation |
 | `v` | Inspect rival problem representations |
 | `/`, `u`, `?` | Search, undo, or show help |
-| `Enter` | Approve and continue the pending compaction |
+| `Enter` on Submit | Open the exact carry-forward draft |
+| Draft: `c`, `e`, `b`, `Enter` | Chat/refine, edit directly, return to clusters, or confirm |
 | `q` | Cancel compaction |
 
-Class rules are floors, not decisions; explicit item edits win. “First 30%” is
+Class rules are floors, not decisions; explicit cluster/source edits win. “First 30%” is
 calculated from cumulative attributable token mass, not message count.
 
 ## Recovery and feedback
@@ -261,6 +284,14 @@ read-only directory, receives a strict JSON schema, and defaults to
 `gpt-5.6-luna`. Foreground `/compact` still opens immediately and preempts a
 stale worker.
 
+Draft chat is separate from background proposal analysis and runs only when the
+user presses `c` on the draft screen. It sends the current bounded contract,
+source excerpts, draft, and explicit feedback to an authenticated child CLI
+with no tools or session persistence. Its schema can change only known
+cluster/source IDs and validated fields. A static elapsed-time indicator remains
+visible while it runs; failure leaves the draft intact and direct editing
+available.
+
 | Variable | Default | Meaning |
 | --- | ---: | --- |
 | `COMPACT_FOCUS_BACKGROUND` | host default | Override background analysis on either host |
@@ -268,6 +299,9 @@ stale worker.
 | `COMPACT_FOCUS_MODEL` | `haiku` on Claude | General proposal model override |
 | `COMPACT_FOCUS_CODEX_MODEL` | `gpt-5.6-luna` | Codex proposal model |
 | `COMPACT_FOCUS_MAX_BUDGET_USD` | `0.10` | Claude worker spend cap |
+| `COMPACT_FOCUS_DRAFT_MODEL` | `haiku` | Claude model used only for explicit draft chat |
+| `COMPACT_FOCUS_DRAFT_MAX_BUDGET_USD` | `0.08` | Spend cap for one Claude draft revision |
+| `COMPACT_FOCUS_DRAFT_MAX_CHARS` | `24000` | Maximum exact draft accepted at confirmation |
 | `COMPACT_FOCUS_WORKER_TIMEOUT` | `180` | Worker timeout in seconds |
 | `COMPACT_FOCUS_PREP_THRESHOLD_PCT` | `50` | Known-window warm threshold |
 | `COMPACT_FOCUS_PREP_USED_TOKENS` | `80000` | Unknown-window warm threshold |
@@ -289,13 +323,16 @@ plugin stores reconstructed source text, review actions, demoted evidence, and
 explicit feedback locally. Raw base64 media is replaced by dimensions, byte
 counts, and digests. Prior-turn reasoning/private thinking is excluded.
 
-With background analysis enabled, bounded textual evidence is sent through a
-child CLI authenticated as the current user. Compact Focus has no telemetry,
-analytics endpoint, or independent network client.
+With background analysis enabled—or when the user explicitly starts draft
+chat—bounded textual evidence is sent through a child CLI authenticated as the
+current user. Compact Focus has no telemetry, analytics endpoint, or
+independent network client.
 
 - `q`, invalid coverage, or an unavailable companion terminal blocks that
   compaction attempt.
 - If a proposal worker fails, the deterministic ledger preserves every source.
+- If draft chat fails, the unmodified draft remains reviewable and directly
+  editable; it never approves compaction.
 - The editor never sends job-control signals to the host; a failed editor
   blocks only that compaction attempt instead of suspending the chat process.
 - Foreground compaction never waits for the background lock or worker.

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 os.sys.path.insert(0, str(ROOT / "compact-focus"))
 
 from compact_focus.finalize import FinalizeError, finalize_cycle, recall, search  # noqa: E402
+from compact_focus.draft import approve_draft, ensure_draft  # noqa: E402
 from compact_focus.review import (  # noqa: E402
     create_item,
     merge_items,
@@ -99,6 +100,8 @@ class ReviewFinalizeTests(unittest.TestCase):
         trace, proposal = fixture()
         review = new_review(proposal)
         resolve_item(review, 0)
+        ensure_draft(trace, review)
+        approve_draft(review)
         with tempfile.TemporaryDirectory() as directory:
             paths = StatePaths(Path(directory), "session", "project", "/tmp")
             paths.ensure()
