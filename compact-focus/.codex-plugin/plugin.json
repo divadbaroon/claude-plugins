@@ -1,0 +1,36 @@
+{
+  "name": "compact-focus",
+  "version": "0.20.6+codex.20260811115559",
+  "description": "Review, edit, recover, and carry forward the context Codex preserves across compaction.",
+  "author": {
+    "name": "Hudson Mitchell-Pullman",
+    "url": "https://github.com/divadbaroon"
+  },
+  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/compact-focus",
+  "repository": "https://github.com/divadbaroon/claude-plugins",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "compaction",
+    "context",
+    "hooks",
+    "human-in-the-loop"
+  ],
+  "interface": {
+    "displayName": "Compact Focus",
+    "shortDescription": "Edit what survives context compaction",
+    "longDescription": "Turns Codex's native /compact into an inline, human-reviewed transaction with source provenance, reversible demotion, feedback recovery, and automatic post-compaction contract restoration.",
+    "developerName": "Hudson Mitchell-Pullman",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Local state"
+    ],
+    "websiteURL": "https://github.com/divadbaroon/claude-plugins/tree/main/compact-focus",
+    "defaultPrompt": [
+      "Explain how Compact Focus changes /compact.",
+      "Show the latest Compact Focus cycle status."
+    ],
+    "brandColor": "#6D5EF7"
+  }
+}

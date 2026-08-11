@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Sequence
 from . import VERSION
 from .finalize import recall as recall_record
 from .finalize import search as search_records
+from .host import HOST_CODEX, detect_host
 from .review import new_review
 from .state import StatePaths, atomic_write_json, load_json, project_id, state_root
 from .terminal import TerminalError, find_terminal
@@ -19,9 +20,11 @@ from .workflow import (
     WorkflowError,
     postcompact,
     precompact,
+    prepare_detached,
     prepare_in_background,
     prompt_feedback,
     read_hook_payload,
+    session_start,
 )
 
 
@@ -40,24 +43,57 @@ def _paths_for_cwd(session_id: Optional[str] = None) -> StatePaths:
 
 
 def _hook(event: str) -> int:
+    payload: Dict[str, Any] = {}
     try:
         payload = read_hook_payload()
         if event == "precompact":
             return precompact(payload)
         if event == "prepare":
             return prepare_in_background(payload)
+        if event == "prepare-dispatch":
+            code = prepare_detached(payload)
+            if detect_host(payload) == HOST_CODEX:
+                print("{}")
+            return code
         if event == "postcompact":
             return postcompact(payload)
         if event == "feedback":
             return prompt_feedback(payload)
+        if event == "session-start":
+            return session_start(payload)
         raise WorkflowError(f"unknown hook event: {event}")
     except WorkflowError as exc:
         if event == "prepare":
+            return 0
+        if event == "precompact" and detect_host(payload) == HOST_CODEX:
+            print(
+                json.dumps(
+                    {
+                        "continue": False,
+                        "stopReason": str(exc),
+                        "systemMessage": f"compact focus: {exc}",
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return 0
         print(f"compact focus: {exc}", file=sys.stderr)
         return 2 if event == "precompact" else 0
     except Exception as exc:
         if event == "prepare":
+            return 0
+        if event == "precompact" and detect_host(payload) == HOST_CODEX:
+            detail = f"unexpected precompact failure: {exc}"
+            print(
+                json.dumps(
+                    {
+                        "continue": False,
+                        "stopReason": detail,
+                        "systemMessage": f"compact focus: {detail}",
+                    },
+                    ensure_ascii=False,
+                )
+            )
             return 0
         print(f"compact focus: unexpected {event} failure: {exc}", file=sys.stderr)
         return 2 if event == "precompact" else 0
@@ -107,9 +143,13 @@ def _status(args: argparse.Namespace) -> int:
             print(f"finalized: {'yes' if finalization.get('finalized_at') else 'no'}")
             audit = postcompact.get("adherence_audit") or {}
             if audit:
+                source = str(postcompact.get("summary_source") or "unavailable")
+                if postcompact.get("audit_final") is False:
+                    source += " (provisional)"
                 print(
                     f"summary audit: {audit.get('checked_items', 0)} checked · "
-                    f"{audit.get('possible_omissions', 0)} possible lexical gaps"
+                    f"{audit.get('possible_omissions', 0)} possible lexical gaps · "
+                    f"{source}"
                 )
             events = result.get("recent_events") or []
             if events:
@@ -193,7 +233,19 @@ def _doctor(_args: argparse.Namespace) -> int:
     checks = []
     checks.append(("python", sys.version_info >= (3, 9), sys.version.split()[0]))
     claude = shutil.which("claude")
-    checks.append(("claude CLI", bool(claude), claude or "not found"))
+    codex = shutil.which("codex")
+    discovered = []
+    if claude:
+        discovered.append(f"Claude={claude}")
+    if codex:
+        discovered.append(f"Codex={codex}")
+    checks.append(
+        (
+            "host CLI",
+            bool(claude or codex),
+            " · ".join(discovered) if discovered else "neither Claude nor Codex found",
+        )
+    )
     root = state_root()
     try:
         root.mkdir(parents=True, exist_ok=True)
@@ -210,7 +262,7 @@ def _doctor(_args: argparse.Namespace) -> int:
         target = find_terminal()
         terminal_ok = True
         terminal_detail = target.path + (
-            f" · Claude pid {target.claude_pid}" if target.claude_pid else ""
+            f" · {target.host_name} pid {target.host_pid}" if target.host_pid else ""
         )
     except TerminalError as exc:
         terminal_ok = False
@@ -231,8 +283,8 @@ def _doctor(_args: argparse.Namespace) -> int:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        prog="cf",
-        description="Human-reviewed compaction for Claude Code",
+        prog="compact-focus",
+        description="Human-reviewed compaction for Claude Code and Codex",
     )
     root.add_argument("--version", action="version", version=VERSION)
     root.add_argument(
@@ -241,10 +293,20 @@ def parser() -> argparse.ArgumentParser:
     )
     commands = root.add_subparsers(dest="command", required=True)
 
-    hook = commands.add_parser("hook", help=argparse.SUPPRESS)
+    hook = commands.add_parser(
+        "hook",
+        help="host lifecycle integration (internal)",
+    )
     hook.add_argument(
         "event",
-        choices=("precompact", "prepare", "postcompact", "feedback"),
+        choices=(
+            "precompact",
+            "prepare",
+            "prepare-dispatch",
+            "postcompact",
+            "feedback",
+            "session-start",
+        ),
     )
 
     status = commands.add_parser(

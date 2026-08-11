@@ -18,7 +18,8 @@ class TerminalError(RuntimeError):
 @dataclass(frozen=True)
 class TerminalTarget:
     path: str
-    claude_pid: Optional[int]
+    host_pid: Optional[int]
+    host_name: Optional[str]
     lineage: Tuple[Tuple[int, int, str, str], ...]
 
 
@@ -43,11 +44,12 @@ def find_terminal() -> TerminalTarget:
             path = os.ttyname(0)
         except OSError as exc:
             raise TerminalError(str(exc)) from exc
-        return TerminalTarget(path, None, ())
+        return TerminalTarget(path, None, None, ())
 
     lineage: List[Tuple[int, int, str, str]] = []
     terminal_path = ""
-    claude_pid: Optional[int] = None
+    host_pid: Optional[int] = None
+    host_name: Optional[str] = None
     seen = set()
     pid = os.getppid()
     while pid > 1 and pid not in seen:
@@ -59,22 +61,27 @@ def find_terminal() -> TerminalTarget:
         lineage.append((pid, parent, tty_name, command))
         lowered = command.lower()
         executable = lowered.split(None, 1)[0] if lowered else ""
-        if claude_pid is None and (
-            executable.endswith("/claude")
-            or executable == "claude"
-            or "/claude/" in executable
-            or "@anthropic-ai/claude-code" in lowered
-        ):
-            claude_pid = pid
+        if host_pid is None:
+            if (
+                executable.endswith("/claude")
+                or executable == "claude"
+                or "/claude/" in executable
+                or "@anthropic-ai/claude-code" in lowered
+            ):
+                host_pid = pid
+                host_name = "Claude"
+            elif executable.endswith("/codex") or executable == "codex":
+                host_pid = pid
+                host_name = "Codex"
         if not terminal_path and tty_name not in {"?", "??", "-"}:
             terminal_path = tty_name if tty_name.startswith("/") else f"/dev/{tty_name}"
         pid = parent
     if not terminal_path:
         raise TerminalError("no terminal was found in the hook process ancestry")
-    if claude_pid is None:
+    if host_pid is None:
         rendered = " -> ".join(f"{pid}:{command[:50]}" for pid, _parent, _tty, command in lineage)
-        raise TerminalError(f"terminal found but Claude host process was not identified ({rendered})")
-    return TerminalTarget(terminal_path, claude_pid, tuple(lineage))
+        raise TerminalError(f"terminal found but a supported host process was not identified ({rendered})")
+    return TerminalTarget(terminal_path, host_pid, host_name, tuple(lineage))
 
 
 def _start_resume_watchdog(host_pid: int, timeout: int = 3700) -> Tuple[int, int]:
@@ -116,9 +123,9 @@ def terminal_lease() -> Iterator[TerminalTarget]:
     try:
         sys.stdout.flush()
         sys.stderr.flush()
-        if target.claude_pid is not None:
-            watcher, watchdog_fd = _start_resume_watchdog(target.claude_pid)
-            os.kill(target.claude_pid, signal.SIGSTOP)
+        if target.host_pid is not None:
+            watcher, watchdog_fd = _start_resume_watchdog(target.host_pid)
+            os.kill(target.host_pid, signal.SIGSTOP)
             stopped = True
         for destination in (0, 1, 2):
             os.dup2(terminal_fd, destination)
@@ -132,9 +139,9 @@ def terminal_lease() -> Iterator[TerminalTarget]:
                 os.dup2(source, destination)
             os.close(source)
         os.close(terminal_fd)
-        if stopped and target.claude_pid is not None:
+        if stopped and target.host_pid is not None:
             with contextlib.suppress(OSError):
-                os.kill(target.claude_pid, signal.SIGCONT)
+                os.kill(target.host_pid, signal.SIGCONT)
         if watchdog_fd is not None:
             with contextlib.suppress(OSError):
                 os.write(watchdog_fd, b"x")

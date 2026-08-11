@@ -124,6 +124,15 @@ class ReviewUI:
         except (AttributeError, curses.error):
             pass
         try:
+            if not curses.has_colors():
+                return
+            curses.start_color()
+        except curses.error:
+            return
+        max_pairs = int(getattr(curses, "COLOR_PAIRS", 0) or 0)
+        if max_pairs <= 1:
+            return
+        try:
             curses.use_default_colors()
         except curses.error:
             pass
@@ -136,10 +145,12 @@ class ReviewUI:
             "accent": (curses.COLOR_MAGENTA, -1),
         }
         for number, (name, values) in enumerate(pairs.items(), 1):
+            if number >= max_pairs:
+                break
             try:
                 curses.init_pair(number, *values)
                 self.colors[name] = curses.color_pair(number)
-            except curses.error:
+            except (curses.error, ValueError):
                 self.colors[name] = 0
 
     def save(self) -> None:

@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from . import SCHEMA_VERSION, VERSION
 from .audit import audit_summary
 from .finalize import FinalizeError, finalize_cycle, search
+from .host import HOST_CODEX, detect_host
 from .proposal import load_policy, normalize_proposal, prepare_proposal, rebase_proposal
 from .review import new_review
 from .state import (
@@ -21,10 +22,12 @@ from .state import (
     cycle_id,
     file_lock,
     load_json,
+    safe_component,
     utc_now,
 )
 from .terminal import TerminalError, terminal_lease
 from .trace import build_trace
+from .codex_trace import add_review_contract
 from .tui import run_review
 
 
@@ -114,6 +117,153 @@ def _transcript(payload: Dict[str, Any]) -> Path:
     return path.resolve()
 
 
+def _latest_reviewed_cycle(
+    paths: StatePaths,
+    *,
+    require_postcompact: bool,
+) -> Tuple[Optional[str], Dict[str, Any]]:
+    try:
+        candidates = sorted(
+            (value for value in paths.cycles.iterdir() if value.is_dir()),
+            key=lambda value: value.name,
+            reverse=True,
+        )
+    except OSError:
+        return None, {}
+    for cycle in candidates:
+        review = load_json(cycle / "review.json", {})
+        finalization = load_json(cycle / "finalization.json", {})
+        if not isinstance(review, dict) or review.get("outcome") != "approved":
+            continue
+        if not isinstance(finalization, dict) or not finalization.get("finalized_at"):
+            continue
+        if require_postcompact:
+            postcompact_result = load_json(cycle / "postcompact.json", {})
+            if not isinstance(postcompact_result, dict) or not postcompact_result.get("recorded_at"):
+                continue
+        return cycle.name, review
+    return None, {}
+
+
+def _pending_contract_path(paths: StatePaths) -> Path:
+    return paths.session / "pending-contract.json"
+
+
+def _clear_pending_contract(paths: StatePaths) -> bool:
+    try:
+        _pending_contract_path(paths).unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _set_pending_contract(
+    paths: StatePaths,
+    identifier: str,
+    *,
+    trigger: str,
+    platform: str,
+    compact_summaries_before: int,
+) -> None:
+    atomic_write_json(
+        _pending_contract_path(paths),
+        {
+            "schema_version": SCHEMA_VERSION,
+            "cycle_id": identifier,
+            "approved_at": utc_now(),
+            "trigger": trigger,
+            "platform": platform,
+            "compact_summaries_before": compact_summaries_before,
+        },
+    )
+
+
+def _pending_contract_cycle(paths: StatePaths) -> Optional[str]:
+    pending = load_json(_pending_contract_path(paths), {})
+    if not isinstance(pending, dict):
+        return None
+    raw = str(pending.get("cycle_id") or "")
+    identifier = safe_component(raw, "")
+    if not identifier or identifier != raw:
+        return None
+    cycle = paths.cycle(identifier)
+    review = load_json(cycle / "review.json", {})
+    finalization = load_json(cycle / "finalization.json", {})
+    if not isinstance(review, dict) or review.get("outcome") != "approved":
+        return None
+    if not isinstance(finalization, dict) or not finalization.get("finalized_at"):
+        return None
+    return identifier
+
+
+def _update_pending_contract(
+    paths: StatePaths,
+    identifier: str,
+    **fields: Any,
+) -> bool:
+    with file_lock(paths.session / ".pending-contract.lock") as acquired:
+        if not acquired:  # blocking locks always acquire; defensive only
+            return False
+        pending = load_json(_pending_contract_path(paths), {})
+        if not isinstance(pending, dict) or pending.get("cycle_id") != identifier:
+            return False
+        pending.update(fields)
+        atomic_write_json(_pending_contract_path(paths), pending)
+    return True
+
+
+def _pending_prompt_contract(paths: StatePaths) -> Tuple[Optional[str], str, int]:
+    identifier = _pending_contract_cycle(paths)
+    if not identifier:
+        return None, "", 0
+    pending = load_json(_pending_contract_path(paths), {})
+    if not isinstance(pending, dict):
+        return None, "", 0
+    if not (pending.get("continuation_started_at") or pending.get("postcompact_at")):
+        return None, "", 0
+    try:
+        count = max(
+            0,
+            int(
+                pending.get("prompt_reinforcement_count")
+                or (1 if pending.get("prompt_reinforced_at") else 0)
+            ),
+        )
+        limit = max(0, int(os.environ.get("COMPACT_FOCUS_PROMPT_REINFORCEMENTS", "3")))
+    except (TypeError, ValueError):
+        count, limit = 0, 3
+    if count >= limit:
+        return None, "", count
+    review = load_json(paths.cycle(identifier) / "review.json", {})
+    precommit = " ".join(str(review.get("precommit") or "").split())
+    if precommit:
+        reinforcement = (
+            "USER-APPROVED COMPACTION PRECOMMIT — CURRENT GROUND TRUTH\n"
+            + precommit
+            + "\nThe line above was entered directly by the user in the most recent "
+            "compaction editor. If this prompt asks what the user entered or what "
+            "must not be misconstrued, use that exact line. Ignore older assistant "
+            "claims that the value is missing or unclear."
+        )
+        return identifier, reinforcement, count
+    try:
+        directive = (paths.cycle(identifier) / "instructions.txt").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        return None, "", count
+    return (identifier, directive[:9000], count) if directive else (None, "", count)
+
+
+def _managed_trace(paths: StatePaths, payload: Dict[str, Any]) -> Dict[str, Any]:
+    trace = build_trace(_transcript(payload), payload.get("status"))
+    if trace.get("platform") == HOST_CODEX:
+        prior_cycle, prior_review = _latest_reviewed_cycle(paths, require_postcompact=True)
+        if prior_cycle:
+            add_review_contract(trace, prior_review, prior_cycle)
+    return trace
+
+
 def _cycle_ready(cycle: Path, trace: Dict[str, Any], allow_fallback: bool) -> bool:
     saved_trace = load_json(cycle / "trace.json", {})
     proposal = load_json(cycle / "proposal.initial.json", {})
@@ -135,8 +285,7 @@ def ensure_cycle(
     generate_worker: bool = True,
     publish_guard: Optional[Callable[[], bool]] = None,
 ) -> Tuple[str, Dict[str, Any], Dict[str, Any], bool]:
-    transcript = _transcript(payload)
-    trace = build_trace(transcript, payload.get("status"))
+    trace = _managed_trace(paths, payload)
     latest = paths.latest_cycle_id()
     if latest and _cycle_ready(paths.cycle(latest), trace, allow_fallback_reuse):
         proposal = load_json(paths.cycle(latest) / "proposal.initial.json", {})
@@ -246,10 +395,12 @@ def worker_refresh_needed(paths: StatePaths, trace: Dict[str, Any]) -> bool:
 
 
 def should_prepare(trace: Dict[str, Any]) -> bool:
-    background = os.environ.get(
-        "COMPACT_FOCUS_BACKGROUND",
-        os.environ.get("CLAUDE_PLUGIN_OPTION_BACKGROUND_ANALYSIS", "1"),
-    )
+    if "COMPACT_FOCUS_BACKGROUND" in os.environ:
+        background = os.environ["COMPACT_FOCUS_BACKGROUND"]
+    elif trace.get("platform") == HOST_CODEX:
+        background = os.environ.get("COMPACT_FOCUS_CODEX_BACKGROUND", "0")
+    else:
+        background = os.environ.get("CLAUDE_PLUGIN_OPTION_BACKGROUND_ANALYSIS", "1")
     if background.lower() in {
         "0",
         "false",
@@ -290,7 +441,7 @@ def prepare_in_background(payload: Dict[str, Any]) -> int:
 
             limit = max(1, int(os.environ.get("COMPACT_FOCUS_PREP_COALESCE_LIMIT", "4")))
             for generation in range(limit):
-                trace = build_trace(_transcript(payload), payload.get("status"))
+                trace = _managed_trace(paths, payload)
                 if not should_prepare(trace):
                     return 0
                 latest = paths.latest_cycle_id()
@@ -310,7 +461,7 @@ def prepare_in_background(payload: Dict[str, Any]) -> int:
                     generate_worker=True,
                     publish_guard=may_publish,
                 )
-                refreshed = build_trace(_transcript(payload), payload.get("status"))
+                refreshed = _managed_trace(paths, payload)
                 latest = paths.latest_cycle_id()
                 if latest and _cycle_ready(paths.cycle(latest), refreshed, allow_fallback=False):
                     return 0
@@ -338,6 +489,8 @@ def precompact(payload: Dict[str, Any]) -> int:
     paths.ensure()
     trigger = str(payload.get("trigger") or "unknown")
     custom = str(payload.get("custom_instructions") or "").strip()
+    if _clear_pending_contract(paths):
+        paths.record("pending_contract_cleared", reason="new_precompact")
     paths.record("precompact", trigger=trigger, focused=bool(custom))
     if custom:
         paths.record("focused_compaction_passthrough", trigger=trigger)
@@ -383,7 +536,7 @@ def precompact(payload: Dict[str, Any]) -> int:
         except (TerminalError, curses.error) as exc:
             paths.record("review_failed", cycle_id=identifier, error=str(exc)[:1000])
             raise WorkflowError(
-                f"inline review could not open ({exc}). Run `cf doctor`; compaction was not performed"
+                f"inline review could not open ({exc}). Run `compact-focus doctor`; compaction was not performed"
             ) from exc
         except Exception as exc:
             paths.record("review_failed", cycle_id=identifier, error=str(exc)[:1000])
@@ -404,12 +557,46 @@ def precompact(payload: Dict[str, Any]) -> int:
             demoted_count=result.get("demoted_count"),
             instruction_chars=result.get("instruction_chars"),
         )
-        sys.stdout.write(str(result["directive"]))
+        _set_pending_contract(
+            paths,
+            identifier,
+            trigger=trigger,
+            platform=str(trace.get("platform") or detect_host(payload)),
+            compact_summaries_before=_compact_summary_count(_transcript(payload)),
+        )
+        if trace.get("platform") == HOST_CODEX:
+            sys.stdout.write(json.dumps({"continue": True}, ensure_ascii=False) + "\n")
+        else:
+            sys.stdout.write(str(result["directive"]))
         return 0
 
 
-def _latest_compact_summary(transcript: Path) -> str:
-    found = ""
+def prepare_detached(payload: Dict[str, Any]) -> int:
+    """Detach model preparation because Codex does not yet support async hooks."""
+    paths = StatePaths.from_hook(payload)
+    paths.ensure()
+    if os.name != "posix":
+        paths.record("background_prepare_skipped", reason="detached hooks require POSIX")
+        return 0
+    child = os.fork()
+    if child:
+        paths.record("background_prepare_dispatched", child_pid=child)
+        return 0
+    try:  # pragma: no cover - exercised by live hook sessions
+        os.setsid()
+        descriptor = os.open(os.devnull, os.O_RDWR)
+        for destination in (0, 1, 2):
+            os.dup2(descriptor, destination)
+        if descriptor > 2:
+            os.close(descriptor)
+        code = prepare_in_background(payload)
+    except BaseException:
+        code = 0
+    os._exit(code)
+
+
+def _compact_summaries(transcript: Path) -> list[str]:
+    found: list[str] = []
     try:
         with transcript.open(encoding="utf-8") as handle:
             for line in handle:
@@ -421,22 +608,130 @@ def _latest_compact_summary(transcript: Path) -> str:
                     continue
                 content = (row.get("message") or {}).get("content", "")
                 if isinstance(content, str):
-                    found = content
+                    found.append(content)
                 elif isinstance(content, list):
-                    found = "\n".join(
-                        str(block.get("text", ""))
-                        for block in content
-                        if isinstance(block, dict) and block.get("type") == "text"
+                    found.append(
+                        "\n".join(
+                            str(block.get("text", ""))
+                            for block in content
+                            if isinstance(block, dict) and block.get("type") == "text"
+                        )
                     )
     except OSError:
         pass
     return found
 
 
+def _compact_summary_count(transcript: Path) -> int:
+    return len(_compact_summaries(transcript))
+
+
+def _latest_new_compact_summary(transcript: Path, summaries_before: int) -> str:
+    summaries = _compact_summaries(transcript)
+    if len(summaries) <= summaries_before:
+        return ""
+    return summaries[-1]
+
+
+def reconcile_transcript_audit(
+    paths: StatePaths,
+    identifier: str,
+    transcript: Path,
+    summaries_before: int,
+    *,
+    wait_seconds: float = 5.0,
+) -> bool:
+    """Replace a provisional Claude audit once the carried summary is appended."""
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    summary = ""
+    while True:
+        summary = _latest_new_compact_summary(transcript, summaries_before)
+        if summary or time.monotonic() >= deadline:
+            break
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+    if not summary:
+        paths.record(
+            "transcript_audit_unavailable",
+            cycle_id=identifier,
+            waited_seconds=wait_seconds,
+        )
+        return False
+
+    cycle = paths.cycle(identifier)
+    with file_lock(cycle / ".postcompact.lock") as acquired:
+        if not acquired:  # blocking locks always acquire; defensive only
+            return False
+        result = load_json(cycle / "postcompact.json", {})
+        review = load_json(cycle / "review.json", {})
+        if not isinstance(result, dict) or result.get("cycle_id") != identifier:
+            return False
+        provisional_source = str(result.get("summary_source") or "unavailable")
+        result.update(
+            {
+                "compact_summary": summary,
+                "summary_source": "transcript",
+                "summary_available": True,
+                "audit_final": True,
+                "provisional_summary_source": provisional_source,
+                "reconciled_at": utc_now(),
+                "adherence_audit": audit_summary(review, summary),
+            }
+        )
+        atomic_write_json(cycle / "postcompact.json", result)
+    paths.record(
+        "transcript_audit_reconciled",
+        cycle_id=identifier,
+        summary_chars=len(summary),
+    )
+    return True
+
+
+def _dispatch_transcript_audit(
+    paths: StatePaths,
+    identifier: str,
+    transcript: Path,
+    summaries_before: int,
+) -> None:
+    if os.name != "posix" or os.environ.get("COMPACT_FOCUS_ASYNC_AUDIT", "1") == "0":
+        return
+    try:
+        child = os.fork()
+    except OSError as exc:
+        paths.record(
+            "transcript_audit_dispatch_failed",
+            cycle_id=identifier,
+            error=str(exc)[:1000],
+        )
+        return
+    if child:
+        paths.record(
+            "transcript_audit_dispatched",
+            cycle_id=identifier,
+            child_pid=child,
+        )
+        return
+    try:  # pragma: no cover - exercised by live Claude hook sessions
+        os.setsid()
+        descriptor = os.open(os.devnull, os.O_RDWR)
+        for destination in (0, 1, 2):
+            os.dup2(descriptor, destination)
+        if descriptor > 2:
+            os.close(descriptor)
+        reconcile_transcript_audit(
+            paths,
+            identifier,
+            transcript,
+            summaries_before,
+        )
+    except BaseException:
+        pass
+    os._exit(0)
+
+
 def postcompact(payload: Dict[str, Any]) -> int:
     paths = StatePaths.from_hook(payload)
     paths.ensure()
-    identifier = paths.latest_cycle_id()
+    identifier = _pending_contract_cycle(paths)
     if not identifier:
         paths.record("postcompact_unmanaged", trigger=payload.get("trigger"))
         return 0
@@ -445,49 +740,148 @@ def postcompact(payload: Dict[str, Any]) -> int:
     if not isinstance(finalization, dict) or not finalization.get("finalized_at"):
         paths.record("postcompact_unmanaged", trigger=payload.get("trigger"))
         return 0
-    summary = str(payload.get("compact_summary") or "")
-    if not summary:
-        try:
-            summary = _latest_compact_summary(_transcript(payload))
-        except WorkflowError:
-            summary = ""
+    pending = load_json(_pending_contract_path(paths), {})
+    try:
+        summaries_before = max(0, int(pending.get("compact_summaries_before") or 0))
+    except (AttributeError, TypeError, ValueError):
+        summaries_before = 0
+    transcript_path: Optional[Path] = None
+    try:
+        transcript_path = _transcript(payload)
+        transcript_summary = _latest_new_compact_summary(
+            transcript_path, summaries_before
+        )
+    except WorkflowError:
+        transcript_summary = ""
+    payload_summary = str(payload.get("compact_summary") or "")
+    summary = transcript_summary or payload_summary
+    summary_source = "transcript" if transcript_summary else ("hook_payload" if payload_summary else "unavailable")
+    host = detect_host(payload)
+    if summary:
+        adherence = audit_summary(load_json(cycle / "review.json", {}), summary)
+    else:
+        adherence = {
+            "status": "unavailable",
+            "reason": (
+                "Codex did not expose plaintext remote compaction output to PostCompact."
+                if host == HOST_CODEX
+                else "No compact summary was present in the hook payload or transcript."
+            ),
+            "checked_items": 0,
+            "checked_precommit": False,
+            "possible_omissions": 0,
+            "precommit": None,
+            "items": [],
+        }
     result = {
         "schema_version": SCHEMA_VERSION,
         "cycle_id": identifier,
         "recorded_at": utc_now(),
         "trigger": payload.get("trigger"),
         "compact_summary": summary,
-        "adherence_audit": audit_summary(
-            load_json(cycle / "review.json", {}),
-            summary,
-        ),
+        "summary_source": summary_source,
+        "platform": host,
+        "summary_available": bool(summary),
+        "audit_final": summary_source == "transcript" or host == HOST_CODEX,
+        "adherence_audit": adherence,
     }
     atomic_write_json(cycle / "postcompact.json", result)
+    _update_pending_contract(paths, identifier, postcompact_at=utc_now())
     paths.record("postcompact", cycle_id=identifier, summary_chars=len(summary))
     review = load_json(cycle / "review.json", {})
     possible = int((result.get("adherence_audit") or {}).get("possible_omissions") or 0)
     audit_note = (
-        f" Lexical audit flags {possible} item(s) for human inspection."
+        f" Lexical audit flags {possible} reviewed anchor(s) for human inspection."
         if possible
         else ""
     )
     message = (
         f"compact focus: applied {len(review.get('items', []))} reviewed items; "
-        f"{finalization.get('demoted_count', 0)} evidence record(s) remain recoverable. "
-        "If something was lost or misconstrued, say `the compaction lost <what>`."
+        "the approved contract is restored into the immediate continuation. "
+        f"{finalization.get('demoted_count', 0)} evidence record(s) remain recoverable."
         + audit_note
     )
+    if host != HOST_CODEX:
+        message += " If something was lost or misconstrued, say `the compaction lost <what>`."
     sys.stdout.write(json.dumps({"systemMessage": message}, ensure_ascii=False) + "\n")
+    if host != HOST_CODEX and summary_source != "transcript" and transcript_path:
+        _dispatch_transcript_audit(
+            paths,
+            identifier,
+            transcript_path,
+            summaries_before,
+        )
+    return 0
+
+
+def session_start(payload: Dict[str, Any]) -> int:
+    if str(payload.get("source") or "") != "compact":
+        return 0
+    paths = StatePaths.from_hook(payload)
+    paths.ensure()
+    identifier = _pending_contract_cycle(paths)
+    if not identifier:
+        paths.record("compact_contract_missing")
+        return 0
+    instruction_path = paths.cycle(identifier) / "instructions.txt"
+    try:
+        directive = instruction_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        paths.record("compact_contract_missing", cycle_id=identifier)
+        return 0
+    if not directive:
+        return 0
+    _update_pending_contract(paths, identifier, continuation_started_at=utc_now())
+    paths.record(
+        "compact_contract_injected",
+        cycle_id=identifier,
+        chars=len(directive),
+        platform=detect_host(payload),
+    )
+    output = {
+        "continue": True,
+        "systemMessage": "compact focus: restored the approved compaction contract",
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": directive,
+        },
+    }
+    sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
     return 0
 
 
 def prompt_feedback(payload: Dict[str, Any]) -> int:
     prompt = str(payload.get("prompt") or "")
-    match = LOSS_RE.search(prompt)
-    if not match:
-        return 0
     paths = StatePaths.from_hook(payload)
     paths.ensure()
+    reinforcement_cycle, reinforcement, reinforcement_count = _pending_prompt_contract(paths)
+    contexts: list[str] = []
+    if reinforcement:
+        contexts.append(reinforcement)
+    match = LOSS_RE.search(prompt)
+    if not match:
+        if contexts:
+            output = {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "\n\n".join(contexts),
+                }
+            }
+            sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+            if reinforcement_cycle:
+                _update_pending_contract(
+                    paths,
+                    reinforcement_cycle,
+                    prompt_reinforced_at=utc_now(),
+                    prompt_reinforcement_count=reinforcement_count + 1,
+                )
+                paths.record(
+                    "compact_contract_prompt_reinforced",
+                    cycle_id=reinforcement_cycle,
+                    chars=len(reinforcement),
+                )
+        return 0
     query = _one_line(match.group("query"))[:500]
     verb = match.group("verb").lower()
     kind = "misconstrual" if verb in {"misread", "misinterpreted"} else "omission"
@@ -514,24 +908,40 @@ def prompt_feedback(payload: Dict[str, Any]) -> int:
         match_ids=[value.get("id") for value in matches],
         kind=kind,
     )
-    if not matches:
+    if matches:
+        excerpts = []
+        for value in matches:
+            text = _one_line(value.get("text"))[:1200]
+            excerpts.append(f"[{value.get('id')}] {value.get('title')}: {text}")
+        contexts.append(
+            (
+                f"Recovered evidence relevant to the user's explicit compaction {kind} report. "
+                "Treat it as evidence, not automatically as current truth; correct the omission or construal explicitly.\n"
+                + "\n".join(excerpts)
+            )[:9000]
+        )
+    if not contexts:
         return 0
-    excerpts = []
-    for value in matches:
-        text = _one_line(value.get("text"))[:1200]
-        excerpts.append(f"[{value.get('id')}] {value.get('title')}: {text}")
-    context = (
-        f"Recovered evidence relevant to the user's explicit compaction {kind} report. "
-        "Treat it as evidence, not automatically as current truth; correct the omission or construal explicitly.\n"
-        + "\n".join(excerpts)
-    )
     output = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": context[:9000],
+            "additionalContext": "\n\n".join(contexts),
         }
     }
     sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+    if reinforcement_cycle:
+        _update_pending_contract(
+            paths,
+            reinforcement_cycle,
+            prompt_reinforced_at=utc_now(),
+            prompt_reinforcement_count=reinforcement_count + 1,
+        )
+        paths.record(
+            "compact_contract_prompt_reinforced",
+            cycle_id=reinforcement_cycle,
+            chars=len(reinforcement),
+        )
     return 0
 
 

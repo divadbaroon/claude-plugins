@@ -1,0 +1,20 @@
+{
+  "name": "papert-tools",
+  "interface": {
+    "displayName": "Papert Tools"
+  },
+  "plugins": [
+    {
+      "name": "compact-focus",
+      "source": {
+        "source": "local",
+        "path": "./compact-focus"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 os.sys.path.insert(0, str(ROOT / "compact-focus"))
 
 from compact_focus.trace import build_trace  # noqa: E402
+from compact_focus.codex_trace import add_review_contract  # noqa: E402
 
 
 class TraceTests(unittest.TestCase):
@@ -408,6 +409,181 @@ class TraceTests(unittest.TestCase):
         rendered = json.dumps(build_trace(self.write_transcript(rows)))
         self.assertNotIn(encoded, rendered)
         self.assertIn("payload_omitted", rendered)
+
+    def test_codex_trace_uses_latest_boundary_and_semantic_tool_items(self):
+        rows = [
+            {
+                "type": "session_meta",
+                "ordinal": 0,
+                "payload": {
+                    "id": "codex-session",
+                    "session_id": "codex-session",
+                    "cwd": "/tmp/project",
+                    "context_window": 258400,
+                },
+            },
+            {
+                "type": "response_item",
+                "ordinal": 1,
+                "payload": {
+                    "id": "old-user",
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "obsolete context"}],
+                },
+            },
+            {
+                "type": "compacted",
+                "ordinal": 2,
+                "payload": {"replacement_history": [{"type": "compaction", "encrypted_content": "opaque"}]},
+            },
+            {
+                "type": "response_item",
+                "ordinal": 3,
+                "payload": {
+                    "id": "new-user",
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "preserve nonlinear drift"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "ordinal": 4,
+                "payload": {
+                    "id": "assistant",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "The constant-offset model is falsified."}],
+                },
+            },
+            {
+                "type": "event_msg",
+                "ordinal": 5,
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "id": "edit",
+                        "type": "FileChange",
+                        "status": "completed",
+                        "changes": {"clock.py": {"kind": "update", "diff": "+ drift"}},
+                    },
+                },
+            },
+            {
+                "type": "response_item",
+                "ordinal": 6,
+                "payload": {"id": "private", "type": "reasoning", "encrypted_content": "secret"},
+            },
+            {
+                "type": "event_msg",
+                "ordinal": 7,
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "model_context_window": 258400,
+                        "last_token_usage": {"total_tokens": 129200},
+                    },
+                },
+            },
+        ]
+        trace = build_trace(self.write_transcript(rows))
+        rendered = json.dumps(trace)
+        self.assertEqual("codex", trace["platform"])
+        self.assertTrue(trace["boundary"]["found"])
+        self.assertNotIn("obsolete context", rendered)
+        self.assertIn("nonlinear drift", rendered)
+        self.assertIn("constant-offset", rendered)
+        self.assertIn("clock.py", rendered)
+        self.assertNotIn("secret", rendered)
+        self.assertEqual(258400, trace["context"]["window_tokens"])
+        self.assertEqual(50.0, trace["context"]["used_pct_observed"])
+        self.assertEqual(1, trace["input_audit"]["private_reasoning_blocks_excluded"])
+        self.assertIn(
+            "file_change",
+            {source["kind"] for episode in trace["episodes"] for source in episode["sources"]},
+        )
+
+    def test_codex_midturn_continuation_splits_at_assistant_progress(self):
+        rows = [
+            {"type": "session_meta", "ordinal": 0, "payload": {"id": "s", "cwd": "/tmp"}},
+            {"type": "compacted", "ordinal": 1, "payload": {"replacement_history": []}},
+            {
+                "type": "response_item",
+                "ordinal": 2,
+                "payload": {
+                    "id": "a1",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Inspect the parser."}],
+                },
+            },
+            {
+                "type": "event_msg",
+                "ordinal": 3,
+                "payload": {
+                    "type": "item_completed",
+                    "item": {"id": "c1", "type": "CommandExecution", "status": "completed", "command": ["pytest"], "stdout": "ok"},
+                },
+            },
+            {
+                "type": "response_item",
+                "ordinal": 4,
+                "payload": {
+                    "id": "a2",
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "Now package the plugin."}],
+                },
+            },
+        ]
+        trace = build_trace(self.write_transcript(rows))
+        self.assertEqual(2, len(trace["episodes"]))
+        self.assertEqual("Inspect the parser.", trace["episodes"][0]["title"])
+        self.assertEqual("Now package the plugin.", trace["episodes"][1]["title"])
+
+    def test_prior_codex_review_contract_carries_structured_user_decisions(self):
+        trace = {
+            "platform": "codex",
+            "source_hash": "",
+            "episodes": [],
+            "context": {"window_tokens": 1000, "used_tokens_observed": 500},
+            "warnings": [],
+        }
+        review = {
+            "precommit": "Do not confuse throughput with latency.",
+            "items": [
+                {
+                    "id": "i1",
+                    "title": "Active benchmark",
+                    "summary": "Latency is the binding outcome.",
+                    "type": "decision",
+                    "status": "active",
+                    "retention": "summarize",
+                    "confidence": "high",
+                    "next_step": "Run the cold benchmark.",
+                },
+                {
+                    "id": "i2",
+                    "title": "Discarded logs",
+                    "summary": "Old output",
+                    "type": "mechanical",
+                    "status": "resolved",
+                    "retention": "demote",
+                    "confidence": "high",
+                },
+            ],
+        }
+        add_review_contract(trace, review, "cycle-1")
+        self.assertEqual(2, len(trace["episodes"]))
+        carried = trace["episodes"][1]["carry_forward"]
+        self.assertEqual("summarize", carried["retention"])
+        self.assertEqual("decision", carried["type"])
+        self.assertNotIn("Discarded logs", json.dumps(trace))
+        self.assertTrue(trace["source_hash"])
 
 
 if __name__ == "__main__":
