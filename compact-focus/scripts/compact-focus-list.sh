@@ -350,6 +350,56 @@ SEED
     echo "── B (lensed summary):"
     ask "$B_SUM" || echo "(B failed)"
     ;;
+  ledger)
+    # Persisted handoff between the skill (which composes the ledger) and
+    # the TUI (which the user edits in their own terminal via `!`).
+    LJ="$S/ledger.json"
+    case "${2:-}" in
+      save)
+        if [ -n "${3:-}" ] && printf '%s' "$3" | jq -e '.items | type == "array"' >/dev/null 2>&1; then
+          mkdir -p "$S" 2>/dev/null
+          printf '%s' "$3" | jq '.finalized = false
+                                 | .constraints = (.constraints // [])
+                                 | .items |= map(.children = (.children // []))' >"$LJ" 2>/dev/null \
+            && echo "(ledger saved: $(jq '.items|length' "$LJ") items → $LJ)" || echo "(could not write $LJ)"
+        else
+          echo "usage: ledger save '{\"items\":[{\"id\":\"L1\",\"tag\":\"open\",\"label\":\"…\",\"cat\":\"keep|contested|drop\",\"prov\":\"threads 1\",\"children\":[{\"text\":\"…\",\"checked\":true}]}]}'"
+        fi
+        ;;
+      load)
+        [ -r "$LJ" ] && cat "$LJ" || echo '{"items":[],"finalized":false}'
+        ;;
+      *) echo "usage: ledger save '<json>' | load";;
+    esac
+    ;;
+  tui)
+    LJ="$S/ledger.json"
+    [ -r "$LJ" ] || { echo "(no ledger.json — the compact-human skill prepares it first)"; exit 0; }
+    exec python3 "$(dirname "$0")/compact-focus-tui.py" "$LJ"
+    ;;
+  tui-open)
+    # Auto-launch: the model's Bash tool has no TTY, but it CAN open a real
+    # terminal window running the TUI (macOS osascript). Falls back to
+    # printing the manual `!` line.
+    LJ="$S/ledger.json"
+    [ -r "$LJ" ] || { echo "(no ledger.json — the compact-human skill prepares it first)"; exit 0; }
+    SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    if command -v osascript >/dev/null 2>&1; then
+      APP="${COMPACT_FOCUS_TERMINAL:-Terminal}"
+      if [ "$APP" = "iTerm" ] || [ "$APP" = "iTerm2" ]; then
+        osascript -e "tell application \"iTerm\"
+          create window with default profile command \"env COMPACT_FOCUS_STATE_DIR='$S' '$SELF' tui\"
+          activate
+        end tell" >/dev/null 2>&1 && { echo "(ledger editor opened in an iTerm window)"; exit 0; }
+      else
+        osascript -e "tell application \"Terminal\"
+          do script \"exec env COMPACT_FOCUS_STATE_DIR='$S' '$SELF' tui\"
+          activate
+        end tell" >/dev/null 2>&1 && { echo "(ledger editor opened in a Terminal window — edit, press q, then come back and say done)"; exit 0; }
+      fi
+    fi
+    echo "(could not auto-open — run manually:  ! $SELF tui  )"
+    ;;
   studymode)
     # The human-compact study wrapper launches sessions with
     # COMPACT_FOCUS_STUDY=1; the skill asks this mode which flow to run.

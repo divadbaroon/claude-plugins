@@ -54,8 +54,29 @@ typed reply, compact.
    states); open items first, mechanical last; contested = rival-lens
    disagreements + unresolved unclear triage items; stable numbering; keep
    the whole ledger under ~25 lines — merge aggressively, this is a
-   partition, not an inventory. END YOUR TURN on the reply line — the user
-   answers in the normal prompt box. No AskUserQuestion in the fast flow.
+   partition, not an inventory.
+
+   BEFORE printing, also persist the same ledger for the interactive
+   editor: `ledger save '<json>'` with each item as {"id","tag","label",
+   "cat":"keep|contested|drop","prov","children":[{"text":"<the actual
+   prompt(s) behind this item, verbatim>","checked":true}]} — children are
+   what un-collapses in the TUI, so populate them from threads.json.
+   Then LAUNCH THE EDITOR YOURSELF: run `tui-open` (it opens the full-screen
+   ledger editor in a new terminal window; on failure it prints the manual
+   `!` line — relay that line if so). Under the printed ledger say only:
+
+   > ✏️ Editor opened in a separate window — check/uncheck, tab to
+   > recategorize, → to expand an item into its prompts, q to save. Say
+   > **done** when finished — or skip the window and reply here: numbers
+   > flip (`5, not 2`) · text → constraint · `? 3` provenance · `race` · `ok`
+
+   END YOUR TURN there. No AskUserQuestion in the fast flow. If the user
+   ran the TUI (their next message follows a "ledger finalized:" line in
+   the transcript, or they say so): `ledger load`, and treat it as ground
+   truth — cat=drop items and unchecked children are the drop set;
+   constraints[] are precommit constraints; items with "edited":true are
+   relabels (record '{"event":"tui_edit","id":"…"}' each). Record
+   '{"event":"ledger_final","via":"tui|reply","kept":"…","dropped":"…"}'.
 
 3. PARSE THE REPLY (tolerate prose and typos; apply ALL parts of a mixed
    reply):
