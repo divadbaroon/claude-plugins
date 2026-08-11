@@ -1,0 +1,151 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Trajectory</title>
+<style>
+:root{--ink:#18181b;--dim:#71717a;--faint:#a1a1aa;--edge:#e4e4e7;--violet:#7c3aed}
+*{box-sizing:border-box;margin:0}
+body{background:#fff;color:var(--ink);font:14px/1.5 -apple-system,system-ui,sans-serif;height:100vh;overflow:hidden}
+#wrap{display:flex;height:100vh}
+#left{flex:1;display:flex;flex-direction:column;min-width:0}
+#hdr{padding:26px 32px 10px}
+.kicker{font-size:12px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;font-weight:600}
+#hdr .date{color:var(--dim);font-size:13px;margin-top:2px}
+#graph{flex:1;position:relative}
+#time{padding:10px 32px 22px;display:flex;align-items:center;gap:14px}
+#time input{flex:1;accent-color:var(--ink)}
+#time .tl{font-size:12px;color:var(--dim);min-width:78px}
+#panel{width:320px;border-left:1px solid var(--edge);padding:28px 26px;overflow-y:auto}
+#panel h2{font-size:11px;color:var(--faint);letter-spacing:.07em;text-transform:uppercase;font-weight:650;margin:22px 0 10px}
+#panel h2:first-child{margin-top:0}
+#state div{font-size:13px;color:#3f3f46;padding:4px 0;border-bottom:1px solid #f4f4f5}
+#state b{font-weight:550;color:var(--ink)}
+.goal{border:1px solid var(--edge);border-radius:9px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:all .15s;font-size:13px;line-height:1.4}
+.goal:hover{border-color:#d4d4d8;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+.goal.on{border-color:var(--violet);background:#f5f3ff}
+.goal .r{font-size:10.5px;color:var(--faint);font-weight:650;letter-spacing:.05em}
+#legend{margin-top:18px}
+#legend div{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);padding:2px 0}
+#legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
+#tip{position:fixed;display:none;background:#18181b;color:#fafafa;border-radius:7px;padding:8px 11px;font-size:12px;z-index:40;pointer-events:none;max-width:260px}
+#tip .tt{font-weight:600}#tip .td{color:#a1a1aa;font-size:11px;margin-top:1px}
+#sheet{position:fixed;top:0;right:-440px;width:420px;height:100%;background:#fff;border-left:1px solid var(--edge);box-shadow:-12px 0 32px rgba(0,0,0,.06);padding:26px;overflow-y:auto;transition:right .22s;z-index:50}
+#sheet.open{right:0}
+#sheet h3{font-size:15px;font-weight:600}
+#sheet .why{color:var(--dim);font-size:13px;margin:6px 0 16px}
+#sheet .sk{font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;font-weight:650;margin:16px 0 8px}
+.ev{border:1px solid var(--edge);border-radius:8px;padding:9px 11px;margin-bottom:8px}
+.ev .d{font-size:11px;color:var(--faint)}.ev .t{font-size:12.5px;color:#3f3f46;margin-top:2px}
+.fb{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.fb button{background:#fff;border:1px solid var(--edge);color:var(--dim);border-radius:7px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
+.fb button.on{color:var(--violet);border-color:#ddd6fe;background:#f5f3ff}
+#x{position:absolute;top:12px;right:14px;background:none;border:none;color:var(--faint);font-size:20px;cursor:pointer}
+.corrected{font-size:12px;color:var(--violet);margin-top:8px}
+</style>
+<script src="/static/graphology.min.js"></script>
+<script src="/static/graphology-library.min.js"></script>
+<script src="/static/sigma.min.js"></script>
+</head><body>
+<div id="wrap"><div id="left">
+ <div id="hdr"><div class="kicker">Trajectory · evidence cloud</div><div class="date" id="today"></div></div>
+ <div id="graph"></div>
+ <div id="time"><span class="tl" id="t0"></span><input type="range" id="scrub" min="0" max="0" value="0"><span class="tl" id="t1" style="text-align:right"></span></div>
+</div>
+<div id="panel">
+ <h2>Current inferred state</h2><div id="state"></div>
+ <h2>Emerging goals</h2><div id="goals"></div>
+ <div id="legend"></div>
+</div></div>
+<div id="tip"></div>
+<div id="sheet"><button id="x" onclick="sheet.classList.remove('open')">&times;</button><div id="sbody"></div></div>
+<script>
+const sheet=document.getElementById('sheet'),tip=document.getElementById('tip');
+const esc=s=>(s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=d=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'';
+let G=null,C={},sigma=null,graph=null,days=[],tIdx=0,focusGoal=null;
+const alpha=(hex,a)=>{const n=parseInt(hex.slice(1),16);return `rgba(${n>>16},${(n>>8)&255},${n&255},${a})`;};
+async function main(){
+ const [g,a]=await Promise.all([fetch('/api/graph').then(r=>r.json()),fetch('/api/analysis').then(r=>r.json())]);
+ G=g;C=(a&&a.corrections)||{};
+ document.getElementById('today').textContent='Today: '+new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+ const ds=[...new Set(G.nodes.map(n=>n.date).filter(Boolean))].sort();days=ds;tIdx=ds.length-1;
+ const sc=document.getElementById('scrub');sc.max=ds.length-1;sc.value=tIdx;
+ document.getElementById('t0').textContent=fmt(ds[0]);document.getElementById('t1').textContent=fmt(ds[ds.length-1]);
+ sc.addEventListener('input',()=>{tIdx=+sc.value;refresh();});
+ graph=new graphology.Graph();
+ G.nodes.forEach(n=>graph.addNode(n.id,{label:n.label,size:5+Math.sqrt(n.weight)*3.2,x:Math.random(),y:Math.random(),nd:n}));
+ G.edges.forEach((e,i)=>{try{graph.addEdgeWithKey('e'+i,e.source,e.target,{});}catch(_){}});
+ const fa2=graphologyLibrary.layoutForceAtlas2;
+ fa2.assign(graph,{iterations:400,settings:Object.assign(fa2.inferSettings(graph),{gravity:0.8,scalingRatio:6})});
+ sigma=new Sigma(graph,document.getElementById('graph'),{
+  minCameraRatio:0.5,maxCameraRatio:2,labelFont:'-apple-system,system-ui,sans-serif',
+  labelSize:12,labelWeight:'500',labelColor:{color:'#3f3f46'},
+  nodeReducer:(id,attrs)=>{const n=attrs.nd,vis=visible(n);
+   const col=G.clusters[n.cluster]?G.clusters[n.cluster].color:'#94a3b8';
+   const rec=recency(n);let a=0.25+0.75*rec;
+   if(focusGoal!==null){const hit=G.goals[focusGoal].cluster===n.cluster||
+     (G.goals[focusGoal].evidence_ids||[]).some(e=>(n.evidence_ids||[]).includes(e));
+     a=hit?Math.max(a,0.9):0.08;}
+   return Object.assign({},attrs,{hidden:!vis,color:alpha(col,a),
+     label:(n.show_label&&(focusGoal===null||a>0.5))?attrs.label:null,
+     size:attrs.size*(vis?1:0)});},
+  edgeReducer:(id,attrs)=>{const [s,t]=graph.extremities(id);
+   const ns=graph.getNodeAttribute(s,'nd'),nt=graph.getNodeAttribute(t,'nd');
+   const hid=!visible(ns)||!visible(nt);let a=0.10;
+   if(focusGoal!==null){const c=G.goals[focusGoal].cluster;
+     a=(ns.cluster===c&&nt.cluster===c)?0.22:0.02;}
+   return Object.assign({},attrs,{hidden:hid,color:`rgba(24,24,27,${a})`,size:1});}});
+ sigma.on('enterNode',({node,event})=>{const n=graph.getNodeAttribute(node,'nd');
+  tip.style.display='block';
+  tip.innerHTML=`<div class="tt">${esc(n.label)}</div><div class="td">${esc(n.type)} · ${fmt(n.date_first||n.date)}${n.date_first&&n.date_first!==n.date?'–'+fmt(n.date):''} · ×${n.weight}</div>`;
+  tip.style.left=Math.min(event.x+16,window.innerWidth-280)+'px';tip.style.top=(event.y+16)+'px';});
+ sigma.on('leaveNode',()=>tip.style.display='none');
+ sigma.on('clickNode',({node})=>openSheet(graph.getNodeAttribute(node,'nd')));
+ sigma.on('clickStage',()=>{if(focusGoal!==null){focusGoal=null;renderPanel();sigma.refresh();}});
+ renderPanel();legend();
+}
+const visible=n=>n.date<=days[tIdx];
+const recency=n=>{const i=days.indexOf(n.date);return days.length<2?1:Math.max(0,1-(tIdx-i)/Math.max(1,days.length-1));};
+function clusterWeights(){const w={};G.nodes.forEach(n=>{if(visible(n))w[n.cluster]=(w[n.cluster]||0)+n.weight;});return w;}
+function renderPanel(){
+ const w=clusterWeights(),full=tIdx===days.length-1,S=G.state;
+ const top=Object.entries(w).sort((a,b)=>b[1]-a[1])[0];
+ const lines=[];
+ if(full&&S.current)lines.push(`<b>Focus:</b> ${esc(S.current)}`);
+ else if(top&&G.clusters[top[0]])lines.push(`<b>Focus:</b> most activity in ${esc(G.clusters[top[0]].label)}`);
+ const q=G.nodes.filter(n=>n.type==='question'&&visible(n)).sort((a,b)=>b.weight-a.weight)[0];
+ if(q)lines.push(`<b>Returning to:</b> ${esc(q.label)} (×${q.weight})`);
+ if(full&&S.blocker)lines.push(`<b>In the way:</b> ${esc(S.blocker)}`);
+ if(full&&S.progress)lines.push(`<b>Recent:</b> ${esc(S.progress)}`);
+ if(!full){const latest=G.nodes.filter(n=>visible(n)&&(n.type==='action'||n.type==='artifact')).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  if(latest)lines.push(`<b>Latest:</b> ${esc(latest.label)}`);
+  lines.push(`<span style="color:var(--faint)">as of ${fmt(days[tIdx])} · weight-derived</span>`);}
+ document.getElementById('state').innerHTML=lines.slice(0,4).map(l=>`<div>${l}</div>`).join('');
+ const order=G.goals.slice().sort((a,b)=>(w[b.cluster]||0)-(w[a.cluster]||0));
+ document.getElementById('goals').innerHTML=order.map((g,i)=>
+  `<div class="goal ${focusGoal===G.goals.indexOf(g)?'on':''}" data-i="${G.goals.indexOf(g)}">
+   <div class="r">${i+1}${G.clusters[g.cluster]?' · '+esc(G.clusters[g.cluster].label):''}</div>${esc(g.label)}</div>`).join('');
+ document.querySelectorAll('.goal').forEach(el=>el.addEventListener('click',()=>{
+  focusGoal=focusGoal===+el.dataset.i?null:+el.dataset.i;renderPanel();sigma.refresh();}));
+}
+function legend(){document.getElementById('legend').innerHTML=
+ '<h2>Clusters</h2>'+G.clusters.map(c=>`<div><i style="background:${c.color}"></i>${esc(c.label)}</div>`).join('');}
+async function openSheet(n){
+ let evh='';const ids=(n.evidence_ids||[]).slice(0,3);
+ if(ids.length){const ev=await (await fetch('/api/evidence?ids='+encodeURIComponent(ids.join(',')))).json();
+  for(const [id,v] of Object.entries(ev)){if(!v)continue;
+   evh+=`<div class="ev"><div class="d">${fmt(v.date)} · session ${esc(v.session_id.slice(0,8))}</div><div class="t">&ldquo;${esc(v.text)}&rdquo;</div></div>`;}}
+ const fbT='node:'+n.id,cor=C[fbT];
+ document.getElementById('sbody').innerHTML=`<h3>${esc(n.label)}</h3>
+  <div class="why">${esc(n.type)} · seen ×${n.weight} · ${fmt(n.date_first||n.date)}${n.date_first&&n.date_first!==n.date?' – '+fmt(n.date):''}</div>
+  <div class="sk">Supporting turns</div>${evh||'<div class="why">No directly resolvable turns.</div>'}
+  ${cor?`<div class="corrected">you said: ${esc(cor.verdict)}${cor.edit?' — '+esc(cor.edit):''}</div>`:''}
+  <div class="sk">Your call</div><div class="fb">${['Important','Not important','Completed','Abandoned','Wrong','Edit'].map(o=>
+   `<button data-t="${esc(fbT)}" data-v="${esc(o)}" class="${cor&&cor.verdict===o?'on':''}">${o}</button>`).join('')}</div>`;
+ document.querySelectorAll('#sbody .fb button').forEach(b=>b.addEventListener('click',async()=>{
+  let edit=null;if(b.dataset.v==='Edit')edit=prompt('Your version:')||null;
+  C[b.dataset.t]={target:b.dataset.t,verdict:b.dataset.v,edit,ts:new Date().toISOString()};
+  await fetch('/api/correction',{method:'POST',body:JSON.stringify(C[b.dataset.t])});openSheet(n);}));
+ sheet.classList.add('open');
+}
+function refresh(){renderPanel();sigma.refresh();}
+main();
+</script></body></html>

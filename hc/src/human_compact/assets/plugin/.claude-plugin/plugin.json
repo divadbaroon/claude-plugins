@@ -1,0 +1,8 @@
+{
+  "name": "vault",
+  "version": "0.3.0",
+  "description": "Persist per-session conversation history that survives compaction. Inert unless CLAUDE_VAULT=1 (set by the claude --vault shim).",
+  "author": {
+    "name": "David Baroon"
+  }
+}

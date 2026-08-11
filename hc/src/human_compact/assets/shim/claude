@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# claude (Vault shim) — sits earlier on PATH than the real Claude Code binary.
+# Recognizes --vault, strips it, sets CLAUDE_VAULT=1, and execs the real
+# `claude` with every other argument unchanged. Without --vault it is a pure
+# pass-through. Finds the real binary by scanning PATH and skipping itself,
+# so Claude Code updates never break it. No network, no other side effects.
+
+VAULT=0
+NEWARGS=()
+for a in "$@"; do
+  if [ "$a" = "--vault" ]; then VAULT=1; else NEWARGS+=("$a"); fi
+done
+
+SELF="$0"
+REAL=""
+while IFS= read -r c; do
+  [ -e "$c" ] || continue
+  if [ ! "$c" -ef "$SELF" ]; then REAL="$c"; break; fi
+done < <(type -aP claude 2>/dev/null)
+
+if [ -z "$REAL" ]; then
+  echo "vault shim: could not find the real 'claude' binary on PATH" >&2
+  exit 127
+fi
+
+[ "$VAULT" = "1" ] && export CLAUDE_VAULT=1
+exec "$REAL" ${NEWARGS[@]+"${NEWARGS[@]}"}
