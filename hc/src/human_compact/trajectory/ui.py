@@ -82,22 +82,31 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             html = resources.files("human_compact.trajectory").joinpath(
-                "web/goals.html").read_bytes()
-            self._send(200, html, "text/html; charset=utf-8")
+                "web/goals_bundle.html").read_text(encoding="utf-8")
+            html = html.replace("<body>",
+                                "<body>\n<script src=\"/bridge.js\"></script>", 1)
+            self._send(200, html.encode(), "text/html; charset=utf-8")
+        elif self.path == "/bridge.js":
+            js = resources.files("human_compact.trajectory").joinpath(
+                "web/bridge.js").read_bytes()
+            self._send(200, js, "application/javascript")
         elif self.path == "/api/state":
             self._send(200, _payload())
         else:
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/api/op":
-            self._send(404, {"error": "not found"}); return
         try:
             n = int(self.headers.get("Content-Length", 0))
-            op = json.loads(self.rfile.read(n))
+            body = json.loads(self.rfile.read(n))
         except (ValueError, TypeError):
             self._send(400, {"ok": False, "error": "bad json"}); return
-        self._send(200, _apply(op))
+        if self.path == "/api/op":
+            self._send(200, _apply(body))
+        elif self.path == "/api/import":
+            self._send(200, _import(body))
+        else:
+            self._send(404, {"error": "not found"})
 
 
 def run(port=8765, open_browser=True):
@@ -120,3 +129,84 @@ def run(port=8765, open_browser=True):
         print("\n  stopped")
     finally:
         srv.server_close()
+
+
+def _import(nested):
+    """Map the Claude Design app's nested node tree back into the goals model.
+    Node ids are preserved; `t:<gid>:<i>` nodes are that goal's todos. Nodes
+    missing from the payload are marked abandoned (history kept, never
+    destroyed). Evidence links and important-item associations survive."""
+    if not isinstance(nested, list):
+        return {"ok": False, "error": "expected a list of nodes"}
+    trajdir = state.trajdir()
+    goals, important = GM.load(trajdir)
+    GM.sanitize(goals)
+    old = {g["id"]: g for g in goals["goals"]}
+    seen, out = set(), []
+
+    def walk(node, parent_gid):
+        nid = str(node.get("id", ""))
+        title = (node.get("title") or "Untitled").strip()[:120]
+        if nid.startswith("t:"):
+            gid = nid.split(":")[1] if nid.count(":") >= 2 else parent_gid
+            host = next((g for g in out if g["id"] == gid), None) or                    next((g for g in out if g["id"] == parent_gid), None)
+            if host is not None:
+                host["todos"].append({"text": title, "done": bool(node.get("done")),
+                                      "evidence_ids": host.pop("_tev", {}).get(
+                                          nid, []) if False else
+                                      old.get(host["id"], {}).get("_", []) or []})
+            for ch in node.get("children") or []:
+                walk(ch, parent_gid)
+            return
+        seen.add(nid)
+        prev = old.get(nid, {})
+        done = bool(node.get("done"))
+        status = ("abandoned" if done and prev.get("status") == "abandoned" else
+                  "completed" if done else
+                  "in_progress" if node.get("status") == "inprog" else "active")
+        out.append({"id": nid, "title": title, "status": status,
+                    "parent_goal_id": parent_gid,
+                    "evidence_ids": prev.get("evidence_ids", []),
+                    "todos": [],
+                    "important_item_ids": prev.get("important_item_ids", []),
+                    "priority": node.get("prio") if node.get("prio") in
+                        ("urgent", "high", "normal") else "normal",
+                    "notes": str(node.get("notes") or "")[:4000],
+                    "description": str(node.get("desc") or "")[:600],
+                    "origin": prev.get("origin", "ui"),
+                    "updated_at": prev.get("updated_at", GM._now())}
+                   )
+        for ch in node.get("children") or []:
+            walk(ch, nid)
+
+    for n in nested:
+        walk(n, None)
+    # preserve todo evidence where text still matches the old todo
+    for g in out:
+        prev = old.get(g["id"])
+        if not prev:
+            g["updated_at"] = GM._now()
+            continue
+        oldtd = {t["text"]: t for t in prev.get("todos", [])}
+        for t in g["todos"]:
+            if t["text"] in oldtd:
+                t["evidence_ids"] = oldtd[t["text"]].get("evidence_ids", [])
+        if (g["title"], g["status"], g["parent_goal_id"], g["priority"],
+            g["notes"], g["description"],
+            [(t["text"], t["done"]) for t in g["todos"]]) !=            (prev.get("title"), prev.get("status"), prev.get("parent_goal_id"),
+            prev.get("priority", "normal"), prev.get("notes", ""),
+            prev.get("description", ""),
+            [(t["text"], t["done"]) for t in prev.get("todos", [])]):
+            g["updated_at"] = GM._now()
+    # anything the app deleted -> abandoned, kept
+    for gid, prev in old.items():
+        if gid not in seen:
+            prev = dict(prev)
+            if prev.get("status") != "abandoned":
+                prev["status"] = "abandoned"
+                prev["updated_at"] = GM._now()
+            out.append(prev)
+    goals["goals"] = out
+    GM.sanitize(goals)
+    GM.save(trajdir, goals, important)
+    return {"ok": True, "goals": len(out)}

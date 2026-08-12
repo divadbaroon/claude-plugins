@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "human-compact"
-version = "0.13.3"
+version = "0.14.0"
 description = "Papert Lab tools for Claude Code conversation persistence. hc-backup onboards Vault: local-first conversation history that survives compaction."
 readme = "README.md"
 requires-python = ">=3.9"
