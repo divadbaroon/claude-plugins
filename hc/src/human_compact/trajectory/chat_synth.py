@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -321,7 +322,7 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
     """Analyze through the latest requested ordinal, coalescing concurrent work."""
     CS.paths(session_id, root)
     try:
-        with CS.session_lock(session_id, root, wait_s=0):
+        with CS.session_lock(session_id, root, wait_s=5):
             state = CS.get_analyzer_state(session_id, root)
             if state.get("status") == "running":
                 CS.request_analysis(session_id, root=root)
@@ -411,20 +412,25 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
     """Request analysis and start one detached, coalescing worker process."""
     p = CS.paths(session_id, root)
     with CS.session_lock(session_id, root, wait_s=5):
-        requested = CS.request_analysis(session_id, root=root)
         worker = p.session_dir / "analyzer.json"
         try:
             prior = json.loads(worker.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
             prior = {}
         pid = prior.get("pid")
-        try:
-            if pid and CS.get_analyzer_state(session_id, root).get("status") == "running":
-                os.kill(int(pid), 0)
-                return {"status": "coalesced", "session_id": session_id,
-                        "requested_ordinal": requested.get("requested_ordinal", 0)}
-        except (OSError, TypeError, ValueError):
-            pass
+        analyzer = CS.get_analyzer_state(session_id, root)
+        worker_alive = bool(pid and _worker_process_matches(pid, session_id))
+        if analyzer.get("status") == "running" and worker_alive:
+            requested = CS.request_analysis(session_id, root=root)
+            return {"status": "coalesced", "session_id": session_id,
+                    "requested_ordinal": requested.get("requested_ordinal", 0)}
+        if analyzer.get("status") == "running":
+            # The prior worker crashed or its PID was reused. Reset the stale
+            # lease so the replacement worker does not immediately coalesce
+            # against a process that no longer owns this session.
+            CS.set_analyzer_state(session_id, status="pending",
+                                  error="recovered stale analyzer worker", root=root)
+        requested = CS.request_analysis(session_id, root=root)
         command = [sys.executable, "-m", "human_compact.cli", "chat-refresh",
                    "--session", session_id]
         child_env = os.environ.copy()
@@ -441,18 +447,46 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
                 env=child_env,
             )
         _DETACHED_PROCESSES.append(process)
-        worker.write_text(json.dumps({"pid": process.pid}) + "\n", encoding="utf-8")
+        worker.write_text(json.dumps({
+            "pid": process.pid,
+            "session_id": session_id,
+            "started_at": time.time(),
+        }) + "\n", encoding="utf-8")
         worker.chmod(0o600)
         return {"status": "spawned", "session_id": session_id,
                 "pid": process.pid,
                 "requested_ordinal": requested.get("requested_ordinal", 0)}
 
 
-def clear_worker_record(session_id: str, root: Optional[Path] = None) -> None:
-    worker = CS.paths(session_id, root).session_dir / "analyzer.json"
+def _worker_process_matches(pid: Any, session_id: str) -> bool:
+    """Reject stale/reused PIDs before coalescing a requested refresh."""
     try:
-        value = json.loads(worker.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        value = {}
-    if value.get("pid") in (None, os.getpid()):
-        worker.unlink(missing_ok=True)
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    if os.name == "nt":
+        return True
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True, text=True, timeout=1,
+        )
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError):
+        return False
+    command = result.stdout
+    return (
+        result.returncode == 0
+        and "human_compact.cli chat-refresh" in command
+        and f"--session {session_id}" in command
+    )
+
+
+def clear_worker_record(session_id: str, root: Optional[Path] = None) -> None:
+    with CS.session_lock(session_id, root, wait_s=5):
+        worker = CS.paths(session_id, root).session_dir / "analyzer.json"
+        try:
+            value = json.loads(worker.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            value = {}
+        if value.get("pid") in (None, os.getpid()):
+            worker.unlink(missing_ok=True)

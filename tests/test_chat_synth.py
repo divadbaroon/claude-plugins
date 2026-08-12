@@ -241,6 +241,21 @@ class ChatSynthesisTests(unittest.TestCase):
                 if process:
                     process.wait(timeout=5)
 
+    def test_live_but_unrelated_stale_pid_does_not_block_worker(self):
+        self.hook("UserPromptSubmit", prompt="Needs analysis")
+        p = CS.paths(SID, self.root)
+        (p.session_dir / "analyzer.json").write_text(json.dumps({
+            "pid": os.getpid(), "session_id": SID,
+        }))
+        CS.set_analyzer_state(SID, status="running", root=self.root)
+        fake_process = mock.Mock(pid=987654)
+        with (mock.patch.object(S, "_worker_process_matches", return_value=False),
+              mock.patch.object(S.subprocess, "Popen", return_value=fake_process) as popen):
+            result = S.spawn_refresh(SID, root=self.root)
+        self.assertEqual("spawned", result["status"])
+        self.assertEqual("pending", CS.get_analyzer_state(SID, self.root)["status"])
+        popen.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
