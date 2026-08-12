@@ -262,20 +262,38 @@ class ChatStateTests(unittest.TestCase):
                     uuid="wrapped-launcher",
                     prompt_id="wrapped-launcher",
                 ),
+                user_record(
+                    "<command-name>/compact</command-name>\n"
+                    "<command-message>compact</command-message>\n"
+                    "<command-args></command-args>",
+                    uuid="wrapped-compact",
+                    prompt_id="wrapped-compact",
+                ),
+                user_record(
+                    "/compact", uuid="plain-compact", prompt_id="plain-compact"
+                ),
                 tool_result_record(text="not a human prompt"),
                 notification,
+                user_record(
+                    "Explain <command-name> as markup",
+                    uuid="markup-discussion",
+                    prompt_id="markup-discussion",
+                ),
                 user_record("Assignable", uuid="human", prompt_id="human"),
             ],
         )
         CS.ingest_transcript(SID, self.transcript, root=self.base)
         prompts = CS.load_prompts(SID, self.base)
 
-        self.assertEqual(1, len(prompts))
+        self.assertEqual(2, len(prompts))
         self.assertEqual(
             {"id", "role", "text", "created_at", "ordinal"}, set(prompts[0])
         )
-        self.assertEqual("Assignable", prompts[0]["text"])
-        self.assertEqual("user", prompts[0]["role"])
+        self.assertEqual(
+            ["Explain <command-name> as markup", "Assignable"],
+            [prompt["text"] for prompt in prompts],
+        )
+        self.assertTrue(all(prompt["role"] == "user" for prompt in prompts))
         kinds = {event["kind"] for event in CS.load_events(SID, self.base)}
         self.assertIn("tool_result", kinds)
         self.assertIn("task_notification", kinds)
@@ -285,6 +303,30 @@ class ChatStateTests(unittest.TestCase):
         ]
         self.assertEqual(2, len(launchers))
         self.assertTrue(all(not event["usable_for_goals"] for event in launchers))
+        compact_commands = [
+            event for event in CS.load_events(SID, self.base)
+            if "compact" in event.get("text", "")
+        ]
+        self.assertEqual(2, len(compact_commands))
+        self.assertTrue(
+            all(not event["usable_for_goals"] for event in compact_commands)
+        )
+
+    def test_prompt_load_filters_command_envelopes_from_legacy_projection(self):
+        prompt_file = CS.paths(SID, self.base).prompts
+        prompt_file.parent.mkdir(parents=True)
+        prompt_file.write_text(json.dumps({"prompts": [
+            {"id": "old-command", "role": "user", "text":
+             "<command-name>/compact</command-name>\n"
+             "<command-message>compact</command-message>\n"
+             "<command-args></command-args>"},
+            {"id": "real", "role": "user", "text": "Keep this message"},
+        ]}))
+
+        self.assertEqual(
+            ["Keep this message"],
+            [prompt["text"] for prompt in CS.load_prompts(SID, self.base)],
+        )
 
     def test_post_tool_batch_captures_plan_and_result_before_transcript_flush(self):
         payload = {

@@ -25,6 +25,10 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 SCHEMA_VERSION = 1
 _TAIL_BYTES = 4096
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
+_COMMAND_TAG_RE = re.compile(
+    r"<command-(name|message|args)>[\s\S]*?</command-\1>", re.IGNORECASE
+)
+_SLASH_COMMAND_RE = re.compile(r"^/[A-Za-z][A-Za-z0-9_-]*(?:\s[^\r\n]*)?$")
 _UNSET = object()
 _LOCKS_GUARD = threading.Lock()
 _LOCKS: Dict[str, threading.RLock] = {}
@@ -245,7 +249,12 @@ def load_prompts(session_id: str, root: Optional[Path] = None) -> List[Dict[str,
         prompts = value
     else:
         prompts = value.get("prompts", []) if isinstance(value, dict) else []
-    return [p for p in prompts if isinstance(p, dict) and p.get("role") == "user"]
+    return [
+        p for p in prompts
+        if (isinstance(p, dict) and p.get("role") == "user"
+            and not _is_hc_ui_launcher(str(p.get("text") or ""))
+            and not _is_command_prompt(str(p.get("text") or "")))
+    ]
 
 
 def _text_content(content: Any) -> str:
@@ -320,6 +329,22 @@ def _is_hc_ui_launcher(text: str) -> bool:
     )
 
 
+def _is_command_prompt(text: str) -> bool:
+    """Identify Claude slash-command records that are not human messages.
+
+    Claude persists built-in commands such as ``/compact`` as XML-like user
+    records. They remain useful in the event stream, but showing them in the
+    prompt picker conflates a UI action with authored conversation content.
+    """
+    stripped = str(text or "").strip()
+    if _SLASH_COMMAND_RE.fullmatch(stripped):
+        return True
+    if not re.search(r"<command-name>", stripped, re.IGNORECASE):
+        return False
+    remainder = _COMMAND_TAG_RE.sub("", stripped)
+    return not remainder.strip()
+
+
 def _base_event(
     record: Dict[str, Any], source: Dict[str, Any], event_id: str
 ) -> Dict[str, Any]:
@@ -390,7 +415,8 @@ def _normalize_record(
         if _human_origin(record):
             prompt_id = record.get("promptId")
             event_id = f"prompt:{prompt_id}" if prompt_id else _record_id(record, raw, "prompt")
-            kind, usable = "human_prompt", not _is_hc_ui_launcher(text)
+            kind = "human_prompt"
+            usable = not (_is_hc_ui_launcher(text) or _is_command_prompt(text))
         elif record.get("isMeta"):
             event_id = _record_id(record, raw, "context")
             kind, usable = "context", False
@@ -644,7 +670,8 @@ def _assignable_prompts(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
         if event.get("kind") != "human_prompt" or not event.get("text"):
             continue
         text = str(event["text"]).strip()
-        if _is_hc_ui_launcher(text):
+        if (not event.get("usable_for_goals", True)
+                or _is_hc_ui_launcher(text) or _is_command_prompt(text)):
             continue
         prompts.append(
             {
@@ -924,7 +951,9 @@ def _ingest_hook_locked(
                 result.last_ordinal,
                 hook_event,
             )
-            boundary["usable_for_goals"] = not _is_hc_ui_launcher(text)
+            boundary["usable_for_goals"] = not (
+                _is_hc_ui_launcher(text) or _is_command_prompt(text)
+            )
     elif hook_event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
         text = payload["last_assistant_message"].strip()
         if text:
