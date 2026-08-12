@@ -1,56 +1,17 @@
 {
-  "description": "Chat-scoped goal updates plus opt-in global Vault snapshots.",
+  "description": "Vault: snapshot conversation history around compaction and session lifecycle. No-op unless CLAUDE_VAULT=1.",
   "hooks": {
     "SessionStart": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
-      ] }
-    ],
-    "UserPromptSubmit": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
-      ] }
-    ],
-    "UserPromptExpansion": [
-      { "matcher": "hc-ui", "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 45 }
-      ] }
-    ],
-    "PostToolBatch": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
-      ] }
-    ],
-    "Stop": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
-      ] }
-    ],
-    "TaskCreated": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
-      ] }
-    ],
-    "TaskCompleted": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
-      ] }
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] } ] }
     ],
     "PreCompact": [
       { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [], "timeout": 20 } ] }
     ],
     "PostCompact": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
-      ] }
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] } ] }
     ],
     "SessionEnd": [
-      { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [], "timeout": 15 },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
-      ] }
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [], "timeout": 15 } ] }
     ]
   }
 }

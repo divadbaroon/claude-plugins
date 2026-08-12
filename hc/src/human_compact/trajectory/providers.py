@@ -3,43 +3,14 @@ local and remote. `claude` sends conversation-derived digests to Anthropic's
 API via the user's own CLI; `ollama` stays entirely on-device."""
 import json
 import os
-import re
 import subprocess
 import urllib.request
 
 OLLAMA_URL = os.environ.get("HC_OLLAMA_URL", "http://localhost:11434")
-CLAUDE_TIMEOUT_SECONDS = 180
 
 
 class ProviderError(RuntimeError):
     pass
-
-
-def _last_json_object(raw):
-    """Return the last complete JSON object in a model response.
-
-    Models occasionally abandon a malformed draft, then emit a corrected
-    object. Taking the text from the first ``{`` through the last ``}`` joins
-    those two drafts and forces a second expensive model call.
-    """
-    try:
-        value = json.loads(raw)
-        if isinstance(value, dict):
-            return value
-    except json.JSONDecodeError:
-        pass
-    decoder = json.JSONDecoder()
-    candidates = []
-    for match in re.finditer(r"\{", raw):
-        try:
-            value, end = decoder.raw_decode(raw[match.start():])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            candidates.append((match.start() + end, -match.start(), value))
-    if not candidates:
-        raise json.JSONDecodeError("no complete JSON object", raw, 0)
-    return max(candidates, key=lambda candidate: candidate[:2])[2]
 
 
 class Base:
@@ -58,53 +29,27 @@ class Base:
             if txt.startswith("```"):
                 txt = "\n".join(l for l in txt.splitlines() if not l.startswith("```"))
             try:
-                return _last_json_object(txt)
-            except json.JSONDecodeError:
+                start = txt.index("{")
+                return json.loads(txt[start:txt.rindex("}") + 1])
+            except (ValueError, json.JSONDecodeError):
                 continue
         raise ProviderError(f"{self.identity()} did not return parseable JSON")
 
 
 class ClaudeCLI(Base):
     kind = "claude"
-    def _run(self, prompt, *, structured=False):
-        command = ["claude", "-p", "--safe-mode", "--model", self.model,
-                   "--no-session-persistence"]
-        if structured:
-            # These are extraction/classification calls, not coding-agent
-            # turns. Pinning effort prevents a user's interactive preference
-            # (for example xhigh) from exhausting the subprocess deadline.
-            command += ["--effort", "low", "--tools", ""]
+    def generate(self, prompt):
         try:
-            # Provider subprocesses are implementation details, not user chats.
-            # Mark them so the always-on chat hook cannot recursively launch
-            # another analyzer, and suppress the opt-in global Vault hook too.
-            child_env = os.environ.copy()
-            child_env["HC_CHAT_INFERENCE"] = "1"
-            child_env.pop("CLAUDE_VAULT", None)
             r = subprocess.run(
-                command, input=prompt, capture_output=True, text=True,
-                timeout=CLAUDE_TIMEOUT_SECONDS, env=child_env)
+                ["claude", "-p", "--safe-mode", "--model", self.model],
+                input=prompt, capture_output=True, text=True, timeout=180)
         except FileNotFoundError:
             raise ProviderError("claude CLI not found on PATH")
         except subprocess.TimeoutExpired:
-            raise ProviderError(
-                f"claude CLI timed out after {CLAUDE_TIMEOUT_SECONDS}s")
+            raise ProviderError("claude CLI timed out")
         if r.returncode != 0:
             raise ProviderError(f"claude CLI failed: {r.stderr.strip()[:200]}")
         return r.stdout
-
-    def generate(self, prompt):
-        return self._run(prompt)
-
-    def generate_json(self, prompt):
-        # Avoid a second full model call when a large rebuild response includes
-        # prose or a discarded draft before its corrected final object.
-        raw = self._run(prompt, structured=True)
-        try:
-            return _last_json_object(raw)
-        except json.JSONDecodeError as e:
-            raise ProviderError(
-                f"{self.identity()} did not return parseable JSON") from e
 
 
 class Ollama(Base):
@@ -144,8 +89,6 @@ class Mock(Base):
         import time
         d = os.environ.get("HC_MOCK_DIR", "")
         which = ("goal_nl" if "goal correction operations" in prompt else
-                 "goal_synth" if "Infer the current goal tree for ONE Claude Code chat" in prompt else
-                 "goal_classify" if "Update the current goal state for ONE Claude Code chat" in prompt else
                  "goal_classify" if "Classify this ONE newly analyzed" in prompt else
                  "goal_synth" if "construct the FULL GOAL TREE" in prompt else
                  "nl_ops" if "correction operations" in prompt else
