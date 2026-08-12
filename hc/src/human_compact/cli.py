@@ -5,15 +5,18 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from importlib import resources
 from pathlib import Path
 
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
+HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
 VAULT_BIN = HOME / ".claude-vault" / "bin"
 ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
 ALWAYS_LINE = "export CLAUDE_VAULT=1"
+_DETACHED_PROCESSES = []
 
 
 def say(msg):
@@ -56,6 +59,25 @@ def install_plugin():
     for s in (SKILLS_DIR / "scripts").glob("*.sh"):
         make_exec(s)
     say(f"plugin installed -> {SKILLS_DIR}")
+    shutil.copytree(asset_root() / "hc-ui-skill", HC_UI_SKILL_DIR,
+                    dirs_exist_ok=True)
+    say(f"/hc-ui installed -> {HC_UI_SKILL_DIR}")
+
+
+def install_main(argv=None):
+    """Install the chat-scoped UI without enabling the global Vault layer."""
+    ap = argparse.ArgumentParser(
+        prog="hc install",
+        description="Install /hc-ui for Claude Code (no global context layer).")
+    ap.parse_args(argv or [])
+    print("\nhuman-compact · chat goal UI\n")
+    if not (HOME / ".claude").exists():
+        say("WARNING: ~/.claude not found — install Claude Code first")
+    install_plugin()
+    print()
+    say("Done. Start a new Claude Code session (or run /reload-plugins),")
+    say("then type /hc-ui in any chat.")
+    print()
 
 
 def install_shim():
@@ -513,6 +535,289 @@ def ui_main(argv=None):
     ui.run(port=args.port, open_browser=not args.no_open)
 
 
+def _request_chat_refresh(session_id):
+    """Coalesce a background goal refresh; hooks must remain fail-open."""
+    from .trajectory import chat_synth
+    return chat_synth.spawn_refresh(session_id)
+
+
+def chat_hook_main(argv=None, stdin=None, stdout=None):
+    """Ingest one Claude Code hook payload and inject cached goal context."""
+    import json
+    ap = argparse.ArgumentParser(prog="hc chat-hook",
+        description="Internal Claude Code chat-state hook.")
+    ap.parse_args(argv or [])
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    if os.environ.get("HC_CHAT_INFERENCE") == "1":
+        return 0
+    payload = {}
+    event = ""
+    try:
+        payload = json.loads(stdin.read())
+        if not isinstance(payload, dict):
+            return 0
+        event = str(payload.get("hook_event_name") or "")
+        from .trajectory import chat_state as CS
+        result = CS.ingest_hook(payload)
+    except (OSError, ValueError, TypeError, TimeoutError) as exc:
+        if event == "UserPromptExpansion":
+            json.dump({
+                "decision": "block",
+                "reason": f"hc-ui could not initialize chat state: {exc}",
+            }, stdout)
+            stdout.write("\n")
+        return 0
+
+    if event == "UserPromptExpansion":
+        # Launch from the hook rather than a skill `!` shell expansion. This
+        # keeps /hc-ui functional under disableSkillShellExecution policies.
+        import contextlib
+        import io
+        launch_args = ["--session", result.session_id,
+                       "--cwd", str(payload.get("cwd") or os.getcwd())]
+        try:
+            launched = io.StringIO()
+            with contextlib.redirect_stdout(launched):
+                chat_ui_main(launch_args)
+            url = next(
+                (line.strip() for line in reversed(launched.getvalue().splitlines())
+                 if line.strip().startswith("http://127.0.0.1:")),
+                "",
+            )
+            if not url:
+                raise RuntimeError("launcher returned no localhost URL")
+            json.dump({"hookSpecificOutput": {
+                "hookEventName": "UserPromptExpansion",
+                "additionalContext": f"hc-ui opened for this chat at {url}",
+            }}, stdout)
+            stdout.write("\n")
+        except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
+            json.dump({
+                "decision": "block",
+                "reason": f"hc-ui could not open: {exc}",
+            }, stdout)
+            stdout.write("\n")
+        return 0
+    if event in ("Stop", "TaskCompleted", "PostCompact", "SessionEnd"):
+        try:
+            _request_chat_refresh(result.session_id)
+        except Exception:  # noqa: BLE001 - a hook may never block Claude
+            pass
+
+    if event in ("SessionStart", "UserPromptSubmit"):
+        context_path = CS.paths(result.session_id).goal_context
+        try:
+            context = context_path.read_text(encoding="utf-8")[:8000]
+        except OSError:
+            context = ""
+        if context.strip():
+            json.dump({
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": context,
+                }
+            }, stdout)
+            stdout.write("\n")
+    return 0
+
+
+def _server_registry(session_dir):
+    return Path(session_dir) / "server.json"
+
+
+def _read_server_registry(session_dir):
+    import json
+    try:
+        value = json.loads(_server_registry(session_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _write_server_registry(session_dir, value):
+    import json
+    target = _server_registry(session_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        temp.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        temp.chmod(0o600)
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _healthy_chat_server(record, session_id, timeout=0.5):
+    import json
+    import urllib.parse
+    import urllib.request
+    if not isinstance(record, dict) or not _pid_alive(record.get("pid")):
+        return False
+    url = record.get("url")
+    if not isinstance(url, str):
+        return False
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
+        return False
+    try:
+        endpoint = url.rstrip("/") + "/api/health"
+        with urllib.request.urlopen(endpoint, timeout=timeout) as response:
+            body = json.loads(response.read())
+    except (OSError, ValueError, TypeError):
+        return False
+    return (
+        isinstance(body, dict)
+        and
+        response.status == 200
+        and body.get("ok") is True
+        and body.get("scope") == "chat"
+        and body.get("session_id") == session_id
+    )
+
+
+def chat_serve_main(argv=None):
+    """Run one scoped server in the detached child process."""
+    ap = argparse.ArgumentParser(prog="hc chat-serve",
+        description="Internal session-scoped goal server.")
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--port", type=int, default=0)
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_state as CS, ui
+    p = CS.paths(args.session)
+
+    def ready(url, _server):
+        _write_server_registry(p.session_dir, {
+            "schema_version": 1,
+            "session_id": args.session,
+            "pid": os.getpid(),
+            "url": url,
+            "started_at": time.time(),
+        })
+
+    try:
+        ui.run(port=args.port, open_browser=False, trajdir=p.session_dir,
+               ready_callback=ready, label="Chat goals")
+    finally:
+        current = _read_server_registry(p.session_dir)
+        if current and current.get("pid") == os.getpid():
+            _server_registry(p.session_dir).unlink(missing_ok=True)
+    return 0
+
+
+def chat_refresh_main(argv=None):
+    """Run one coalescing goal refresh in a detached child."""
+    ap = argparse.ArgumentParser(prog="hc chat-refresh",
+        description="Internal session-scoped goal analyzer.")
+    ap.add_argument("--session", required=True)
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_synth
+    try:
+        result = chat_synth.refresh(args.session)
+        if result.get("status") == "error":
+            print(result.get("error") or "chat goal analysis failed",
+                  file=sys.stderr)
+            return 1
+        return 0
+    finally:
+        chat_synth.clear_worker_record(args.session)
+
+
+def chat_ui_main(argv=None):
+    """Open or reuse the detached UI belonging to one Claude chat."""
+    import webbrowser
+    ap = argparse.ArgumentParser(prog="hc chat-ui",
+        description="Open a session-scoped goal workspace.")
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--cwd")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_state as CS
+    session_cwd = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
+    try:
+        p = CS.paths(args.session)
+        CS.ingest_hook({
+            "session_id": args.session,
+            "hook_event_name": "SessionStart",
+            # Do not overwrite the stable project root already captured by
+            # SessionStart merely because the user invoked /hc-ui after `cd`.
+            "cwd": CS.load_manifest(args.session).get("cwd") or session_cwd,
+        })
+    except (OSError, ValueError, TypeError, TimeoutError) as exc:
+        raise SystemExit(f"could not initialize chat state: {exc}") from exc
+
+    with CS.session_lock(args.session, wait_s=8):
+        record = _read_server_registry(p.session_dir)
+        if not _healthy_chat_server(record, args.session):
+            log_path = p.session_dir / "server.log"
+            log_path.touch(mode=0o600, exist_ok=True)
+            log_path.chmod(0o600)
+            command = [sys.executable, "-m", "human_compact.cli", "chat-serve",
+                       "--session", args.session, "--port", str(args.port)]
+            child_env = os.environ.copy()
+            child_env.pop("HC_CHAT_INFERENCE", None)
+            with log_path.open("ab", buffering=0) as log:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    start_new_session=True,
+                    env=child_env,
+                )
+            # Keep the Popen object alive while this short-lived parent polls
+            # readiness. Tests can reap it explicitly; the real CLI exits and
+            # the new session becomes an orphan adopted by the OS.
+            _DETACHED_PROCESSES.append(process)
+            deadline = time.monotonic() + 8
+            record = None
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                candidate = _read_server_registry(p.session_dir)
+                if _healthy_chat_server(candidate, args.session):
+                    record = candidate
+                    break
+                time.sleep(0.05)
+            if record is None:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+                detail = ""
+                try:
+                    detail = log_path.read_text(errors="replace")[-600:].strip()
+                except OSError:
+                    pass
+                raise SystemExit("chat UI server did not start" +
+                                 (f": {detail}" if detail else ""))
+
+    try:
+        _request_chat_refresh(args.session)
+    except Exception:  # noqa: BLE001 - the UI remains useful without inference
+        pass
+    url = record["url"]
+    if not args.no_open:
+        webbrowser.open(url)
+    print(url)
+    return 0
+
+
 def hc_main():
     import sys
     args = sys.argv[1:]
@@ -520,10 +825,12 @@ def hc_main():
         print("usage: hc <command>\n\n"
               "  goals       your goal tree + important items (primary)\n"
               "  ui          goal tree in the browser (localhost)\n"
+              "  chat-ui     goal tree for one Claude chat\n"
               "  mark        mark something important — never lose it\n"
               "  lens        the derived compaction lens\n"
               "  status      vault + analysis pipeline status\n"
               "  refresh     process pending conversations, regenerate lens\n"
+              "  install     install /hc-ui without enabling global Vault\n"
               "  backup      onboard Vault / import history\n"
               "  trajectory  full analyze + lens (alias)\n")
         return
@@ -531,6 +838,8 @@ def hc_main():
     if cmd == "backup":
         sys.argv = ["hc-backup"] + rest
         backup_main()
+    elif cmd == "install":
+        install_main(rest)
     elif cmd == "trajectory":
         trajectory_main(rest)
     elif cmd == "lens":
@@ -539,6 +848,14 @@ def hc_main():
         goals_main(rest)
     elif cmd == "ui":
         ui_main(rest)
+    elif cmd == "chat-ui":
+        chat_ui_main(rest)
+    elif cmd == "chat-serve":
+        chat_serve_main(rest)
+    elif cmd == "chat-hook":
+        chat_hook_main(rest)
+    elif cmd == "chat-refresh":
+        raise SystemExit(chat_refresh_main(rest))
     elif cmd == "mark":
         mark_main(rest)
     elif cmd == "status":
