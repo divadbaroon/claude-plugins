@@ -2,26 +2,19 @@
 
 Local goal state and conversation persistence for Claude Code.
 
-## Install `/hc-ui` only
+## Install
 
-This path installs the chat-scoped goal UI without enabling the global Vault
-history or context lens:
-
-```bash
-brew install pipx jq
-pipx ensurepath
-pipx install "git+https://github.com/divadbaroon/claude-plugins.git@main#subdirectory=hc"
-```
-
-If `pipx ensurepath` changed your shell configuration, open a new terminal
-before continuing. Then install the Claude Code integration:
+Run the single installer from a terminal where Claude Code is installed:
 
 ```bash
-hc install
+npx human-compact
 ```
 
-If an older standalone `uv` makes `pipx install` report a backend-version
-conflict, rerun that install command with `--backend pip`.
+It installs a managed `hc` runtime plus the Claude Code hooks and `/hc-ui`
+skill. It then asks whether to enable the global Vault (`1` yes, `2` no). If
+you choose yes, it separately asks whether to infer global goals now. The
+second opt-in sends bounded conversation-derived digests through your own
+authenticated Claude Code CLI.
 
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 
@@ -35,21 +28,12 @@ same chat restores its goals and prompt links. The server binds to
 `127.0.0.1`, rejects cross-origin writes, and exits after an idle period. Chat
 state files are owner-only (`0700` directory, `0600` artifacts).
 
-## Add the global context layer
+## Global context layer
 
-The global layer is separate and opt-in. It imports recent conversations,
-derives a cross-chat context lens, and supports the original global goal UI:
-
-```bash
-hc backup
-hc refresh
-hc goals --rebuild
-hc ui
-```
-
-`hc backup` installs the same `/hc-ui` integration as `hc install`, then asks
-whether to import history and whether future global capture should be always
-on or limited to `claude --vault` sessions.
+The global layer is separate and opt-in. Choosing `1` for global Vault imports
+existing Claude Code transcripts and enables future capture. Choosing `1` for
+global goals then analyzes that history before rebuilding the cross-chat goal
+tree; rebuilding alone would have no extraction cache on a fresh install.
 
 ## Chat goal model
 
@@ -95,6 +79,6 @@ python3 -m py_compile src/human_compact/*.py src/human_compact/trajectory/*.py
 uv build
 ```
 
-The runtime uses Python's standard library. `jq` is required only by the
-optional global Vault shell hooks; the chat-scoped Python hooks do not parse
-state with `jq`.
+The runtime uses Python's standard library. The npm package carries the exact
+Python wheel it installs; it does not fetch executable code from a mutable Git
+branch.

@@ -4,38 +4,26 @@ This repository is a Claude Code and Codex plugin marketplace. Its published pac
 [Compact Focus](./compact-focus): an inline, human-reviewed replacement for
 blind context compaction.
 
-It also contains [`hc`](./hc), the pipx-installed local goal-state service for
-Claude Code. `hc` is distributed from this repository rather than the plugin
-marketplace because its localhost server and CLI need a Python executable.
+It also contains [`hc`](./hc), the local goal-state service for Claude Code.
+The `human-compact` npm package installs its Python runtime and Claude Code
+integration together, so setup does not require Homebrew, pipx, or jq.
 
 ## Install chat-scoped goals
 
 ```bash
-brew install pipx jq
-pipx ensurepath
-pipx install "git+https://github.com/divadbaroon/claude-plugins.git@main#subdirectory=hc"
+npx human-compact
 ```
 
-If `pipx ensurepath` changed your shell configuration, open a new terminal
-before continuing. Then install the Claude Code integration:
+The installer adds the Claude Code integration automatically, then asks two
+numeric questions:
 
-```bash
-hc install
-```
+1. Enable the global Vault? Choose `2` to keep only chat-scoped goals.
+2. If Vault is enabled, infer global goals now? Choose `1` to analyze the
+   imported history and rebuild the global goal tree.
 
-If an older standalone `uv` makes `pipx install` report a backend-version
-conflict, rerun that install command with `--backend pip`.
-
-Start a new Claude Code session and run `/hc-ui`. This quick path is scoped to
-the current chat and does not enable the global context layer. To add that
-layer later:
-
-```bash
-hc backup
-hc refresh
-hc goals --rebuild
-hc ui
-```
+Start a new Claude Code session (or run `/reload-plugins`) and type `/hc-ui`.
+That command opens the goal workspace for the current chat. The global Vault
+and its cross-chat inference remain separate, opt-in layers.
 
 See the [hc documentation](./hc/README.md) for persistence, event ingestion,
 the inference data boundary, and the separation between chat-scoped and global
@@ -89,14 +77,15 @@ development workflow.
 ## Repository scope
 
 - `compact-focus/` is the supported marketplace plugin.
-- `hc/` is the pipx package and Claude Code hook/skill installer for goal state.
-- `human-compact/` is retained as historical prototype code and is not listed
-  in the marketplace or represented as a security sandbox.
+- `hc/` is the Python goal-state backend bundled by the npm installer.
+- `human-compact/` is the one-command npm installer published as
+  `human-compact`.
 
 ## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
+(cd human-compact && npm test)
 claude plugin validate . --strict
 uv run --with pyyaml python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ./compact-focus
 claude --plugin-dir ./compact-focus
