@@ -43,7 +43,7 @@ class HcSetupTests(unittest.TestCase):
         }) + "\n")
         return source
 
-    def test_setup_without_global_is_noninteractive_and_disables_prior_opt_in(self):
+    def test_setup_without_global_overrides_legacy_environment_opt_in(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
             cli, gv = self._modules(home)
@@ -54,7 +54,16 @@ class HcSetupTests(unittest.TestCase):
                 cli.setup_main(["--global-vault", "no", "--goals", "no"])
             install.assert_called_once_with([])
             backfill.assert_not_called()
+            self.assertEqual("disabled", gv.enable_file().read_text().strip())
+            with mock.patch.dict(os.environ, {"CLAUDE_VAULT": "1"}):
+                self.assertFalse(gv.is_enabled())
+
+    def test_legacy_environment_remains_fallback_before_explicit_setup(self):
+        with tempfile.TemporaryDirectory() as td:
+            _, gv = self._modules(Path(td))
             self.assertFalse(gv.enable_file().exists())
+            with mock.patch.dict(os.environ, {"CLAUDE_VAULT": "1"}):
+                self.assertTrue(gv.is_enabled())
 
     def test_setup_rejects_goals_without_global_vault(self):
         with tempfile.TemporaryDirectory() as td:
@@ -89,6 +98,8 @@ class HcSetupTests(unittest.TestCase):
             ])
             goals.assert_called_once_with(["--rebuild", "--no-interact"])
             self.assertEqual("enabled", gv.enable_file().read_text().strip())
+            with mock.patch.dict(os.environ, {"CLAUDE_VAULT": "0"}):
+                self.assertTrue(gv.is_enabled())
 
     def test_missing_claude_fails_after_base_integration_is_installed(self):
         with tempfile.TemporaryDirectory() as td:

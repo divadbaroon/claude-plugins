@@ -37,29 +37,41 @@ def enable_file() -> Path:
     return home_dir() / ".human-compact" / "config" / "global-vault"
 
 
-def enable_always_on() -> Path:
-    """Persist always-on capture without modifying a shell profile."""
+def _persist_enable_state(state: str) -> Path:
     target = enable_file()
     _secure_dir(target.parent, home_dir() / ".human-compact")
     tmp = target.with_suffix(".tmp")
-    tmp.write_text("enabled\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, target)
+    try:
+        tmp.write_text(state + "\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
     return target
 
 
-def disable_always_on() -> None:
-    """Disable only setup's persisted mode; legacy environment opt-in remains."""
-    enable_file().unlink(missing_ok=True)
+def enable_always_on() -> Path:
+    """Persist always-on capture without modifying a shell profile."""
+    return _persist_enable_state("enabled")
+
+
+def disable_always_on() -> Path:
+    """Persist an explicit opt-out that overrides legacy environment state."""
+    return _persist_enable_state("disabled")
 
 
 def is_enabled() -> bool:
-    if os.environ.get("CLAUDE_VAULT") == "1":  # legacy/selective mode
-        return True
     try:
-        return enable_file().read_text().strip() == "enabled"
+        state = enable_file().read_text().strip()
+    except FileNotFoundError:
+        # Before setup recorded an explicit choice, preserve the historical
+        # per-process opt-in used by ``claude --vault`` and old shell profiles.
+        return os.environ.get("CLAUDE_VAULT") == "1"
     except OSError:
+        # A present-but-unreadable choice must fail closed instead of silently
+        # re-enabling capture through a legacy environment export.
         return False
+    return state == "enabled"
 
 
 def _utc_now() -> str:
