@@ -1,0 +1,17 @@
+{
+  "description": "Vault: snapshot conversation history around compaction and session lifecycle. No-op unless CLAUDE_VAULT=1.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] } ] }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [], "timeout": 20 } ] }
+    ],
+    "PostCompact": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [], "timeout": 15 } ] }
+    ]
+  }
+}

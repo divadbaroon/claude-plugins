@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "human-compact"
+version = "0.13.3"
+description = "Papert Lab tools for Claude Code conversation persistence. hc-backup onboards Vault: local-first conversation history that survives compaction."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "David Baroon" }]
+license = { text = "MIT" }
+
+[project.scripts]
+hc-backup = "human_compact.cli:main"
+hc = "human_compact.cli:hc_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+human_compact = ["assets/**/*", "assets/plugin/.claude-plugin/*", "trajectory/web/*", "trajectory/web/static/*"]
