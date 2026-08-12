@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,15 +86,59 @@ class ChatStateTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX permission semantics")
     def test_session_state_is_owner_only(self):
+        parent = Path(self.temp.name)
+        parent.chmod(0o755)
         self.transcript.write_text(
             json.dumps(user_record("private conversation")) + "\n",
             encoding="utf-8",
         )
         CS.ingest_transcript(SID, self.transcript, root=self.base)
         p = CS.paths(SID, self.base)
+        self.assertEqual(0o755, parent.stat().st_mode & 0o777)
+        self.assertEqual(0o700, p.base.stat().st_mode & 0o777)
         self.assertEqual(0o700, p.session_dir.stat().st_mode & 0o777)
         for artifact in (p.manifest, p.events, p.prompts):
             self.assertEqual(0o600, artifact.stat().st_mode & 0o777, artifact)
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission semantics")
+    def test_fresh_default_chat_hook_secures_the_full_state_path(self):
+        vault = Path(self.temp.name) / ".claude-vault"
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "SessionStart",
+            "cwd": "/repo",
+        }
+        with mock.patch.dict(os.environ, {
+            "CLAUDE_VAULT_DIR": str(vault),
+            "HC_CHAT_STATE_DIR": "",
+        }):
+            CS.ingest_hook(payload)
+            p = CS.paths(SID)
+
+        for directory in (vault, vault / "chat-sessions", p.session_dir):
+            self.assertEqual(0o700, directory.stat().st_mode & 0o777, directory)
+        for artifact in (p.manifest, p.events, p.prompts):
+            self.assertEqual(0o600, artifact.stat().st_mode & 0o777, artifact)
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink semantics")
+    def test_default_chat_hook_refuses_symlinked_vault_without_writing_target(self):
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir(mode=0o755)
+        vault = Path(self.temp.name) / ".claude-vault"
+        vault.symlink_to(outside, target_is_directory=True)
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "SessionStart",
+            "cwd": "/repo",
+        }
+        with mock.patch.dict(os.environ, {
+            "CLAUDE_VAULT_DIR": str(vault),
+            "HC_CHAT_STATE_DIR": "",
+        }), self.assertRaisesRegex(RuntimeError, "private state"):
+            CS.ingest_hook(payload)
+
+        self.assertEqual([], list(outside.iterdir()))
+        self.assertEqual(0o755, outside.stat().st_mode & 0o777)
 
     def test_partial_line_waits_for_completion_and_reopen_persists(self):
         first = user_record("First prompt")

@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
+from .secure_io import secure_dir
+
 
 SCHEMA_VERSION = 1
 _TAIL_BYTES = 4096
@@ -62,14 +64,27 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _state_base(root: Optional[Path] = None) -> Path:
+def _absolute(path: Path) -> Path:
+    """Normalize a state path without resolving through symlinks."""
+    return Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+
+
+def _state_location(root: Optional[Path] = None) -> Tuple[Path, Path]:
+    """Return ``(session base, private boundary)`` for chat state."""
     if root is not None:
-        return Path(root).expanduser().resolve()
+        base = _absolute(root)
+        return base, base
     configured = os.environ.get("HC_CHAT_STATE_DIR")
     if configured:
-        return Path(configured).expanduser().resolve()
-    vault = Path(os.environ.get("CLAUDE_VAULT_DIR", Path.home() / ".claude-vault"))
-    return (vault / "chat-sessions").expanduser().resolve()
+        base = _absolute(Path(configured))
+        return base, base
+    vault = _absolute(Path(os.environ.get(
+        "CLAUDE_VAULT_DIR", Path.home() / ".claude-vault")))
+    return vault / "chat-sessions", vault
+
+
+def _state_base(root: Optional[Path] = None) -> Path:
+    return _state_location(root)[0]
 
 
 def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
@@ -113,8 +128,8 @@ def session_lock(
 ) -> Iterator[ChatPaths]:
     """Acquire a process-safe, same-thread-reentrant lock for a chat session."""
     p = paths(session_id, root)
-    p.session_dir.mkdir(parents=True, exist_ok=True)
-    p.session_dir.chmod(0o700)
+    _, boundary = _state_location(root)
+    secure_dir(p.session_dir, boundary)
     local = _local_lock(p.lock_dir)
     local.acquire()
     depths = getattr(_LOCK_DEPTH, "values", None)
