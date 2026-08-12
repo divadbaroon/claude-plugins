@@ -20,6 +20,9 @@ before continuing. Then install the Claude Code integration:
 hc install
 ```
 
+If an older standalone `uv` makes `pipx install` report a backend-version
+conflict, rerun that install command with `--backend pip`.
+
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 
 ```text

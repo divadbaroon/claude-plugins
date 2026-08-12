@@ -51,6 +51,9 @@ before continuing. Install only the chat-scoped `/hc-ui` command with:
 
     hc install
 
+If an older standalone `uv` makes `pipx install` report a backend-version
+conflict, rerun that install command with `--backend pip`.
+
 Start a new Claude Code session (or run `/reload-plugins`) and use `/hc-ui`.
 This path does not install the shim or enable global Vault capture.
 

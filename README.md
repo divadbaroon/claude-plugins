@@ -23,6 +23,9 @@ before continuing. Then install the Claude Code integration:
 hc install
 ```
 
+If an older standalone `uv` makes `pipx install` report a backend-version
+conflict, rerun that install command with `--backend pip`.
+
 Start a new Claude Code session and run `/hc-ui`. This quick path is scoped to
 the current chat and does not enable the global context layer. To add that
 layer later:
