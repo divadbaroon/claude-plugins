@@ -23,6 +23,11 @@ MAX_CONTEXT_CHARS = 12_000
 MAX_EVENT_TEXT = 2_000
 MAX_REFRESH_PASSES = 3
 _CONTEXT_NAMES = ("AGENTS.md", "CLAUDE.md", "README.md")
+_TEXT_SUFFIXES = {
+    ".md", ".txt", ".rst", ".py", ".js", ".jsx", ".ts", ".tsx",
+    ".json", ".toml", ".yaml", ".yml", ".html", ".css", ".sh",
+    ".rs", ".go", ".java", ".c", ".h", ".cpp", ".sql",
+}
 _DETACHED_PROCESSES = []
 
 
@@ -95,6 +100,59 @@ def _query_terms(events: Iterable[Dict[str, Any]]) -> set:
     }
 
 
+def _nested_strings(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _nested_strings(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _nested_strings(nested)
+
+
+def _referenced_files(cwd: Path, events: Iterable[Dict[str, Any]]) -> List[Path]:
+    """Resolve explicitly mentioned text files, confined to the project root."""
+    candidates: List[str] = []
+    suffixes = "|".join(re.escape(suffix.lstrip(".")) for suffix in _TEXT_SUFFIXES)
+    pattern = re.compile(
+        rf"(?:^|[\s\"'`(])([A-Za-z0-9_./@+ -]+\.(?:{suffixes}))(?=$|[\s\"'`),:])",
+        re.IGNORECASE,
+    )
+    for event in events:
+        text = str(event.get("text") or "")
+        try:
+            decoded = json.loads(text)
+        except (TypeError, ValueError):
+            decoded = None
+        if decoded is not None:
+            candidates.extend(_nested_strings(decoded))
+        candidates.extend(match.group(1).strip() for match in pattern.finditer(text))
+
+    out, seen = [], set()
+    for raw in candidates:
+        value = raw.strip().removeprefix("file://")
+        if not value or Path(value).suffix.lower() not in _TEXT_SUFFIXES:
+            continue
+        unresolved = Path(value).expanduser()
+        if not unresolved.is_absolute():
+            unresolved = cwd / unresolved
+        if unresolved.is_symlink():
+            continue
+        try:
+            resolved = unresolved.resolve()
+            resolved.relative_to(cwd)
+        except (OSError, ValueError):
+            continue
+        if not resolved.is_file() or resolved in seen:
+            continue
+        seen.add(resolved)
+        out.append(resolved)
+        if len(out) >= 4:
+            break
+    return out
+
+
 def project_context(cwd_value: Optional[str], events: Iterable[Dict[str, Any]]) -> str:
     """Read bounded project instructions plus relevant durable memory notes."""
     cwd = Path(cwd_value or os.getcwd()).expanduser().resolve()
@@ -110,6 +168,14 @@ def project_context(cwd_value: Optional[str], events: Iterable[Dict[str, Any]]) 
         if remaining <= 0:
             break
         if (base / ".git").exists():
+            break
+
+    for path in _referenced_files(cwd, events):
+        text = _read_bounded(path, min(2_500, remaining))
+        if text:
+            chunks.append(f"## Referenced file: {path}\n{text}")
+            remaining -= len(text)
+        if remaining <= 0:
             break
 
     memory_dir = (
@@ -303,7 +369,7 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
             passes += 1
             revision = CS.goal_revision(session_id, root)
             context = project_context(CS.load_manifest(session_id, root).get("cwd"), events)
-            valid_ids = {e["id"] for e in events}
+            valid_ids = {row["id"] for row in digest}
             if not goals.get("goals"):
                 prompt = (INITIAL_PROMPT.replace("<<CONTEXT>>", context)
                           .replace("<<EVENTS>>", json.dumps(digest, ensure_ascii=False)))
@@ -327,7 +393,9 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 # A browser edit won the race. Recompute against the new state;
                 # do not advance the evidence cursor.
                 continue
-            through = max(int(e.get("ordinal") or 0) for e in events)
+            # Advance only through evidence actually included in this bounded
+            # prompt. Later events remain pending for the next pass/worker.
+            through = max(int(row.get("ordinal") or 0) for row in digest)
             changes.extend(step_changes)
             CS.set_analyzer_state(session_id, last_analyzed_ordinal=through,
                                   error=None, root=root)

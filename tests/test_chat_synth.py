@@ -169,6 +169,38 @@ class ChatSynthesisTests(unittest.TestCase):
         context = S.project_context(str(self.cwd), [])
         self.assertNotIn("DO-NOT-EXFILTRATE", context)
 
+    def test_project_context_reads_only_in_repo_referenced_files(self):
+        source = self.cwd / "src" / "feature.py"
+        source.parent.mkdir()
+        source.write_text("FEATURE-FILE-SENTINEL = True")
+        outside = Path(self.temp.name) / "secret.py"
+        outside.write_text("OUTSIDE-SECRET")
+        (self.cwd / "linked.py").symlink_to(outside)
+        events = [{"text": json.dumps({
+            "path": "src/feature.py", "other": "linked.py"
+        })}]
+        context = S.project_context(str(self.cwd), events)
+        self.assertIn("FEATURE-FILE-SENTINEL", context)
+        self.assertNotIn("OUTSIDE-SECRET", context)
+
+    def test_bounded_batches_do_not_advance_past_unsent_events(self):
+        for index in range(6):
+            self.hook("UserPromptSubmit", prompt=f"prompt-{index}-" + "x" * 80)
+        provider = Provider([
+            {"goals": [{"id": "g1", "title": "Batched goal",
+                        "status": "active", "parent_goal_id": None,
+                        "evidence_ids": [], "todos": []}]},
+            {"operations": []},
+            {"operations": []},
+        ])
+        with mock.patch.object(S, "MAX_EVENT_CHARS", 300):
+            result = S.refresh(SID, root=self.root, provider=provider)
+        state = CS.get_analyzer_state(SID, self.root)
+        self.assertLess(state["last_analyzed_ordinal"],
+                        CS.load_manifest(SID, self.root)["last_ordinal"])
+        self.assertEqual("pending", state["status"])
+        self.assertEqual("updated", result["status"])
+
     def test_detached_worker_executes_real_cli_route(self):
         self.hook("UserPromptSubmit", prompt="Infer this goal")
         mock_dir = Path(self.temp.name) / "mock"
