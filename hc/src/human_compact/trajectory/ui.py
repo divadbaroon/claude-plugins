@@ -2,8 +2,9 @@
 through the goals model (goal_context.md stays in sync for SessionStart
 injection). Stdlib only; localhost only; Ctrl-C to stop."""
 import json
-import socket
+import os
 import threading
+import time
 import webbrowser
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,6 +12,10 @@ from importlib import resources
 from pathlib import Path
 
 from . import chat_state as CS, goals as GM, state
+
+
+DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
+MAX_JSON_BYTES = 2 * 1024 * 1024
 
 
 def _scope(trajdir=None):
@@ -161,6 +166,42 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):                  # quiet
         pass
 
+    def _request_origin(self):
+        return f"http://{self.server.expected_host}"
+
+    def _begin_request(self):
+        """Validate the browser boundary, then mark this request active.
+
+        Host validation blocks DNS rebinding.  Origin validation and the JSON
+        media-type check in ``do_POST`` block cross-site, CORS-simple writes.
+        Missing Origin remains valid for the launcher health check and other
+        local non-browser clients.
+        """
+        hosts = self.headers.get_all("Host", [])
+        if hosts != [self.server.expected_host]:
+            self._send(403, {"ok": False, "error": "invalid host"})
+            return False
+        origins = self.headers.get_all("Origin", [])
+        if origins and origins != [self._request_origin()]:
+            self._send(403, {"ok": False, "error": "cross-origin request denied"})
+            return False
+        with self.server.activity_lock:
+            if self.server.idle_expired:
+                closing = True
+            else:
+                closing = False
+                self.server.active_requests += 1
+                self.server.last_activity = time.monotonic()
+        if closing:
+            self._send(503, {"ok": False, "error": "server is shutting down"})
+            return False
+        return True
+
+    def _finish_request(self):
+        with self.server.activity_lock:
+            self.server.active_requests -= 1
+            self.server.last_activity = time.monotonic()
+
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
@@ -170,60 +211,128 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
-            html = resources.files("human_compact.trajectory").joinpath(
-                "web/goals_bundle.html").read_text(encoding="utf-8")
-            html = html.replace("<body>",
-                                "<body>\n<script src=\"/bridge.js\"></script>", 1)
-            self._send(200, html.encode(), "text/html; charset=utf-8")
-        elif self.path == "/bridge.js":
-            js = resources.files("human_compact.trajectory").joinpath(
-                "web/bridge.js").read_bytes()
-            self._send(200, js, "application/javascript")
-        elif self.path == "/api/state":
-            self._send(200, _payload(
-                self.server.trajdir, self.server.chat_scoped))
-        elif self.path == "/api/health":
-            self._send(200, {
-                "ok": True,
-                "scope": "chat" if self.server.chat_scoped else "global",
-                "session_id": (self.server.trajdir.name
-                               if self.server.chat_scoped else None),
-            })
-        else:
-            self._send(404, {"error": "not found"})
+        if not self._begin_request():
+            return
+        try:
+            if self.path in ("/", "/index.html"):
+                html = resources.files("human_compact.trajectory").joinpath(
+                    "web/goals_bundle.html").read_text(encoding="utf-8")
+                html = html.replace("<body>",
+                                    "<body>\n<script src=\"/bridge.js\"></script>", 1)
+                self._send(200, html.encode(), "text/html; charset=utf-8")
+            elif self.path == "/bridge.js":
+                js = resources.files("human_compact.trajectory").joinpath(
+                    "web/bridge.js").read_bytes()
+                self._send(200, js, "application/javascript")
+            elif self.path == "/api/state":
+                self._send(200, _payload(
+                    self.server.trajdir, self.server.chat_scoped))
+            elif self.path == "/api/health":
+                self._send(200, {
+                    "ok": True,
+                    "scope": "chat" if self.server.chat_scoped else "global",
+                    "session_id": (self.server.trajdir.name
+                                   if self.server.chat_scoped else None),
+                })
+            else:
+                self._send(404, {"error": "not found"})
+        finally:
+            self._finish_request()
 
     def do_POST(self):
+        if not self._begin_request():
+            return
         try:
-            n = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(n))
-        except (ValueError, TypeError):
-            self._send(400, {"ok": False, "error": "bad json"}); return
-        if self.path == "/api/op":
-            with self.server.state_lock:
-                result = _apply(
-                    body, self.server.trajdir, self.server.chat_scoped)
-            self._send(200, result)
-        elif self.path == "/api/import":
-            with self.server.state_lock:
-                result = _import(
-                    body, self.server.trajdir, self.server.chat_scoped)
-            self._send(200, result)
-        else:
-            self._send(404, {"error": "not found"})
+            content_types = self.headers.get_all("Content-Type", [])
+            if (len(content_types) != 1 or
+                    content_types[0].split(";", 1)[0].strip().lower()
+                    != "application/json"):
+                self._send(415, {"ok": False, "error": "application/json required"})
+                return
+            lengths = self.headers.get_all("Content-Length", [])
+            try:
+                n = int(lengths[0]) if len(lengths) == 1 else -1
+            except (ValueError, TypeError):
+                n = -1
+            if n < 0:
+                self._send(400, {"ok": False, "error": "invalid content length"})
+                return
+            if n > MAX_JSON_BYTES:
+                self._send(413, {"ok": False, "error": "request body too large"})
+                return
+            try:
+                body = json.loads(self.rfile.read(n))
+            except (ValueError, TypeError):
+                self._send(400, {"ok": False, "error": "bad json"})
+                return
+            if self.path == "/api/op":
+                if not isinstance(body, dict):
+                    self._send(400, {"ok": False, "error": "expected an operation"})
+                    return
+                with self.server.state_lock:
+                    result = _apply(
+                        body, self.server.trajdir, self.server.chat_scoped)
+                self._send(200, result)
+            elif self.path == "/api/import":
+                with self.server.state_lock:
+                    result = _import(
+                        body, self.server.trajdir, self.server.chat_scoped)
+                self._send(200, result)
+            else:
+                self._send(404, {"error": "not found"})
+        finally:
+            self._finish_request()
+
+
+def _configure_server(server, trajdir, chat_scoped):
+    server.trajdir = trajdir
+    server.chat_scoped = chat_scoped
+    server.state_lock = threading.RLock()
+    server.expected_host = f"127.0.0.1:{server.server_address[1]}"
+    server.activity_lock = threading.Lock()
+    server.last_activity = time.monotonic()
+    server.active_requests = 0
+    server.idle_expired = False
+
+
+def _resolved_idle_timeout(value, chat_scoped):
+    if value is None and not chat_scoped:
+        return None
+    if value is None:
+        value = os.environ.get("HC_CHAT_UI_IDLE_SECONDS", DEFAULT_CHAT_IDLE_SECONDS)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = float(DEFAULT_CHAT_IDLE_SECONDS)
+    return seconds if seconds > 0 else None
+
+
+def _watch_idle(server, timeout, stop):
+    interval = min(60.0, max(0.05, timeout / 4))
+    while not stop.wait(interval):
+        with server.activity_lock:
+            expired = (
+                not server.active_requests
+                and time.monotonic() - server.last_activity >= timeout
+            )
+            if expired:
+                # Prevent a new request from starting between this decision and
+                # shutdown. Existing requests are never interrupted.
+                server.idle_expired = True
+        if expired:
+            server.shutdown()
+            return
 
 
 def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
-        label="Vault goals"):
+        label="Vault goals", idle_timeout=None):
     chat_scoped = trajdir is not None
     trajdir = _scope(trajdir)
     trajdir.mkdir(parents=True, exist_ok=True)
     for p in range(port, port + 20):
         try:
             srv = ThreadingHTTPServer(("127.0.0.1", p), H)
-            srv.trajdir = trajdir
-            srv.chat_scoped = chat_scoped
-            srv.state_lock = threading.RLock()
+            _configure_server(srv, trajdir, chat_scoped)
             break
         except OSError:
             continue
@@ -232,16 +341,29 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"\n  {label} · {url}")
     print("  Ctrl-C to stop\n")
+    idle_stop = threading.Event()
+    idle_thread = None
     try:
         if ready_callback is not None:
             ready_callback(url, srv)
         if open_browser:
             threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+        timeout = _resolved_idle_timeout(idle_timeout, chat_scoped)
+        if timeout is not None:
+            idle_thread = threading.Thread(
+                target=_watch_idle,
+                args=(srv, timeout, idle_stop),
+                daemon=True,
+            )
+            idle_thread.start()
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n  stopped")
     finally:
+        idle_stop.set()
         srv.server_close()
+        if idle_thread is not None and idle_thread is not threading.current_thread():
+            idle_thread.join(timeout=1)
 
 
 def _import(nested, trajdir=None, chat_scoped=None):

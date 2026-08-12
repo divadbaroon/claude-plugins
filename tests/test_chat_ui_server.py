@@ -10,6 +10,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,9 +46,7 @@ def write_scope(path, goals, prompts):
 @contextmanager
 def server_for(path, chat_scoped=True):
     server = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.H)
-    server.trajdir = Path(path)
-    server.chat_scoped = chat_scoped
-    server.state_lock = threading.RLock()
+    ui._configure_server(server, Path(path), chat_scoped)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -63,11 +62,13 @@ def get_json(url):
         return json.loads(response.read())
 
 
-def post_json(url, body):
+def post_json(url, body, headers=None):
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
     request = urllib.request.Request(
         url,
         data=json.dumps(body).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=request_headers,
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=2) as response:
@@ -138,6 +139,62 @@ class ChatUiServerTests(unittest.TestCase):
             )
             self.assertEqual(["p-new"], get_json(url_a + "/api/state")["goals"][0]["prompt_ids"])
             self.assertEqual([], get_json(url_b + "/api/state")["goals"][0]["prompt_ids"])
+
+    def test_http_boundary_rejects_cross_site_writes_and_dns_rebinding(self):
+        with server_for(self.a) as url:
+            attacks = [
+                urllib.request.Request(
+                    url + "/api/import",
+                    data=b"[]",
+                    headers={"Content-Type": "text/plain"},
+                    method="POST",
+                ),
+                urllib.request.Request(
+                    url + "/api/import",
+                    data=b"[]",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Origin": "https://attacker.example",
+                    },
+                    method="POST",
+                ),
+                urllib.request.Request(
+                    url + "/api/import",
+                    data=b"[]",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Host": "attacker.example",
+                    },
+                    method="POST",
+                ),
+            ]
+            for request, status in zip(attacks, (415, 403, 403)):
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    urllib.request.urlopen(request, timeout=2)
+                self.assertEqual(status, raised.exception.code)
+
+            # Rejected imports did not abandon the goal tree.
+            state = get_json(url + "/api/state")
+            self.assertTrue(all(g["status"] == "active" for g in state["goals"]))
+
+            # A browser request from the server's exact origin still works.
+            self.assertEqual(
+                {"ok": True},
+                post_json(
+                    url + "/api/op",
+                    {"op": "attach_prompt", "goal_id": "a1", "prompt_id": "p-new"},
+                    {"Origin": url},
+                ),
+            )
+
+    def test_invalid_host_is_rejected_for_reads_too(self):
+        with server_for(self.a) as url:
+            request = urllib.request.Request(
+                url + "/api/state", headers={"Host": "attacker.example"}
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(403, raised.exception.code)
 
     def test_prompt_links_are_many_to_many_deduped_and_human_only(self):
         for operation in (
@@ -320,6 +377,76 @@ class ChatUiServerTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         self.assertTrue(observed["url"].startswith("http://127.0.0.1:"))
         self.assertEqual(self.a.resolve(), observed["scope"].resolve())
+
+    def test_chat_server_idle_timeout_is_extended_by_requests(self):
+        observed = {}
+        ready = threading.Event()
+
+        def bound(url, _server):
+            observed["url"] = url.rstrip("/")
+            ready.set()
+
+        thread = threading.Thread(
+            target=ui.run,
+            kwargs={
+                "port": 0,
+                "open_browser": False,
+                "trajdir": self.a,
+                "ready_callback": bound,
+                "idle_timeout": 0.12,
+            },
+        )
+        thread.start()
+        self.assertTrue(ready.wait(timeout=1))
+        for _ in range(5):
+            time.sleep(0.05)
+            self.assertTrue(get_json(observed["url"] + "/api/health")["ok"])
+        self.assertTrue(thread.is_alive())
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+
+    def test_idle_watcher_never_interrupts_an_active_request(self):
+        observed = {}
+        ready = threading.Event()
+        request_started = threading.Event()
+        release_request = threading.Event()
+        real_payload = ui._payload
+
+        def bound(url, _server):
+            observed["url"] = url.rstrip("/")
+            ready.set()
+
+        def slow_payload(*args, **kwargs):
+            request_started.set()
+            release_request.wait(timeout=1)
+            return real_payload(*args, **kwargs)
+
+        with mock.patch.object(ui, "_payload", side_effect=slow_payload):
+            thread = threading.Thread(
+                target=ui.run,
+                kwargs={
+                    "port": 0,
+                    "open_browser": False,
+                    "trajdir": self.a,
+                    "ready_callback": bound,
+                    "idle_timeout": 0.08,
+                },
+            )
+            thread.start()
+            self.assertTrue(ready.wait(timeout=1))
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                response = pool.submit(
+                    get_json, observed["url"] + "/api/state"
+                )
+                self.assertTrue(request_started.wait(timeout=1))
+                time.sleep(0.15)
+                self.assertTrue(thread.is_alive())
+                self.assertFalse(response.done())
+                release_request.set()
+                result = response.result(timeout=1)
+                self.assertEqual("a1", result["goals"][0]["id"])
+            thread.join(timeout=1)
+            self.assertFalse(thread.is_alive())
 
 
 if __name__ == "__main__":
