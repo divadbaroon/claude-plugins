@@ -253,6 +253,61 @@ class ChatCliTests(unittest.TestCase):
                     except ChildProcessError:
                         pass
 
+    def test_refresh_worker_hands_off_remaining_bounded_evidence(self):
+        from human_compact.trajectory import chat_synth
+
+        order = []
+        states = [
+            {"last_analyzed_ordinal": 3, "status": "running"},
+            {"last_analyzed_ordinal": 9, "status": "pending"},
+        ]
+        with (
+            mock.patch.object(
+                chat_synth.CS, "get_analyzer_state", side_effect=states
+            ),
+            mock.patch.object(
+                chat_synth, "refresh",
+                side_effect=lambda _sid: order.append("refresh") or {
+                    "status": "updated", "changes": ["goal + bounded"]
+                },
+            ),
+            mock.patch.object(
+                chat_synth, "clear_worker_record",
+                side_effect=lambda _sid: order.append("clear"),
+            ),
+            mock.patch.object(
+                chat_synth, "spawn_refresh",
+                side_effect=lambda _sid: order.append("spawn") or {"status": "spawned"},
+            ) as spawn,
+        ):
+            code = self.cli.chat_refresh_main(["--session", SID])
+
+        self.assertEqual(0, code)
+        self.assertEqual(["refresh", "clear", "spawn"], order)
+        spawn.assert_called_once_with(SID)
+
+    def test_refresh_worker_does_not_loop_without_cursor_progress(self):
+        from human_compact.trajectory import chat_synth
+
+        with (
+            mock.patch.object(
+                chat_synth.CS, "get_analyzer_state",
+                side_effect=[
+                    {"last_analyzed_ordinal": 3, "status": "running"},
+                    {"last_analyzed_ordinal": 3, "status": "pending"},
+                ],
+            ),
+            mock.patch.object(
+                chat_synth, "refresh", return_value={"status": "coalesced"}
+            ),
+            mock.patch.object(chat_synth, "clear_worker_record"),
+            mock.patch.object(chat_synth, "spawn_refresh") as spawn,
+        ):
+            code = self.cli.chat_refresh_main(["--session", SID])
+
+        self.assertEqual(0, code)
+        spawn.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

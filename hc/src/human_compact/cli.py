@@ -722,15 +722,32 @@ def chat_refresh_main(argv=None):
     ap.add_argument("--session", required=True)
     args = ap.parse_args(argv or [])
     from .trajectory import chat_synth
+    before = int(
+        chat_synth.CS.get_analyzer_state(args.session)
+        .get("last_analyzed_ordinal") or 0
+    )
     try:
         result = chat_synth.refresh(args.session)
-        if result.get("status") == "error":
-            print(result.get("error") or "chat goal analysis failed",
-                  file=sys.stderr)
-            return 1
-        return 0
     finally:
         chat_synth.clear_worker_record(args.session)
+    if result.get("status") == "error":
+        print(result.get("error") or "chat goal analysis failed",
+              file=sys.stderr)
+        return 1
+
+    # One worker intentionally has a bounded number of provider calls. If it
+    # made progress but more evidence remains, hand the next bounded slice to
+    # a fresh worker after releasing our lease. This drains long resumed chats
+    # without turning one hook subprocess into an unbounded job.
+    state = chat_synth.CS.get_analyzer_state(args.session)
+    after = int(state.get("last_analyzed_ordinal") or 0)
+    if state.get("status") == "pending" and after > before:
+        try:
+            chat_synth.spawn_refresh(args.session)
+        except Exception as exc:  # noqa: BLE001 - retain pending state for retry
+            print(f"could not continue chat goal analysis: {exc}", file=sys.stderr)
+            return 1
+    return 0
 
 
 def chat_ui_main(argv=None):
