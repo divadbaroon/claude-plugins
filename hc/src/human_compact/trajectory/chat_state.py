@@ -308,6 +308,18 @@ def _human_origin(record: Dict[str, Any]) -> bool:
     )
 
 
+def _is_hc_ui_launcher(text: str) -> bool:
+    """Keep the command that opens the workspace out of its own goal model."""
+    lowered = str(text or "").strip().lower()
+    return (
+        lowered in ("/hc-ui", "\\hc-ui", "hc-ui")
+        or lowered.startswith("/hc-ui ")
+        or bool(re.search(
+            r"^\s*<command-name>\s*/?hc-ui\s*</command-name>", lowered
+        ))
+    )
+
+
 def _base_event(
     record: Dict[str, Any], source: Dict[str, Any], event_id: str
 ) -> Dict[str, Any]:
@@ -378,7 +390,7 @@ def _normalize_record(
         if _human_origin(record):
             prompt_id = record.get("promptId")
             event_id = f"prompt:{prompt_id}" if prompt_id else _record_id(record, raw, "prompt")
-            kind, usable = "human_prompt", True
+            kind, usable = "human_prompt", not _is_hc_ui_launcher(text)
         elif record.get("isMeta"):
             event_id = _record_id(record, raw, "context")
             kind, usable = "context", False
@@ -462,7 +474,7 @@ def _normalize_record(
                 kind="queued_prompt",
                 role="user",
                 text=text,
-                usable_for_goals=True,
+                usable_for_goals=not _is_hc_ui_launcher(text),
             )
             out.append(event)
         return out
@@ -632,15 +644,7 @@ def _assignable_prompts(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
         if event.get("kind") != "human_prompt" or not event.get("text"):
             continue
         text = str(event["text"]).strip()
-        lowered = text.lower()
-        if (
-            lowered in ("/hc-ui", "\\hc-ui", "hc-ui")
-            or lowered.startswith("/hc-ui ")
-            or re.search(
-                r"^\s*<command-name>\s*/?hc-ui\s*</command-name>",
-                lowered,
-            )
-        ):
+        if _is_hc_ui_launcher(text):
             continue
         prompts.append(
             {
@@ -920,6 +924,7 @@ def _ingest_hook_locked(
                 result.last_ordinal,
                 hook_event,
             )
+            boundary["usable_for_goals"] = not _is_hc_ui_launcher(text)
     elif hook_event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
         text = payload["last_assistant_message"].strip()
         if text:

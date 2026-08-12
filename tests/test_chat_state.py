@@ -279,6 +279,12 @@ class ChatStateTests(unittest.TestCase):
         kinds = {event["kind"] for event in CS.load_events(SID, self.base)}
         self.assertIn("tool_result", kinds)
         self.assertIn("task_notification", kinds)
+        launchers = [
+            event for event in CS.load_events(SID, self.base)
+            if "hc-ui" in event.get("text", "")
+        ]
+        self.assertEqual(2, len(launchers))
+        self.assertTrue(all(not event["usable_for_goals"] for event in launchers))
 
     def test_post_tool_batch_captures_plan_and_result_before_transcript_flush(self):
         payload = {
