@@ -508,18 +508,22 @@ class ChatUiServerTests(unittest.TestCase):
             observed["scope"] = server.trajdir
             threading.Timer(0.05, server.shutdown).start()
 
-        thread = threading.Thread(
-            target=ui.run,
-            kwargs={
-                "port": 0,
-                "open_browser": False,
-                "trajdir": self.a,
-                "ready_callback": ready,
-                "label": "Chat goals",
-            },
-        )
-        thread.start()
-        thread.join(timeout=3)
+        with mock.patch(
+            "http.server.socket.getfqdn",
+            side_effect=AssertionError("loopback bind must not use reverse DNS"),
+        ):
+            thread = threading.Thread(
+                target=ui.run,
+                kwargs={
+                    "port": 0,
+                    "open_browser": False,
+                    "trajdir": self.a,
+                    "ready_callback": ready,
+                    "label": "Chat goals",
+                },
+            )
+            thread.start()
+            thread.join(timeout=3)
         self.assertFalse(thread.is_alive())
         self.assertTrue(observed["url"].startswith("http://127.0.0.1:"))
         self.assertEqual(self.a.resolve(), observed["scope"].resolve())
@@ -539,7 +543,9 @@ class ChatUiServerTests(unittest.TestCase):
                 "open_browser": False,
                 "trajdir": self.a,
                 "ready_callback": bound,
-                "idle_timeout": 0.12,
+                # Leave enough scheduling margin for loaded CI runners while
+                # still proving that requests extend the original deadline.
+                "idle_timeout": 0.5,
             },
         )
         thread.start()

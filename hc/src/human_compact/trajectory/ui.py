@@ -4,11 +4,13 @@ injection). Stdlib only; localhost only; Ctrl-C to stop."""
 import hashlib
 import json
 import os
+import socketserver
 import threading
 import time
 import webbrowser
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer as _ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
@@ -17,6 +19,18 @@ from . import chat_state as CS, goals as GM, state
 
 DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
+
+
+class ThreadingHTTPServer(_ThreadingHTTPServer):
+    """Loopback server that never performs reverse DNS during bind."""
+
+    def server_bind(self):
+        # HTTPServer.server_bind calls socket.getfqdn(host), which can block
+        # for tens of seconds on macOS even though this server accepts only a
+        # numeric loopback address. Preserve TCPServer's bind semantics and
+        # keep the already-known numeric identity.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 def _scope(trajdir=None):

@@ -7,7 +7,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +18,7 @@ if str(HC_SRC) not in sys.path:
     sys.path.insert(0, str(HC_SRC))
 
 from human_compact.trajectory import chat_state as CS  # noqa: E402
+from human_compact.trajectory.ui import ThreadingHTTPServer  # noqa: E402
 
 
 SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
