@@ -1103,26 +1103,36 @@ def _goal_context_text(
     prompt_map = {p.get("id"): p for p in prompts}
     item_map = {i.get("id"): i for i in important.get("items", [])}
 
-    def emit(goal: Dict[str, Any], depth: int) -> None:
+    def emit(goal: Dict[str, Any], depth: int, *, details: bool = True) -> None:
         indent = "  " * depth
         lines.append(
             f"{indent}- {goal.get('title', 'Untitled')} "
             f"[{str(goal.get('status', 'active')).replace('_', ' ')}]"
         )
+        if details:
+            description = " ".join(str(goal.get("description") or "").split())[:280]
+            notes = " ".join(str(goal.get("notes") or "").split())[:280]
+            priority = str(goal.get("priority") or "normal")
+            if description:
+                lines.append(f"{indent}  - DESCRIPTION: {description}")
+            if notes:
+                lines.append(f"{indent}  - USER NOTES: {notes}")
+            if priority != "normal":
+                lines.append(f"{indent}  - PRIORITY: {priority}")
         for todo in goal.get("todos", []):
-            if isinstance(todo, dict) and not todo.get("done"):
+            if details and isinstance(todo, dict) and not todo.get("done"):
                 lines.append(f"{indent}  - TODO: {todo.get('text', '')}")
         for prompt_id in goal.get("prompt_ids", [])[:4]:
             prompt = prompt_map.get(prompt_id)
-            if prompt:
+            if details and prompt:
                 text = " ".join(str(prompt.get("text") or "").split())[:220]
                 lines.append(f"{indent}  - USER PROMPT: {text}")
         for item_id in goal.get("important_item_ids", [])[:3]:
             item = item_map.get(item_id)
-            if item:
+            if details and item:
                 lines.append(f"{indent}  - IMPORTANT: {str(item.get('text') or '')[:220]}")
         for child in by_parent.get(goal.get("id"), []):
-            emit(child, depth + 1)
+            emit(child, depth + 1, details=details)
 
     roots = [
         goal
@@ -1135,6 +1145,16 @@ def _goal_context_text(
         lines.append("")
         for goal in roots:
             emit(goal, 0)
+    inactive = [
+        goal
+        for goal in by_parent.get(None, [])
+        if goal.get("status") in ("completed", "abandoned")
+    ]
+    if inactive:
+        inactive.sort(key=lambda goal: str(goal.get("updated_at") or ""), reverse=True)
+        lines.extend(("", "Recent inactive goals:"))
+        for goal in inactive[:8]:
+            emit(goal, 0, details=False)
     return "\n".join(lines)[:8000] + "\n"
 
 

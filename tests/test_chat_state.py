@@ -407,6 +407,18 @@ class ChatStateTests(unittest.TestCase):
                     "todos": [],
                     "important_item_ids": [],
                     "prompt_ids": [CS.load_prompts(SID, self.base)[0]["id"]],
+                    "description": "Keep the scoped UI synchronized",
+                    "notes": "Preserve browser-authored relationships",
+                    "priority": "high",
+                },
+                {
+                    "id": "g2",
+                    "title": "Debug the rebuild timeout",
+                    "status": "completed",
+                    "parent_goal_id": None,
+                    "todos": [],
+                    "important_item_ids": [],
+                    "prompt_ids": [],
                 }
             ],
         }
@@ -432,6 +444,11 @@ class ChatStateTests(unittest.TestCase):
         context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
         self.assertIn("Connect this chat", context)
         self.assertIn("USER PROMPT: Persist this requirement", context)
+        self.assertIn("DESCRIPTION: Keep the scoped UI synchronized", context)
+        self.assertIn("USER NOTES: Preserve browser-authored relationships", context)
+        self.assertIn("PRIORITY: high", context)
+        self.assertIn("Recent inactive goals:", context)
+        self.assertIn("Debug the rebuild timeout [completed]", context)
 
         state = CS.set_analyzer_state(
             SID,

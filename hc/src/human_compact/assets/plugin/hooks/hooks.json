@@ -14,7 +14,7 @@
     ],
     "UserPromptExpansion": [
       { "matcher": "hc-ui", "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 30 }
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 45 }
       ] }
     ],
     "PostToolBatch": [
