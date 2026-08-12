@@ -672,7 +672,11 @@ def _healthy_chat_server(record, session_id, timeout=0.5):
         return False
     try:
         endpoint = url.rstrip("/") + "/api/health"
-        with urllib.request.urlopen(endpoint, timeout=timeout) as response:
+        # A loopback readiness probe must never inherit corporate/system proxy
+        # settings. macOS hosted runners can otherwise route 127.0.0.1 through
+        # HTTP_PROXY and make a healthy child look dead until the 8s deadline.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(endpoint, timeout=timeout) as response:
             body = json.loads(response.read())
     except (OSError, ValueError, TypeError):
         return False

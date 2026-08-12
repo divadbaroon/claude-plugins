@@ -32,6 +32,12 @@ class ChatCliTests(unittest.TestCase):
             {
                 "HC_CHAT_STATE_DIR": str(self.root),
                 "PYTHONPATH": str(HC_SRC) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+                # Local health probes must bypass even a hostile proxy setup.
+                "HTTP_PROXY": "http://127.0.0.1:9",
+                "HTTPS_PROXY": "http://127.0.0.1:9",
+                "ALL_PROXY": "http://127.0.0.1:9",
+                "NO_PROXY": "",
+                "no_proxy": "",
             },
         )
         self.env.start()
