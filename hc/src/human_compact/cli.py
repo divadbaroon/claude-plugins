@@ -659,27 +659,35 @@ def _pid_alive(pid):
 
 
 def _healthy_chat_server(record, session_id, timeout=0.5):
+    import http.client
     import json
     import urllib.parse
-    import urllib.request
     if not isinstance(record, dict) or not _pid_alive(record.get("pid")):
         return False
     url = record.get("url")
     if not isinstance(url, str):
         return False
     parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
+    if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+            or parsed.path not in ("", "/")):
         return False
+    connection = None
     try:
-        endpoint = url.rstrip("/") + "/api/health"
-        # A loopback readiness probe must never inherit corporate/system proxy
-        # settings. macOS hosted runners can otherwise route 127.0.0.1 through
-        # HTTP_PROXY and make a healthy child look dead until the 8s deadline.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(endpoint, timeout=timeout) as response:
-            body = json.loads(response.read())
-    except (OSError, ValueError, TypeError):
+        # Speak HTTP directly to loopback. urllib inherits corporate/system
+        # proxy behavior on macOS; a readiness probe must never leave the host.
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", parsed.port, timeout=timeout
+        )
+        connection.request("GET", "/api/health", headers={
+            "Host": parsed.netloc,
+        })
+        response = connection.getresponse()
+        body = json.loads(response.read())
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
         return False
+    finally:
+        if connection is not None:
+            connection.close()
     return (
         isinstance(body, dict)
         and
