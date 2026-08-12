@@ -29,3 +29,20 @@ jobs:
       - run: python -m json.tool .claude-plugin/marketplace.json >/dev/null
       - run: python -m json.tool compact-focus/.claude-plugin/plugin.json >/dev/null
       - run: python -m json.tool compact-focus/hooks/hooks.json >/dev/null
+
+  npm-installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+        working-directory: human-compact
+      - run: npm pack --ignore-scripts --dry-run
+        working-directory: human-compact
