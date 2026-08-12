@@ -163,6 +163,26 @@ class ChatStateTests(unittest.TestCase):
         self.assertEqual("prompt:p1", after[0]["canonical_id"])
         self.assertTrue(all(e["source"]["type"] == "claude_jsonl" for e in after))
 
+    def test_hook_dedupes_newly_flushed_turn_but_preserves_repeated_prompt(self):
+        write_jsonl(self.transcript, [user_record("continue")])
+        hook = {
+            "session_id": SID,
+            "transcript_path": str(self.transcript),
+            "cwd": "/repo",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "continue",
+        }
+        first = CS.ingest_hook(hook, root=self.base)
+        self.assertEqual(1, first.total_events)
+
+        # The next identical submission is a distinct human act even though
+        # its canonical JSONL row has not flushed yet.
+        second = CS.ingest_hook(hook, root=self.base)
+        self.assertEqual(2, second.total_events)
+        prompts = CS.load_prompts(SID, self.base)
+        self.assertEqual(["continue", "continue"], [p["text"] for p in prompts])
+        self.assertEqual(2, len({p["id"] for p in prompts}))
+
     def test_visible_assistant_plan_tool_and_result_are_goal_evidence(self):
         write_jsonl(
             self.transcript,

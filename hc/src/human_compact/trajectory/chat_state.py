@@ -553,7 +553,9 @@ def _event_aliases(event: Dict[str, Any]) -> Iterable[str]:
 
 
 def _merge_events(
-    existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]
+    existing: List[Dict[str, Any]],
+    incoming: List[Dict[str, Any]],
+    synthetic_match_after: Optional[int] = None,
 ) -> Tuple[List[Dict[str, Any]], int]:
     aliases: Dict[str, Dict[str, Any]] = {}
     for event in existing:
@@ -561,14 +563,19 @@ def _merge_events(
     appended = 0
     for new in incoming:
         prior = aliases.get(new["id"])
-        if prior is None and new.get("source", {}).get("synthetic"):
+        if (
+            prior is None
+            and new.get("source", {}).get("synthetic")
+            and synthetic_match_after is not None
+        ):
             boundary = int(new.get("source", {}).get("after_ordinal") or 0)
             for candidate in reversed(existing[-20:]):
                 ordinal = int(candidate.get("ordinal") or 0)
                 if ordinal < max(1, boundary - 5):
                     break
                 if (
-                    not candidate.get("source", {}).get("synthetic")
+                    ordinal > synthetic_match_after
+                    and not candidate.get("source", {}).get("synthetic")
                     and candidate.get("kind") == new.get("kind")
                     and candidate.get("text") == new.get("text")
                 ):
@@ -596,7 +603,11 @@ def _merge_events(
                 ordinal = prior.get("ordinal")
                 prior.update(new)
                 prior["ordinal"] = ordinal
-            if prior.get("id") != new["id"]:
+            if (
+                prior.get("id") != new["id"]
+                and prior.get("source", {}).get("synthetic")
+                and not new.get("source", {}).get("synthetic")
+            ):
                 prior["canonical_id"] = new["id"]
                 ordinal = prior.get("ordinal")
                 stable_id = prior["id"]
@@ -865,6 +876,14 @@ def ingest_hook(payload: Dict[str, Any], root: Optional[Path] = None) -> IngestR
     """
     session_id = str(payload.get("session_id") or payload.get("sessionId") or "")
     paths(session_id, root)  # validate before touching disk
+    with session_lock(session_id, root, wait_s=5):
+        return _ingest_hook_locked(payload, session_id, root)
+
+
+def _ingest_hook_locked(
+    payload: Dict[str, Any], session_id: str, root: Optional[Path]
+) -> IngestResult:
+    baseline_ordinal = int(load_manifest(session_id, root).get("last_ordinal") or 0)
     transcript = payload.get("transcript_path")
     if transcript and Path(str(transcript)).expanduser().is_file():
         result = ingest_transcript(
@@ -933,7 +952,11 @@ def ingest_hook(payload: Dict[str, Any], root: Optional[Path] = None) -> IngestR
 
     with session_lock(session_id, root, wait_s=5) as p:
         manifest = load_manifest(session_id, root)
-        events, appended = _merge_events(load_events(session_id, root), boundaries)
+        events, appended = _merge_events(
+            load_events(session_id, root),
+            boundaries,
+            synthetic_match_after=baseline_ordinal,
+        )
         prompts = _assignable_prompts(events)
         _persist_stream(p, manifest, events, prompts)
         return IngestResult(
