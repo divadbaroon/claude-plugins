@@ -550,11 +550,13 @@ class ChatUiServerTests(unittest.TestCase):
         )
         thread.start()
         self.assertTrue(ready.wait(timeout=1))
-        for _ in range(5):
+        # Keep the server active beyond its original 0.5s deadline.
+        for _ in range(11):
             time.sleep(0.05)
             self.assertTrue(get_json(observed["url"] + "/api/health")["ok"])
         self.assertTrue(thread.is_alive())
-        thread.join(timeout=1)
+        # shutdown() wakes serve_forever on its own polling interval.
+        thread.join(timeout=2)
         self.assertFalse(thread.is_alive())
 
     def test_idle_watcher_never_interrupts_an_active_request(self):
