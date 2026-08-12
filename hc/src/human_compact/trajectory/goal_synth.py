@@ -104,7 +104,9 @@ def rebuild(provider, extractions, corrections_text=None):
               .replace("<<EXTRACTIONS>>",
                        json.dumps([compact_extraction(e) for e in extractions])))
     data = provider.generate_json(prompt)
-    return {"version": 1, "goals": data.get("goals", [])}
+    if not isinstance(data.get("goals"), list):
+        raise ValueError("goal synthesis response is missing the goals array")
+    return {"version": 1, "goals": data["goals"]}
 
 
 def classify(provider, goals, extraction):
