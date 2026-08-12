@@ -4,6 +4,43 @@ This repository is a Claude Code and Codex plugin marketplace. Its published pac
 [Compact Focus](./compact-focus): an inline, human-reviewed replacement for
 blind context compaction.
 
+It also contains [`hc`](./hc), the pipx-installed local goal-state service for
+Claude Code. `hc` is distributed from this repository rather than the plugin
+marketplace because its localhost server and CLI need a Python executable.
+
+## Install chat-scoped goals
+
+```bash
+brew install pipx jq
+pipx ensurepath
+pipx install "git+https://github.com/divadbaroon/claude-plugins.git@main#subdirectory=hc"
+```
+
+If `pipx ensurepath` changed your shell configuration, open a new terminal
+before continuing. Then install the Claude Code integration:
+
+```bash
+hc install
+```
+
+If an older standalone `uv` makes `pipx install` report a backend-version
+conflict, rerun that install command with `--backend pip`.
+
+Start a new Claude Code session and run `/hc-ui`. This quick path is scoped to
+the current chat and does not enable the global context layer. To add that
+layer later:
+
+```bash
+hc backup
+hc refresh
+hc goals --rebuild
+hc ui
+```
+
+See the [hc documentation](./hc/README.md) for persistence, event ingestion,
+the inference data boundary, and the separation between chat-scoped and global
+state.
+
 ## Install once, use in every local chat
 
 Requirements: macOS or Linux, Python 3.9+, and either Claude Code 2.1.227+
@@ -52,6 +89,7 @@ development workflow.
 ## Repository scope
 
 - `compact-focus/` is the supported marketplace plugin.
+- `hc/` is the pipx package and Claude Code hook/skill installer for goal state.
 - `human-compact/` is retained as historical prototype code and is not listed
   in the marketplace or represented as a security sandbox.
 
