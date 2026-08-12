@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -125,6 +126,8 @@ class ChatUiServerTests(unittest.TestCase):
             self.assertEqual(["b1"], [g["id"] for g in state_b["goals"]])
             self.assertEqual(["p-old", "p-new"], [p["id"] for p in state_a["prompts"]])
             self.assertEqual(["bp"], [p["id"] for p in state_b["prompts"]])
+            self.assertEqual("idle", state_a["analyzer"]["status"])
+            self.assertIsInstance(state_a["revision"], str)
             self.assertEqual(
                 {"ok": True, "scope": "chat", "session_id": "chat-a"},
                 get_json(url_a + "/api/health"),
@@ -139,6 +142,18 @@ class ChatUiServerTests(unittest.TestCase):
             )
             self.assertEqual(["p-new"], get_json(url_a + "/api/state")["goals"][0]["prompt_ids"])
             self.assertEqual([], get_json(url_b + "/api/state")["goals"][0]["prompt_ids"])
+
+    def test_scoped_state_exposes_current_analyzer_progress(self):
+        chat_state.set_analyzer_state(
+            "chat-a",
+            status="pending",
+            requested_ordinal=7,
+            root=self.root,
+        )
+        with server_for(self.a) as url:
+            analyzer = get_json(url + "/api/state")["analyzer"]
+        self.assertEqual("pending", analyzer["status"])
+        self.assertEqual(7, analyzer["requested_ordinal"])
 
     def test_http_boundary_rejects_cross_site_writes_and_dns_rebinding(self):
         with server_for(self.a) as url:
@@ -313,11 +328,139 @@ class ChatUiServerTests(unittest.TestCase):
                 "children": [],
             },
         ]
-        self.assertEqual({"ok": True, "goals": 2}, ui._import(nested, self.a))
+        imported_result = ui._import(nested, self.a)
+        self.assertTrue(imported_result["ok"])
+        self.assertEqual(2, imported_result["goals"])
+        self.assertIsInstance(imported_result["revision"], str)
         state = ui._payload(self.a)
         imported = next(g for g in state["goals"] if g["id"] == "a1")
         self.assertEqual("renamed in bundle", imported["title"])
         self.assertEqual(["p-new"], imported["prompt_ids"])
+
+    def test_revisioned_import_rejects_stale_browser_without_mutation(self):
+        with server_for(self.a) as url:
+            initial = get_json(url + "/api/state")
+            stale_revision = initial["revision"]
+            goals, important = chat_state.load_goals("chat-a", self.root)
+            goals["goals"][0]["status"] = "completed"
+            goals["goals"].append(goal("a3", "analyzer-added goal"))
+            chat_state.save_goals("chat-a", goals, important, self.root)
+
+            stale_tree = [{
+                "id": "a1",
+                "title": "goal in chat a",
+                "done": False,
+                "status": "todo",
+                "prio": "high",
+                "notes": "",
+                "desc": "",
+                "children": [],
+            }]
+            request = urllib.request.Request(
+                url + "/api/import",
+                data=json.dumps({
+                    "goals": stale_tree,
+                    "base_revision": stale_revision,
+                }).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.assertRaises(urllib.error.HTTPError) as raised:
+                urllib.request.urlopen(request, timeout=2)
+            self.assertEqual(409, raised.exception.code)
+            conflict = json.loads(raised.exception.read())
+            self.assertTrue(conflict["conflict"])
+
+            current = get_json(url + "/api/state")
+            by_id = {g["id"]: g for g in current["goals"]}
+            self.assertEqual("completed", by_id["a1"]["status"])
+            self.assertEqual("analyzer-added goal", by_id["a3"]["title"])
+            self.assertEqual("normal", by_id["a1"]["priority"])
+
+    def test_ui_revision_ignores_write_timestamps_but_tracks_semantics(self):
+        goals, important = chat_state.load_goals("chat-a", self.root)
+        first = ui._goal_revision(goals, important)
+        goals["generated_at"] = "2099-01-01T00:00:00Z"
+        goals["goals"][0]["updated_at"] = "2099-01-01T00:00:01Z"
+        self.assertEqual(first, ui._goal_revision(goals, important))
+        goals["goals"][0]["status"] = "completed"
+        self.assertNotEqual(first, ui._goal_revision(goals, important))
+
+    def test_open_browser_merges_analyzer_update_with_unsent_manual_edit(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = shutil.which("google-chrome") or shutil.which("chromium")
+        mac_chrome = Path(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        )
+        if not chrome and mac_chrome.is_file():
+            chrome = str(mac_chrome)
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        self.assertEqual(
+            {"ok": True},
+            ui._apply({
+                "op": "attach_prompt",
+                "goal_id": "a1",
+                "prompt_id": "p-new",
+            }, self.a),
+        )
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.locator("#hc-prompt-links")).to_be_visible(
+                    timeout=10_000
+                )
+                expect(page.locator("#hc-prompt-links .hc-pa-card")).to_have_count(1)
+
+                # Exact localStorage representation written by the bundled
+                # app, deliberately left unsent when analysis wins the race.
+                page.evaluate("""() => {
+                    const key = "hc-vault-ui-v1";
+                    const saved = JSON.parse(localStorage.getItem(key));
+                    saved.goals[0].prio = "high";
+                    localStorage.setItem(key, JSON.stringify(saved));
+                }""")
+                goals, important = chat_state.load_goals("chat-a", self.root)
+                goals["goals"][0]["status"] = "in_progress"
+                goals["goals"][0]["todos"] = [{
+                    "text": "analyzer-added todo",
+                    "done": False,
+                    "evidence_ids": [],
+                }]
+                goals["goals"].append(goal("a3", "analyzer-added goal"))
+                chat_state.save_goals("chat-a", goals, important, self.root)
+
+                expect(page.get_by_text("analyzer-added goal", exact=True).first).to_be_visible(
+                    timeout=10_000
+                )
+                expect(page.get_by_text("analyzer-added todo", exact=True).first).to_be_visible(
+                    timeout=10_000
+                )
+                expect(page.locator("#hc-prompt-links .hc-pa-card")).to_have_count(1)
+                current = {
+                    g["id"]: g
+                    for g in chat_state.load_goals("chat-a", self.root)[0]["goals"]
+                }
+                self.assertEqual("in_progress", current["a1"]["status"])
+                self.assertEqual("high", current["a1"]["priority"])
+                self.assertEqual(["p-new"], current["a1"]["prompt_ids"])
+                self.assertEqual(
+                    ["analyzer-added todo"],
+                    [t["text"] for t in current["a1"]["todos"]],
+                )
+                self.assertIn("a3", current)
+            finally:
+                browser.close()
 
     def test_goal_sanitize_and_merge_preserve_unique_prompt_links(self):
         from human_compact.trajectory import goals as goal_model

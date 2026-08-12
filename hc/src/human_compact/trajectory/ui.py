@@ -1,6 +1,7 @@
 """hc ui — localhost goal browser. Reads and writes the SAME goals.json
 through the goals model (goal_context.md stays in sync for SessionStart
 injection). Stdlib only; localhost only; Ctrl-C to stop."""
+import hashlib
 import json
 import os
 import threading
@@ -87,6 +88,27 @@ def _load_prompts(trajdir, chat_scoped=False):
     return out
 
 
+def _goal_revision(goals, important):
+    def stable(value):
+        if isinstance(value, dict):
+            return {
+                key: stable(nested)
+                for key, nested in value.items()
+                if key not in ("generated_at", "updated_at")
+            }
+        if isinstance(value, list):
+            return [stable(nested) for nested in value]
+        return value
+
+    payload = json.dumps(
+        stable({"goals": goals, "important": important}),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _payload(trajdir=None, chat_scoped=None):
     chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
     trajdir = _scope(trajdir)
@@ -94,14 +116,20 @@ def _payload(trajdir=None, chat_scoped=None):
         goals, important = _load_goals(trajdir, chat_scoped)
         GM.sanitize(goals)
         ana = {}
+        analyzer = None
         try:
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
             pass
+        if chat_scoped:
+            session_id, root = _chat_identity(trajdir)
+            analyzer = CS.get_analyzer_state(session_id, root)
         return {"goals": goals["goals"], "items": important["items"],
                 "prompts": _load_prompts(trajdir, chat_scoped),
                 "generated_at": goals.get("generated_at", ""),
-                "sessions": ana.get("sessions_analyzed")}
+                "sessions": ana.get("sessions_analyzed"),
+                "analyzer": analyzer,
+                "revision": _goal_revision(goals, important)}
 
 
 def _apply(op, trajdir=None, chat_scoped=None):
@@ -274,10 +302,28 @@ class H(BaseHTTPRequestHandler):
                         body, self.server.trajdir, self.server.chat_scoped)
                 self._send(200, result)
             elif self.path == "/api/import":
+                if not isinstance(body, dict):
+                    self._send(400, {
+                        "ok": False,
+                        "error": "revisioned import payload required",
+                    })
+                    return
+                nested = body.get("goals")
+                expected_revision = body.get("base_revision")
+                if not isinstance(expected_revision, str):
+                    self._send(400, {
+                        "ok": False,
+                        "error": "base_revision is required",
+                    })
+                    return
                 with self.server.state_lock:
                     result = _import(
-                        body, self.server.trajdir, self.server.chat_scoped)
-                self._send(200, result)
+                        nested,
+                        self.server.trajdir,
+                        self.server.chat_scoped,
+                        expected_revision=expected_revision,
+                    )
+                self._send(409 if result.get("conflict") else 200, result)
             else:
                 self._send(404, {"error": "not found"})
         finally:
@@ -366,7 +412,7 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
             idle_thread.join(timeout=1)
 
 
-def _import(nested, trajdir=None, chat_scoped=None):
+def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
     """Map the Claude Design app's nested node tree back into the goals model.
     Node ids are preserved; `t:<gid>:<i>` nodes are that goal's todos. Nodes
     missing from the payload are marked abandoned (history kept, never
@@ -378,6 +424,15 @@ def _import(nested, trajdir=None, chat_scoped=None):
     with _state_access(trajdir, chat_scoped):
         goals, important = _load_goals(trajdir, chat_scoped)
         GM.sanitize(goals)
+        current_revision = _goal_revision(goals, important)
+        if (expected_revision is not None
+                and expected_revision != current_revision):
+            return {
+                "ok": False,
+                "conflict": True,
+                "error": "goal state changed; refresh and merge before importing",
+                "revision": current_revision,
+            }
         old = {g["id"]: g for g in goals["goals"]}
         seen, out = set(), []
 
@@ -449,4 +504,9 @@ def _import(nested, trajdir=None, chat_scoped=None):
         goals["goals"] = out
         GM.sanitize(goals)
         _save_goals(trajdir, goals, important, chat_scoped)
-        return {"ok": True, "goals": len(out)}
+        saved_goals, saved_important = _load_goals(trajdir, chat_scoped)
+        return {
+            "ok": True,
+            "goals": len(out),
+            "revision": _goal_revision(saved_goals, saved_important),
+        }

@@ -5,6 +5,7 @@
   "use strict";
 
   var KEY = "hc-vault-ui-v1";
+  var SYNC_KEY = "hc-vault-ui-sync-v1";
   var promptState = { goals: [], prompts: [] };
   var promptStateFingerprint = null;
   var stateRevision = 0;
@@ -16,6 +17,10 @@
   var pickerLimit = 80;
   var promptError = "";
   var pendingLinks = Object.create(null);
+  var syncBusy = false;
+  var lastObservedGoals = null;
+  var analyzerState = null;
+  var analyzerSignature = null;
 
   function array(value) {
     return Array.isArray(value) ? value : [];
@@ -53,8 +58,133 @@
     };
   }
 
+  function rootsFromState(st) {
+    var byParent = {}, todosOf = {};
+    array(st && st.goals).forEach(function (g) {
+      todosOf[g.id] = g.todos || [];
+      var parent = g.parent_goal_id || null;
+      (byParent[parent] = byParent[parent] || []).push(g);
+    });
+    return (byParent[null] || []).map(function (g) {
+      return toNode(g, byParent, todosOf);
+    });
+  }
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function same(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  function readSync() {
+    try {
+      var value = JSON.parse(localStorage.getItem(SYNC_KEY) || "null");
+      return value && typeof value.revision === "string" &&
+        Array.isArray(value.goals) ? value : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function writeSync(revision, goals) {
+    try {
+      localStorage.setItem(SYNC_KEY, JSON.stringify({
+        revision: revision,
+        goals: clone(goals)
+      }));
+    } catch (e) {}
+  }
+
+  function readLocalGoals() {
+    try {
+      var value = JSON.parse(localStorage.getItem(KEY) || "{}");
+      return Array.isArray(value.goals) ? value.goals : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function flattenTree(nodes) {
+    var map = Object.create(null), order = [];
+    function walk(list, parentId) {
+      array(list).forEach(function (node) {
+        if (!node || typeof node.id !== "string" || map[node.id]) return;
+        var value = clone(node);
+        delete value.children;
+        map[node.id] = { value: value, parent: parentId };
+        order.push(node.id);
+        walk(node.children, node.id);
+      });
+    }
+    walk(nodes, null);
+    return { map: map, order: order };
+  }
+
+  // Three-way merge against the exact server tree the browser last synced.
+  // Remote changes win for untouched fields; explicit local field edits,
+  // additions, moves, and deletions survive. Remote additions are never
+  // interpreted as local deletions merely because this browser never saw them.
+  function mergeTrees(baseRoots, localRoots, remoteRoots) {
+    var base = flattenTree(baseRoots), local = flattenTree(localRoots);
+    var remote = flattenTree(remoteRoots), selected = Object.create(null);
+    var order = remote.order.slice();
+    local.order.forEach(function (id) {
+      if (!remote.map[id] && !base.map[id]) order.push(id);
+    });
+
+    order.forEach(function (id) {
+      var b = base.map[id], l = local.map[id], r = remote.map[id];
+      if (r && b && !l) return; // an explicit local deletion
+      if (!r && (!l || b)) return; // remote deletion, unless locally created
+      if (!r && l && !b) {
+        selected[id] = { value: clone(l.value), parent: l.parent };
+        return;
+      }
+      if (r && !l) {
+        selected[id] = { value: clone(r.value), parent: r.parent };
+        return;
+      }
+      var value = clone(r.value);
+      var keys = Object.keys(l.value);
+      keys.forEach(function (key) {
+        if (key === "id") return;
+        if (!b || !same(l.value[key], b.value[key])) {
+          value[key] = clone(l.value[key]);
+        }
+      });
+      var parent = r.parent;
+      if (!b || l.parent !== b.parent) parent = l.parent;
+      selected[id] = { value: value, parent: parent };
+    });
+
+    var children = Object.create(null), roots = [];
+    order.forEach(function (id) {
+      var row = selected[id];
+      if (!row) return;
+      row.value.children = [];
+      var parent = row.parent;
+      if (!parent || !selected[parent] || parent === id) {
+        roots.push(row.value);
+      } else {
+        (children[parent] = children[parent] || []).push(row.value);
+      }
+    });
+    order.forEach(function (id) {
+      if (selected[id]) selected[id].value.children = children[id] || [];
+    });
+    return roots;
+  }
+
   function acceptState(st) {
     if (!st || !Array.isArray(st.goals)) return false;
+    var nextAnalyzer = st.analyzer && typeof st.analyzer === "object" ?
+      st.analyzer : null;
+    if (!same(nextAnalyzer, analyzerState)) {
+      analyzerState = nextAnalyzer;
+      analyzerSignature = null;
+    }
     var next = {
       goals: st.goals,
       // The endpoint is intentionally human-only. Keep the role check here so
@@ -85,15 +215,7 @@
       x.send();
       var st = JSON.parse(x.responseText);
       if (!acceptState(st)) return;
-      var byParent = {}, todosOf = {};
-      st.goals.forEach(function (g) {
-        todosOf[g.id] = g.todos || [];
-        var p = g.parent_goal_id || null;
-        (byParent[p] = byParent[p] || []).push(g);
-      });
-      var roots = (byParent[null] || []).map(function (g) {
-        return toNode(g, byParent, todosOf);
-      });
+      var roots = rootsFromState(st);
       var sel = roots.length ? roots[0].id : null;
       localStorage.setItem(KEY, JSON.stringify({
         v: 6,
@@ -107,29 +229,109 @@
         view: "split"
       }));
       window.__hcSeed = JSON.stringify(roots);
+      lastObservedGoals = window.__hcSeed;
+      if (typeof st.revision === "string") writeSync(st.revision, roots);
     } catch (e) {
       // Offline model missing: let the app boot with whatever it already has.
     }
   }
 
   function watchGoals() {
-    var last = window.__hcSeed || null;
     setInterval(function () {
+      if (syncBusy) return;
       var raw;
       try { raw = localStorage.getItem(KEY); } catch (e) { return; }
       if (!raw) return;
       var goals;
       try { goals = JSON.stringify(JSON.parse(raw).goals); } catch (e) { return; }
-      if (goals === last) return;
-      last = goals;
-      fetch("/api/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: goals
-      }).then(function () {
-        refreshState();
-      }).catch(function () {});
+      if (goals === lastObservedGoals) return;
+      lastObservedGoals = goals;
+      importGoals(JSON.parse(goals));
     }, 800);
+  }
+
+  function responseJson(response) {
+    return response.json().then(function (body) {
+      if (!response.ok || !body || body.ok !== true) {
+        var error = new Error(body && body.error ? body.error :
+          "request failed (" + response.status + ")");
+        error.status = response.status;
+        throw error;
+      }
+      return body;
+    });
+  }
+
+  function postImport(goals, baseRevision) {
+    return fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goals: goals, base_revision: baseRevision })
+    }).then(responseJson);
+  }
+
+  function importGoals(goals) {
+    var synced = readSync();
+    if (!synced) {
+      lastObservedGoals = null;
+      refreshState();
+      return;
+    }
+    syncBusy = true;
+    postImport(goals, synced.revision).then(function (result) {
+      writeSync(result.revision, goals);
+      syncBusy = false;
+      refreshState();
+    }).catch(function () {
+      // A revision conflict is expected when analysis and a browser edit race.
+      // Re-fetch and three-way merge; transient failures retry on the next tick.
+      syncBusy = false;
+      lastObservedGoals = null;
+      refreshState();
+    });
+  }
+
+  function installGoalsAndReload(goals, revision) {
+    var saved;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { saved = {}; }
+    saved.goals = goals;
+    var ids = flattenTree(goals).map;
+    if (typeof saved.selId !== "string" || !ids[saved.selId]) {
+      saved.selId = goals.length ? goals[0].id : null;
+    }
+    saved.updatedAt = Date.now();
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    writeSync(revision, goals);
+    lastObservedGoals = JSON.stringify(goals);
+    syncBusy = true;
+    window.location.reload();
+  }
+
+  function reconcileState(st) {
+    if (!st || typeof st.revision !== "string") return;
+    var remote = rootsFromState(st);
+    var synced = readSync();
+    if (!synced) {
+      writeSync(st.revision, remote);
+      return;
+    }
+    if (synced.revision === st.revision) return;
+    var local = readLocalGoals();
+    var merged = mergeTrees(synced.goals, local, remote);
+    if (same(merged, remote)) {
+      writeSync(st.revision, remote);
+      if (!same(local, remote)) installGoalsAndReload(remote, st.revision);
+      return;
+    }
+    syncBusy = true;
+    postImport(merged, st.revision).then(function (result) {
+      installGoalsAndReload(merged, result.revision);
+    }).catch(function () {
+      syncBusy = false;
+      lastObservedGoals = null;
+      setTimeout(refreshState, 50);
+    });
   }
 
   function refreshState() {
@@ -140,7 +342,10 @@
         if (!r.ok) throw new Error("state request failed (" + r.status + ")");
         return r.json();
       })
-      .then(acceptState)
+      .then(function (st) {
+        acceptState(st);
+        reconcileState(st);
+      })
       .catch(function () {})
       .then(function () { refreshPending = false; });
   }
@@ -282,6 +487,8 @@
       ".hc-pa-result-text{display:block;font-size:11.5px;line-height:1.45;color:var(--mut);white-space:pre-wrap;word-break:break-word}",
       ".hc-pa-result[disabled]{cursor:wait;opacity:.6}",
       ".hc-pa-foot{padding:8px 16px;font-size:10px;color:var(--fnt)}",
+      ".hc-analyzer-state{position:fixed;right:18px;bottom:16px;z-index:99990;padding:6px 9px;border:1px solid var(--bd,#ddd);border-radius:2px;background:var(--panel,#fff);color:var(--fnt,#777);box-shadow:0 3px 16px rgba(0,0,0,.08);font:10.5px/1.35 'Source Code Pro',monospace}",
+      ".hc-analyzer-state[data-status='error']{color:var(--del,#a33);border-color:var(--del,#a33)}",
       "@media(max-width:700px){.hc-pa-overlay{padding:8px}.hc-pa-dialog{max-height:calc(100vh - 16px)}}"
     ].join("");
     document.head.appendChild(style);
@@ -579,7 +786,34 @@
     });
   }
 
+  function renderAnalyzerStatus() {
+    var status = analyzerState && analyzerState.status;
+    var visible = promptState.goals.length === 0 &&
+      (status === "pending" || status === "running" || status === "error");
+    var signature = visible ? status : "hidden";
+    if (signature === analyzerSignature) return;
+    analyzerSignature = signature;
+    var indicator = document.getElementById("hc-analyzer-state");
+    if (!visible) {
+      if (indicator) indicator.remove();
+      return;
+    }
+    ensureStyles();
+    if (!indicator) {
+      indicator = document.createElement("div");
+      indicator.id = "hc-analyzer-state";
+      indicator.className = "hc-analyzer-state";
+      indicator.setAttribute("aria-live", "polite");
+      (document.querySelector(".hc") || document.body).appendChild(indicator);
+    }
+    indicator.dataset.status = status;
+    indicator.setAttribute("role", status === "error" ? "alert" : "status");
+    indicator.textContent = status === "error" ?
+      "goal analysis failed" : "analyzing this chat\u2026";
+  }
+
   function mountPromptUI() {
+    renderAnalyzerStatus();
     renderPanel();
     if (picker && !picker.hidden && !document.documentElement.contains(picker)) {
       picker = null;
@@ -601,7 +835,9 @@
     normalize: normalize,
     rankedPrompts: rankedPrompts,
     acceptState: acceptState,
-    selectedGoalId: readSelection
+    selectedGoalId: readSelection,
+    mergeTrees: mergeTrees,
+    rootsFromState: rootsFromState
   };
 
   seed();

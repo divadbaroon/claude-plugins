@@ -96,6 +96,40 @@ class GoalPromptUiTests(unittest.TestCase):
             result,
         )
 
+    def test_three_way_merge_keeps_remote_analysis_and_explicit_local_edits(self):
+        result = self.run_js(
+            """(() => {
+              const node = (id, title, extra, children) => Object.assign({
+                id, title, prio: "normal", done: false, open: true,
+                status: "todo", notes: "", desc: "", labels: [],
+                children: children || []
+              }, extra || {});
+              const base = [
+                node("g1", "Shared goal"),
+                node("g-delete", "User deletes this")
+              ];
+              const local = [
+                node("g1", "Shared goal", { prio: "high", notes: "human note" }),
+                node("g-local", "Manual local goal")
+              ];
+              const remote = [
+                node("g1", "Shared goal", { done: true, status: "todo" }, [
+                  node("t:g1:0", "Analyzer todo")
+                ]),
+                node("g-delete", "User deletes this", { done: true }),
+                node("g-remote", "Analyzer-added goal", { status: "inprog" })
+              ];
+              return window.__hcPromptUI.mergeTrees(base, local, remote);
+            })()"""
+        )
+        by_id = {goal["id"]: goal for goal in result}
+        self.assertEqual({"g1", "g-local", "g-remote"}, set(by_id))
+        self.assertTrue(by_id["g1"]["done"])
+        self.assertEqual("high", by_id["g1"]["prio"])
+        self.assertEqual("human note", by_id["g1"]["notes"])
+        self.assertEqual("t:g1:0", by_id["g1"]["children"][0]["id"])
+        self.assertEqual("inprog", by_id["g-remote"]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()
