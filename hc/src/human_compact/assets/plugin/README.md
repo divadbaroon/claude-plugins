@@ -17,9 +17,9 @@ authenticated Claude CLI. Set `HC_CHAT_PROVIDER=ollama` for on-device
 inference. The localhost server binds to `127.0.0.1`, rejects cross-origin
 writes, and chat artifacts are owner-only.
 
-The global history layer below is inert unless `CLAUDE_VAULT=1`. The `claude`
-shim sets that for you when you run `claude --vault`; plain `claude` is a pure
-pass-through for global Vault capture.
+The global history layer below is inert unless it was explicitly enabled by
+the installer. Legacy selective installs can still opt in per session with
+`CLAUDE_VAULT=1` or `claude --vault`.
 
 ## What it stores
 
@@ -40,62 +40,46 @@ The original Claude transcript is only ever read, never modified.
 
 ## Install
 
-Install the Python package and its Claude Code integration:
+Install the managed Python runtime and Claude Code integration together:
 
-    brew install pipx jq
-    pipx ensurepath
-    pipx install "git+https://github.com/divadbaroon/claude-plugins.git@main#subdirectory=hc"
+    npx human-compact
 
-If `pipx ensurepath` changed your shell configuration, open a new terminal
-before continuing. Install only the chat-scoped `/hc-ui` command with:
-
-    hc install
-
-If an older standalone `uv` makes `pipx install` report a backend-version
-conflict, rerun that install command with `--backend pip`.
+The installer asks whether to enable the global Vault (`1` yes, `2` no). If
+enabled, it separately asks whether to infer global goals now. That second
+choice runs history analysis before rebuilding the goal tree and sends bounded
+conversation-derived digests through your authenticated Claude Code CLI.
 
 Start a new Claude Code session (or run `/reload-plugins`) and use `/hc-ui`.
-This path does not install the shim or enable global Vault capture.
-
-To add the optional global history layer, run:
-
-    hc backup
-
-That command installs the shim and asks whether to import prior conversations
-and whether future global capture should be always on or limited to
-`claude --vault`. `jq` is required by these optional global Vault hooks, but
-not by the chat-scoped Python hooks.
+Choosing `2` for global Vault installs only that chat-scoped path. No Homebrew,
+pipx, jq, shell-profile edit, or manual `hc` command is required.
 
 ## Backfill existing history
 
-Import all transcripts Claude Code still has on disk (one-time, re-run safe):
-
-    ~/.claude/skills/vault/scripts/vault-backfill.sh --dry-run   # preview
-    ~/.claude/skills/vault/scripts/vault-backfill.sh             # import
+Choosing `1` for global Vault imports all transcripts Claude Code still has on
+disk. The Python import is atomic, owner-only, and safe to rerun.
 
 Imported sessions carry `start_source: "backfill"`. Reach is limited by
 Claude Code's transcript retention (cleanupPeriodDays).
 
 ## Use
 
-    claude --vault        # Vault-enabled session
-    claude                # normal session, Vault fully inert
+After global Vault is enabled, ordinary `claude` sessions are captured. Legacy
+selective mode remains available with `claude --vault`.
 
-Always-on mode: `export CLAUDE_VAULT=1` in your shell profile enables Vault
-for every session without the flag.
-
-Debugging: `VAULT_DEBUG=1 claude --vault` appends one JSON line per hook
+Debugging: `VAULT_DEBUG=1 claude` appends one JSON line per hook
 action to `~/.claude-vault/debug.log`. `CLAUDE_VAULT_DIR` relocates the vault.
 
 ## Acceptance test
 
-1. `claude --vault`, hold a several-turn conversation, exit.
+1. Enable global Vault in `npx human-compact`, hold a several-turn Claude
+   conversation, and exit.
 2. `ls ~/.claude-vault/sessions/` — a directory named by the session id exists.
 3. Inspect `conversation.jsonl` — the most complete transcript available from
    Claude Code (the transcript file is written asynchronously by Claude Code,
    so the very last lines of the final turn can trail by moments; the
    SessionEnd snapshot captures whatever is on disk at exit).
-4. `claude` (no flag) — no new directories, no Vault output anywhere.
+4. Rerun `npx human-compact`, choose `2`, then start another conversation —
+   no new global Vault session directory is created.
 
 ## Known platform caveats
 
@@ -110,6 +94,10 @@ action to `~/.claude-vault/debug.log`. `CLAUDE_VAULT_DIR` relocates the vault.
 
 ## Uninstall
 
-    pipx uninstall human-compact
-    rm -rf ~/.claude/skills/vault ~/.claude/skills/hc-ui ~/.claude-vault
-    # and remove the PATH line from ~/.zshrc
+Remove the managed runtime and Claude integration directories after preserving
+any state you want to keep:
+
+    rm -rf ~/.human-compact ~/.claude/skills/vault ~/.claude/skills/hc-ui
+
+Global and per-chat state remains in `~/.claude-vault` until removed
+separately.
