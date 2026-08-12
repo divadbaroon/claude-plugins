@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -81,6 +82,18 @@ class ChatStateTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission semantics")
+    def test_session_state_is_owner_only(self):
+        self.transcript.write_text(
+            json.dumps(user_record("private conversation")) + "\n",
+            encoding="utf-8",
+        )
+        CS.ingest_transcript(SID, self.transcript, root=self.base)
+        p = CS.paths(SID, self.base)
+        self.assertEqual(0o700, p.session_dir.stat().st_mode & 0o777)
+        for artifact in (p.manifest, p.events, p.prompts):
+            self.assertEqual(0o600, artifact.stat().st_mode & 0o777, artifact)
 
     def test_partial_line_waits_for_completion_and_reopen_persists(self):
         first = user_record("First prompt")

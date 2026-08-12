@@ -110,6 +110,7 @@ def session_lock(
     """Acquire a process-safe, same-thread-reentrant lock for a chat session."""
     p = paths(session_id, root)
     p.session_dir.mkdir(parents=True, exist_ok=True)
+    p.session_dir.chmod(0o700)
     local = _local_lock(p.lock_dir)
     local.acquire()
     depths = getattr(_LOCK_DEPTH, "values", None)
@@ -128,6 +129,7 @@ def session_lock(
                         json.dumps({"pid": os.getpid(), "created_at": _now()}),
                         encoding="utf-8",
                     )
+                    (p.lock_dir / "owner.json").chmod(0o600)
                     acquired = True
                     break
                 except FileExistsError:
@@ -162,6 +164,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
     )
     try:
         with tmp.open("wb") as handle:
+            os.fchmod(handle.fileno(), 0o600)
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
