@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -318,57 +319,239 @@ def _merge_initial_with_manual(inferred: Dict[str, Any], current: Dict[str, Any]
     return inferred
 
 
+def _worker_path(session_id: str, root: Optional[Path] = None) -> Path:
+    return CS.paths(session_id, root).session_dir / "analyzer.json"
+
+
+def _read_worker_record(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_worker_record(path: Path, value: Dict[str, Any]) -> None:
+    """Publish a worker lease atomically with owner-only permissions."""
+    token = str(value.get("token") or secrets.token_hex(16))
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{token}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump(value, handle, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _record_owned_by(record: Dict[str, Any], token: Optional[str]) -> bool:
+    if not token or record.get("token") != token:
+        return False
+    try:
+        return int(record.get("pid")) == os.getpid()
+    except (TypeError, ValueError):
+        return False
+
+
+def _worker_record_alive(record: Dict[str, Any], session_id: str) -> bool:
+    if not record or record.get("session_id") not in (None, session_id):
+        return False
+    try:
+        pid = int(record.get("pid"))
+    except (TypeError, ValueError):
+        return False
+    if pid == os.getpid() and record.get("mode") == "direct":
+        return True
+    if record.get("mode", "detached") == "detached":
+        return _worker_process_matches(pid, session_id)
+    try:
+        os.kill(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _claim_refresh(
+    session_id: str, root: Optional[Path]
+) -> Dict[str, Any]:
+    """Claim this session's analyzer lease or coalesce into its live owner."""
+    supplied_token = os.environ.get("HC_CHAT_WORKER_TOKEN")
+    with CS.session_lock(session_id, root, wait_s=5):
+        worker = _worker_path(session_id, root)
+        record = _read_worker_record(worker)
+        if _record_owned_by(record, supplied_token):
+            owner_token = str(supplied_token)
+        elif (
+            not supplied_token
+            and record.get("pid") == os.getpid()
+            and not record.get("token")
+        ):
+            # Upgrade a worker record written by a pre-token version.
+            owner_token = secrets.token_hex(16)
+            record.update(token=owner_token, mode="direct")
+            _write_worker_record(worker, record)
+        elif _worker_record_alive(record, session_id):
+            requested = CS.request_analysis(session_id, root=root)
+            return {
+                "owned": False,
+                "requested_ordinal": int(requested.get("requested_ordinal") or 0),
+            }
+        else:
+            worker.unlink(missing_ok=True)
+            analyzer = CS.get_analyzer_state(session_id, root)
+            if analyzer.get("status") == "running":
+                CS.set_analyzer_state(
+                    session_id,
+                    status="pending",
+                    error="recovered stale analyzer worker",
+                    root=root,
+                )
+            owner_token = supplied_token or secrets.token_hex(16)
+            _write_worker_record(worker, {
+                "schema_version": 1,
+                "pid": os.getpid(),
+                "session_id": session_id,
+                "token": owner_token,
+                "mode": "detached" if supplied_token else "direct",
+                "started_at": time.time(),
+            })
+
+        manifest = CS.load_manifest(session_id, root)
+        target = int(manifest.get("last_ordinal") or 0)
+        if target:
+            CS.set_analyzer_state(
+                session_id,
+                status="running",
+                requested_ordinal=target,
+                error=None,
+                root=root,
+            )
+        return {"owned": True, "token": owner_token, "target": target}
+
+
+def _settle_refresh(
+    session_id: str,
+    root: Optional[Path],
+    owner_token: str,
+    *,
+    error: Optional[Exception] = None,
+    handoff_if_pending: bool = False,
+) -> Dict[str, Any]:
+    """Set status and release the exact owned lease in one critical section."""
+    with CS.session_lock(session_id, root, wait_s=5):
+        state = CS.get_analyzer_state(session_id, root)
+        cursor = int(state.get("last_analyzed_ordinal") or 0)
+        requested = int(state.get("requested_ordinal") or 0)
+        pending = requested > cursor
+        if error is not None:
+            status = "error"
+            error_value: Any = error
+        else:
+            status = "pending" if pending else "idle"
+            error_value = None
+        state = CS.set_analyzer_state(
+            session_id, status=status, error=error_value, root=root
+        )
+        worker = _worker_path(session_id, root)
+        record = _read_worker_record(worker)
+        if _record_owned_by(record, owner_token):
+            worker.unlink(missing_ok=True)
+        return {
+            "state": state,
+            "needs_handoff": bool(
+                error is None and pending and handoff_if_pending
+            ),
+        }
+
+
+def _goal_snapshot(
+    session_id: str, root: Optional[Path]
+) -> tuple:
+    """Read goal content and its CAS revision under one session lock."""
+    with CS.session_lock(session_id, root, wait_s=5):
+        goals, important = CS.load_goals(session_id, root)
+        revision = CS.goal_revision(session_id, root)
+    return goals, important, revision
+
+
 def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict[str, Any]:
     """Analyze through the latest requested ordinal, coalescing concurrent work."""
     CS.paths(session_id, root)
     try:
-        with CS.session_lock(session_id, root, wait_s=5):
-            state = CS.get_analyzer_state(session_id, root)
-            if state.get("status") == "running":
-                CS.request_analysis(session_id, root=root)
-                return {"status": "coalesced", "session_id": session_id}
-            manifest = CS.load_manifest(session_id, root)
-            target = int(manifest.get("last_ordinal") or 0)
-            if not target:
-                CS.set_analyzer_state(session_id, last_analyzed_ordinal=0,
-                                      status="idle", error=None, root=root)
-                return {"status": "empty", "session_id": session_id,
-                        "analyzed_through": 0, "changes": []}
-            CS.set_analyzer_state(session_id, status="running",
-                                  requested_ordinal=target, error=None, root=root)
+        claim = _claim_refresh(session_id, root)
     except TimeoutError:
-        CS.request_analysis(session_id, root=root)
+        try:
+            CS.request_analysis(session_id, root=root)
+        except TimeoutError:
+            pass
         return {"status": "coalesced", "session_id": session_id}
+    if not claim["owned"]:
+        return {
+            "status": "coalesced",
+            "session_id": session_id,
+            "requested_ordinal": claim["requested_ordinal"],
+            "needs_handoff": False,
+        }
+    owner_token = str(claim["token"])
+    if not claim["target"]:
+        settled = _settle_refresh(session_id, root, owner_token)
+        return {
+            "status": "empty",
+            "session_id": session_id,
+            "analyzed_through": 0,
+            "changes": [],
+            "needs_handoff": settled["needs_handoff"],
+        }
 
     changes: List[str] = []
     passes = 0
+    starting_cursor = int(
+        CS.get_analyzer_state(session_id, root).get("last_analyzed_ordinal") or 0
+    )
     try:
         while True:
             if passes >= MAX_REFRESH_PASSES:
-                CS.set_analyzer_state(session_id, status="pending", error=None, root=root)
+                state = CS.get_analyzer_state(session_id, root)
+                cursor = int(state.get("last_analyzed_ordinal") or 0)
+                settled = _settle_refresh(
+                    session_id,
+                    root,
+                    owner_token,
+                    handoff_if_pending=cursor > starting_cursor,
+                )
                 return {"status": "updated" if changes else "coalesced",
                         "session_id": session_id,
-                        "analyzed_through": int(CS.get_analyzer_state(session_id, root)
-                                                .get("last_analyzed_ordinal") or 0),
-                        "changes": changes}
+                        "analyzed_through": cursor,
+                        "changes": changes,
+                        "needs_handoff": settled["needs_handoff"]}
             state = CS.get_analyzer_state(session_id, root)
             cursor = int(state.get("last_analyzed_ordinal") or 0)
             requested = int(state.get("requested_ordinal") or 0)
             events = [e for e in CS.new_events_since(session_id, cursor, root)
                       if int(e.get("ordinal") or 0) <= requested]
             if not events:
-                CS.set_analyzer_state(session_id, status="idle", error=None, root=root)
+                # Re-check requested vs. analyzed while releasing the lease.
+                # A turn can land after the empty read and before this lock.
+                settled = _settle_refresh(
+                    session_id, root, owner_token, handoff_if_pending=True
+                )
                 return {"status": "current" if not changes else "updated",
                         "session_id": session_id, "analyzed_through": cursor,
-                        "changes": changes}
+                        "changes": changes,
+                        "needs_handoff": settled["needs_handoff"]}
             digest = _event_digest(events)
             if not digest:
                 cursor = max(int(e.get("ordinal") or 0) for e in events)
                 CS.set_analyzer_state(session_id, last_analyzed_ordinal=cursor, root=root)
                 continue
-            goals, important = CS.load_goals(session_id, root)
+            goals, important, revision = _goal_snapshot(session_id, root)
             passes += 1
-            revision = CS.goal_revision(session_id, root)
             context = project_context(CS.load_manifest(session_id, root).get("cwd"), events)
             valid_ids = {row["id"] for row in digest}
             if not goals.get("goals"):
@@ -401,29 +584,26 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
             CS.set_analyzer_state(session_id, last_analyzed_ordinal=through,
                                   error=None, root=root)
     except Exception as exc:  # noqa: BLE001 - persist failure for inspection
-        CS.set_analyzer_state(session_id, status="error", error=exc, root=root)
+        settled = _settle_refresh(session_id, root, owner_token, error=exc)
+        state = settled["state"]
         return {"status": "error", "session_id": session_id,
-                "analyzed_through": int(CS.get_analyzer_state(session_id, root)
-                                        .get("last_analyzed_ordinal") or 0),
-                "changes": changes, "error": str(exc)}
+                "analyzed_through": int(state.get("last_analyzed_ordinal") or 0),
+                "changes": changes, "error": str(exc),
+                "needs_handoff": False}
 
 
 def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any]:
     """Request analysis and start one detached, coalescing worker process."""
     p = CS.paths(session_id, root)
     with CS.session_lock(session_id, root, wait_s=5):
-        worker = p.session_dir / "analyzer.json"
-        try:
-            prior = json.loads(worker.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            prior = {}
-        pid = prior.get("pid")
+        worker = _worker_path(session_id, root)
+        prior = _read_worker_record(worker)
         analyzer = CS.get_analyzer_state(session_id, root)
-        worker_alive = bool(pid and _worker_process_matches(pid, session_id))
-        if analyzer.get("status") in ("pending", "running") and worker_alive:
+        if _worker_record_alive(prior, session_id):
             requested = CS.request_analysis(session_id, root=root)
             return {"status": "coalesced", "session_id": session_id,
                     "requested_ordinal": requested.get("requested_ordinal", 0)}
+        worker.unlink(missing_ok=True)
         if analyzer.get("status") == "running":
             # The prior worker crashed or its PID was reused. Reset the stale
             # lease so the replacement worker does not immediately coalesce
@@ -437,6 +617,8 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
         if root is not None:
             child_env["HC_CHAT_STATE_DIR"] = str(Path(root).expanduser().resolve())
         child_env["HC_CHAT_INFERENCE"] = "1"
+        owner_token = secrets.token_hex(16)
+        child_env["HC_CHAT_WORKER_TOKEN"] = owner_token
         log = p.session_dir / "analyzer.log"
         log.touch(mode=0o600, exist_ok=True)
         log.chmod(0o600)
@@ -447,12 +629,14 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
                 env=child_env,
             )
         _DETACHED_PROCESSES.append(process)
-        worker.write_text(json.dumps({
+        _write_worker_record(worker, {
+            "schema_version": 1,
             "pid": process.pid,
             "session_id": session_id,
+            "token": owner_token,
+            "mode": "detached",
             "started_at": time.time(),
-        }) + "\n", encoding="utf-8")
-        worker.chmod(0o600)
+        })
         return {"status": "spawned", "session_id": session_id,
                 "pid": process.pid,
                 "requested_ordinal": requested.get("requested_ordinal", 0)}
@@ -481,12 +665,20 @@ def _worker_process_matches(pid: Any, session_id: str) -> bool:
     )
 
 
-def clear_worker_record(session_id: str, root: Optional[Path] = None) -> None:
+def clear_worker_record(
+    session_id: str,
+    root: Optional[Path] = None,
+    owner_token: Optional[str] = None,
+) -> None:
+    """Clear only this process's lease, never a successor's reused PID."""
+    token = owner_token or os.environ.get("HC_CHAT_WORKER_TOKEN")
     with CS.session_lock(session_id, root, wait_s=5):
-        worker = CS.paths(session_id, root).session_dir / "analyzer.json"
-        try:
-            value = json.loads(worker.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            value = {}
-        if value.get("pid") in (None, os.getpid()):
+        worker = _worker_path(session_id, root)
+        value = _read_worker_record(worker)
+        legacy_owner = (
+            not value.get("token")
+            and not token
+            and value.get("pid") in (None, os.getpid())
+        )
+        if _record_owned_by(value, token) or legacy_owner:
             worker.unlink(missing_ok=True)

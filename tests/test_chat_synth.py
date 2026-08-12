@@ -3,6 +3,7 @@ import os
 import signal
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -166,6 +167,70 @@ class ChatSynthesisTests(unittest.TestCase):
         self.assertEqual("edited while model ran", goal["notes"])
         self.assertEqual([evidence], goal["evidence_ids"])
 
+    def test_goal_snapshot_holds_session_lock_through_revision_read(self):
+        self.hook("UserPromptSubmit", prompt="Build a goal")
+        CS.save_goals(SID, {"version": 1, "goals": [{
+            "id": "g1", "title": "Existing", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "prompt_ids": [], "important_item_ids": [], "notes": "",
+            "priority": "normal", "origin": "inferred",
+        }]}, {"items": []}, root=self.root)
+        evidence = CS.load_events(SID, self.root)[0]["id"]
+        response = {"operations": [{
+            "op": "attach_evidence", "goal_id": "g1",
+            "evidence_ids": [evidence],
+        }]}
+
+        revision_entered = threading.Event()
+        release_revision = threading.Event()
+        edit_attempted = threading.Event()
+        edit_done = threading.Event()
+        original_revision = CS.goal_revision
+        first_revision = [True]
+
+        def blocked_revision(session_id, root=None):
+            if first_revision[0]:
+                first_revision[0] = False
+                revision_entered.set()
+                if not release_revision.wait(2):
+                    raise TimeoutError("test did not release revision read")
+            return original_revision(session_id, root)
+
+        def browser_edit():
+            edit_attempted.set()
+            goals, important = CS.load_goals(SID, self.root)
+            goals["goals"][0]["notes"] = "atomic browser edit"
+            CS.save_goals(SID, goals, important, root=self.root)
+            edit_done.set()
+
+        provider = RacingProvider(
+            [response, response], lambda: edit_done.wait(2)
+        )
+        results = []
+        analyzer = threading.Thread(
+            target=lambda: results.append(
+                S.refresh(SID, root=self.root, provider=provider)
+            )
+        )
+        with mock.patch.object(CS, "goal_revision", side_effect=blocked_revision):
+            analyzer.start()
+            self.assertTrue(revision_entered.wait(2))
+            editor = threading.Thread(target=browser_edit)
+            editor.start()
+            self.assertTrue(edit_attempted.wait(2))
+            self.assertFalse(edit_done.wait(0.1))
+            release_revision.set()
+            editor.join(2)
+            analyzer.join(2)
+
+        self.assertFalse(editor.is_alive())
+        self.assertFalse(analyzer.is_alive())
+        self.assertEqual("updated", results[0]["status"])
+        self.assertEqual(2, len(provider.prompts))
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertEqual("atomic browser edit", goal["notes"])
+        self.assertEqual([evidence], goal["evidence_ids"])
+
     def test_failure_is_persisted_and_cursor_does_not_advance(self):
         self.hook("UserPromptSubmit", prompt="A goal")
         provider = Provider([{"wrong": []}])
@@ -174,6 +239,9 @@ class ChatSynthesisTests(unittest.TestCase):
         state = CS.get_analyzer_state(SID, self.root)
         self.assertEqual("error", state["status"])
         self.assertEqual(0, state["last_analyzed_ordinal"])
+        self.assertFalse(
+            (CS.paths(SID, self.root).session_dir / "analyzer.json").exists()
+        )
 
     def test_empty_refresh_resets_pending_state(self):
         CS.ingest_hook({"session_id": SID, "hook_event_name": "SessionStart",
@@ -221,6 +289,78 @@ class ChatSynthesisTests(unittest.TestCase):
                         CS.load_manifest(SID, self.root)["last_ordinal"])
         self.assertEqual("pending", state["status"])
         self.assertEqual("updated", result["status"])
+        self.assertTrue(result["needs_handoff"])
+        self.assertFalse(
+            (CS.paths(SID, self.root).session_dir / "analyzer.json").exists()
+        )
+
+    def test_turn_landing_after_empty_read_stays_pending_for_handoff(self):
+        self.hook("UserPromptSubmit", prompt="first turn")
+        provider = Provider([{"goals": [{
+            "id": "g1", "title": "First goal", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+        }]}])
+        original_new_events = CS.new_events_since
+        injected = [False]
+
+        def racing_new_events(session_id, cursor, root=None):
+            events = original_new_events(session_id, cursor, root)
+            if cursor == 1 and not events and not injected[0]:
+                injected[0] = True
+                self.hook("UserPromptSubmit", prompt="turn during worker exit")
+            return events
+
+        with mock.patch.object(CS, "new_events_since", side_effect=racing_new_events):
+            result = S.refresh(SID, root=self.root, provider=provider)
+
+        state = CS.get_analyzer_state(SID, self.root)
+        self.assertTrue(injected[0])
+        self.assertEqual("pending", state["status"])
+        self.assertEqual(1, state["last_analyzed_ordinal"])
+        self.assertEqual(2, state["requested_ordinal"])
+        self.assertTrue(result["needs_handoff"])
+        self.assertFalse(
+            (CS.paths(SID, self.root).session_dir / "analyzer.json").exists()
+        )
+
+    def test_concurrent_direct_refresh_coalesces_into_token_owner(self):
+        self.hook("UserPromptSubmit", prompt="one analyzer only")
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingProvider(Provider):
+            def generate_json(inner_self, prompt):
+                inner_self.prompts.append(prompt)
+                entered.set()
+                if not release.wait(2):
+                    raise TimeoutError("test did not release provider")
+                return inner_self.responses.pop(0)
+
+        first_provider = BlockingProvider([{"goals": [{
+            "id": "g1", "title": "Single owner", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+        }]}])
+        second_provider = Provider([{"goals": []}])
+        first_results = []
+        with mock.patch.dict(os.environ, {"HC_CHAT_WORKER_TOKEN": ""}):
+            worker = threading.Thread(
+                target=lambda: first_results.append(
+                    S.refresh(SID, root=self.root, provider=first_provider)
+                )
+            )
+            worker.start()
+            self.assertTrue(entered.wait(2))
+            second = S.refresh(SID, root=self.root, provider=second_provider)
+            release.set()
+            worker.join(2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual("coalesced", second["status"])
+        self.assertEqual([], second_provider.prompts)
+        self.assertEqual("updated", first_results[0]["status"])
+        self.assertFalse(
+            (CS.paths(SID, self.root).session_dir / "analyzer.json").exists()
+        )
 
     def test_detached_worker_executes_real_cli_route(self):
         self.hook("UserPromptSubmit", prompt="Infer this goal")
@@ -289,6 +429,36 @@ class ChatSynthesisTests(unittest.TestCase):
             result = S.spawn_refresh(SID, root=self.root)
         self.assertEqual("coalesced", result["status"])
         popen.assert_not_called()
+
+    def test_idle_live_worker_is_coalesced_during_atomic_exit_window(self):
+        self.hook("UserPromptSubmit", prompt="Needs analysis")
+        p = CS.paths(SID, self.root)
+        (p.session_dir / "analyzer.json").write_text(json.dumps({
+            "pid": os.getpid(), "session_id": SID,
+        }))
+        CS.set_analyzer_state(SID, status="idle", root=self.root)
+        with (mock.patch.object(S, "_worker_process_matches", return_value=True),
+              mock.patch.object(S.subprocess, "Popen") as popen):
+            result = S.spawn_refresh(SID, root=self.root)
+        self.assertEqual("coalesced", result["status"])
+        self.assertEqual("pending", CS.get_analyzer_state(SID, self.root)["status"])
+        popen.assert_not_called()
+
+    def test_old_worker_token_cannot_clear_successor_record(self):
+        p = CS.paths(SID, self.root)
+        p.session_dir.mkdir(parents=True)
+        worker = p.session_dir / "analyzer.json"
+        S._write_worker_record(worker, {
+            "pid": os.getpid(), "session_id": SID, "token": "successor",
+            "mode": "direct", "started_at": time.time(),
+        })
+
+        with mock.patch.dict(os.environ, {"HC_CHAT_WORKER_TOKEN": "departed"}):
+            S.clear_worker_record(SID, root=self.root)
+        self.assertTrue(worker.exists())
+
+        S.clear_worker_record(SID, root=self.root, owner_token="successor")
+        self.assertFalse(worker.exists())
 
 
 if __name__ == "__main__":

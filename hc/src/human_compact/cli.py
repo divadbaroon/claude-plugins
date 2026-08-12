@@ -741,7 +741,9 @@ def chat_refresh_main(argv=None):
     # without turning one hook subprocess into an unbounded job.
     state = chat_synth.CS.get_analyzer_state(args.session)
     after = int(state.get("last_analyzed_ordinal") or 0)
-    if state.get("status") == "pending" and after > before:
+    if result.get("needs_handoff") or (
+        state.get("status") == "pending" and after > before
+    ):
         try:
             chat_synth.spawn_refresh(args.session)
         except Exception as exc:  # noqa: BLE001 - retain pending state for retry

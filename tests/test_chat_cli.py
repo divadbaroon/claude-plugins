@@ -308,6 +308,32 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         spawn.assert_not_called()
 
+    def test_refresh_worker_hands_off_exit_race_without_cursor_progress(self):
+        from human_compact.trajectory import chat_synth
+
+        with (
+            mock.patch.object(
+                chat_synth.CS, "get_analyzer_state",
+                side_effect=[
+                    {"last_analyzed_ordinal": 3, "status": "running"},
+                    {"last_analyzed_ordinal": 3, "status": "pending"},
+                ],
+            ),
+            mock.patch.object(
+                chat_synth, "refresh", return_value={
+                    "status": "updated", "needs_handoff": True,
+                },
+            ),
+            mock.patch.object(chat_synth, "clear_worker_record"),
+            mock.patch.object(
+                chat_synth, "spawn_refresh", return_value={"status": "spawned"}
+            ) as spawn,
+        ):
+            code = self.cli.chat_refresh_main(["--session", SID])
+
+        self.assertEqual(0, code)
+        spawn.assert_called_once_with(SID)
+
 
 if __name__ == "__main__":
     unittest.main()
