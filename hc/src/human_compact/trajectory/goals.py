@@ -8,6 +8,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .secure_io import atomic_write_json, atomic_write_text, secure_dir
+
 TTY = sys.stdout.isatty()
 def c(code, s): return f"\033[{code}m{s}\033[0m" if TTY else s
 def bold(s): return c("1", s)
@@ -39,12 +41,11 @@ def load(trajdir: Path):
 
 
 def save(trajdir: Path, goals, important):
+    root = trajdir.parent
+    secure_dir(trajdir, root)
     goals["generated_at"] = _now()
     for name, obj in (("goals.json", goals), ("important.json", important)):
-        tmp = trajdir / (name + ".tmp")
-        tmp.write_text(json.dumps(obj, indent=1))
-        import os
-        os.replace(tmp, trajdir / name)
+        atomic_write_json(trajdir / name, obj, root=root)
     write_goal_context(trajdir, goals, important)
 
 
@@ -310,4 +311,4 @@ def write_goal_context(trajdir: Path, goals, important):
               if not x.get("parent_goal_id") and x["status"] in ("active", "in_progress")]:
         emit(g, 0)
     txt = "\n".join(lines)[:1900]
-    (trajdir / "goal_context.md").write_text(txt)
+    atomic_write_text(trajdir / "goal_context.md", txt, root=trajdir.parent)

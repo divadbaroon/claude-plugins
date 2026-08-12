@@ -9,6 +9,8 @@ import os
 from datetime import date, timedelta
 from pathlib import Path
 
+from .secure_io import atomic_write_json, secure_dir
+
 VAULT = Path(os.environ.get("CLAUDE_VAULT_DIR", Path.home() / ".claude-vault"))
 MAX_TURNS = 80          # last N turns per session fed to extraction
 MAX_TURN_CHARS = 300
@@ -89,11 +91,11 @@ def discover(days: int):
 
 def write_evidence_index(sessions, outdir: Path):
     """Turn-id -> resolvable evidence record, for the UI drawer."""
-    outdir.mkdir(parents=True, exist_ok=True)
+    secure_dir(outdir, VAULT)
     idx = {}
     for s in sessions:
         for t in s["turns"]:
             idx[t["id"]] = {"session_id": s["session_id"], "date": s["date"],
                             "role": t["role"], "text": t["text"], "cwd": s["cwd"]}
-    (outdir / "evidence_index.json").write_text(json.dumps(idx, indent=1))
+    atomic_write_json(outdir / "evidence_index.json", idx, root=VAULT)
     return idx

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import discover as D, extract as X, synthesize as S, state
 from . import providers as P
+from .secure_io import atomic_write_text, secure_dir
 
 
 def _providers():
@@ -77,6 +78,8 @@ def synthesize_from_cache(sy, days, log=print):
 
 
 def drain(days=30, log=print):
+    from .secure_io import secure_existing_tree
+    secure_existing_tree(state.trajdir(), D.VAULT)
     if not state.acquire_lock():
         log("worker: another worker holds the lock; exiting (queue intact)")
         return 0
@@ -111,8 +114,8 @@ def drain(days=30, log=print):
                     new_sids.append(sid)
                 except Exception as e:                   # noqa: BLE001
                     log(f"worker: {sid[:8]} failed: {e}")
-                    state.fdir().mkdir(parents=True, exist_ok=True)
-                    (state.fdir() / sid).write_text(str(e))
+                    secure_dir(state.fdir(), D.VAULT)
+                    atomic_write_text(state.fdir() / sid, str(e), root=D.VAULT)
                     qfile.unlink(missing_ok=True)
                 finally:
                     state.clear_processing()

@@ -6,9 +6,11 @@ Recurring items across conversations MERGE into one node whose weight is its
 recurrence, which is what makes clusters emerge under ForceAtlas2.
 Derived layer: regenerable, raw Vault untouched.
 """
-import json
 import re
 from pathlib import Path
+
+from . import discover as D
+from .secure_io import atomic_write_json, secure_dir
 
 PALETTE = ["#8b5cf6", "#14b8a6", "#d97706", "#e11d48", "#64748b", "#2563eb"]
 ITEM_FIELDS = [("decisions", "decision"), ("actions_taken", "action"),
@@ -121,6 +123,6 @@ def build(extractions, analysis, outdir: Path):
                        "question": (a.get("unresolved_questions") or [{}])[0].get("question", ""),
                        "blocker": (a.get("blockers") or [{}])[0].get("description", ""),
                        "progress": (a.get("recent_progress") or [{}])[0].get("description", "")}}
-    outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / "graph.json").write_text(json.dumps(graph, indent=1))
+    secure_dir(outdir, D.VAULT)
+    atomic_write_json(outdir / "graph.json", graph, root=D.VAULT)
     return graph

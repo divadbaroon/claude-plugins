@@ -18,6 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+from .trajectory.secure_io import (
+    atomic_write_text as _private_atomic_write_text,
+    open_private_append,
+    secure_dir as _trajectory_secure_dir,
+)
+
 
 def home_dir() -> Path:
     return Path(os.environ.get("HC_HOME", Path.home()))
@@ -283,15 +289,12 @@ def _counter(base: Path, increment: bool = False) -> int:
 
 def _start_worker(root: Path, session_id: str, now: str) -> None:
     queue = root / "trajectory" / "queue"
-    _secure_dir(queue, root)
+    _trajectory_secure_dir(queue, root)
     marker = queue / session_id
-    marker.write_text(now + "\n")
-    os.chmod(marker, 0o600)
+    _private_atomic_write_text(marker, now + "\n", root=root)
     log_path = root / "trajectory" / "worker.log"
-    _secure_dir(log_path.parent, root)
     child_env = os.environ.copy()
-    with log_path.open("a", encoding="utf-8") as log:
-        os.chmod(log_path, 0o600)
+    with open_private_append(log_path, root=root) as log:
         subprocess.Popen(
             [sys.executable, "-m", "human_compact.cli", "worker"],
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,

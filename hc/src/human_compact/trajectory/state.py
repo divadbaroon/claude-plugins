@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import discover as D
+from .secure_io import atomic_write_json, atomic_write_text, secure_dir
 
 
 def trajdir():
@@ -22,8 +23,8 @@ def statef(): return trajdir() / "worker.state"
 
 
 def enqueue(sid):
-    qdir().mkdir(parents=True, exist_ok=True)
-    (qdir() / sid).write_text(str(int(time.time())))
+    secure_dir(qdir(), D.VAULT)
+    atomic_write_text(qdir() / sid, str(int(time.time())), root=D.VAULT)
 
 
 def pending():
@@ -46,8 +47,10 @@ def acquire_lock(wait_s=0):
     deadline = time.time() + wait_s
     while True:
         try:
-            lockdir().mkdir(parents=True)
-            (lockdir() / "pid").write_text(str(os.getpid()))
+            secure_dir(trajdir(), D.VAULT)
+            lockdir().mkdir(mode=0o700)
+            os.chmod(lockdir(), 0o700)
+            atomic_write_text(lockdir() / "pid", str(os.getpid()), root=D.VAULT)
             return True
         except FileExistsError:
             try:
@@ -71,10 +74,10 @@ def release_lock():
 
 
 def set_processing(sid, phase="extracting"):
-    statef().parent.mkdir(parents=True, exist_ok=True)
-    statef().write_text(json.dumps(
+    secure_dir(statef().parent, D.VAULT)
+    atomic_write_json(statef(),
         {"pid": os.getpid(), "phase": phase, "current": sid,
-         "started": int(time.time())}))
+         "started": int(time.time())}, root=D.VAULT)
 
 
 def clear_processing():

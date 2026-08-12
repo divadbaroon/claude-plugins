@@ -473,9 +473,10 @@ def trajectory_main(argv=None):
     import json as _json
     from .trajectory import discover as D, providers as P, extract as X
     from .trajectory import synthesize as S, serve as V, graph_build as G
+    from .trajectory import secure_io as IO
 
     trajdir = D.VAULT / "trajectory"
-    trajdir.mkdir(parents=True, exist_ok=True)
+    IO.secure_existing_tree(trajdir, D.VAULT)
     cfgf = trajdir / "config.json"
     cfg = _json.loads(cfgf.read_text()) if cfgf.is_file() else {}
 
@@ -510,7 +511,7 @@ def trajectory_main(argv=None):
     if sy_kind == "claude" and ex_kind != "claude" and not args.synth_provider and not cfg.get("synth_provider"):
         sy_kind = ex_kind                    # never silently escalate off-device
     cfg.update({"extract_provider": ex_kind, "synth_provider": sy_kind})
-    cfgf.write_text(_json.dumps(cfg, indent=1))
+    IO.atomic_write_json(cfgf, cfg, root=D.VAULT)
 
     ex = P.make(ex_kind, "extract", args.model)
     sy = P.make(sy_kind, "synthesize", args.synth_model)
@@ -674,7 +675,8 @@ def goals_main(argv=None):
     import json as _j
     from .trajectory import goals as GM, goal_synth as GS, state, worker as W
     from .trajectory import providers as Pr, lens as L
-    trajdir = state.trajdir(); trajdir.mkdir(parents=True, exist_ok=True)
+    from .trajectory import secure_io as IO
+    trajdir = state.trajdir(); IO.secure_existing_tree(trajdir, trajdir.parent)
     try:
         cfg = _j.loads((trajdir / "config.json").read_text())
         provider = Pr.make(cfg.get("synth_provider") or cfg["extract_provider"], "synthesize")
@@ -783,7 +785,8 @@ def _goal_nl_flow(trajdir, provider, read):
     except (OSError, ValueError):
         pass
     cur.setdefault("_goal_freeform", []).append(entry)
-    p.write_text(_j.dumps(cur, indent=1))
+    from .trajectory.secure_io import atomic_write_json
+    atomic_write_json(p, cur, root=trajdir.parent)
     if applied:
         # mark_important ops need the important store; route them
         plain = [o for o in ops if o.get("op") != "mark_important"]

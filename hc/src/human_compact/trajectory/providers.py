@@ -6,6 +6,9 @@ import os
 import re
 import subprocess
 import urllib.request
+from pathlib import Path
+
+from .secure_io import open_private_append
 
 OLLAMA_URL = os.environ.get("HC_OLLAMA_URL", "http://localhost:11434")
 CLAUDE_TIMEOUT_SECONDS = 180
@@ -156,7 +159,8 @@ class Mock(Base):
             for line in prompt.splitlines():
                 if ", id " in line:
                     cid = line.split(", id ")[1].split(",")[0]; break
-            with open(os.path.join(d, "calls.log"), "a") as f:
+            with open_private_append(
+                    Path(d) / "calls.log", secure_parent=False) as f:
                 f.write(cid + "\n")
             fail = os.environ.get("HC_MOCK_FAIL_SUBSTR")
             if fail and fail in prompt:

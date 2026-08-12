@@ -4,6 +4,9 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import discover as D
+from .secure_io import atomic_write_json, secure_dir
+
 SYNTH_VERSION = "6"
 
 PROMPT = """You are synthesizing structured extractions from a user's Claude Code
@@ -100,9 +103,6 @@ def synthesize(extractions, provider, days, outdir: Path, meta, corrections_text
         "synth_version": SYNTH_VERSION,
         "analysis": data,
     }
-    outdir.mkdir(parents=True, exist_ok=True)
-    tmp = outdir / "analysis.json.tmp"
-    tmp.write_text(json.dumps(analysis, indent=1))
-    import os as _os
-    _os.replace(tmp, outdir / "analysis.json")     # atomic lens replacement
+    secure_dir(outdir, D.VAULT)
+    atomic_write_json(outdir / "analysis.json", analysis, root=D.VAULT)
     return analysis

@@ -391,7 +391,11 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
         label="Vault goals", idle_timeout=None):
     chat_scoped = trajdir is not None
     trajdir = _scope(trajdir)
-    trajdir.mkdir(parents=True, exist_ok=True)
+    from .secure_io import secure_dir, secure_existing_tree
+    if chat_scoped:
+        secure_dir(trajdir, trajdir.parent)
+    else:
+        secure_existing_tree(trajdir, trajdir.parent)
     for p in range(port, port + 20):
         try:
             srv = ThreadingHTTPServer(("127.0.0.1", p), H)
