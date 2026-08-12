@@ -420,7 +420,7 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
         pid = prior.get("pid")
         analyzer = CS.get_analyzer_state(session_id, root)
         worker_alive = bool(pid and _worker_process_matches(pid, session_id))
-        if analyzer.get("status") == "running" and worker_alive:
+        if analyzer.get("status") in ("pending", "running") and worker_alive:
             requested = CS.request_analysis(session_id, root=root)
             return {"status": "coalesced", "session_id": session_id,
                     "requested_ordinal": requested.get("requested_ordinal", 0)}

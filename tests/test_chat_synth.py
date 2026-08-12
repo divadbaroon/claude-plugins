@@ -118,6 +118,27 @@ class ChatSynthesisTests(unittest.TestCase):
         self.assertEqual("urgent", goal["priority"])
         self.assertEqual("completed", goal["status"])
 
+    def test_incremental_subgoal_stays_under_existing_goal(self):
+        first = self.hook("UserPromptSubmit", prompt="Build the chat UI")
+        CS.save_goals(SID, {"version": 1, "goals": [{
+            "id": "g1", "title": "Build the chat UI", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "prompt_ids": [], "important_item_ids": [],
+        }]}, {"items": []}, root=self.root)
+        CS.set_analyzer_state(SID, last_analyzed_ordinal=first.last_ordinal,
+                              status="idle", root=self.root)
+        self.hook("UserPromptSubmit", prompt="Add prompt search")
+        evidence = CS.load_events(SID, self.root)[-1]["id"]
+        provider = Provider([{"operations": [{
+            "op": "new_goal", "parent_goal_id": "g1",
+            "title": "Add prompt search", "evidence_ids": [evidence],
+            "todos": [], "distinct_because": "",
+        }]}])
+        S.refresh(SID, root=self.root, provider=provider)
+        child = next(g for g in CS.load_goals(SID, self.root)[0]["goals"]
+                     if g["id"] != "g1")
+        self.assertEqual("g1", child["parent_goal_id"])
+
     def test_browser_race_retries_without_losing_manual_edit(self):
         self.hook("UserPromptSubmit", prompt="Build a goal")
         CS.save_goals(SID, {"version": 1, "goals": [{
@@ -255,6 +276,19 @@ class ChatSynthesisTests(unittest.TestCase):
         self.assertEqual("spawned", result["status"])
         self.assertEqual("pending", CS.get_analyzer_state(SID, self.root)["status"])
         popen.assert_called_once()
+
+    def test_pending_live_worker_is_coalesced_before_it_marks_running(self):
+        self.hook("UserPromptSubmit", prompt="Needs analysis")
+        p = CS.paths(SID, self.root)
+        (p.session_dir / "analyzer.json").write_text(json.dumps({
+            "pid": os.getpid(), "session_id": SID,
+        }))
+        CS.set_analyzer_state(SID, status="pending", root=self.root)
+        with (mock.patch.object(S, "_worker_process_matches", return_value=True),
+              mock.patch.object(S.subprocess, "Popen") as popen):
+            result = S.spawn_refresh(SID, root=self.root)
+        self.assertEqual("coalesced", result["status"])
+        popen.assert_not_called()
 
 
 if __name__ == "__main__":

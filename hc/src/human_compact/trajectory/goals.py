@@ -116,21 +116,26 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                     t["done"] = True; g["updated_at"] = _now()
                     changes.append(f"todo ✓ {t['text'][:44]}"); break
         elif op == "new_goal":
-            top = not o.get("parent_goal_id")
+            parent_id = o.get("parent_goal_id")
+            if parent_id and not by_id(goals, parent_id):
+                parent_id = None
+            top = not parent_id
             if top:
                 new_top += 1
                 if new_top > max_new_top_level or not o.get("distinct_because"):
                     changes.append(f"REFUSED new top-level goal: {o.get('title','')[:40]}")
                     continue
             gid = next_goal_id(goals)
-            goals["goals"].append(sanitize({"goals": [{
+            goals["goals"].append({
                 "id": gid, "title": o.get("title", ""), "status": "active",
-                "parent_goal_id": o.get("parent_goal_id"),
+                "parent_goal_id": parent_id,
                 "evidence_ids": o.get("evidence_ids", []),
                 "todos": [{"text": t.get("text", ""), "done": bool(t.get("done")),
                            "evidence_ids": t.get("evidence_ids", [])}
                           for t in o.get("todos", []) if isinstance(t, dict)],
-                "important_item_ids": [], "updated_at": _now()}]})["goals"][0])
+                "important_item_ids": [], "prompt_ids": [],
+                "updated_at": _now()})
+            sanitize(goals)
             changes.append(f"goal + {o.get('title','')[:44]}")
         elif op == "set_status" and g and o.get("status") in ("active", "in_progress", "completed", "abandoned"):
             g["status"] = o["status"]; g["updated_at"] = _now()
