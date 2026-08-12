@@ -814,6 +814,7 @@ def chat_ui_main(argv=None):
             _DETACHED_PROCESSES.append(process)
             deadline = time.monotonic() + 8
             record = None
+            candidate = None
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     break
@@ -823,7 +824,8 @@ def chat_ui_main(argv=None):
                     break
                 time.sleep(0.05)
             if record is None:
-                if process.poll() is None:
+                exit_at_deadline = process.poll()
+                if exit_at_deadline is None:
                     process.terminate()
                     try:
                         process.wait(timeout=2)
@@ -835,8 +837,14 @@ def chat_ui_main(argv=None):
                     detail = log_path.read_text(errors="replace")[-600:].strip()
                 except OSError:
                     pass
-                raise SystemExit("chat UI server did not start" +
-                                 (f": {detail}" if detail else ""))
+                startup = (
+                    f"pid={process.pid}, exit_at_deadline={exit_at_deadline}, "
+                    f"exit_after_cleanup={process.returncode}, "
+                    f"registry={candidate!r}"
+                )
+                if detail:
+                    startup += f", log={detail}"
+                raise SystemExit(f"chat UI server did not start: {startup}")
 
     try:
         _request_chat_refresh(args.session)

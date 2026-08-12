@@ -21,6 +21,9 @@ from human_compact.trajectory import ui  # noqa: E402
 from human_compact.trajectory import chat_state  # noqa: E402
 
 
+NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def goal(goal_id, title, prompt_ids=None):
     return {
         "id": goal_id,
@@ -59,7 +62,7 @@ def server_for(path, chat_scoped=True):
 
 
 def get_json(url):
-    with urllib.request.urlopen(url, timeout=2) as response:
+    with NO_PROXY_OPENER.open(url, timeout=2) as response:
         return json.loads(response.read())
 
 
@@ -72,7 +75,7 @@ def post_json(url, body, headers=None):
         headers=request_headers,
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=2) as response:
+    with NO_PROXY_OPENER.open(request, timeout=2) as response:
         return json.loads(response.read())
 
 

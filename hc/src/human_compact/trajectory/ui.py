@@ -385,8 +385,10 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
     else:
         print("  no free port found"); return
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
-    print(f"\n  {label} · {url}")
-    print("  Ctrl-C to stop\n")
+    # Detached launchers redirect this output to a private diagnostic log.
+    # Flush before readiness so a blocked child still exposes its last stage.
+    print(f"\n  {label} · {url}", flush=True)
+    print("  Ctrl-C to stop\n", flush=True)
     idle_stop = threading.Event()
     idle_thread = None
     try:
