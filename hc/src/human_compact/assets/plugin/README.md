@@ -1,10 +1,25 @@
-# vault
+# vault + chat goals
 
-Persist per-session Claude Code conversation history that survives context
-compaction. Local-first: no network, no telemetry, nothing leaves your machine.
+Maintain per-chat goal state, and optionally persist Claude Code conversation
+history that survives context compaction. There is no telemetry; persisted
+state stays on your machine.
 
-Inert unless `CLAUDE_VAULT=1`. The `claude` shim sets that for you when you
-run `claude --vault`; plain `claude` is a pure pass-through.
+## Chat-scoped goals (always available after install)
+
+Run `/hc-ui` inside Claude Code. The browser UI is keyed to that chat's stable
+session ID and stored at `~/.claude-vault/chat-sessions/<session-id>/`.
+User prompts can be linked many-to-many with goals. Inference also observes
+assistant plans/progress, tool activity, task events, and completion evidence.
+
+This chat-scoped layer does not require the shim or `CLAUDE_VAULT=1`.
+Its default goal analyzer sends a bounded chat/context digest through your
+authenticated Claude CLI. Set `HC_CHAT_PROVIDER=ollama` for on-device
+inference. The localhost server binds to `127.0.0.1`, rejects cross-origin
+writes, and chat artifacts are owner-only.
+
+The global history layer below is inert unless `CLAUDE_VAULT=1`. The `claude`
+shim sets that for you when you run `claude --vault`; plain `claude` is a pure
+pass-through for global Vault capture.
 
 ## What it stores
 
@@ -25,25 +40,31 @@ The original Claude transcript is only ever read, never modified.
 
 ## Install
 
-1. Plugin (skills-directory install):
+Install the Python package and its Claude Code integration:
 
-       cp -R vault ~/.claude/skills/vault
-       chmod +x ~/.claude/skills/vault/scripts/vault-hook.sh
-       claude plugin list   # expect vault@skills-dir, 0.1.0
+    brew install pipx jq
+    pipx ensurepath
+    pipx install "git+https://github.com/divadbaroon/claude-plugins.git@main#subdirectory=hc"
 
-2. Shim:
+If `pipx ensurepath` changed your shell configuration, open a new terminal
+before continuing. Install only the chat-scoped `/hc-ui` command with:
 
-       mkdir -p ~/.claude-vault/bin
-       cp vault/shim/claude ~/.claude-vault/bin/claude
-       chmod +x ~/.claude-vault/bin/claude
-       echo 'export PATH="$HOME/.claude-vault/bin:$PATH"' >> ~/.zshrc
+    hc install
 
-   Open a new terminal (or `source ~/.zshrc; hash -r`), then verify:
+If an older standalone `uv` makes `pipx install` report a backend-version
+conflict, rerun that install command with `--backend pip`.
 
-       which claude          # -> ~/.claude-vault/bin/claude (the shim)
-       claude --version      # still your normal Claude Code version
+Start a new Claude Code session (or run `/reload-plugins`) and use `/hc-ui`.
+This path does not install the shim or enable global Vault capture.
 
-Requires `jq` (`brew install jq`).
+To add the optional global history layer, run:
+
+    hc backup
+
+That command installs the shim and asks whether to import prior conversations
+and whether future global capture should be always on or limited to
+`claude --vault`. `jq` is required by these optional global Vault hooks, but
+not by the chat-scoped Python hooks.
 
 ## Backfill existing history
 
@@ -89,5 +110,6 @@ action to `~/.claude-vault/debug.log`. `CLAUDE_VAULT_DIR` relocates the vault.
 
 ## Uninstall
 
-    rm -rf ~/.claude/skills/vault ~/.claude-vault
+    pipx uninstall human-compact
+    rm -rf ~/.claude/skills/vault ~/.claude/skills/hc-ui ~/.claude-vault
     # and remove the PATH line from ~/.zshrc
