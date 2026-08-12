@@ -172,7 +172,10 @@ class GoalPromptUiTests(unittest.TestCase):
                   "Markdown formats as you type · auto-saved with this goal"
                 ),
                 notesPlaceholderRemoved: !patched.includes("Plan in markdown —") &&
-                  patched.includes('aria-label="Goal notes"')
+                  patched.includes('aria-label="Goal notes"'),
+                acceptsEmptyV7: patched.includes(
+                  "(saved.goals.length || saved.v >= 7)"
+                )
               };
             })()"""
         )
@@ -194,6 +197,7 @@ class GoalPromptUiTests(unittest.TestCase):
                 "copyCaptionRemoved": True,
                 "notesCaptionRemoved": True,
                 "notesPlaceholderRemoved": True,
+                "acceptsEmptyV7": True,
             },
             result,
         )

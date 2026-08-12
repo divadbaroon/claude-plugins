@@ -74,6 +74,10 @@
         '<!-- Notes save through component state. -->'
       ],
       [
+        "      if (saved && saved.v >= 4 && Array.isArray(saved.goals) && saved.goals.length && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);",
+        "      if (saved && saved.v >= 4 && Array.isArray(saved.goals) && (saved.goals.length || saved.v >= 7) && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);"
+      ],
+      [
         "      filter: (saved && saved.v >= 6 && saved.filter) ? saved.filter : 'active',\n      labels:",
         "      filter: (saved && saved.v >= 6 && saved.filter) ? saved.filter : 'active',\n      activeRetained: (saved && saved.v >= 7 && Array.isArray(saved.activeRetained)) ? saved.activeRetained : [],\n      labels:"
       ],

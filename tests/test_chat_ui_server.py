@@ -481,6 +481,49 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_fresh_empty_chat_does_not_import_bundle_demo_goals(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        empty = self.root / "fresh-empty"
+        write_scope(empty, [], [])
+        with server_for(empty) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(
+                    page.get_by_text("No goals yet — add one below.", exact=True)
+                ).to_be_visible(timeout=10_000)
+                expect(page.get_by_text("Add goal", exact=True)).to_have_count(1)
+                expect(
+                    page.get_by_text("Ship the goal-state foundation", exact=True)
+                ).to_have_count(0)
+
+                # The bridge polls localStorage every 800 ms. Waiting beyond
+                # that boundary proves the demo seed was not imported later.
+                page.wait_for_timeout(1_200)
+                saved = page.evaluate(
+                    "JSON.parse(localStorage.getItem('hc-vault-ui-v1'))"
+                )
+                self.assertEqual(7, saved["v"])
+                self.assertEqual([], saved["goals"])
+                self.assertEqual([], get_json(url + "/api/state")["goals"])
+                self.assertEqual([], json.loads(
+                    (empty / "goals.json").read_text()
+                )["goals"])
+            finally:
+                browser.close()
+
     def test_active_completion_stays_crossed_out_until_filter_changes(self):
         try:
             from playwright.sync_api import expect, sync_playwright
