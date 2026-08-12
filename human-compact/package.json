@@ -1,17 +1,40 @@
 {
-  "name": "@papertlab/human-compact",
-  "version": "0.4.0",
-  "description": "Sandbox-forked Claude Code sessions for human-in-the-loop compaction studies: pick any past chat, work in a fork (original untouched), file changes disabled, /compact runs the study hook.",
+  "name": "human-compact",
+  "version": "0.16.0",
+  "description": "One-command installer for chat-scoped goals and optional global context in Claude Code.",
   "bin": {
     "human-compact": "bin/human-compact.js"
   },
   "files": [
     "bin",
-    "scripts",
-    "README.md"
+    "lib",
+    "vendor",
+    "README.md",
+    "LICENSE"
   ],
+  "scripts": {
+    "build:vendor": "node scripts/build-vendor.js",
+    "test": "node --test test/*.test.js",
+    "test:pack": "node --test test/pack.test.js"
+  },
   "engines": {
     "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/divadbaroon/claude-plugins.git",
+    "directory": "human-compact"
+  },
+  "bugs": {
+    "url": "https://github.com/divadbaroon/claude-plugins/issues"
+  },
+  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/human-compact#readme",
+  "publishConfig": {
+    "access": "public"
   },
   "license": "MIT"
 }

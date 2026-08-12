@@ -1,19 +1,43 @@
 """hc-backup: onboard Vault for Claude Code conversation persistence."""
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import time
+import uuid
 from importlib import resources
 from pathlib import Path
 
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
+HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
 VAULT_BIN = HOME / ".claude-vault" / "bin"
 ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
 ALWAYS_LINE = "export CLAUDE_VAULT=1"
+_DETACHED_PROCESSES = []
+MIN_CLAUDE_VERSION = (2, 1, 175)
+MIN_CLAUDE_VERSION_TEXT = ".".join(map(str, MIN_CLAUDE_VERSION))
+MANAGED_MARKER = ".human-compact-managed.json"
+_ASSET_FILES = {
+    "vault": {
+        ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
+        "scripts/chat-hook.sh", "scripts/vault-backfill.sh",
+        "scripts/vault-hook.sh",
+    },
+    "hc-ui": {"SKILL.md"},
+}
+# Exact unmarked v0.15.0 assets. This permits migration of installs created by
+# this project before ownership markers existed without claiming arbitrary
+# directories that merely happen to use the same names.
+_LEGACY_DIGESTS = {
+    "vault": {"4f5319b78efe7f90eccb967bbcd787b7ddcfbfdae8643e82281f01e6551dda02"},
+    "hc-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
+}
 
 
 def say(msg):
@@ -49,13 +73,207 @@ def ask(question: str, default_yes=True) -> bool:
     return ans in ("y", "yes")
 
 
+def _path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _asset_digest(root: Path, asset: str):
+    """Return an exact tree digest, or None for any unexpected path/layout."""
+    expected_files = _ASSET_FILES[asset]
+    if not root.is_dir() or root.is_symlink():
+        return None
+    actual_files, actual_dirs = set(), set()
+    try:
+        for path in root.rglob("*"):
+            if path.is_symlink():
+                return None
+            relative = path.relative_to(root).as_posix()
+            if path.is_dir():
+                actual_dirs.add(relative)
+            elif path.is_file():
+                actual_files.add(relative)
+            else:
+                return None
+    except OSError:
+        return None
+    expected_dirs = {
+        parent.as_posix()
+        for name in expected_files
+        for parent in Path(name).parents
+        if parent.as_posix() != "."
+    }
+    if actual_files != expected_files or actual_dirs != expected_dirs:
+        return None
+    digest = hashlib.sha256()
+    try:
+        for name in sorted(expected_files):
+            digest.update(name.encode() + b"\0")
+            digest.update((root / name).read_bytes())
+            digest.update(b"\0")
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _owned_asset(destination: Path, asset: str) -> bool:
+    marker = destination / MANAGED_MARKER
+    if marker.is_symlink():
+        return False
+    try:
+        value = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        return False
+    return (value.get("owner") == "human-compact" and
+            value.get("asset") == asset and value.get("format") == 1)
+
+
+def _legacy_asset(destination: Path, source: Path, asset: str) -> bool:
+    digest = _asset_digest(destination, asset)
+    if digest is None:
+        return False
+    return digest == _asset_digest(source, asset) or digest in _LEGACY_DIGESTS[asset]
+
+
+def _preflight_asset(source: Path, destination: Path, asset: str):
+    if not _path_exists(destination):
+        return "new"
+    if destination.is_symlink() or not destination.is_dir():
+        raise RuntimeError(
+            f"refusing to replace unmanaged Claude skill path: {destination}; "
+            "move it aside, then rerun npx human-compact")
+    if _owned_asset(destination, asset):
+        return "managed"
+    if _legacy_asset(destination, source, asset):
+        return "legacy"
+    raise RuntimeError(
+        f"refusing to replace unmanaged Claude skill directory: {destination}; "
+        "move it aside, then rerun npx human-compact")
+
+
+def _tighten_asset_modes(root: Path):
+    os.chmod(root, 0o700)
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"refusing symlink in packaged Claude asset: {path}")
+        if path.is_dir():
+            os.chmod(path, 0o700)
+        elif path.is_file():
+            executable = (path.suffix == ".sh" or
+                          bool(path.stat().st_mode & stat.S_IXUSR))
+            os.chmod(path, 0o700 if executable else 0o600)
+
+
+def _stage_asset(source: Path, destination: Path, asset: str) -> Path:
+    stage = destination.parent / f".{destination.name}.hc-stage-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(source, stage, symlinks=True)
+        marker = stage / MANAGED_MARKER
+        marker.write_text(json.dumps({
+            "owner": "human-compact", "asset": asset, "format": 1,
+        }, sort_keys=True) + "\n")
+        _tighten_asset_modes(stage)
+        if not _owned_asset(stage, asset):
+            raise RuntimeError(f"staged {asset} ownership marker is invalid")
+        # The marker is intentionally the only difference from packaged data.
+        marker.unlink()
+        source_digest = _asset_digest(source, asset)
+        valid = (source_digest is not None and
+                 _asset_digest(stage, asset) == source_digest)
+        marker.write_text(json.dumps({
+            "owner": "human-compact", "asset": asset, "format": 1,
+        }, sort_keys=True) + "\n")
+        os.chmod(marker, 0o600)
+        if not valid:
+            raise RuntimeError(f"staged {asset} failed package validation")
+        return stage
+    except Exception:
+        if _path_exists(stage):
+            shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+
+def _remove_asset(path: Path):
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
 def install_plugin():
-    src = asset_root() / "plugin"
-    SKILLS_DIR.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, SKILLS_DIR, dirs_exist_ok=True)
-    for s in (SKILLS_DIR / "scripts").glob("*.sh"):
-        make_exec(s)
+    parent = SKILLS_DIR.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    specs = [
+        {"asset": "vault", "source": asset_root() / "plugin",
+         "destination": SKILLS_DIR},
+        {"asset": "hc-ui", "source": asset_root() / "hc-ui-skill",
+         "destination": HC_UI_SKILL_DIR},
+    ]
+    for spec in specs:
+        spec["ownership"] = _preflight_asset(
+            spec["source"], spec["destination"], spec["asset"])
+    try:
+        for spec in specs:
+            spec["stage"] = _stage_asset(
+                spec["source"], spec["destination"], spec["asset"])
+            spec["backup"] = spec["destination"].parent / (
+                f".{spec['destination'].name}.hc-backup-{uuid.uuid4().hex}")
+            spec["backup_moved"] = False
+            spec["promoted"] = False
+    except Exception:
+        for spec in specs:
+            if spec.get("stage"):
+                _remove_asset(spec["stage"])
+        raise
+
+    try:
+        for spec in specs:
+            destination = spec["destination"]
+            if _path_exists(destination):
+                os.replace(destination, spec["backup"])
+                spec["backup_moved"] = True
+            os.replace(spec["stage"], destination)
+            spec["promoted"] = True
+    except Exception as install_error:
+        rollback_errors = []
+        for spec in reversed(specs):
+            try:
+                if spec["promoted"] and _path_exists(spec["destination"]):
+                    _remove_asset(spec["destination"])
+                if spec["backup_moved"] and _path_exists(spec["backup"]):
+                    os.replace(spec["backup"], spec["destination"])
+            except Exception as rollback_error:  # noqa: BLE001
+                rollback_errors.append(
+                    f"{spec['destination']}: {rollback_error}; backup={spec['backup']}")
+            if _path_exists(spec["stage"]):
+                _remove_asset(spec["stage"])
+        detail = ("; rollback incomplete: " + "; ".join(rollback_errors)
+                  if rollback_errors else "; previous install restored")
+        raise RuntimeError(f"Claude integration install failed: {install_error}{detail}") \
+            from install_error
+
+    for spec in specs:
+        if spec["backup_moved"] and _path_exists(spec["backup"]):
+            _remove_asset(spec["backup"])
+        if spec["ownership"] == "legacy":
+            say(f"migrated legacy {spec['asset']} install")
     say(f"plugin installed -> {SKILLS_DIR}")
+    say(f"/hc-ui installed -> {HC_UI_SKILL_DIR}")
+
+
+def install_main(argv=None):
+    """Install the chat-scoped UI without enabling the global Vault layer."""
+    ap = argparse.ArgumentParser(
+        prog="hc install",
+        description="Install /hc-ui for Claude Code (no global context layer).")
+    ap.parse_args(argv or [])
+    print("\nhuman-compact · chat goal UI\n")
+    if not (HOME / ".claude").exists():
+        say("WARNING: ~/.claude not found — install Claude Code first")
+    install_plugin()
+    print()
+    say("Done. Start a new Claude Code session (or run /reload-plugins),")
+    say("then type /hc-ui in any chat.")
+    print()
 
 
 def install_shim():
@@ -67,17 +285,20 @@ def install_shim():
     zshrc_append(PATH_LINE, "shim on PATH")
 
 
-def run_backfill():
+def run_backfill(assume_yes=False):
     script = SKILLS_DIR / "scripts" / "vault-backfill.sh"
     dry = subprocess.run(["bash", str(script), "--dry-run"],
                          capture_output=True, text=True)
+    if dry.returncode != 0:
+        raise RuntimeError(dry.stderr.strip() or dry.stdout.strip() or
+                           "Vault backfill preview failed")
     tail = (dry.stdout.strip().splitlines() or ["backfill: nothing found"])[-1]
     say(f"preview: {tail}")
     if "0 imported" in tail or "nothing found" in tail:
         say("nothing new to import")
         return
-    if ask("Import these now?"):
-        subprocess.run(["bash", str(script)])
+    if assume_yes or ask("Import these now?"):
+        subprocess.run(["bash", str(script)], check=True)
 
 
 def backup_main():
@@ -103,7 +324,7 @@ def backup_main():
     retro = args.retroactive == "yes" if args.retroactive \
         else ask("Import your existing Claude Code conversations retroactively?")
     if retro:
-        run_backfill()
+        run_backfill(assume_yes=args.retroactive == "yes")
     print()
 
     if args.mode:
@@ -116,6 +337,10 @@ def backup_main():
 
     if mode == "all":
         zshrc_append(ALWAYS_LINE, "always-on capture")
+        # New installs use this shell-independent sentinel. Keep the zshrc
+        # export above so existing pipx/selective workflows remain unchanged.
+        from . import global_vault
+        global_vault.enable_always_on()
     else:
         say("selective mode: start Vault sessions with  claude --vault")
 
@@ -124,6 +349,102 @@ def backup_main():
     say("  which claude   ->  ~/.claude-vault/bin/claude")
     say("Vaulted history lives in ~/.claude-vault/sessions/ (by date).")
     print()
+
+
+def _validate_claude_cli():
+    import re
+    executable = shutil.which("claude")
+    if not executable:
+        raise RuntimeError(
+            "Claude Code is required; install it, then rerun npx human-compact")
+    try:
+        result = subprocess.run([executable, "--version"], capture_output=True,
+                                text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"Claude Code validation failed: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:200]
+        raise RuntimeError("Claude Code validation failed" +
+                           (f": {detail}" if detail else ""))
+    raw_version = (result.stdout or "").strip() or (result.stderr or "").strip()
+    match = re.fullmatch(
+        r"(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?"
+        r"(?:\+[0-9A-Za-z.-]+)?\s+\(Claude Code\)",
+        raw_version,
+    )
+    if not match:
+        raise RuntimeError(
+            f"unsupported Claude Code version output {raw_version!r}; "
+            f"human-compact requires Claude Code {MIN_CLAUDE_VERSION_TEXT} or newer")
+    installed = tuple(int(part) for part in match.groups())
+    if installed < MIN_CLAUDE_VERSION:
+        installed_text = ".".join(map(str, installed))
+        raise RuntimeError(
+            f"Claude Code {installed_text} is too old; human-compact requires "
+            f"Claude Code {MIN_CLAUDE_VERSION_TEXT} or newer")
+    return executable
+
+
+def setup_main(argv=None):
+    """One noninteractive orchestration seam for the npm installer."""
+    ap = argparse.ArgumentParser(
+        prog="hc setup",
+        description="Install /hc-ui and optionally initialize global Vault state.")
+    ap.add_argument("--global-vault", required=True, choices=["yes", "no"])
+    ap.add_argument("--goals", required=True, choices=["yes", "no"])
+    args = ap.parse_args(argv or [])
+    if args.goals == "yes" and args.global_vault != "yes":
+        ap.error("--goals yes requires --global-vault yes")
+
+    # This is deliberately first: /hc-ui remains installed even when optional
+    # global-history setup fails later and the user retries the installer.
+    install_main([])
+    if args.global_vault == "no":
+        from . import global_vault
+        global_vault.disable_always_on()
+    _validate_claude_cli()
+    if args.global_vault == "no":
+        return
+
+    from . import global_vault
+    counts = global_vault.backfill()
+    config = global_vault.enable_always_on()
+    say("global Vault enabled -> " + str(config))
+    say(f"history import: {counts['imported']} imported, "
+        f"{counts['skipped']} already present")
+
+    if args.goals == "yes":
+        trajectory_main([
+            "--provider", "claude", "--synth-provider", "claude",
+            "--refresh", "--no-interact", "--strict",
+        ])
+        goals_main(["--rebuild", "--no-interact"])
+        if not (global_vault.vault_root() / "trajectory" / "goals.json").is_file():
+            raise RuntimeError("goal inference completed without writing goals.json")
+        say("global goal tree rebuilt")
+
+
+def global_hook_main(argv=None):
+    """Python lifecycle hook used by npm-managed and pipx runtimes."""
+    ap = argparse.ArgumentParser(prog="hc global-hook")
+    ap.parse_args(argv or [])
+    import json
+    from . import global_vault
+    try:
+        payload = json.load(sys.stdin)
+    except (OSError, ValueError):
+        return 0
+    if isinstance(payload, dict):
+        try:
+            global_vault.handle_hook(payload)
+        except Exception as exc:  # noqa: BLE001 - Claude hooks are fail-open
+            try:
+                global_vault._debug(  # noqa: SLF001 - same hook layer
+                    str(payload.get("hook_event_name") or "?"),
+                    f"Python hook failed: {exc}")
+            except Exception:  # noqa: BLE001 - debug logging is best-effort
+                pass
+    return 0
 
 
 
@@ -139,6 +460,7 @@ def trajectory_main(argv=None):
     ap.add_argument("--model")
     ap.add_argument("--synth-model")
     ap.add_argument("--refresh", action="store_true", help="ignore extraction cache")
+    ap.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--workers", type=int, default=4, help="parallel extraction workers (default 4)")
     ap.add_argument("--no-serve", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--browser", action="store_true", help="also open the legacy browser evidence view")
@@ -151,9 +473,10 @@ def trajectory_main(argv=None):
     import json as _json
     from .trajectory import discover as D, providers as P, extract as X
     from .trajectory import synthesize as S, serve as V, graph_build as G
+    from .trajectory import secure_io as IO
 
     trajdir = D.VAULT / "trajectory"
-    trajdir.mkdir(parents=True, exist_ok=True)
+    IO.secure_existing_tree(trajdir, D.VAULT)
     cfgf = trajdir / "config.json"
     cfg = _json.loads(cfgf.read_text()) if cfgf.is_file() else {}
 
@@ -188,7 +511,7 @@ def trajectory_main(argv=None):
     if sy_kind == "claude" and ex_kind != "claude" and not args.synth_provider and not cfg.get("synth_provider"):
         sy_kind = ex_kind                    # never silently escalate off-device
     cfg.update({"extract_provider": ex_kind, "synth_provider": sy_kind})
-    cfgf.write_text(_json.dumps(cfg, indent=1))
+    IO.atomic_write_json(cfgf, cfg, root=D.VAULT)
 
     ex = P.make(ex_kind, "extract", args.model)
     sy = P.make(sy_kind, "synthesize", args.synth_model)
@@ -197,7 +520,10 @@ def trajectory_main(argv=None):
     print(f"  discovering vault sessions (last {args.days} days)…")
     sessions = D.discover(args.days)
     if not sessions:
-        print("  no vaulted conversations in the window — run hc backup or have some chats first.")
+        message = "no vaulted conversations in the window — run hc backup or have some chats first"
+        if args.strict:
+            raise RuntimeError(message)
+        print("  " + message + ".")
         return
     print(f"  {len(sessions)} conversations found "
           f"({sum(1 for s in sessions if s['low_evidence'])} low-evidence, kept and downweighted)")
@@ -205,8 +531,15 @@ def trajectory_main(argv=None):
 
     ext, failures = X.extract_all(sessions, ex, trajdir / "conversations",
                                   refresh=args.refresh, workers=args.workers)
+    if failures and args.strict:
+        detail = "; ".join(f"{sid[:8]}: {reason}" for sid, reason in failures[:3])
+        raise RuntimeError(
+            f"{len(failures)} conversation extraction(s) failed: {detail}")
     if not ext:
-        print("  extraction produced nothing — check the provider and retry."); return
+        message = "extraction produced nothing — check the provider and retry"
+        if args.strict:
+            raise RuntimeError(message)
+        print("  " + message + "."); return
     print(f"  synthesizing across {len(ext)} conversations…")
     cor_text = None
     cfile = trajdir / "corrections.json"
@@ -342,7 +675,8 @@ def goals_main(argv=None):
     import json as _j
     from .trajectory import goals as GM, goal_synth as GS, state, worker as W
     from .trajectory import providers as Pr, lens as L
-    trajdir = state.trajdir(); trajdir.mkdir(parents=True, exist_ok=True)
+    from .trajectory import secure_io as IO
+    trajdir = state.trajdir(); IO.secure_existing_tree(trajdir, trajdir.parent)
     try:
         cfg = _j.loads((trajdir / "config.json").read_text())
         provider = Pr.make(cfg.get("synth_provider") or cfg["extract_provider"], "synthesize")
@@ -451,7 +785,8 @@ def _goal_nl_flow(trajdir, provider, read):
     except (OSError, ValueError):
         pass
     cur.setdefault("_goal_freeform", []).append(entry)
-    p.write_text(_j.dumps(cur, indent=1))
+    from .trajectory.secure_io import atomic_write_json
+    atomic_write_json(p, cur, root=trajdir.parent)
     if applied:
         # mark_important ops need the important store; route them
         plain = [o for o in ops if o.get("op") != "mark_important"]
@@ -513,6 +848,328 @@ def ui_main(argv=None):
     ui.run(port=args.port, open_browser=not args.no_open)
 
 
+def _request_chat_refresh(session_id):
+    """Coalesce a background goal refresh; hooks must remain fail-open."""
+    from .trajectory import chat_synth
+    return chat_synth.spawn_refresh(session_id)
+
+
+def chat_hook_main(argv=None, stdin=None, stdout=None):
+    """Ingest one Claude Code hook payload and inject cached goal context."""
+    import json
+    ap = argparse.ArgumentParser(prog="hc chat-hook",
+        description="Internal Claude Code chat-state hook.")
+    ap.parse_args(argv or [])
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+    if os.environ.get("HC_CHAT_INFERENCE") == "1":
+        return 0
+    payload = {}
+    event = ""
+    try:
+        payload = json.loads(stdin.read())
+        if not isinstance(payload, dict):
+            return 0
+        event = str(payload.get("hook_event_name") or "")
+        from .trajectory import chat_state as CS
+        result = CS.ingest_hook(payload)
+    except (OSError, ValueError, TypeError, TimeoutError) as exc:
+        if event == "UserPromptExpansion":
+            json.dump({
+                "decision": "block",
+                "reason": f"hc-ui could not initialize chat state: {exc}",
+            }, stdout)
+            stdout.write("\n")
+        return 0
+
+    if event == "UserPromptExpansion":
+        # Launch from the hook rather than a skill `!` shell expansion. This
+        # keeps /hc-ui functional under disableSkillShellExecution policies.
+        import contextlib
+        import io
+        launch_args = ["--session", result.session_id,
+                       "--cwd", str(payload.get("cwd") or os.getcwd())]
+        try:
+            launched = io.StringIO()
+            with contextlib.redirect_stdout(launched):
+                chat_ui_main(launch_args)
+            url = next(
+                (line.strip() for line in reversed(launched.getvalue().splitlines())
+                 if line.strip().startswith("http://127.0.0.1:")),
+                "",
+            )
+            if not url:
+                raise RuntimeError("launcher returned no localhost URL")
+            json.dump({"hookSpecificOutput": {
+                "hookEventName": "UserPromptExpansion",
+                "additionalContext": f"hc-ui opened for this chat at {url}",
+            }}, stdout)
+            stdout.write("\n")
+        except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
+            json.dump({
+                "decision": "block",
+                "reason": f"hc-ui could not open: {exc}",
+            }, stdout)
+            stdout.write("\n")
+        return 0
+    if event in ("Stop", "TaskCompleted", "PostCompact", "SessionEnd"):
+        try:
+            _request_chat_refresh(result.session_id)
+        except Exception:  # noqa: BLE001 - a hook may never block Claude
+            pass
+
+    if event in ("SessionStart", "UserPromptSubmit"):
+        context_path = CS.paths(result.session_id).goal_context
+        try:
+            context = context_path.read_text(encoding="utf-8")[:8000]
+        except OSError:
+            context = ""
+        if context.strip():
+            json.dump({
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": context,
+                }
+            }, stdout)
+            stdout.write("\n")
+    return 0
+
+
+def _server_registry(session_dir):
+    return Path(session_dir) / "server.json"
+
+
+def _read_server_registry(session_dir):
+    import json
+    try:
+        value = json.loads(_server_registry(session_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _write_server_registry(session_dir, value):
+    import json
+    target = _server_registry(session_dir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        temp.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        temp.chmod(0o600)
+        os.replace(temp, target)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _healthy_chat_server(record, session_id, timeout=0.5):
+    import http.client
+    import json
+    import urllib.parse
+    if not isinstance(record, dict) or not _pid_alive(record.get("pid")):
+        return False
+    url = record.get("url")
+    if not isinstance(url, str):
+        return False
+    parsed = urllib.parse.urlparse(url)
+    if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
+            or parsed.path not in ("", "/")):
+        return False
+    connection = None
+    try:
+        # Speak HTTP directly to loopback. urllib inherits corporate/system
+        # proxy behavior on macOS; a readiness probe must never leave the host.
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", parsed.port, timeout=timeout
+        )
+        connection.request("GET", "/api/health", headers={
+            "Host": parsed.netloc,
+        })
+        response = connection.getresponse()
+        body = json.loads(response.read())
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+    return (
+        isinstance(body, dict)
+        and
+        response.status == 200
+        and body.get("ok") is True
+        and body.get("scope") == "chat"
+        and body.get("session_id") == session_id
+    )
+
+
+def chat_serve_main(argv=None):
+    """Run one scoped server in the detached child process."""
+    ap = argparse.ArgumentParser(prog="hc chat-serve",
+        description="Internal session-scoped goal server.")
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--port", type=int, default=0)
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_state as CS, ui
+    p = CS.paths(args.session)
+
+    def ready(url, _server):
+        _write_server_registry(p.session_dir, {
+            "schema_version": 1,
+            "session_id": args.session,
+            "pid": os.getpid(),
+            "url": url,
+            "started_at": time.time(),
+        })
+
+    try:
+        ui.run(port=args.port, open_browser=False, trajdir=p.session_dir,
+               ready_callback=ready, label="Chat goals")
+    finally:
+        current = _read_server_registry(p.session_dir)
+        if current and current.get("pid") == os.getpid():
+            _server_registry(p.session_dir).unlink(missing_ok=True)
+    return 0
+
+
+def chat_refresh_main(argv=None):
+    """Run one coalescing goal refresh in a detached child."""
+    ap = argparse.ArgumentParser(prog="hc chat-refresh",
+        description="Internal session-scoped goal analyzer.")
+    ap.add_argument("--session", required=True)
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_synth
+    before = int(
+        chat_synth.CS.get_analyzer_state(args.session)
+        .get("last_analyzed_ordinal") or 0
+    )
+    try:
+        result = chat_synth.refresh(args.session)
+    finally:
+        chat_synth.clear_worker_record(args.session)
+    if result.get("status") == "error":
+        print(result.get("error") or "chat goal analysis failed",
+              file=sys.stderr)
+        return 1
+
+    # One worker intentionally has a bounded number of provider calls. If it
+    # made progress but more evidence remains, hand the next bounded slice to
+    # a fresh worker after releasing our lease. This drains long resumed chats
+    # without turning one hook subprocess into an unbounded job.
+    state = chat_synth.CS.get_analyzer_state(args.session)
+    after = int(state.get("last_analyzed_ordinal") or 0)
+    if result.get("needs_handoff") or (
+        state.get("status") == "pending" and after > before
+    ):
+        try:
+            chat_synth.spawn_refresh(args.session)
+        except Exception as exc:  # noqa: BLE001 - retain pending state for retry
+            print(f"could not continue chat goal analysis: {exc}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def chat_ui_main(argv=None):
+    """Open or reuse the detached UI belonging to one Claude chat."""
+    import webbrowser
+    ap = argparse.ArgumentParser(prog="hc chat-ui",
+        description="Open a session-scoped goal workspace.")
+    ap.add_argument("--session", required=True)
+    ap.add_argument("--cwd")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_state as CS
+    session_cwd = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
+    try:
+        p = CS.paths(args.session)
+        CS.ingest_hook({
+            "session_id": args.session,
+            "hook_event_name": "SessionStart",
+            # Do not overwrite the stable project root already captured by
+            # SessionStart merely because the user invoked /hc-ui after `cd`.
+            "cwd": CS.load_manifest(args.session).get("cwd") or session_cwd,
+        })
+    except (OSError, ValueError, TypeError, TimeoutError) as exc:
+        raise SystemExit(f"could not initialize chat state: {exc}") from exc
+
+    with CS.session_lock(args.session, wait_s=8):
+        record = _read_server_registry(p.session_dir)
+        if not _healthy_chat_server(record, args.session):
+            log_path = p.session_dir / "server.log"
+            log_path.touch(mode=0o600, exist_ok=True)
+            log_path.chmod(0o600)
+            command = [sys.executable, "-m", "human_compact.cli", "chat-serve",
+                       "--session", args.session, "--port", str(args.port)]
+            child_env = os.environ.copy()
+            child_env.pop("HC_CHAT_INFERENCE", None)
+            with log_path.open("ab", buffering=0) as log:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    start_new_session=True,
+                    env=child_env,
+                )
+            # Keep the Popen object alive while this short-lived parent polls
+            # readiness. Tests can reap it explicitly; the real CLI exits and
+            # the new session becomes an orphan adopted by the OS.
+            _DETACHED_PROCESSES.append(process)
+            deadline = time.monotonic() + 8
+            record = None
+            candidate = None
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    break
+                candidate = _read_server_registry(p.session_dir)
+                if _healthy_chat_server(candidate, args.session):
+                    record = candidate
+                    break
+                time.sleep(0.05)
+            if record is None:
+                exit_at_deadline = process.poll()
+                if exit_at_deadline is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+                detail = ""
+                try:
+                    detail = log_path.read_text(errors="replace")[-600:].strip()
+                except OSError:
+                    pass
+                startup = (
+                    f"pid={process.pid}, exit_at_deadline={exit_at_deadline}, "
+                    f"exit_after_cleanup={process.returncode}, "
+                    f"registry={candidate!r}"
+                )
+                if detail:
+                    startup += f", log={detail}"
+                raise SystemExit(f"chat UI server did not start: {startup}")
+
+    try:
+        _request_chat_refresh(args.session)
+    except Exception:  # noqa: BLE001 - the UI remains useful without inference
+        pass
+    url = record["url"]
+    if not args.no_open:
+        webbrowser.open(url)
+    print(url)
+    return 0
+
+
 def hc_main():
     import sys
     args = sys.argv[1:]
@@ -520,10 +1177,13 @@ def hc_main():
         print("usage: hc <command>\n\n"
               "  goals       your goal tree + important items (primary)\n"
               "  ui          goal tree in the browser (localhost)\n"
+              "  chat-ui     goal tree for one Claude chat\n"
               "  mark        mark something important — never lose it\n"
               "  lens        the derived compaction lens\n"
               "  status      vault + analysis pipeline status\n"
               "  refresh     process pending conversations, regenerate lens\n"
+              "  install     install /hc-ui without enabling global Vault\n"
+              "  setup       noninteractive npm onboarding\n"
               "  backup      onboard Vault / import history\n"
               "  trajectory  full analyze + lens (alias)\n")
         return
@@ -531,6 +1191,10 @@ def hc_main():
     if cmd == "backup":
         sys.argv = ["hc-backup"] + rest
         backup_main()
+    elif cmd == "setup":
+        setup_main(rest)
+    elif cmd == "install":
+        install_main(rest)
     elif cmd == "trajectory":
         trajectory_main(rest)
     elif cmd == "lens":
@@ -539,6 +1203,16 @@ def hc_main():
         goals_main(rest)
     elif cmd == "ui":
         ui_main(rest)
+    elif cmd == "chat-ui":
+        chat_ui_main(rest)
+    elif cmd == "chat-serve":
+        chat_serve_main(rest)
+    elif cmd == "chat-hook":
+        chat_hook_main(rest)
+    elif cmd == "chat-refresh":
+        raise SystemExit(chat_refresh_main(rest))
+    elif cmd == "global-hook":
+        raise SystemExit(global_hook_main(rest))
     elif cmd == "mark":
         mark_main(rest)
     elif cmd == "status":

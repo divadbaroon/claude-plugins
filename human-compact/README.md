@@ -1,63 +1,73 @@
 # human-compact
 
-Study launcher for the Human-Driven Compaction project. Colleagues test the
-compaction flow against **forks of their own real sessions** — the original
-chat is never modified, and the fork is a sandbox.
-
-## Install & run
+Install chat-scoped goal workspaces for Claude Code with one command:
 
 ```bash
-npm i -g @papertlab/human-compact   # or: npx from the repo
-human-compact                       # native session picker → forked sandbox
-human-compact <session-id>          # fork a specific session
+npx human-compact
 ```
 
-Options: `--participant <name>` (labels the state dir), `--hook <path>`
-(PreCompact hook override), `--dry-run` (show what would launch).
+The installer asks two numeric questions:
 
-## What a session looks like
+1. whether to enable the optional global Vault; and
+2. if Vault is enabled, whether to analyze history and build global goals now.
 
-- **Fork, not resume**: launched as `claude --resume --fork-session`, so the
-  picked conversation continues under a new session ID; the production JSONL
-  is untouched (verified byte-identical in testing).
-- **Everything study-specific rides a `--settings` overlay** for that one
-  invocation — the participant's own settings, hooks, and sessions never see
-  any of it. No install into their Claude config, nothing to uninstall.
-- **Persistent statusline banner**: `⚠ SANDBOX FORK · original chat
-  untouched · file changes off · ctx N%` — nudges `/compact` when context is
-  high, or `/resume` (pick a fuller chat) when under 50%.
-- **Session-start notice** repeats the sandbox explanation once, with the
-  same under-50% redirect.
-- **Restricted, not isolated**: Edit/Write/NotebookEdit denied via
-  permissions; Bash blocked by a PreToolUse guard except single unchained
-  invocations of the instrument script (first-token match, all shell
-  metacharacters denied). KNOWN LIMIT: `--settings` is ADDITIVE — the
-  participant's own user/project plugins, hooks, permission allows, and
-  MCP servers remain active, so this is a restriction layer, not an
-  isolation boundary. Do not distribute for adversarial or unattended use
-  until the study runs inside an OS sandbox/container with normal setting
-  sources excluded (per Anthropic's permissions guidance) and
-  instrumentation exposed via a narrow MCP API instead of Bash.
-- **`/compact` runs the study hook**: PreCompact wired to (in order)
-  `--hook`/`$HUMAN_COMPACT_HOOK`, the repo-sibling
-  `compact-focus/scripts/compact-focus.sh`, or a skills-dir install. Swap in
-  a different hook without touching this package.
-- **Isolated instrument state**: `COMPACT_FOCUS_STATE_DIR` points at
-  `~/.human-compact/state/<participant>/` — per-participant corpora
-  (log.jsonl, demoted.jsonl, threads.json, lens.md, guidelines.md) are just
-  directories.
+It always installs the Claude Code integration for chat-scoped goals. Start a
+new Claude Code session (or run `/reload-plugins`), then run:
 
-## Graduation path
+```text
+/hc-ui
+```
 
-The sandbox is stage one. If results are good, participants adopt the real
-thing by installing the compact-focus plugin and invoking the
-`compact-human` skill in any production chat — same flow, no restrictions.
+The Python backend is an exact wheel bundled in the npm release. It is
+installed into a managed private runtime under `~/.human-compact/`; the npm
+package does not fetch code from a mutable Git branch and does not run install
+lifecycle scripts.
 
-## Known limits
+## Noninteractive installation
 
-- Context % is estimated from the transcript's last usage entry against a
-  200k window; 1M-window sessions will read low.
-- The under-50% redirect is a nudge, not a gate — the native picker cannot
-  filter by context fill.
-- The Bash guard fails open if `jq` is missing (Edit/Write remain denied
-  regardless).
+Use numeric flags in automation:
+
+```bash
+# Chat-scoped /hc-ui only
+npx human-compact --non-interactive --global-vault 2
+
+# Global Vault plus global goal inference
+npx human-compact --non-interactive --global-vault 1 --goals 1
+
+# Global Vault without running goal inference now
+npx human-compact --non-interactive --global-vault 1 --goals 2
+```
+
+Values other than `1` and `2` are rejected. `--goals 1` is invalid when the
+global Vault is disabled.
+
+## Requirements and state
+
+- macOS or Linux
+- Node.js 18+
+- Claude Code 2.1.175+
+
+Installer metadata lives at `~/.human-compact/install.json`; versioned Python
+runtimes live under `~/.human-compact/runtimes/`; and the stable backend
+launcher is `~/.human-compact/bin/hc`. Re-running the same npm version repairs
+the Claude integration and reuses a verified runtime.
+
+The installer uses an existing compatible Python when available. Otherwise it
+downloads pinned `uv` 0.11.32 release assets, verifies their published SHA-256,
+and provisions a managed Python automatically. Set `HUMAN_COMPACT_PYTHON` to
+an explicit Python executable when automatic interpreter discovery is
+unsuitable.
+
+## Maintainer release step
+
+After the matching `hc/` source is committed, populate the immutable wheel and
+its checksum manifest:
+
+```bash
+npm run build:vendor
+npm test
+npm publish --dry-run
+```
+
+The published tarball must contain `vendor/manifest.json` and exactly the wheel
+named by that manifest.

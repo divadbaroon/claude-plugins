@@ -6,10 +6,12 @@ automatically invalidates prior derived analyses.
 """
 import hashlib
 import json
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+from . import discover as D
+from .secure_io import atomic_write_json, secure_dir
 
 EXTRACTOR_VERSION = "1"
 SCHEMA_VERSION = "1"
@@ -59,13 +61,11 @@ def _finish(sess, data, key, provider, cache_file: Path):
     data["user_turn_count"] = sess["user_turn_count"]
     data["low_evidence"] = sess["low_evidence"]
     data["cwd"] = sess["cwd"]
-    tmp = cache_file.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(
+    atomic_write_json(cache_file,
         {"cache_key": key, "provider": provider.identity(),
          "versions": {"extractor": EXTRACTOR_VERSION, "schema": SCHEMA_VERSION,
                       "prompt": prompt_sha()},
-         "extracted": data}, indent=1))
-    os.replace(tmp, cache_file)          # atomic: interrupted runs resume safely
+         "extracted": data}, root=D.VAULT)
     return data
 
 
@@ -73,7 +73,7 @@ def extract_all(sessions, provider, outdir: Path, refresh=False, log=print, work
     """Map stage. Cache hits are resolved up front (no worker, no API call);
     the misses run under bounded concurrency, higher-evidence sessions first.
     Failures are collected, not fatal. Returns (results, failures)."""
-    outdir.mkdir(parents=True, exist_ok=True)
+    secure_dir(outdir, D.VAULT)
     total = len(sessions)
     results, failures, misses = [], [], []
     counter = {"n": 0}

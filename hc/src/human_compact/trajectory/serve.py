@@ -8,8 +8,11 @@ from importlib import resources
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+from .secure_io import atomic_write_json, secure_existing_tree
+
 
 def run(trajdir: Path, port=7710, open_browser=True):
+    secure_existing_tree(trajdir, trajdir.parent)
     web = resources.files("human_compact").joinpath("trajectory/web")
     index_html = web.joinpath("index.html").read_text()
     corrections_file = trajdir / "corrections.json"
@@ -64,7 +67,7 @@ def run(trajdir: Path, port=7710, open_browser=True):
             rec = json.loads(self.rfile.read(n))
             cur = load("corrections.json") or {}
             cur[rec.get("target", "unknown")] = rec
-            corrections_file.write_text(json.dumps(cur, indent=1))
+            atomic_write_json(corrections_file, cur, root=trajdir.parent)
             self._send({"ok": True})
 
     srv = None

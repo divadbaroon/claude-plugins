@@ -1,11 +1,26 @@
 #!/usr/bin/env bash
 # vault-hook.sh — single dispatcher for all Vault lifecycle events (v0.1.0)
 #
-# Inert unless CLAUDE_VAULT=1. Local-only: jq, mkdir, cp, mv, date. Never
+# Inert unless globally enabled. The installed Python runtime is preferred so
+# npm installs need neither jq nor a shell PATH mutation. Never
 # blocks anything, never writes into the session, never touches the original
 # transcript except to read it. Every failure path is a silent exit 0
 # (visible in ~/.claude-vault/debug.log when VAULT_DEBUG=1).
 
+HC_CMD=""
+if [ -n "${HC_EXECUTABLE:-}" ] && [ -x "$HC_EXECUTABLE" ]; then
+  HC_CMD="$HC_EXECUTABLE"
+elif [ -x "$HOME/.human-compact/bin/hc" ]; then
+  HC_CMD="$HOME/.human-compact/bin/hc"
+else
+  HC_CMD=$(command -v hc 2>/dev/null || true)
+fi
+if [ -n "$HC_CMD" ]; then
+  exec "$HC_CMD" global-hook
+fi
+
+# Compatibility fallback for old skills-directory installs whose Python CLI
+# has been removed but whose selective CLAUDE_VAULT=1 workflow remains active.
 [ "${CLAUDE_VAULT:-}" = "1" ] || exit 0
 
 set -uo pipefail

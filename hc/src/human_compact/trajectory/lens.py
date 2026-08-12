@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from itertools import zip_longest
 from pathlib import Path
 
+from .secure_io import atomic_write_json, secure_dir
+
 TTY = sys.stdout.isatty()
 def c(code, s): return f"\033[{code}m{s}\033[0m" if TTY else s
 def bold(s): return c("1", s)
@@ -54,7 +56,7 @@ def save_correction(trajdir: Path, target, verdict, edit=None):
         pass
     cur[target] = {"target": target, "verdict": verdict, "edit": edit,
                    "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    p.write_text(json.dumps(cur, indent=1))
+    atomic_write_json(p, cur, root=trajdir.parent)
 
 
 NL_PROMPT = """You translate a user's natural-language feedback about their
@@ -241,7 +243,7 @@ def _save_raw(trajdir, entry):
     except (OSError, json.JSONDecodeError):
         pass
     cur.setdefault("_freeform", []).append(entry)
-    p.write_text(json.dumps(cur, indent=1))
+    atomic_write_json(p, cur, root=trajdir.parent)
     return cur
 
 
@@ -274,7 +276,7 @@ def _apply_ops(trajdir, ops):
                 vals = {k: round(v * 100 / t) for k, v in vals.items()}
                 vals["preserve"] += 100 - sum(vals.values())
                 cur["_allocation"] = vals
-            p.write_text(json.dumps(cur, indent=1))
+            atomic_write_json(p, cur, root=trajdir.parent)
         elif op in ("add_item", "exclude_topic"):
             p = trajdir / "corrections.json"
             cur = {}
@@ -288,7 +290,7 @@ def _apply_ops(trajdir, ops):
                      "label": o.get("label", ""), "reason": o.get("reason", "")})
             else:
                 cur.setdefault("_exclusions", []).append(o.get("topic", ""))
-            p.write_text(json.dumps(cur, indent=1))
+            atomic_write_json(p, cur, root=trajdir.parent)
 
 
 def nl_correct_flow(analysis, corrections, trajdir, provider, read):
@@ -408,8 +410,8 @@ def test_flow(analysis, corrections, trajdir, provider, days, read, log=print):
             "COMPRESS may be dropped.\n\nPOLICY:\n" + lens_txt +
             "\n\n" + base + convo).strip()
         r = {"default": default, "lensed": lensed}
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(json.dumps(r, indent=1))
+        secure_dir(cache.parent, trajdir.parent)
+        atomic_write_json(cache, r, root=trajdir.parent)
     _render_compare(r["default"], r["lensed"], analysis, corrections)
 
 

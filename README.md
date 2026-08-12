@@ -4,6 +4,33 @@ This repository is a Claude Code and Codex plugin marketplace. Its published pac
 [Compact Focus](./compact-focus): an inline, human-reviewed replacement for
 blind context compaction.
 
+It also contains [`hc`](./hc), the local goal-state service for Claude Code.
+The `human-compact` npm package installs its Python runtime and Claude Code
+integration together, so setup does not require Homebrew, pipx, or jq.
+
+## Install chat-scoped goals
+
+Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
+
+```bash
+npx human-compact
+```
+
+The installer adds the Claude Code integration automatically, then asks two
+numeric questions:
+
+1. Enable the global Vault? Choose `2` to keep only chat-scoped goals.
+2. If Vault is enabled, infer global goals now? Choose `1` to analyze the
+   imported history and rebuild the global goal tree.
+
+Start a new Claude Code session (or run `/reload-plugins`) and type `/hc-ui`.
+That command opens the goal workspace for the current chat. The global Vault
+and its cross-chat inference remain separate, opt-in layers.
+
+See the [hc documentation](./hc/README.md) for persistence, event ingestion,
+the inference data boundary, and the separation between chat-scoped and global
+state.
+
 ## Install once, use in every local chat
 
 Requirements: macOS or Linux, Python 3.9+, and either Claude Code 2.1.227+
@@ -52,13 +79,15 @@ development workflow.
 ## Repository scope
 
 - `compact-focus/` is the supported marketplace plugin.
-- `human-compact/` is retained as historical prototype code and is not listed
-  in the marketplace or represented as a security sandbox.
+- `hc/` is the Python goal-state backend bundled by the npm installer.
+- `human-compact/` is the one-command npm installer published as
+  `human-compact`.
 
 ## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
+(cd human-compact && npm test)
 claude plugin validate . --strict
 uv run --with pyyaml python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ./compact-focus
 claude --plugin-dir ./compact-focus
