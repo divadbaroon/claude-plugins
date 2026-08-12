@@ -40,6 +40,7 @@ The original Claude transcript is only ever read, never modified.
 
 ## Install
 
+Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
 Install the managed Python runtime and Claude Code integration together:
 
     npx human-compact

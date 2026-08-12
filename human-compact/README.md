@@ -45,7 +45,7 @@ global Vault is disabled.
 
 - macOS or Linux
 - Node.js 18+
-- Claude Code
+- Claude Code 2.1.175+
 
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
 runtimes live under `~/.human-compact/runtimes/`; and the stable backend

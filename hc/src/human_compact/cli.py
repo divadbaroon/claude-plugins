@@ -20,6 +20,8 @@ ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
 ALWAYS_LINE = "export CLAUDE_VAULT=1"
 _DETACHED_PROCESSES = []
+MIN_CLAUDE_VERSION = (2, 1, 175)
+MIN_CLAUDE_VERSION_TEXT = ".".join(map(str, MIN_CLAUDE_VERSION))
 MANAGED_MARKER = ".human-compact-managed.json"
 _ASSET_FILES = {
     "vault": {
@@ -350,6 +352,7 @@ def backup_main():
 
 
 def _validate_claude_cli():
+    import re
     executable = shutil.which("claude")
     if not executable:
         raise RuntimeError(
@@ -363,6 +366,22 @@ def _validate_claude_cli():
         detail = (result.stderr or result.stdout).strip()[:200]
         raise RuntimeError("Claude Code validation failed" +
                            (f": {detail}" if detail else ""))
+    raw_version = (result.stdout or "").strip() or (result.stderr or "").strip()
+    match = re.fullmatch(
+        r"(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?"
+        r"(?:\+[0-9A-Za-z.-]+)?\s+\(Claude Code\)",
+        raw_version,
+    )
+    if not match:
+        raise RuntimeError(
+            f"unsupported Claude Code version output {raw_version!r}; "
+            f"human-compact requires Claude Code {MIN_CLAUDE_VERSION_TEXT} or newer")
+    installed = tuple(int(part) for part in match.groups())
+    if installed < MIN_CLAUDE_VERSION:
+        installed_text = ".".join(map(str, installed))
+        raise RuntimeError(
+            f"Claude Code {installed_text} is too old; human-compact requires "
+            f"Claude Code {MIN_CLAUDE_VERSION_TEXT} or newer")
     return executable
 
 

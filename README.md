@@ -10,6 +10,8 @@ integration together, so setup does not require Homebrew, pipx, or jq.
 
 ## Install chat-scoped goals
 
+Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
+
 ```bash
 npx human-compact
 ```

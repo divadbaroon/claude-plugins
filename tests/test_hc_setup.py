@@ -110,6 +110,46 @@ class HcSetupTests(unittest.TestCase):
                     cli.setup_main(["--global-vault", "no", "--goals", "no"])
             install.assert_called_once_with([])
 
+    def test_claude_version_validation_is_suffix_aware_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli, _ = self._modules(Path(td))
+            completed = mock.Mock(returncode=0,
+                                  stdout="2.2.0-beta.1+build.7 (Claude Code)\n",
+                                  stderr="")
+            with mock.patch("human_compact.cli.shutil.which",
+                            return_value="/usr/bin/claude"), \
+                    mock.patch("human_compact.cli.subprocess.run",
+                               return_value=completed):
+                self.assertEqual("/usr/bin/claude", cli._validate_claude_cli())
+
+            for output, pattern in (
+                    ("2.1.174 (Claude Code)\n", r"2\.1\.174 is too old.*2\.1\.175 or newer"),
+                    ("development build\n", r"unsupported Claude Code version output.*2\.1\.175 or newer")):
+                completed = mock.Mock(returncode=0, stdout=output, stderr="")
+                with mock.patch("human_compact.cli.shutil.which",
+                                return_value="/usr/bin/claude"), \
+                        mock.patch("human_compact.cli.subprocess.run",
+                                   return_value=completed), \
+                        self.assertRaisesRegex(RuntimeError, pattern):
+                    cli._validate_claude_cli()
+
+    def test_direct_setup_rejects_old_claude_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli, _ = self._modules(Path(td))
+            completed = mock.Mock(returncode=0,
+                                  stdout="2.1.150 (Claude Code)\n", stderr="")
+            with mock.patch.object(cli, "install_main") as install, \
+                    mock.patch("human_compact.cli.shutil.which",
+                               return_value="/usr/bin/claude"), \
+                    mock.patch("human_compact.cli.subprocess.run",
+                               return_value=completed), \
+                    self.assertRaisesRegex(
+                        RuntimeError,
+                        r"2\.1\.150 is too old.*2\.1\.175 or newer",
+                    ):
+                cli.setup_main(["--global-vault", "no", "--goals", "no"])
+            install.assert_called_once_with([])
+
     def test_python_backfill_is_idempotent_private_and_needs_no_jq(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)

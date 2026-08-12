@@ -4,7 +4,9 @@ Local goal state and conversation persistence for Claude Code.
 
 ## Install
 
-Run the single installer from a terminal where Claude Code is installed:
+Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
+Run the single installer from a terminal where that Claude Code version is
+installed:
 
 ```bash
 npx human-compact

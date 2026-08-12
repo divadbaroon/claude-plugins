@@ -8,6 +8,8 @@ const { spawnSync } = require('child_process');
 
 const OWNER = 'human-compact';
 const INSTALL_SCHEMA = 1;
+const MIN_CLAUDE_VERSION = Object.freeze([2, 1, 175]);
+const MIN_CLAUDE_VERSION_TEXT = MIN_CLAUDE_VERSION.join('.');
 const UV_VERSION = '0.11.32';
 const UV_RELEASE = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
 const MAX_UV_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -255,6 +257,41 @@ function checkedCommand(runner, command, args, options, description) {
     throw new Error(`${description} failed${detail ? `: ${detail}` : ''}`);
   }
   return result;
+}
+
+function parseClaudeVersion(output) {
+  const match = String(output || '').match(
+    /^\s*(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\s+\(Claude Code\)\s*$/,
+  );
+  if (!match) return null;
+  const version = match.slice(1).map(Number);
+  return version.every(Number.isSafeInteger) ? version : null;
+}
+
+function compareVersions(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] < right[index] ? -1 : 1;
+  }
+  return 0;
+}
+
+function requireCompatibleClaude(output) {
+  const raw = String(output || '').trim();
+  const version = parseClaudeVersion(raw);
+  if (!version) {
+    throw new Error(
+      `unsupported Claude Code version output ${JSON.stringify(raw || '(empty)')}; `
+      + `human-compact requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`,
+    );
+  }
+  const installed = version.join('.');
+  if (compareVersions(version, MIN_CLAUDE_VERSION) < 0) {
+    throw new Error(
+      `Claude Code ${installed} is too old; `
+      + `human-compact requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`,
+    );
+  }
+  return installed;
 }
 
 function compatiblePython(runner, command) {
@@ -524,6 +561,9 @@ async function install(options) {
   if (claude.status !== 0) {
     throw new Error('Claude Code is required; install it and ensure `claude` is on PATH');
   }
+  const claudeVersionOutput = String(claude.stdout || '').trim()
+    || String(claude.stderr || '').trim();
+  requireCompatibleClaude(claudeVersionOutput);
   establishOwnership(root);
   const releaseLock = acquireLock(root, deps.now);
   let createdRuntime = false;
@@ -629,6 +669,8 @@ async function install(options) {
 
 module.exports = {
   INSTALL_SCHEMA,
+  MIN_CLAUDE_VERSION,
+  MIN_CLAUDE_VERSION_TEXT,
   OWNER,
   UV_ASSETS,
   UV_VERSION,
@@ -645,6 +687,8 @@ module.exports = {
   isMusl,
   loadOwnedInstall,
   pythonCandidates,
+  parseClaudeVersion,
+  requireCompatibleClaude,
   removeManaged,
   runCommand,
   safeChild,

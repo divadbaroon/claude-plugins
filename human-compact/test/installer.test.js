@@ -14,6 +14,8 @@ const {
   establishOwnership,
   inspectVendor,
   install,
+  parseClaudeVersion,
+  requireCompatibleClaude,
   safeChild,
   supportedTarget,
   switchLauncher,
@@ -66,7 +68,7 @@ function installOptions(packageRoot, managedRoot, calls, setupStatus = 0) {
       runCommand(command, args, options) {
         calls.push({ command, args, options });
         if (args[0] === 'setup') return { status: setupStatus };
-        return { status: 0, stdout: '', stderr: '' };
+        return { status: 0, stdout: '2.1.175 (Claude Code)\n', stderr: '' };
       },
     },
   };
@@ -96,6 +98,21 @@ test('inspectVendor rejects npm/backend skew and tampering', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('Claude Code version parsing is strict, suffix-aware, and fail-closed', () => {
+  assert.deepEqual(parseClaudeVersion('2.1.175 (Claude Code)\n'), [2, 1, 175]);
+  assert.deepEqual(parseClaudeVersion('2.2.0-beta.1+build.7 (Claude Code)'), [2, 2, 0]);
+  assert.equal(parseClaudeVersion('claude 2.1.175'), null);
+  assert.equal(requireCompatibleClaude('2.1.175 (Claude Code)'), '2.1.175');
+  assert.throws(
+    () => requireCompatibleClaude('2.1.174 (Claude Code)'),
+    /Claude Code 2\.1\.174 is too old.*2\.1\.175 or newer/,
+  );
+  assert.throws(
+    () => requireCompatibleClaude('development build'),
+    /unsupported Claude Code version output.*2\.1\.175 or newer/,
+  );
 });
 
 test('safeChild refuses root and sibling deletion targets', () => {
@@ -225,6 +242,23 @@ test('installer requires Claude Code before creating managed state', async () =>
     const options = installOptions(packageRoot, managedRoot, []);
     options.deps.runCommand = () => ({ status: 127, stdout: '', stderr: 'missing' });
     await assert.rejects(install(options), /Claude Code is required/);
+    assert.equal(fs.existsSync(managedRoot), false);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('installer rejects incompatible Claude Code before creating managed state', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-claude-version-test-'));
+  try {
+    const packageRoot = path.join(fixture, 'package');
+    const managedRoot = path.join(fixture, 'managed');
+    writeVendor(packageRoot);
+    const options = installOptions(packageRoot, managedRoot, []);
+    options.deps.runCommand = () => ({
+      status: 0, stdout: '2.1.150 (Claude Code)\n', stderr: '',
+    });
+    await assert.rejects(install(options), /2\.1\.150 is too old.*2\.1\.175 or newer/);
     assert.equal(fs.existsSync(managedRoot), false);
   } finally {
     fs.rmSync(fixture, { recursive: true, force: true });
