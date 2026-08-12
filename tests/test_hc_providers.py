@@ -25,11 +25,14 @@ class ClaudeCLIProviderTests(unittest.TestCase):
 
         self.assertEqual({"goals": []}, result)
         command = run.call_args.args[0]
+        child_env = run.call_args.kwargs["env"]
         self.assertEqual("low", command[command.index("--effort") + 1])
         self.assertEqual("", command[command.index("--tools") + 1])
         self.assertNotIn("--json-schema", command)
         self.assertIn("--safe-mode", command)
         self.assertIn("--no-session-persistence", command)
+        self.assertEqual("1", child_env["HC_CHAT_INFERENCE"])
+        self.assertNotIn("CLAUDE_VAULT", child_env)
         self.assertEqual("large prompt", run.call_args.kwargs["input"])
         self.assertEqual(
             providers.CLAUDE_TIMEOUT_SECONDS,

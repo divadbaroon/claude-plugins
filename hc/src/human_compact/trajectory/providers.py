@@ -75,9 +75,15 @@ class ClaudeCLI(Base):
             # (for example xhigh) from exhausting the subprocess deadline.
             command += ["--effort", "low", "--tools", ""]
         try:
+            # Provider subprocesses are implementation details, not user chats.
+            # Mark them so the always-on chat hook cannot recursively launch
+            # another analyzer, and suppress the opt-in global Vault hook too.
+            child_env = os.environ.copy()
+            child_env["HC_CHAT_INFERENCE"] = "1"
+            child_env.pop("CLAUDE_VAULT", None)
             r = subprocess.run(
                 command, input=prompt, capture_output=True, text=True,
-                timeout=CLAUDE_TIMEOUT_SECONDS)
+                timeout=CLAUDE_TIMEOUT_SECONDS, env=child_env)
         except FileNotFoundError:
             raise ProviderError("claude CLI not found on PATH")
         except subprocess.TimeoutExpired:
@@ -138,6 +144,8 @@ class Mock(Base):
         import time
         d = os.environ.get("HC_MOCK_DIR", "")
         which = ("goal_nl" if "goal correction operations" in prompt else
+                 "goal_synth" if "Infer the current goal tree for ONE Claude Code chat" in prompt else
+                 "goal_classify" if "Update the current goal state for ONE Claude Code chat" in prompt else
                  "goal_classify" if "Classify this ONE newly analyzed" in prompt else
                  "goal_synth" if "construct the FULL GOAL TREE" in prompt else
                  "nl_ops" if "correction operations" in prompt else
