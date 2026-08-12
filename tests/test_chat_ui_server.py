@@ -79,6 +79,17 @@ def post_json(url, body, headers=None):
         return json.loads(response.read())
 
 
+def browser_executable():
+    configured = os.environ.get("HC_TEST_BROWSER")
+    if configured and Path(configured).is_file():
+        return configured
+    chrome = shutil.which("google-chrome") or shutil.which("chromium")
+    mac_chrome = Path(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    )
+    return chrome or (str(mac_chrome) if mac_chrome.is_file() else None)
+
+
 class ChatUiServerTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -123,6 +134,16 @@ class ChatUiServerTests(unittest.TestCase):
 
     def test_two_running_servers_keep_state_and_writes_scoped(self):
         with server_for(self.a) as url_a, server_for(self.b) as url_b:
+            with NO_PROXY_OPENER.open(url_a, timeout=2) as response:
+                html = response.read().decode()
+            self.assertLess(
+                html.index('script type="__bundler/template"'),
+                html.index('<script src="/bridge.js"></script>'),
+            )
+            self.assertLess(
+                html.index('<script src="/bridge.js"></script>'),
+                html.index("</body>"),
+            )
             state_a = get_json(url_a + "/api/state")
             state_b = get_json(url_b + "/api/state")
             self.assertEqual(["a1", "a2"], [g["id"] for g in state_a["goals"]])
@@ -394,12 +415,7 @@ class ChatUiServerTests(unittest.TestCase):
             from playwright.sync_api import expect, sync_playwright
         except ImportError:
             self.skipTest("playwright is not installed")
-        chrome = shutil.which("google-chrome") or shutil.which("chromium")
-        mac_chrome = Path(
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        )
-        if not chrome and mac_chrome.is_file():
-            chrome = str(mac_chrome)
+        chrome = browser_executable()
         if not chrome:
             self.skipTest("Chrome/Chromium is not installed")
 
@@ -462,6 +478,74 @@ class ChatUiServerTests(unittest.TestCase):
                     [t["text"] for t in current["a1"]["todos"]],
                 )
                 self.assertIn("a3", current)
+            finally:
+                browser.close()
+
+    def test_active_completion_stays_crossed_out_until_filter_changes(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        goals_path = self.a / "goals.json"
+        saved = json.loads(goals_path.read_text())
+        saved["goals"][1]["parent_goal_id"] = "a1"
+        goals_path.write_text(json.dumps(saved))
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.get_by_text("+ Add subgoal", exact=True)).to_have_count(
+                    2, timeout=10_000
+                )
+                expect(page.get_by_text("Add goal", exact=True)).to_have_count(1)
+                self.assertEqual(
+                    ["+ Add subgoal", "+ Add subgoal"],
+                    page.locator('[title="Add subgoal"]').all_text_contents(),
+                )
+
+                toggles = page.locator('[title="Toggle complete"]')
+                expect(toggles).to_have_count(2)
+                toggles.nth(1).click()
+                child_title = page.get_by_text("another a goal", exact=True).first
+                expect(child_title.locator("..")).to_have_css(
+                    "text-decoration-line", "line-through"
+                )
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    persisted = {
+                        item["id"]: item
+                        for item in json.loads(goals_path.read_text())["goals"]
+                    }
+                    if persisted["a2"]["status"] == "completed":
+                        break
+                    time.sleep(0.05)
+                self.assertEqual("completed", persisted["a2"]["status"])
+
+                page.reload(wait_until="domcontentloaded")
+                child_title = page.get_by_text("another a goal", exact=True).first
+                expect(child_title.locator("..")).to_have_css(
+                    "text-decoration-line", "line-through", timeout=10_000
+                )
+
+                page.get_by_text("done (1)", exact=True).click()
+                page.get_by_text("active (1)", exact=True).click()
+                expect(page.locator('[title="Toggle complete"]')).to_have_count(1)
+                self.assertNotIn(
+                    "another a goal",
+                    page.locator('[title="Toggle complete"]')
+                    .locator("..")
+                    .all_text_contents(),
+                )
             finally:
                 browser.close()
 

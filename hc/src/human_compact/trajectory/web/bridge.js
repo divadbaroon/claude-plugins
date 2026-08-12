@@ -1,6 +1,6 @@
 /* hc ui bridge: seeds the Claude Design app's localStorage from goals.json
-   before boot, mirrors app edits through /api/import, and adds server-backed
-   human-prompt assignment without modifying the bundled app. */
+   before boot, applies local behavior patches without forking the checked-in
+   artifact, mirrors edits through /api/import, and adds prompt assignment. */
 (function () {
   "use strict";
 
@@ -21,6 +21,72 @@
   var lastObservedGoals = null;
   var analyzerState = null;
   var analyzerSignature = null;
+
+  function replaceBundlePart(source, before, after) {
+    if (source.indexOf(after) >= 0) return source;
+    var at = source.indexOf(before);
+    if (at < 0 || source.indexOf(before, at + before.length) >= 0) {
+      throw new Error("goal UI bundle shape changed");
+    }
+    return source.slice(0, at) + after + source.slice(at + before.length);
+  }
+
+  // The design artifact is checked in byte-for-byte. Patch its component
+  // source before the artifact runtime unpacks it rather than forking the
+  // generated bundle or replacing the chat/prompt bridge around it.
+  function patchBundleSource(source) {
+    var parts = [
+      [
+        '<span sc-camel-on-click="{{ row.addSub }}" title="Add subgoal" style="width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;font:500 12px \'Source Code Pro\',monospace;color:var(--fnt);cursor:pointer" style-hover="color:var(--acc);background:var(--hov)">+</span>',
+        '<span sc-camel-on-click="{{ row.addSub }}" title="Add subgoal" style="height:18px;flex:none;display:flex;align-items:center;justify-content:center;padding:0 4px;font:500 10.5px \'Source Code Pro\',monospace;color:var(--fnt);cursor:pointer" style-hover="color:var(--acc);background:var(--hov)">+ Add subgoal</span>'
+      ],
+      [
+        "      filter: (saved && saved.v >= 6 && saved.filter) ? saved.filter : 'active',\n      labels:",
+        "      filter: (saved && saved.v >= 6 && saved.filter) ? saved.filter : 'active',\n      activeRetained: (saved && saved.v >= 7 && Array.isArray(saved.activeRetained)) ? saved.activeRetained : [],\n      labels:"
+      ],
+      [
+        "  save() { try { const { goals, selId, filter, updatedAt, labels, paneTab, themeMode, view } = this.state; localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 6, goals, selId, filter, updatedAt, labels, paneTab, themeMode, view })); } catch (e) {} }",
+        "  save() { try { const { goals, selId, filter, activeRetained, updatedAt, labels, paneTab, themeMode, view } = this.state; localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals, selId, filter, activeRetained, updatedAt, labels, paneTab, themeMode, view })); } catch (e) {} }"
+      ],
+      [
+        "    const { goals, selId, filter, updatedAt, editId, copied, genN, genText, genFor, labels, paneTab } = this.state;",
+        "    const { goals, selId, filter, activeRetained, updatedAt, editId, copied, genN, genText, genFor, labels, paneTab } = this.state;"
+      ],
+      [
+        "    const keep = (n) => filter === 'all' ? true : filter === 'active' ? !n.done : filter === 'inprog' ? (!n.done && hasIp(n)) : hasDone(n);",
+        "    const retained = new Set(activeRetained || []);\n    const keep = (n) => filter === 'all' ? true : filter === 'active' ? (!n.done || retained.has(n.id)) : filter === 'inprog' ? (!n.done && hasIp(n)) : hasDone(n);"
+      ],
+      [
+        "        done: (e) => { e.stopPropagation(); this.set(s => ({ goals: this.up(s.goals, n.id, x => ({ ...x, done: !x.done })), editId: null }), true); },",
+        "        done: (e) => { e.stopPropagation(); this.set(s => { const done = !n.done, kept = new Set(s.activeRetained || []); if (s.filter === 'active' && done) kept.add(n.id); else kept.delete(n.id); return { goals: this.up(s.goals, n.id, x => ({ ...x, done })), activeRetained: Array.from(kept), editId: null }; }, true); },"
+      ],
+      [
+        "      click: () => this.set(() => ({ filter: k }))",
+        "      click: () => this.set(s => ({ filter: k, activeRetained: s.filter === 'active' && k !== 'active' ? [] : s.activeRetained }))"
+      ],
+      [
+        "    const setSt = (k) => sel && this.set(s => ({ goals: this.up(s.goals, sel.id, x => k === 'done' ? { ...x, done: true } : { ...x, done: false, status: k === 'inprog' ? 'inprog' : 'todo' }) }), true);",
+        "    const setSt = (k) => sel && this.set(s => { const kept = new Set(s.activeRetained || []); if (s.filter === 'active' && k === 'done') kept.add(sel.id); else kept.delete(sel.id); return { goals: this.up(s.goals, sel.id, x => k === 'done' ? { ...x, done: true } : { ...x, done: false, status: k === 'inprog' ? 'inprog' : 'todo' }), activeRetained: Array.from(kept) }; }, true);"
+      ]
+    ];
+    return parts.reduce(function (patched, part) {
+      return replaceBundlePart(patched, part[0], part[1]);
+    }, source);
+  }
+
+  function patchBundleTemplate() {
+    var template = document.querySelector('script[type="__bundler/template"]');
+    if (!template) return false;
+    try {
+      template.textContent = JSON.stringify(patchBundleSource(
+        JSON.parse(template.textContent)
+      ));
+      return true;
+    } catch (error) {
+      console.error("[hc ui] could not patch goal controls:", error);
+      return false;
+    }
+  }
 
   function array(value) {
     return Array.isArray(value) ? value : [];
@@ -95,6 +161,31 @@
         goals: clone(goals)
       }));
     } catch (e) {}
+  }
+
+  function seedPayload(st, roots, saved) {
+    saved = saved && typeof saved === "object" ? saved : {};
+    var flat = flattenTree(roots).map;
+    var filters = { active: true, inprog: true, done: true, all: true };
+    var filter = filters[saved.filter] ? saved.filter : "active";
+    var retained = filter === "active" ? array(saved.activeRetained).filter(function (id) {
+      return typeof id === "string" && flat[id] && flat[id].value.done;
+    }) : [];
+    var selection = typeof saved.selId === "string" && flat[saved.selId] ?
+      saved.selId : (roots.length ? roots[0].id : null);
+    return {
+      v: 7,
+      goals: roots,
+      selId: selection,
+      filter: filter,
+      activeRetained: retained,
+      updatedAt: st.generated_at ? Date.parse(st.generated_at) : Date.now(),
+      labels: array(saved.labels),
+      paneTab: saved.paneTab === "notes" ? "notes" : "prompt",
+      themeMode: saved.themeMode === "light" || saved.themeMode === "dark" ?
+        saved.themeMode : null,
+      view: saved.view === "tree" || saved.view === "inspect" ? saved.view : "split"
+    };
   }
 
   function readLocalGoals() {
@@ -216,18 +307,10 @@
       var st = JSON.parse(x.responseText);
       if (!acceptState(st)) return;
       var roots = rootsFromState(st);
-      var sel = roots.length ? roots[0].id : null;
-      localStorage.setItem(KEY, JSON.stringify({
-        v: 6,
-        goals: roots,
-        selId: sel,
-        filter: "active",
-        updatedAt: st.generated_at ? Date.parse(st.generated_at) : Date.now(),
-        labels: [],
-        paneTab: "prompt",
-        themeMode: null,
-        view: "split"
-      }));
+      var saved = null;
+      try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); }
+      catch (e) {}
+      localStorage.setItem(KEY, JSON.stringify(seedPayload(st, roots, saved)));
       window.__hcSeed = JSON.stringify(roots);
       lastObservedGoals = window.__hcSeed;
       if (typeof st.revision === "string") writeSync(st.revision, roots);
@@ -837,10 +920,16 @@
     acceptState: acceptState,
     selectedGoalId: readSelection,
     mergeTrees: mergeTrees,
-    rootsFromState: rootsFromState
+    rootsFromState: rootsFromState,
+    patchBundleSource: patchBundleSource,
+    seedPayload: seedPayload
   };
 
   seed();
+  // The server places this script after the template island and before the
+  // closing body tag. Patch synchronously: the bundle's DOMContentLoaded
+  // listener has been registered, but cannot unpack the template yet.
+  patchBundleTemplate();
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       watchGoals();

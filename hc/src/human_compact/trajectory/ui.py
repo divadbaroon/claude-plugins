@@ -259,8 +259,11 @@ class H(BaseHTTPRequestHandler):
             if self.path in ("/", "/index.html"):
                 html = resources.files("human_compact.trajectory").joinpath(
                     "web/goals_bundle.html").read_text(encoding="utf-8")
-                html = html.replace("<body>",
-                                    "<body>\n<script src=\"/bridge.js\"></script>", 1)
+                # Parse the artifact's template island before running the
+                # bridge, while still running the bridge synchronously before
+                # DOMContentLoaded lets the artifact unpack that template.
+                html = html.replace(
+                    "</body>", '<script src="/bridge.js"></script>\n</body>', 1)
                 self._send(200, html.encode(), "text/html; charset=utf-8")
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(

@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "hc" / "src" / "human_compact" / "trajectory" / "web" / "bridge.js"
+BUNDLE = ROOT / "hc" / "src" / "human_compact" / "trajectory" / "web" / "goals_bundle.html"
 NODE = shutil.which("node")
 
 HARNESS = r"""
@@ -21,6 +22,7 @@ XMLHttpRequest.prototype.send = function () {
 const document = {
   readyState: "loading",
   addEventListener: function () {},
+  querySelector: function () { return null; },
   querySelectorAll: function () { return []; },
   getElementById: function () { return null; },
   documentElement: { contains: function () { return false; } }
@@ -42,6 +44,11 @@ const sandbox = {
 sandbox.window = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), sandbox);
+if (process.argv[3]) {
+  const bundle = fs.readFileSync(process.argv[3], "utf8");
+  const match = bundle.match(/<script type="__bundler\/template">\s*([\s\S]*?)\s*<\/script>/);
+  sandbox.__bundleTemplate = JSON.parse(match[1]);
+}
 const result = vm.runInContext(process.argv[2], sandbox);
 process.stdout.write(JSON.stringify(result));
 """
@@ -51,7 +58,7 @@ process.stdout.write(JSON.stringify(result));
 class GoalPromptUiTests(unittest.TestCase):
     def run_js(self, expression):
         result = subprocess.run(
-            [NODE, "-e", HARNESS, str(BRIDGE), expression],
+            [NODE, "-e", HARNESS, str(BRIDGE), expression, str(BUNDLE)],
             check=False,
             capture_output=True,
             text=True,
@@ -129,6 +136,86 @@ class GoalPromptUiTests(unittest.TestCase):
         self.assertEqual("human note", by_id["g1"]["notes"])
         self.assertEqual("t:g1:0", by_id["g1"]["children"][0]["id"])
         self.assertEqual("inprog", by_id["g-remote"]["status"])
+
+    def test_bundle_patch_labels_add_controls_and_retains_active_completions(self):
+        result = self.run_js(
+            """(() => {
+              const patch = window.__hcPromptUI.patchBundleSource;
+              const source = __bundleTemplate;
+              const patched = patch(source);
+              return {
+                idempotent: patch(patched) === patched,
+                labeledSubgoal: patched.includes(">+ Add subgoal</span>"),
+                nakedSubgoal: patched.includes(
+                  'title="Add subgoal" style="width:18px;height:18px'
+                ),
+                labeledRoot: patched.includes('>+</span><span style="font-size:12.5px">Add goal</span>'),
+                persistsRetention: patched.includes("v: 7, goals, selId, filter, activeRetained"),
+                activeKeepsRetained: patched.includes("(!n.done || retained.has(n.id))"),
+                rowCompletionRetains: patched.includes("kept.add(n.id)"),
+                inspectorCompletionRetains: patched.includes("kept.add(sel.id)"),
+                leavingActiveClears: patched.includes(
+                  "s.filter === 'active' && k !== 'active' ? []"
+                )
+              };
+            })()"""
+        )
+        self.assertEqual(
+            {
+                "idempotent": True,
+                "labeledSubgoal": True,
+                "nakedSubgoal": False,
+                "labeledRoot": True,
+                "persistsRetention": True,
+                "activeKeepsRetained": True,
+                "rowCompletionRetains": True,
+                "inspectorCompletionRetains": True,
+                "leavingActiveClears": True,
+            },
+            result,
+        )
+
+    def test_reload_seed_preserves_only_visible_active_completions(self):
+        result = self.run_js(
+            """(() => {
+              const seed = window.__hcPromptUI.seedPayload;
+              const roots = [
+                { id: "done", done: true, children: [] },
+                { id: "active", done: false, children: [] }
+              ];
+              const active = seed({}, roots, {
+                v: 7, filter: "active", selId: "done",
+                activeRetained: ["done", "active", "missing"],
+                paneTab: "notes", themeMode: "dark", view: "tree"
+              });
+              const afterFilterChange = seed({}, roots, {
+                v: 7, filter: "done", activeRetained: ["done"]
+              });
+              return {
+                version: active.v,
+                filter: active.filter,
+                selected: active.selId,
+                retained: active.activeRetained,
+                paneTab: active.paneTab,
+                themeMode: active.themeMode,
+                view: active.view,
+                clearedOutsideActive: afterFilterChange.activeRetained
+              };
+            })()"""
+        )
+        self.assertEqual(
+            {
+                "version": 7,
+                "filter": "active",
+                "selected": "done",
+                "retained": ["done"],
+                "paneTab": "notes",
+                "themeMode": "dark",
+                "view": "tree",
+                "clearedOutsideActive": [],
+            },
+            result,
+        )
 
 
 if __name__ == "__main__":
