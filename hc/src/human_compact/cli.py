@@ -89,17 +89,20 @@ def install_shim():
     zshrc_append(PATH_LINE, "shim on PATH")
 
 
-def run_backfill():
+def run_backfill(assume_yes=False):
     script = SKILLS_DIR / "scripts" / "vault-backfill.sh"
     dry = subprocess.run(["bash", str(script), "--dry-run"],
                          capture_output=True, text=True)
+    if dry.returncode != 0:
+        raise RuntimeError(dry.stderr.strip() or dry.stdout.strip() or
+                           "Vault backfill preview failed")
     tail = (dry.stdout.strip().splitlines() or ["backfill: nothing found"])[-1]
     say(f"preview: {tail}")
     if "0 imported" in tail or "nothing found" in tail:
         say("nothing new to import")
         return
-    if ask("Import these now?"):
-        subprocess.run(["bash", str(script)])
+    if assume_yes or ask("Import these now?"):
+        subprocess.run(["bash", str(script)], check=True)
 
 
 def backup_main():
@@ -125,7 +128,7 @@ def backup_main():
     retro = args.retroactive == "yes" if args.retroactive \
         else ask("Import your existing Claude Code conversations retroactively?")
     if retro:
-        run_backfill()
+        run_backfill(assume_yes=args.retroactive == "yes")
     print()
 
     if args.mode:
@@ -138,6 +141,10 @@ def backup_main():
 
     if mode == "all":
         zshrc_append(ALWAYS_LINE, "always-on capture")
+        # New installs use this shell-independent sentinel. Keep the zshrc
+        # export above so existing pipx/selective workflows remain unchanged.
+        from . import global_vault
+        global_vault.enable_always_on()
     else:
         say("selective mode: start Vault sessions with  claude --vault")
 
@@ -146,6 +153,85 @@ def backup_main():
     say("  which claude   ->  ~/.claude-vault/bin/claude")
     say("Vaulted history lives in ~/.claude-vault/sessions/ (by date).")
     print()
+
+
+def _validate_claude_cli():
+    executable = shutil.which("claude")
+    if not executable:
+        raise RuntimeError(
+            "Claude Code is required; install it, then rerun npx human-compact")
+    try:
+        result = subprocess.run([executable, "--version"], capture_output=True,
+                                text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"Claude Code validation failed: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:200]
+        raise RuntimeError("Claude Code validation failed" +
+                           (f": {detail}" if detail else ""))
+    return executable
+
+
+def setup_main(argv=None):
+    """One noninteractive orchestration seam for the npm installer."""
+    ap = argparse.ArgumentParser(
+        prog="hc setup",
+        description="Install /hc-ui and optionally initialize global Vault state.")
+    ap.add_argument("--global-vault", required=True, choices=["yes", "no"])
+    ap.add_argument("--goals", required=True, choices=["yes", "no"])
+    args = ap.parse_args(argv or [])
+    if args.goals == "yes" and args.global_vault != "yes":
+        ap.error("--goals yes requires --global-vault yes")
+
+    # This is deliberately first: /hc-ui remains installed even when optional
+    # global-history setup fails later and the user retries the installer.
+    install_main([])
+    if args.global_vault == "no":
+        from . import global_vault
+        global_vault.disable_always_on()
+    _validate_claude_cli()
+    if args.global_vault == "no":
+        return
+
+    from . import global_vault
+    counts = global_vault.backfill()
+    config = global_vault.enable_always_on()
+    say("global Vault enabled -> " + str(config))
+    say(f"history import: {counts['imported']} imported, "
+        f"{counts['skipped']} already present")
+
+    if args.goals == "yes":
+        trajectory_main([
+            "--provider", "claude", "--synth-provider", "claude",
+            "--refresh", "--no-interact", "--strict",
+        ])
+        goals_main(["--rebuild", "--no-interact"])
+        if not (global_vault.vault_root() / "trajectory" / "goals.json").is_file():
+            raise RuntimeError("goal inference completed without writing goals.json")
+        say("global goal tree rebuilt")
+
+
+def global_hook_main(argv=None):
+    """Python lifecycle hook used by npm-managed and pipx runtimes."""
+    ap = argparse.ArgumentParser(prog="hc global-hook")
+    ap.parse_args(argv or [])
+    import json
+    from . import global_vault
+    try:
+        payload = json.load(sys.stdin)
+    except (OSError, ValueError):
+        return 0
+    if isinstance(payload, dict):
+        try:
+            global_vault.handle_hook(payload)
+        except Exception as exc:  # noqa: BLE001 - Claude hooks are fail-open
+            try:
+                global_vault._debug(  # noqa: SLF001 - same hook layer
+                    str(payload.get("hook_event_name") or "?"),
+                    f"Python hook failed: {exc}")
+            except Exception:  # noqa: BLE001 - debug logging is best-effort
+                pass
+    return 0
 
 
 
@@ -161,6 +247,7 @@ def trajectory_main(argv=None):
     ap.add_argument("--model")
     ap.add_argument("--synth-model")
     ap.add_argument("--refresh", action="store_true", help="ignore extraction cache")
+    ap.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--workers", type=int, default=4, help="parallel extraction workers (default 4)")
     ap.add_argument("--no-serve", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--browser", action="store_true", help="also open the legacy browser evidence view")
@@ -219,7 +306,10 @@ def trajectory_main(argv=None):
     print(f"  discovering vault sessions (last {args.days} days)…")
     sessions = D.discover(args.days)
     if not sessions:
-        print("  no vaulted conversations in the window — run hc backup or have some chats first.")
+        message = "no vaulted conversations in the window — run hc backup or have some chats first"
+        if args.strict:
+            raise RuntimeError(message)
+        print("  " + message + ".")
         return
     print(f"  {len(sessions)} conversations found "
           f"({sum(1 for s in sessions if s['low_evidence'])} low-evidence, kept and downweighted)")
@@ -227,8 +317,15 @@ def trajectory_main(argv=None):
 
     ext, failures = X.extract_all(sessions, ex, trajdir / "conversations",
                                   refresh=args.refresh, workers=args.workers)
+    if failures and args.strict:
+        detail = "; ".join(f"{sid[:8]}: {reason}" for sid, reason in failures[:3])
+        raise RuntimeError(
+            f"{len(failures)} conversation extraction(s) failed: {detail}")
     if not ext:
-        print("  extraction produced nothing — check the provider and retry."); return
+        message = "extraction produced nothing — check the provider and retry"
+        if args.strict:
+            raise RuntimeError(message)
+        print("  " + message + "."); return
     print(f"  synthesizing across {len(ext)} conversations…")
     cor_text = None
     cfile = trajdir / "corrections.json"
@@ -870,6 +967,7 @@ def hc_main():
               "  status      vault + analysis pipeline status\n"
               "  refresh     process pending conversations, regenerate lens\n"
               "  install     install /hc-ui without enabling global Vault\n"
+              "  setup       noninteractive npm onboarding\n"
               "  backup      onboard Vault / import history\n"
               "  trajectory  full analyze + lens (alias)\n")
         return
@@ -877,6 +975,8 @@ def hc_main():
     if cmd == "backup":
         sys.argv = ["hc-backup"] + rest
         backup_main()
+    elif cmd == "setup":
+        setup_main(rest)
     elif cmd == "install":
         install_main(rest)
     elif cmd == "trajectory":
@@ -895,6 +995,8 @@ def hc_main():
         chat_hook_main(rest)
     elif cmd == "chat-refresh":
         raise SystemExit(chat_refresh_main(rest))
+    elif cmd == "global-hook":
+        raise SystemExit(global_hook_main(rest))
     elif cmd == "mark":
         mark_main(rest)
     elif cmd == "status":

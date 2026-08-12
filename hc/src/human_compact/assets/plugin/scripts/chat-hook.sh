@@ -14,14 +14,23 @@ if [[ "$INPUT" =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"UserPromptExpans
   IS_EXPANSION=1
 fi
 
-if ! command -v hc >/dev/null 2>&1; then
+HC_CMD=""
+if [ -n "${HC_EXECUTABLE:-}" ] && [ -x "$HC_EXECUTABLE" ]; then
+  HC_CMD="$HC_EXECUTABLE"
+elif [ -x "$HOME/.human-compact/bin/hc" ]; then
+  HC_CMD="$HOME/.human-compact/bin/hc"
+else
+  HC_CMD=$(command -v hc 2>/dev/null || true)
+fi
+
+if [ -z "$HC_CMD" ]; then
   if [ "$IS_EXPANSION" = "1" ]; then
-    printf '%s\n' '{"decision":"block","reason":"hc-ui could not open: hc is unavailable to Claude Code; run hc install, then restart Claude Code"}'
+    printf '%s\n' '{"decision":"block","reason":"hc-ui could not open: its runtime is unavailable; rerun npx human-compact, then restart Claude Code"}'
   fi
   exit 0
 fi
 
-OUTPUT=$(printf '%s' "$INPUT" | hc chat-hook 2>/dev/null)
+OUTPUT=$(printf '%s' "$INPUT" | "$HC_CMD" chat-hook 2>/dev/null)
 STATUS=$?
 if [ -n "$OUTPUT" ]; then
   printf '%s\n' "$OUTPUT"
