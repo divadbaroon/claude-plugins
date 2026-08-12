@@ -75,7 +75,13 @@ def sanitize(goals):
         if g.get("status") not in ("active", "in_progress", "completed", "abandoned"):
             g["status"] = "active"
         g.setdefault("evidence_ids", []); g.setdefault("todos", [])
-        g.setdefault("important_item_ids", []); g.setdefault("updated_at", _now())
+        g.setdefault("important_item_ids", [])
+        raw_prompt_ids = g.setdefault("prompt_ids", [])
+        if not isinstance(raw_prompt_ids, list):
+            raw_prompt_ids = []
+        g["prompt_ids"] = list(dict.fromkeys(
+            pid for pid in raw_prompt_ids if isinstance(pid, str)))
+        g.setdefault("updated_at", _now())
         g.setdefault("priority", "normal"); g.setdefault("notes", "")
         g.setdefault("description", "")
         if g["priority"] not in ("urgent", "high", "normal"):
@@ -145,6 +151,8 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                                         if e not in dst["evidence_ids"]]
                 dst["todos"] += src["todos"]
                 dst["important_item_ids"] += src["important_item_ids"]
+                dst["prompt_ids"] += [pid for pid in src.get("prompt_ids", [])
+                                      if pid not in dst["prompt_ids"]]
                 for ch in goals["goals"]:
                     if ch.get("parent_goal_id") == src["id"]:
                         ch["parent_goal_id"] = dst["id"]

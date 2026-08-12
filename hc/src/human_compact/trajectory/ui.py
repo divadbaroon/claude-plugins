@@ -7,12 +7,42 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
+from pathlib import Path
 
 from . import goals as GM, state
 
 
-def _payload():
-    trajdir = state.trajdir()
+def _scope(trajdir=None):
+    """Resolve legacy global UI scope or an explicitly bound chat scope."""
+    return Path(trajdir) if trajdir is not None else state.trajdir()
+
+
+def _load_prompts(trajdir):
+    """Read assignable human prompts from this chat only.
+
+    Accept the early list-shaped store defensively; the durable store is
+    ``{"prompts": [...]}``. Malformed/incomplete rows never reach the UI.
+    """
+    try:
+        raw = json.loads((trajdir / "prompts.json").read_text())
+    except (OSError, ValueError, TypeError):
+        return []
+    rows = raw if isinstance(raw, list) else raw.get("prompts", []) \
+        if isinstance(raw, dict) else []
+    out, seen = [], set()
+    for prompt in rows:
+        if not (isinstance(prompt, dict) and prompt.get("role") == "user"
+                and isinstance(prompt.get("id"), str)
+                and isinstance(prompt.get("text"), str)
+                and prompt["id"] not in seen):
+            continue
+        seen.add(prompt["id"])
+        out.append(prompt)
+    return out
+
+
+def _payload(trajdir=None):
+    trajdir = _scope(trajdir)
     goals, important = GM.load(trajdir)
     GM.sanitize(goals)
     ana = {}
@@ -21,12 +51,13 @@ def _payload():
     except (OSError, ValueError):
         pass
     return {"goals": goals["goals"], "items": important["items"],
+            "prompts": _load_prompts(trajdir),
             "generated_at": goals.get("generated_at", ""),
             "sessions": ana.get("sessions_analyzed")}
 
 
-def _apply(op):
-    trajdir = state.trajdir()
+def _apply(op, trajdir=None):
+    trajdir = _scope(trajdir)
     goals, important = GM.load(trajdir)
     GM.sanitize(goals)
     kind = op.get("op")
@@ -50,6 +81,19 @@ def _apply(op):
     elif kind == "add_todo" and g and op.get("text", "").strip():
         g["todos"].append({"text": op["text"].strip()[:160], "done": False,
                            "evidence_ids": []})
+    elif kind in ("attach_prompt", "detach_prompt"):
+        if not g:
+            return {"ok": False, "error": "goal not found in this chat"}
+        prompt_id = op.get("prompt_id")
+        valid = {p["id"] for p in _load_prompts(trajdir)}
+        if not isinstance(prompt_id, str) or prompt_id not in valid:
+            return {"ok": False, "error": "prompt not found in this chat"}
+        links = g.setdefault("prompt_ids", [])
+        if kind == "attach_prompt" and prompt_id not in links:
+            links.append(prompt_id)
+        elif kind == "detach_prompt":
+            g["prompt_ids"] = [pid for pid in links if pid != prompt_id]
+        g["updated_at"] = GM._now()
     elif kind == "add_goal":
         parent = op.get("parent_goal_id") or None
         if parent and not GM.by_id(goals, parent):
@@ -58,6 +102,7 @@ def _apply(op):
         goals["goals"].append({"id": gid, "title": (op.get("title") or "Untitled").strip()[:120],
                                "status": "active", "parent_goal_id": parent,
                                "evidence_ids": [], "todos": [], "important_item_ids": [],
+                               "prompt_ids": [],
                                "priority": "normal", "notes": "",
                                "updated_at": GM._now(), "origin": "user"})
     else:
@@ -91,7 +136,7 @@ class H(BaseHTTPRequestHandler):
                 "web/bridge.js").read_bytes()
             self._send(200, js, "application/javascript")
         elif self.path == "/api/state":
-            self._send(200, _payload())
+            self._send(200, _payload(self.server.trajdir))
         else:
             self._send(404, {"error": "not found"})
 
@@ -102,17 +147,25 @@ class H(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             self._send(400, {"ok": False, "error": "bad json"}); return
         if self.path == "/api/op":
-            self._send(200, _apply(body))
+            with self.server.state_lock:
+                result = _apply(body, self.server.trajdir)
+            self._send(200, result)
         elif self.path == "/api/import":
-            self._send(200, _import(body))
+            with self.server.state_lock:
+                result = _import(body, self.server.trajdir)
+            self._send(200, result)
         else:
             self._send(404, {"error": "not found"})
 
 
-def run(port=8765, open_browser=True):
+def run(port=8765, open_browser=True, trajdir=None):
+    trajdir = _scope(trajdir)
+    trajdir.mkdir(parents=True, exist_ok=True)
     for p in range(port, port + 20):
         try:
             srv = ThreadingHTTPServer(("127.0.0.1", p), H)
+            srv.trajdir = trajdir
+            srv.state_lock = threading.RLock()
             break
         except OSError:
             continue
@@ -131,14 +184,14 @@ def run(port=8765, open_browser=True):
         srv.server_close()
 
 
-def _import(nested):
+def _import(nested, trajdir=None):
     """Map the Claude Design app's nested node tree back into the goals model.
     Node ids are preserved; `t:<gid>:<i>` nodes are that goal's todos. Nodes
     missing from the payload are marked abandoned (history kept, never
     destroyed). Evidence links and important-item associations survive."""
     if not isinstance(nested, list):
         return {"ok": False, "error": "expected a list of nodes"}
-    trajdir = state.trajdir()
+    trajdir = _scope(trajdir)
     goals, important = GM.load(trajdir)
     GM.sanitize(goals)
     old = {g["id"]: g for g in goals["goals"]}
@@ -169,6 +222,7 @@ def _import(nested):
                     "evidence_ids": prev.get("evidence_ids", []),
                     "todos": [],
                     "important_item_ids": prev.get("important_item_ids", []),
+                    "prompt_ids": prev.get("prompt_ids", []),
                     "priority": node.get("prio") if node.get("prio") in
                         ("urgent", "high", "normal") else "normal",
                     "notes": str(node.get("notes") or "")[:4000],
