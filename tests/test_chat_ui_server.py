@@ -492,6 +492,16 @@ class ChatUiServerTests(unittest.TestCase):
 
         goals_path = self.a / "goals.json"
         saved = json.loads(goals_path.read_text())
+        root_title = (
+            "Root goal with enough implementation detail to wrap across lines "
+            "while its selected background and controls stay aligned"
+        )
+        child_title_text = (
+            "Completed nested subgoal explaining persistence, reload, "
+            "reconciliation, and rendering without overlapping adjacent rows"
+        )
+        saved["goals"][0]["title"] = root_title
+        saved["goals"][1]["title"] = child_title_text
         saved["goals"][1]["parent_goal_id"] = "a1"
         goals_path.write_text(json.dumps(saved))
 
@@ -512,13 +522,118 @@ class ChatUiServerTests(unittest.TestCase):
                     ["+ Add subgoal", "+ Add subgoal"],
                     page.locator('[title="Add subgoal"]').all_text_contents(),
                 )
+                expect(page.get_by_text("SELECTED GOAL", exact=True)).to_have_count(0)
+                expect(
+                    page.get_by_text("Copy appends goal metadata", exact=True)
+                ).to_have_count(0)
+                expect(
+                    page.get_by_text(
+                        "Markdown formats as you type · auto-saved with this goal",
+                        exact=True,
+                    )
+                ).to_have_count(0)
+                expect(page.locator('[placeholder^="Plan in markdown"]')).to_have_count(0)
+                page.get_by_text("NOTES", exact=True).first.click()
+                notes = page.locator('textarea[aria-label="Goal notes"]')
+                expect(notes).to_be_visible()
+                self.assertIn(notes.get_attribute("placeholder"), (None, ""))
+                expect(
+                    page.get_by_text(
+                        "Markdown formats as you type · auto-saved with this goal",
+                        exact=True,
+                    )
+                ).to_have_count(0)
+                page.get_by_text("PROMPT", exact=True).first.click()
+
+                metrics = page.evaluate(
+                    """titles => {
+                      const measure = text => {
+                        const inner = [...document.querySelectorAll('.sc-interp')]
+                          .find(el => el.textContent === text && el.parentElement &&
+                            el.parentElement.parentElement.querySelector('[title="Add subgoal"]'));
+                        const title = inner.parentElement;
+                        const row = title.parentElement;
+                        const add = row.querySelector('[title="Add subgoal"]');
+                        const guide = row.firstElementChild;
+                        const rr = row.getBoundingClientRect();
+                        const tr = title.getBoundingClientRect();
+                        const ar = add.getBoundingClientRect();
+                        const gr = guide.getBoundingClientRect();
+                        return {
+                          row: { top: rr.top, bottom: rr.bottom, height: rr.height },
+                          title: { left: tr.left, right: tr.right, height: tr.height },
+                          add: { left: ar.left, top: ar.top, bottom: ar.bottom },
+                          guide: { width: gr.width, height: gr.height },
+                          background: getComputedStyle(row).backgroundColor
+                        };
+                      };
+                      return { root: measure(titles[0]), child: measure(titles[1]) };
+                    }""",
+                    [root_title, child_title_text],
+                )
+                self.assertGreater(metrics["root"]["row"]["height"], 29)
+                self.assertGreater(metrics["child"]["row"]["height"], 29)
+                self.assertLessEqual(
+                    metrics["root"]["row"]["bottom"],
+                    metrics["child"]["row"]["top"] + 0.5,
+                )
+                for measured in metrics.values():
+                    self.assertLessEqual(
+                        measured["title"]["right"], measured["add"]["left"] + 0.5
+                    )
+                    self.assertGreaterEqual(
+                        measured["add"]["top"], measured["row"]["top"] - 0.5
+                    )
+                    self.assertLessEqual(
+                        measured["add"]["bottom"], measured["row"]["bottom"] + 0.5
+                    )
+                    self.assertAlmostEqual(
+                        measured["guide"]["height"],
+                        measured["row"]["height"],
+                        delta=0.5,
+                    )
+                self.assertGreater(metrics["child"]["guide"]["width"], 0)
+                self.assertGreater(
+                    metrics["child"]["title"]["left"],
+                    metrics["root"]["title"]["left"],
+                )
+                self.assertNotIn(
+                    metrics["root"]["background"],
+                    ("rgba(0, 0, 0, 0)", "transparent"),
+                )
 
                 toggles = page.locator('[title="Toggle complete"]')
                 expect(toggles).to_have_count(2)
                 toggles.nth(1).click()
-                child_title = page.get_by_text("another a goal", exact=True).first
+                child_title = page.get_by_text(child_title_text, exact=True).first
                 expect(child_title.locator("..")).to_have_css(
                     "text-decoration-line", "line-through"
+                )
+                child_title.click()
+                completed_row = child_title.locator("..").locator("..")
+                self.assertNotIn(
+                    completed_row.evaluate("e => getComputedStyle(e).backgroundColor"),
+                    ("rgba(0, 0, 0, 0)", "transparent"),
+                )
+                completed_bounds = toggles.evaluate_all("""marks => marks.map(mark => {
+                    const row = mark.parentElement;
+                    const rect = row.getBoundingClientRect();
+                    const title = row.querySelector('[data-dc-tpl="42"]') ||
+                      [...row.children].find(el => el.textContent.includes('subgoal'));
+                    const add = row.querySelector('[title="Add subgoal"]');
+                    const tr = title.getBoundingClientRect();
+                    const ar = add.getBoundingClientRect();
+                    return { top: rect.top, bottom: rect.bottom, height: rect.height,
+                      titleRight: tr.right, addLeft: ar.left };
+                  })""")
+                self.assertLessEqual(
+                    completed_bounds[0]["bottom"],
+                    completed_bounds[1]["top"] + 0.5,
+                )
+                self.assertGreater(completed_bounds[1]["height"], 29)
+                self.assertLessEqual(
+                    completed_bounds[1]["titleRight"],
+                    completed_bounds[1]["addLeft"] + 0.5,
                 )
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
@@ -532,7 +647,7 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertEqual("completed", persisted["a2"]["status"])
 
                 page.reload(wait_until="domcontentloaded")
-                child_title = page.get_by_text("another a goal", exact=True).first
+                child_title = page.get_by_text(child_title_text, exact=True).first
                 expect(child_title.locator("..")).to_have_css(
                     "text-decoration-line", "line-through", timeout=10_000
                 )
@@ -541,11 +656,47 @@ class ChatUiServerTests(unittest.TestCase):
                 page.get_by_text("active (1)", exact=True).click()
                 expect(page.locator('[title="Toggle complete"]')).to_have_count(1)
                 self.assertNotIn(
-                    "another a goal",
+                    child_title_text,
                     page.locator('[title="Toggle complete"]')
                     .locator("..")
                     .all_text_contents(),
                 )
+            finally:
+                browser.close()
+
+    def test_prompt_picker_close_button_and_escape_restore_trigger_focus(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                trigger = page.locator("#hc-prompt-links .hc-pa-add")
+                expect(trigger).to_be_visible(timeout=10_000)
+                overlay = page.locator("#hc-prompt-picker")
+
+                trigger.click()
+                expect(overlay).to_be_visible()
+                page.locator("#hc-prompt-picker .hc-pa-close").click()
+                expect(overlay).to_be_hidden()
+                expect(trigger).to_be_focused()
+
+                trigger.click()
+                expect(overlay).to_be_visible()
+                page.keyboard.press("Escape")
+                expect(overlay).to_be_hidden()
+                expect(trigger).to_be_focused()
             finally:
                 browser.close()
 

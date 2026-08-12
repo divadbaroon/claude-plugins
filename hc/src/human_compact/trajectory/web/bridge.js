@@ -13,6 +13,7 @@
   var panel = null;
   var panelSignature = null;
   var picker = null;
+  var pickerTrigger = null;
   var pickerQuery = "";
   var pickerLimit = 80;
   var promptError = "";
@@ -37,8 +38,40 @@
   function patchBundleSource(source) {
     var parts = [
       [
+        '<div sc-camel-on-click="{{ row.sel }}" sc-camel-on-double-click="{{ row.edit }}" style="display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }}" style-hover="background:{{ row.hovBg }}">',
+        '<div sc-camel-on-click="{{ row.sel }}" sc-camel-on-double-click="{{ row.edit }}" style="display:flex;align-items:center;gap:7px;min-height:29px;padding:0 8px;box-sizing:border-box;border-radius:2px;cursor:pointer;background:{{ row.bg }}" style-hover="background:{{ row.hovBg }}">'
+      ],
+      [
+        '<sc-if value="{{ row.isEdit }}" hint-placeholder-val="{{ false }}"><input sc-camel-default-value="{{ row.rawTitle }}" sc-camel-on-key-down="{{ row.key }}" sc-camel-on-blur="{{ row.blur }}" ref="{{ row.ref }}" placeholder="Goal title" style="flex:1;min-width:80px;',
+        '<sc-if value="{{ row.isEdit }}" hint-placeholder-val="{{ false }}"><input sc-camel-default-value="{{ row.rawTitle }}" sc-camel-on-key-down="{{ row.key }}" sc-camel-on-blur="{{ row.blur }}" ref="{{ row.ref }}" placeholder="Goal title" style="flex:1;min-width:0;'
+      ],
+      [
+        '<sc-if value="{{ row.showTitle }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}">{{ row.title }}</span></sc-if>',
+        '<sc-if value="{{ row.showTitle }}" hint-placeholder-val="{{ true }}"><span style="flex:1 1 auto;min-width:0;padding:5px 0;font-size:12.5px;line-height:1.45;overflow-wrap:anywhere;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}">{{ row.title }}</span></sc-if>'
+      ],
+      [
+        '<span style="margin-left:auto;display:inline-flex;gap:10px;align-items:center">',
+        '<span style="margin-left:auto;display:inline-flex;gap:10px;align-items:center;align-self:center;flex:none">'
+      ],
+      [
         '<span sc-camel-on-click="{{ row.addSub }}" title="Add subgoal" style="width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;font:500 12px \'Source Code Pro\',monospace;color:var(--fnt);cursor:pointer" style-hover="color:var(--acc);background:var(--hov)">+</span>',
         '<span sc-camel-on-click="{{ row.addSub }}" title="Add subgoal" style="height:18px;flex:none;display:flex;align-items:center;justify-content:center;padding:0 4px;font:500 10.5px \'Source Code Pro\',monospace;color:var(--fnt);cursor:pointer" style-hover="color:var(--acc);background:var(--hov)">+ Add subgoal</span>'
+      ],
+      [
+        '<div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font:600 10px \'Source Code Pro\',monospace;letter-spacing:1.2px;color:var(--mut)">SELECTED GOAL</span><span sc-camel-on-click="{{ inspExpand }}"',
+        '<div style="display:flex;justify-content:flex-end;align-items:baseline"><span sc-camel-on-click="{{ inspExpand }}"'
+      ],
+      [
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;gap:12px"><span style="font-size:11px;color:var(--fnt);min-width:0">Copy appends goal metadata</span><span style="flex:none;display:inline-flex;gap:18px;align-items:baseline">',
+        '<div style="display:flex;align-items:center;justify-content:flex-end;margin-top:10px;gap:12px"><span style="flex:none;display:inline-flex;gap:18px;align-items:baseline">'
+      ],
+      [
+        ' placeholder="Plan in markdown — # heading, - list, - [ ] task, **bold**, `code`" style="position:absolute;',
+        ' aria-label="Goal notes" style="position:absolute;'
+      ],
+      [
+        '<div style="margin-top:8px;font-size:11px;color:var(--fnt)">Markdown formats as you type · auto-saved with this goal</div>',
+        '<!-- Notes save through component state. -->'
       ],
       [
         "      filter: (saved && saved.v >= 6 && saved.filter) ? saved.filter : 'active',\n      labels:",
@@ -63,6 +96,10 @@
       [
         "      click: () => this.set(() => ({ filter: k }))",
         "      click: () => this.set(s => ({ filter: k, activeRetained: s.filter === 'active' && k !== 'active' ? [] : s.activeRetained }))"
+      ],
+      [
+        "        if (el) { const top = nx * 29, bot = top + 29; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; }",
+        "        if (el) { const marks = el.querySelectorAll('[title=\"Toggle complete\"]'), row = marks[nx] && marks[nx].parentElement; if (row) { const top = row.offsetTop, bot = top + row.offsetHeight; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; } }"
       ],
       [
         "    const setSt = (k) => sel && this.set(s => ({ goals: this.up(s.goals, sel.id, x => k === 'done' ? { ...x, done: true } : { ...x, done: false, status: k === 'inprog' ? 'inprog' : 'todo' }) }), true);",
@@ -555,6 +592,7 @@
       ".hc-pa-empty,.hc-pa-error{margin-top:7px;font:10.5px/1.45 'Source Code Pro',monospace;color:var(--fnt)}",
       ".hc-pa-error{color:var(--del)}",
       ".hc-pa-overlay{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;padding:20px}",
+      ".hc-pa-overlay[hidden]{display:none}",
       ".hc-pa-dialog{width:min(620px,100%);max-height:min(680px,calc(100vh - 40px));display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--bd2,#d5d5d5);border-radius:3px;box-shadow:0 18px 60px rgba(0,0,0,.2);font-family:'Source Code Pro',monospace}",
       ".hc-pa-dialog-head{display:flex;align-items:baseline;justify-content:space-between;padding:14px 16px 10px}",
       ".hc-pa-dialog-title{font-size:12.5px;font-weight:700}",
@@ -748,9 +786,12 @@
     return picker;
   }
 
-  function openPicker() {
+  function openPicker(event) {
     var goal = goalById(readSelection());
     if (!goal) return;
+    var trigger = event && event.currentTarget;
+    pickerTrigger = trigger && typeof trigger.focus === "function" ?
+      trigger : document.activeElement;
     ensureStyles();
     createPicker();
     promptError = "";
@@ -765,6 +806,12 @@
 
   function closePicker() {
     if (picker) picker.hidden = true;
+    var target = pickerTrigger;
+    pickerTrigger = null;
+    if (target && typeof target.focus === "function" &&
+        document.documentElement.contains(target)) {
+      setTimeout(function () { target.focus(); }, 0);
+    }
   }
 
   function renderPickerList(keepScroll) {

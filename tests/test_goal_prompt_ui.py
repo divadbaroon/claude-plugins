@@ -156,7 +156,23 @@ class GoalPromptUiTests(unittest.TestCase):
                 inspectorCompletionRetains: patched.includes("kept.add(sel.id)"),
                 leavingActiveClears: patched.includes(
                   "s.filter === 'active' && k !== 'active' ? []"
-                )
+                ),
+                contentDrivenRows: patched.includes(
+                  "gap:7px;min-height:29px;padding:0 8px;box-sizing:border-box"
+                ) && !patched.includes("gap:7px;height:29px;padding:0 8px"),
+                wrappingTitles: patched.includes(
+                  "flex:1 1 auto;min-width:0;padding:5px 0;font-size:12.5px;line-height:1.45;overflow-wrap:anywhere"
+                ),
+                fixedControls: patched.includes(
+                  "align-items:center;align-self:center;flex:none"
+                ),
+                selectedLabelRemoved: !patched.includes("SELECTED GOAL"),
+                copyCaptionRemoved: !patched.includes("Copy appends goal metadata"),
+                notesCaptionRemoved: !patched.includes(
+                  "Markdown formats as you type · auto-saved with this goal"
+                ),
+                notesPlaceholderRemoved: !patched.includes("Plan in markdown —") &&
+                  patched.includes('aria-label="Goal notes"')
               };
             })()"""
         )
@@ -171,6 +187,13 @@ class GoalPromptUiTests(unittest.TestCase):
                 "rowCompletionRetains": True,
                 "inspectorCompletionRetains": True,
                 "leavingActiveClears": True,
+                "contentDrivenRows": True,
+                "wrappingTitles": True,
+                "fixedControls": True,
+                "selectedLabelRemoved": True,
+                "copyCaptionRemoved": True,
+                "notesCaptionRemoved": True,
+                "notesPlaceholderRemoved": True,
             },
             result,
         )
