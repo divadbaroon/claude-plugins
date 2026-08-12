@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import ui  # noqa: E402
+from human_compact.trajectory import chat_state  # noqa: E402
 
 
 def goal(goal_id, title, prompt_ids=None):
@@ -41,9 +43,10 @@ def write_scope(path, goals, prompts):
 
 
 @contextmanager
-def server_for(path):
+def server_for(path, chat_scoped=True):
     server = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.H)
     server.trajdir = Path(path)
+    server.chat_scoped = chat_scoped
     server.state_lock = threading.RLock()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -121,6 +124,10 @@ class ChatUiServerTests(unittest.TestCase):
             self.assertEqual(["b1"], [g["id"] for g in state_b["goals"]])
             self.assertEqual(["p-old", "p-new"], [p["id"] for p in state_a["prompts"]])
             self.assertEqual(["bp"], [p["id"] for p in state_b["prompts"]])
+            self.assertEqual(
+                {"ok": True, "scope": "chat", "session_id": "chat-a"},
+                get_json(url_a + "/api/health"),
+            )
 
             self.assertEqual(
                 {"ok": True},
@@ -189,6 +196,42 @@ class ChatUiServerTests(unittest.TestCase):
         self.assertEqual({p["id"] for p in prompts}, set(linked))
         self.assertEqual(len(prompts), len(linked))
 
+    def test_analyzer_like_writer_and_http_attach_serialize_cross_process_lock(self):
+        """An inference writer cannot save a stale tree over a manual link."""
+        analyzer_holds_lock = threading.Event()
+        release_analyzer = threading.Event()
+
+        def analyzer_like_write():
+            with chat_state.session_lock("chat-a", self.root, wait_s=2):
+                goals, important = chat_state.load_goals("chat-a", self.root)
+                goals["goals"][0]["description"] = "analyzer-derived description"
+                analyzer_holds_lock.set()
+                release_analyzer.wait(timeout=2)
+                chat_state.save_goals("chat-a", goals, important, self.root)
+
+        analyzer = threading.Thread(target=analyzer_like_write)
+        analyzer.start()
+        self.assertTrue(analyzer_holds_lock.wait(timeout=1))
+        with server_for(self.a) as url:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                response = pool.submit(
+                    post_json,
+                    url + "/api/op",
+                    {"op": "attach_prompt", "goal_id": "a1", "prompt_id": "p-new"},
+                )
+                time.sleep(0.1)
+                self.assertFalse(response.done())
+                release_analyzer.set()
+                self.assertEqual({"ok": True}, response.result(timeout=2))
+            current = get_json(url + "/api/state")["goals"][0]
+        analyzer.join(timeout=2)
+        self.assertFalse(analyzer.is_alive())
+        self.assertEqual("analyzer-derived description", current["description"])
+        self.assertEqual(["p-new"], current["prompt_ids"])
+        context = (self.a / "goal_context.md").read_text()
+        self.assertIn("analyzer-derived description", json.dumps(current))
+        self.assertIn("new human prompt", context)
+
     def test_bundle_import_preserves_prompt_relationships(self):
         ui._apply(
             {"op": "attach_prompt", "goal_id": "a1", "prompt_id": "p-new"},
@@ -253,6 +296,30 @@ class ChatUiServerTests(unittest.TestCase):
                 os.environ.pop("HC_HOME", None)
             else:
                 os.environ["HC_HOME"] = old
+
+    def test_run_reports_bound_server_before_serving(self):
+        observed = {}
+
+        def ready(url, server):
+            observed["url"] = url
+            observed["scope"] = server.trajdir
+            threading.Timer(0.05, server.shutdown).start()
+
+        thread = threading.Thread(
+            target=ui.run,
+            kwargs={
+                "port": 0,
+                "open_browser": False,
+                "trajdir": self.a,
+                "ready_callback": ready,
+                "label": "Chat goals",
+            },
+        )
+        thread.start()
+        thread.join(timeout=3)
+        self.assertFalse(thread.is_alive())
+        self.assertTrue(observed["url"].startswith("http://127.0.0.1:"))
+        self.assertEqual(self.a.resolve(), observed["scope"].resolve())
 
 
 if __name__ == "__main__":
