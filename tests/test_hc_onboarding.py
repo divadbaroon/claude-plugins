@@ -3,6 +3,7 @@ import importlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -53,6 +54,27 @@ class HcOnboardingTests(unittest.TestCase):
                        "scripts" / "chat-hook.sh").read_text()
         self.assertIn('CLAUDE_VAULT:-', vault_script)
         self.assertNotIn('CLAUDE_VAULT:-', chat_script)
+
+    def test_ui_expansion_reports_missing_cli_instead_of_claiming_success(self):
+        script = (
+            HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /
+            "chat-hook.sh"
+        )
+        payload = json.dumps({
+            "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "hook_event_name": "UserPromptExpansion",
+        })
+        result = subprocess.run(
+            ["/bin/bash", str(script)],
+            input=payload,
+            text=True,
+            capture_output=True,
+            env={**os.environ, "PATH": "/usr/bin:/bin"},
+            check=True,
+        )
+        response = json.loads(result.stdout)
+        self.assertEqual("block", response["decision"])
+        self.assertIn("run hc install", response["reason"])
 
 
 if __name__ == "__main__":
