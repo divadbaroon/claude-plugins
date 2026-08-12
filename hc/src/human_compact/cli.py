@@ -1,11 +1,14 @@
 """hc-backup: onboard Vault for Claude Code conversation persistence."""
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
 import time
+import uuid
 from importlib import resources
 from pathlib import Path
 
@@ -17,6 +20,22 @@ ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
 ALWAYS_LINE = "export CLAUDE_VAULT=1"
 _DETACHED_PROCESSES = []
+MANAGED_MARKER = ".human-compact-managed.json"
+_ASSET_FILES = {
+    "vault": {
+        ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
+        "scripts/chat-hook.sh", "scripts/vault-backfill.sh",
+        "scripts/vault-hook.sh",
+    },
+    "hc-ui": {"SKILL.md"},
+}
+# Exact unmarked v0.15.0 assets. This permits migration of installs created by
+# this project before ownership markers existed without claiming arbitrary
+# directories that merely happen to use the same names.
+_LEGACY_DIGESTS = {
+    "vault": {"4f5319b78efe7f90eccb967bbcd787b7ddcfbfdae8643e82281f01e6551dda02"},
+    "hc-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
+}
 
 
 def say(msg):
@@ -52,15 +71,190 @@ def ask(question: str, default_yes=True) -> bool:
     return ans in ("y", "yes")
 
 
+def _path_exists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _asset_digest(root: Path, asset: str):
+    """Return an exact tree digest, or None for any unexpected path/layout."""
+    expected_files = _ASSET_FILES[asset]
+    if not root.is_dir() or root.is_symlink():
+        return None
+    actual_files, actual_dirs = set(), set()
+    try:
+        for path in root.rglob("*"):
+            if path.is_symlink():
+                return None
+            relative = path.relative_to(root).as_posix()
+            if path.is_dir():
+                actual_dirs.add(relative)
+            elif path.is_file():
+                actual_files.add(relative)
+            else:
+                return None
+    except OSError:
+        return None
+    expected_dirs = {
+        parent.as_posix()
+        for name in expected_files
+        for parent in Path(name).parents
+        if parent.as_posix() != "."
+    }
+    if actual_files != expected_files or actual_dirs != expected_dirs:
+        return None
+    digest = hashlib.sha256()
+    try:
+        for name in sorted(expected_files):
+            digest.update(name.encode() + b"\0")
+            digest.update((root / name).read_bytes())
+            digest.update(b"\0")
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _owned_asset(destination: Path, asset: str) -> bool:
+    marker = destination / MANAGED_MARKER
+    if marker.is_symlink():
+        return False
+    try:
+        value = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        return False
+    return (value.get("owner") == "human-compact" and
+            value.get("asset") == asset and value.get("format") == 1)
+
+
+def _legacy_asset(destination: Path, source: Path, asset: str) -> bool:
+    digest = _asset_digest(destination, asset)
+    if digest is None:
+        return False
+    return digest == _asset_digest(source, asset) or digest in _LEGACY_DIGESTS[asset]
+
+
+def _preflight_asset(source: Path, destination: Path, asset: str):
+    if not _path_exists(destination):
+        return "new"
+    if destination.is_symlink() or not destination.is_dir():
+        raise RuntimeError(
+            f"refusing to replace unmanaged Claude skill path: {destination}; "
+            "move it aside, then rerun npx human-compact")
+    if _owned_asset(destination, asset):
+        return "managed"
+    if _legacy_asset(destination, source, asset):
+        return "legacy"
+    raise RuntimeError(
+        f"refusing to replace unmanaged Claude skill directory: {destination}; "
+        "move it aside, then rerun npx human-compact")
+
+
+def _tighten_asset_modes(root: Path):
+    os.chmod(root, 0o700)
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise RuntimeError(f"refusing symlink in packaged Claude asset: {path}")
+        if path.is_dir():
+            os.chmod(path, 0o700)
+        elif path.is_file():
+            executable = (path.suffix == ".sh" or
+                          bool(path.stat().st_mode & stat.S_IXUSR))
+            os.chmod(path, 0o700 if executable else 0o600)
+
+
+def _stage_asset(source: Path, destination: Path, asset: str) -> Path:
+    stage = destination.parent / f".{destination.name}.hc-stage-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(source, stage, symlinks=True)
+        marker = stage / MANAGED_MARKER
+        marker.write_text(json.dumps({
+            "owner": "human-compact", "asset": asset, "format": 1,
+        }, sort_keys=True) + "\n")
+        _tighten_asset_modes(stage)
+        if not _owned_asset(stage, asset):
+            raise RuntimeError(f"staged {asset} ownership marker is invalid")
+        # The marker is intentionally the only difference from packaged data.
+        marker.unlink()
+        source_digest = _asset_digest(source, asset)
+        valid = (source_digest is not None and
+                 _asset_digest(stage, asset) == source_digest)
+        marker.write_text(json.dumps({
+            "owner": "human-compact", "asset": asset, "format": 1,
+        }, sort_keys=True) + "\n")
+        os.chmod(marker, 0o600)
+        if not valid:
+            raise RuntimeError(f"staged {asset} failed package validation")
+        return stage
+    except Exception:
+        if _path_exists(stage):
+            shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+
+def _remove_asset(path: Path):
+    if path.is_symlink():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
 def install_plugin():
-    src = asset_root() / "plugin"
-    SKILLS_DIR.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(src, SKILLS_DIR, dirs_exist_ok=True)
-    for s in (SKILLS_DIR / "scripts").glob("*.sh"):
-        make_exec(s)
+    parent = SKILLS_DIR.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    specs = [
+        {"asset": "vault", "source": asset_root() / "plugin",
+         "destination": SKILLS_DIR},
+        {"asset": "hc-ui", "source": asset_root() / "hc-ui-skill",
+         "destination": HC_UI_SKILL_DIR},
+    ]
+    for spec in specs:
+        spec["ownership"] = _preflight_asset(
+            spec["source"], spec["destination"], spec["asset"])
+    try:
+        for spec in specs:
+            spec["stage"] = _stage_asset(
+                spec["source"], spec["destination"], spec["asset"])
+            spec["backup"] = spec["destination"].parent / (
+                f".{spec['destination'].name}.hc-backup-{uuid.uuid4().hex}")
+            spec["backup_moved"] = False
+            spec["promoted"] = False
+    except Exception:
+        for spec in specs:
+            if spec.get("stage"):
+                _remove_asset(spec["stage"])
+        raise
+
+    try:
+        for spec in specs:
+            destination = spec["destination"]
+            if _path_exists(destination):
+                os.replace(destination, spec["backup"])
+                spec["backup_moved"] = True
+            os.replace(spec["stage"], destination)
+            spec["promoted"] = True
+    except Exception as install_error:
+        rollback_errors = []
+        for spec in reversed(specs):
+            try:
+                if spec["promoted"] and _path_exists(spec["destination"]):
+                    _remove_asset(spec["destination"])
+                if spec["backup_moved"] and _path_exists(spec["backup"]):
+                    os.replace(spec["backup"], spec["destination"])
+            except Exception as rollback_error:  # noqa: BLE001
+                rollback_errors.append(
+                    f"{spec['destination']}: {rollback_error}; backup={spec['backup']}")
+            if _path_exists(spec["stage"]):
+                _remove_asset(spec["stage"])
+        detail = ("; rollback incomplete: " + "; ".join(rollback_errors)
+                  if rollback_errors else "; previous install restored")
+        raise RuntimeError(f"Claude integration install failed: {install_error}{detail}") \
+            from install_error
+
+    for spec in specs:
+        if spec["backup_moved"] and _path_exists(spec["backup"]):
+            _remove_asset(spec["backup"])
+        if spec["ownership"] == "legacy":
+            say(f"migrated legacy {spec['asset']} install")
     say(f"plugin installed -> {SKILLS_DIR}")
-    shutil.copytree(asset_root() / "hc-ui-skill", HC_UI_SKILL_DIR,
-                    dirs_exist_ok=True)
     say(f"/hc-ui installed -> {HC_UI_SKILL_DIR}")
 
 
