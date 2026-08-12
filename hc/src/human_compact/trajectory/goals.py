@@ -86,6 +86,19 @@ def sanitize(goals):
         g.setdefault("description", "")
         if g["priority"] not in ("urgent", "high", "normal"):
             g["priority"] = "normal"
+    # A model response or imported browser snapshot can name valid parents and
+    # still form a cycle. Break the edge owned by the first goal that observes
+    # each cycle so every node remains reachable from a top-level root.
+    for g in goals["goals"]:
+        seen = {g.get("id")}
+        parent_id = g.get("parent_goal_id")
+        while parent_id:
+            if parent_id in seen:
+                g["parent_goal_id"] = None
+                break
+            seen.add(parent_id)
+            parent = by_id(goals, parent_id)
+            parent_id = parent.get("parent_goal_id") if parent else None
     for g in goals["goals"]:
         if depth(goals, g["id"]) > 3:
             g["parent_goal_id"] = None
@@ -126,17 +139,21 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                     changes.append(f"REFUSED new top-level goal: {o.get('title','')[:40]}")
                     continue
             gid = next_goal_id(goals)
+            title = str(o.get("title") or "Untitled goal")[:120]
             goals["goals"].append({
-                "id": gid, "title": o.get("title", ""), "status": "active",
+                "id": gid, "title": title, "status": "active",
                 "parent_goal_id": parent_id,
                 "evidence_ids": o.get("evidence_ids", []),
-                "todos": [{"text": t.get("text", ""), "done": bool(t.get("done")),
+                "todos": [{"text": str(t.get("text") or "")[:160],
+                           "done": bool(t.get("done")),
                            "evidence_ids": t.get("evidence_ids", [])}
                           for t in o.get("todos", []) if isinstance(t, dict)],
                 "important_item_ids": [], "prompt_ids": [],
+                "description": str(o.get("description") or "")[:600],
+                "priority": "normal", "notes": "", "origin": "inferred",
                 "updated_at": _now()})
             sanitize(goals)
-            changes.append(f"goal + {o.get('title','')[:44]}")
+            changes.append(f"goal + {title[:44]}")
         elif op == "set_status" and g and o.get("status") in ("active", "in_progress", "completed", "abandoned"):
             g["status"] = o["status"]; g["updated_at"] = _now()
             changes.append(f"{g['title'][:36]} → {o['status']}")
