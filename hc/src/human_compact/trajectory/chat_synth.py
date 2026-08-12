@@ -21,6 +21,7 @@ from . import chat_state as CS, goals as GM, providers as P
 MAX_EVENT_CHARS = 36_000
 MAX_CONTEXT_CHARS = 12_000
 MAX_EVENT_TEXT = 2_000
+MAX_REFRESH_PASSES = 3
 _CONTEXT_NAMES = ("AGENTS.md", "CLAUDE.md", "README.md")
 _DETACHED_PROCESSES = []
 
@@ -273,8 +274,16 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
         return {"status": "coalesced", "session_id": session_id}
 
     changes: List[str] = []
+    passes = 0
     try:
         while True:
+            if passes >= MAX_REFRESH_PASSES:
+                CS.set_analyzer_state(session_id, status="pending", error=None, root=root)
+                return {"status": "updated" if changes else "coalesced",
+                        "session_id": session_id,
+                        "analyzed_through": int(CS.get_analyzer_state(session_id, root)
+                                                .get("last_analyzed_ordinal") or 0),
+                        "changes": changes}
             state = CS.get_analyzer_state(session_id, root)
             cursor = int(state.get("last_analyzed_ordinal") or 0)
             requested = int(state.get("requested_ordinal") or 0)
@@ -291,6 +300,7 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 CS.set_analyzer_state(session_id, last_analyzed_ordinal=cursor, root=root)
                 continue
             goals, important = CS.load_goals(session_id, root)
+            passes += 1
             revision = CS.goal_revision(session_id, root)
             context = project_context(CS.load_manifest(session_id, root).get("cwd"), events)
             valid_ids = {e["id"] for e in events}
