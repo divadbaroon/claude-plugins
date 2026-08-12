@@ -1,0 +1,276 @@
+'use strict';
+
+const assert = require('assert/strict');
+const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+const test = require('node:test');
+
+const {
+  ensureUv,
+  ensureManagedDirectory,
+  establishOwnership,
+  inspectVendor,
+  install,
+  safeChild,
+  supportedTarget,
+  switchLauncher,
+} = require('../lib/installer');
+
+function capture() {
+  let value = '';
+  return {
+    stream: { write(chunk) { value += chunk; } },
+    read() { return value; },
+  };
+}
+
+function writeVendor(packageRoot, body = 'wheel-a') {
+  const vendor = path.join(packageRoot, 'vendor');
+  fs.mkdirSync(vendor, { recursive: true });
+  const wheel = 'human_compact-0.16.0-py3-none-any.whl';
+  fs.writeFileSync(path.join(vendor, wheel), body);
+  fs.writeFileSync(path.join(vendor, 'manifest.json'), JSON.stringify({
+    schema: 1,
+    package: 'human-compact',
+    version: '0.16.0',
+    wheel,
+    sha256: crypto.createHash('sha256').update(body).digest('hex'),
+    sourceRevision: '1'.repeat(40),
+  }));
+}
+
+function fakeRuntime(staging) {
+  fs.mkdirSync(path.join(staging, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(staging, 'bin', 'python'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(staging, 'bin', 'hc'), '#!/bin/sh\n');
+  fs.chmodSync(path.join(staging, 'bin', 'python'), 0o700);
+  fs.chmodSync(path.join(staging, 'bin', 'hc'), 0o700);
+}
+
+function installOptions(packageRoot, managedRoot, calls, setupStatus = 0) {
+  return {
+    packageRoot,
+    packageVersion: '0.16.0',
+    managedRoot,
+    choices: { globalVault: '1', goals: '2' },
+    platform: 'darwin',
+    arch: 'arm64',
+    output: capture().stream,
+    errorOutput: capture().stream,
+    deps: {
+      now: () => Date.UTC(2026, 7, 12),
+      async buildRuntime({ staging }) { fakeRuntime(staging); },
+      runCommand(command, args, options) {
+        calls.push({ command, args, options });
+        if (args[0] === 'setup') return { status: setupStatus };
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    },
+  };
+}
+
+test('supportedTarget pins Darwin, glibc, and musl archives', () => {
+  assert.equal(supportedTarget('darwin', 'arm64').sha256.length, 64);
+  assert.equal(
+    supportedTarget('linux', 'x64', () => ({ header: { glibcVersionRuntime: '2.39' } })).key,
+    'linux-x64-gnu',
+  );
+  assert.equal(
+    supportedTarget('linux', 'arm64', () => ({ header: {} })).key,
+    'linux-arm64-musl',
+  );
+  assert.throws(() => supportedTarget('win32', 'x64'), /unsupported platform/);
+});
+
+test('inspectVendor rejects npm/backend skew and tampering', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-vendor-test-'));
+  try {
+    writeVendor(root);
+    assert.equal(inspectVendor(root, '0.16.0').version, '0.16.0');
+    assert.throws(() => inspectVendor(root, '0.17.0'), /version mismatch/);
+    fs.appendFileSync(path.join(root, 'vendor', 'human_compact-0.16.0-py3-none-any.whl'), 'tamper');
+    assert.throws(() => inspectVendor(root, '0.16.0'), /SHA-256/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('safeChild refuses root and sibling deletion targets', () => {
+  const root = path.join(os.tmpdir(), 'managed-root');
+  assert.equal(safeChild(root, path.join(root, 'runtimes')), path.join(root, 'runtimes'));
+  assert.throws(() => safeChild(root, root), /unsafe/);
+  assert.throws(() => safeChild(root, `${root}-sibling`), /unsafe/);
+});
+
+test('ownership accepts legacy state but rejects unrelated unowned content', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-marker-test-'));
+  try {
+    const legacy = path.join(fixture, 'legacy');
+    fs.mkdirSync(path.join(legacy, 'state'), { recursive: true });
+    establishOwnership(legacy);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(legacy, '.owner.json'))).owner, 'human-compact');
+
+    const unrelated = path.join(fixture, 'unrelated');
+    fs.mkdirSync(unrelated);
+    fs.writeFileSync(path.join(unrelated, 'notes.txt'), 'mine');
+    assert.throws(() => establishOwnership(unrelated), /non-empty/);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('managed directory checks reject symlinked components before cleanup', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-symlink-test-'));
+  try {
+    const root = path.join(fixture, 'managed');
+    const outside = path.join(fixture, 'outside');
+    fs.mkdirSync(root);
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(root, 'runtimes'));
+    assert.throws(
+      () => ensureManagedDirectory(root, path.join('runtimes', 'release')),
+      /not a real directory/,
+    );
+    assert.equal(fs.existsSync(outside), true);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('pinned uv bootstrap verifies the archive and repairs a corrupt managed binary', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-uv-test-'));
+  try {
+    const root = path.join(fixture, 'managed');
+    fs.mkdirSync(root);
+    const payload = path.join(fixture, 'payload', 'uv-test-target');
+    fs.mkdirSync(payload, { recursive: true });
+    fs.writeFileSync(path.join(payload, 'uv'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+    const archive = path.join(fixture, 'uv-test-target.tar.gz');
+    const packed = spawnSync('tar', [
+      '-czf', archive, '-C', path.join(fixture, 'payload'), 'uv-test-target',
+    ], { encoding: 'utf8' });
+    assert.equal(packed.status, 0, packed.stderr);
+    const target = {
+      key: 'test-target',
+      file: path.basename(archive),
+      url: 'https://example.invalid/uv.tar.gz',
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(archive)).digest('hex'),
+    };
+    let downloads = 0;
+    const options = {
+      root,
+      target,
+      runner(command, args, spawnOptions) {
+        return spawnSync(command, args, { encoding: 'utf8', ...spawnOptions });
+      },
+      async download(url, destination) {
+        assert.equal(url, target.url);
+        downloads += 1;
+        fs.copyFileSync(archive, destination);
+      },
+    };
+    const executable = await ensureUv(options);
+    assert.equal(downloads, 1);
+    assert.equal(fs.readFileSync(executable, 'utf8'), '#!/bin/sh\nexit 0\n');
+    fs.appendFileSync(executable, 'corrupt');
+    assert.equal(await ensureUv(options), executable);
+    assert.equal(downloads, 2);
+    assert.equal(fs.readFileSync(executable, 'utf8'), '#!/bin/sh\nexit 0\n');
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('installer creates stable launcher, manifest, and exact setup argv', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-install-test-'));
+  try {
+    const packageRoot = path.join(fixture, 'package');
+    const managedRoot = path.join(fixture, 'managed');
+    writeVendor(packageRoot);
+    const calls = [];
+    const result = await install(installOptions(packageRoot, managedRoot, calls));
+    assert.equal(fs.lstatSync(result.launcher).isSymbolicLink(), true);
+    assert.equal(
+      fs.realpathSync(result.launcher),
+      fs.realpathSync(path.join(result.runtime, 'bin', 'hc')),
+    );
+    const setup = calls.find((call) => call.args[0] === 'setup');
+    assert.deepEqual(setup.args, [
+      'setup', '--global-vault', 'yes', '--goals', 'no',
+    ]);
+    assert.equal(setup.options.env.HC_EXECUTABLE, path.join(managedRoot, 'bin', 'hc'));
+    const manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
+    assert.equal(manifest.owner, 'human-compact');
+    assert.equal(manifest.backendVersion, '0.16.0');
+
+    let rebuilt = false;
+    const repeat = installOptions(packageRoot, managedRoot, [], 0);
+    repeat.deps.buildRuntime = async () => { rebuilt = true; };
+    await install(repeat);
+    assert.equal(rebuilt, false);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('installer requires Claude Code before creating managed state', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-claude-test-'));
+  try {
+    const packageRoot = path.join(fixture, 'package');
+    const managedRoot = path.join(fixture, 'managed');
+    writeVendor(packageRoot);
+    const options = installOptions(packageRoot, managedRoot, []);
+    options.deps.runCommand = () => ({ status: 127, stdout: '', stderr: 'missing' });
+    await assert.rejects(install(options), /Claude Code is required/);
+    assert.equal(fs.existsSync(managedRoot), false);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('failed setup keeps a usable base install and rerun repairs it', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-rollback-test-'));
+  try {
+    const packageRoot = path.join(fixture, 'package');
+    const managedRoot = path.join(fixture, 'managed');
+    writeVendor(packageRoot);
+    await assert.rejects(
+      install(installOptions(packageRoot, managedRoot, [], 7)),
+      /exit code 7/,
+    );
+    const launcher = path.join(managedRoot, 'bin', 'hc');
+    assert.equal(fs.lstatSync(launcher).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(fs.realpathSync(launcher)), true);
+    let manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
+    assert.equal(manifest.owner, 'human-compact');
+    assert.equal(manifest.setupStatus, 'failed');
+    assert.equal(manifest.setupExitCode, 7);
+
+    let rebuilt = false;
+    const retry = installOptions(packageRoot, managedRoot, [], 0);
+    retry.deps.buildRuntime = async () => { rebuilt = true; };
+    await install(retry);
+    assert.equal(rebuilt, false);
+    manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
+    assert.equal(manifest.setupStatus, 'complete');
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('switchLauncher refuses an unmanaged existing launcher', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-owner-test-'));
+  try {
+    fs.mkdirSync(path.join(fixture, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'bin', 'hc'), 'mine');
+    assert.throws(
+      () => switchLauncher(fixture, '/managed/hc', null),
+      /unmanaged launcher/,
+    );
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});

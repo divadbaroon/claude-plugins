@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "package": "human-compact",
+  "version": "0.16.0",
+  "wheel": "human_compact-0.16.0-py3-none-any.whl",
+  "sha256": "319c6713a1f8d6a3cad7aceededdd8468602a5dcc7d168c6d1148781298f1007",
+  "sourceRevision": "4df02ab1830c7a32de12aae75e50fb2bd984f644"
+}
