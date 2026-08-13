@@ -9,7 +9,7 @@ Run the single installer from a terminal where that Claude Code version is
 installed:
 
 ```bash
-npx human-compact
+npx human-vault
 ```
 
 It installs a managed `hc` runtime plus the Claude Code hooks and `/hc-ui`

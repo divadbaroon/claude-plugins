@@ -13,7 +13,7 @@ integration together, so setup does not require Homebrew, pipx, or jq.
 Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
 
 ```bash
-npx human-compact
+npx human-vault
 ```
 
 The installer adds the Claude Code integration automatically, then asks two

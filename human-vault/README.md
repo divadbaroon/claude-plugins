@@ -3,7 +3,7 @@
 Install chat-scoped goal workspaces for Claude Code with one command:
 
 ```bash
-npx human-compact
+npx human-vault
 ```
 
 The installer asks two numeric questions:
@@ -29,13 +29,13 @@ Use numeric flags in automation:
 
 ```bash
 # Chat-scoped /hc-ui only
-npx human-compact --non-interactive --global-vault 2
+npx human-vault --non-interactive --global-vault 2
 
 # Global Vault plus global goal inference
-npx human-compact --non-interactive --global-vault 1 --goals 1
+npx human-vault --non-interactive --global-vault 1 --goals 1
 
 # Global Vault without running goal inference now
-npx human-compact --non-interactive --global-vault 1 --goals 2
+npx human-vault --non-interactive --global-vault 1 --goals 2
 ```
 
 Values other than `1` and `2` are rejected. `--goals 1` is invalid when the

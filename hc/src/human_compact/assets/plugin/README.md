@@ -43,7 +43,7 @@ The original Claude transcript is only ever read, never modified.
 Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
 Install the managed Python runtime and Claude Code integration together:
 
-    npx human-compact
+    npx human-vault
 
 The installer asks whether to enable the global Vault (`1` yes, `2` no). If
 enabled, it separately asks whether to infer global goals now. That second
@@ -72,14 +72,14 @@ action to `~/.claude-vault/debug.log`. `CLAUDE_VAULT_DIR` relocates the vault.
 
 ## Acceptance test
 
-1. Enable global Vault in `npx human-compact`, hold a several-turn Claude
+1. Enable global Vault in `npx human-vault`, hold a several-turn Claude
    conversation, and exit.
 2. `ls ~/.claude-vault/sessions/` — a directory named by the session id exists.
 3. Inspect `conversation.jsonl` — the most complete transcript available from
    Claude Code (the transcript file is written asynchronously by Claude Code,
    so the very last lines of the final turn can trail by moments; the
    SessionEnd snapshot captures whatever is on disk at exit).
-4. Rerun `npx human-compact`, choose `2`, then start another conversation —
+4. Rerun `npx human-vault`, choose `2`, then start another conversation —
    no new global Vault session directory is created.
 
 ## Known platform caveats

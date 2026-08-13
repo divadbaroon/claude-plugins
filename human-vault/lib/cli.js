@@ -28,7 +28,7 @@ function createAnswerReader(input, output) {
 }
 
 function usage() {
-  return `Usage: npx human-compact [options]
+  return `Usage: npx human-vault [options]
 
 Options:
   --global-vault <1|2>  1 enables global Vault; 2 installs /hc-ui only

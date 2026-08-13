@@ -59,7 +59,7 @@ try {
   fs.copyFileSync(source, path.join(vendorRoot, wheels[0]));
   fs.writeFileSync(path.join(vendorRoot, 'manifest.json'), `${JSON.stringify({
     schema: 1,
-    package: 'human-compact',
+    package: 'human-vault',
     version: packageJson.version,
     wheel: wheels[0],
     sha256,

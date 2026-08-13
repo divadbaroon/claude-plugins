@@ -6,7 +6,7 @@ const https = require('https');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const OWNER = 'human-compact';
+const OWNER = 'human-vault';
 const INSTALL_SCHEMA = 1;
 const MIN_CLAUDE_VERSION = Object.freeze([2, 1, 175]);
 const MIN_CLAUDE_VERSION_TEXT = MIN_CLAUDE_VERSION.join('.');
@@ -58,7 +58,7 @@ function sha256File(file) {
 function inspectVendor(packageRoot, expectedVersion) {
   const vendorRoot = path.join(packageRoot, 'vendor');
   const manifest = readJson(path.join(vendorRoot, 'manifest.json'));
-  if (manifest.schema !== 1 || manifest.package !== 'human-compact') {
+  if (manifest.schema !== 1 || manifest.package !== 'human-vault') {
     throw new Error('bundled backend manifest has an unsupported schema or package');
   }
   if (manifest.version !== expectedVersion) {
@@ -321,7 +321,7 @@ function validateRuntime(runner, runtime, version) {
   try {
     const result = runner(python, [
       '-c',
-      `import importlib.metadata; raise SystemExit(0 if importlib.metadata.version("human-compact") == ${JSON.stringify(version)} else 1)`,
+      `import importlib.metadata; raise SystemExit(0 if importlib.metadata.version("human-vault") == ${JSON.stringify(version)} else 1)`,
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
     return result.status === 0;
   } catch {

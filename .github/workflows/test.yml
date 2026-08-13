@@ -43,6 +43,6 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm test
-        working-directory: human-compact
+        working-directory: human-vault
       - run: npm pack --ignore-scripts --dry-run
-        working-directory: human-compact
+        working-directory: human-vault

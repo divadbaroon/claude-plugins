@@ -1,12 +1,19 @@
 {
   "name": "papert-tools",
   "description": "Human-centered Claude Code and Codex tools with inspectable state and reversible decisions.",
-  "owner": { "name": "Hudson Mitchell-Pullman" },
+  "owner": {
+    "name": "Hudson Mitchell-Pullman"
+  },
   "plugins": [
     {
       "name": "compact-focus",
       "source": "./compact-focus",
       "description": "Inline, human-reviewed compaction for Claude Code and Codex with provenance, recovery, and feedback-aware proposals."
+    },
+    {
+      "name": "vault",
+      "source": "./hc/src/human_compact/assets/plugin",
+      "description": "Chat-scoped goals, goal-bound Claude sessions, and live task observation. Needs the hc runtime: npx human-vault."
     }
   ]
 }

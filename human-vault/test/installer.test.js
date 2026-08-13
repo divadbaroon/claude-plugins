@@ -36,7 +36,7 @@ function writeVendor(packageRoot, body = 'wheel-a') {
   fs.writeFileSync(path.join(vendor, wheel), body);
   fs.writeFileSync(path.join(vendor, 'manifest.json'), JSON.stringify({
     schema: 1,
-    package: 'human-compact',
+    package: 'human-vault',
     version: '0.16.0',
     wheel,
     sha256: crypto.createHash('sha256').update(body).digest('hex'),
@@ -128,7 +128,7 @@ test('ownership accepts legacy state but rejects unrelated unowned content', () 
     const legacy = path.join(fixture, 'legacy');
     fs.mkdirSync(path.join(legacy, 'state'), { recursive: true });
     establishOwnership(legacy);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(legacy, '.owner.json'))).owner, 'human-compact');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(legacy, '.owner.json'))).owner, 'human-vault');
 
     const unrelated = path.join(fixture, 'unrelated');
     fs.mkdirSync(unrelated);
@@ -220,7 +220,7 @@ test('installer creates stable launcher, manifest, and exact setup argv', async 
     ]);
     assert.equal(setup.options.env.HC_EXECUTABLE, path.join(managedRoot, 'bin', 'hc'));
     const manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
-    assert.equal(manifest.owner, 'human-compact');
+    assert.equal(manifest.owner, 'human-vault');
     assert.equal(manifest.backendVersion, '0.16.0');
 
     let rebuilt = false;
@@ -279,7 +279,7 @@ test('failed setup keeps a usable base install and rerun repairs it', async () =
     assert.equal(fs.lstatSync(launcher).isSymbolicLink(), true);
     assert.equal(fs.existsSync(fs.realpathSync(launcher)), true);
     let manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
-    assert.equal(manifest.owner, 'human-compact');
+    assert.equal(manifest.owner, 'human-vault');
     assert.equal(manifest.setupStatus, 'failed');
     assert.equal(manifest.setupExitCode, 7);
 

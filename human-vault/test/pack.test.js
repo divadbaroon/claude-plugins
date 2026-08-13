@@ -17,7 +17,7 @@ function checked(command, args, options = {}) {
 
 test('packed npm artifact contains and executes the verified wheel', () => {
   const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json')));
-  assert.deepEqual(Object.keys(metadata.bin), ['human-compact']);
+  assert.deepEqual(Object.keys(metadata.bin), ['human-vault']);
   assert.equal(metadata.dependencies, undefined);
   assert.equal(metadata.devDependencies, undefined);
   for (const lifecycle of ['preinstall', 'install', 'postinstall']) {
@@ -29,7 +29,7 @@ test('packed npm artifact contains and executes the verified wheel', () => {
       'pack', '--ignore-scripts', '--json', '--pack-destination', fixture,
     ], { cwd: packageRoot });
     const [{ filename, files, name, version }] = JSON.parse(packed.stdout);
-    assert.equal(name, 'human-compact');
+    assert.equal(name, 'human-vault');
     assert.equal(version, '0.16.0');
     const paths = files.map((entry) => entry.path);
     assert(paths.includes('vendor/manifest.json'));
@@ -41,7 +41,7 @@ test('packed npm artifact contains and executes the verified wheel', () => {
       'install', '--ignore-scripts', '--no-audit', '--no-fund',
       '--prefix', prefix, path.join(fixture, filename),
     ]);
-    const binary = path.join(prefix, 'node_modules', '.bin', 'human-compact');
+    const binary = path.join(prefix, 'node_modules', '.bin', 'human-vault');
     const managed = path.join(fixture, 'must-not-exist');
     const invocation = checked(binary, [
       '--dry-run', '--non-interactive', '--global-vault', '2',
