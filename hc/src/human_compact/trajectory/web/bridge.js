@@ -501,6 +501,30 @@
     }
   }
 
+  var threads = Object.create(null);
+
+  function loadThread(id) {
+    // The list carries a short preview so polling stays cheap. Opening one
+    // conversation is when the whole transcript is worth fetching.
+    if (!id || threads[id]) return Promise.resolve(false);
+    threads[id] = true;
+    return fetch("/api/conversation?id=" + encodeURIComponent(id),
+                 { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!body || body.ok !== true || !array(body.thread).length) return false;
+        var rows = array(window.__hcConvos);
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i] && rows[i].id === id) {
+            rows[i].thread = body.thread;
+            return true;
+          }
+        }
+        return false;
+      })
+      .catch(function () { threads[id] = false; return false; });
+  }
+
   function briefingSections(brief) {
     // The briefing is written to be read as a prompt; the inspector shows the
     // same material as panels. One section can feed one panel, and one panel
@@ -683,6 +707,10 @@
        "codeAddGh: () => window.__hcAsk('github').then(function (v) { if (v) setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: 'github', label: v }])); })"],
       ["codeAddLocal: () => setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: 'local', label: '~/path/to/project' }]))",
        "codeAddLocal: () => window.__hcAsk('local').then(function (v) { if (v) setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: 'local', label: v }])); })"],
+      // Opening a conversation shows a preview until the full transcript
+      // arrives; the second setState re-renders it in place.
+      ["open: () => this.setState({ convSel: c.id })",
+       "open: () => { this.setState({ convSel: c.id }); if (window.__hcPromptUI) window.__hcPromptUI.loadThread(c.id).then((got) => { if (got) this.setState({ convSel: c.id }); }); }"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -896,6 +924,7 @@
     promptRows: promptRows,
     ask: ask,
     renderBanner: renderBanner,
+    loadThread: loadThread,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; }

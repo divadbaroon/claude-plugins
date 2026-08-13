@@ -83,8 +83,11 @@ const sandbox = {
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
   fetch: (url, opts) => {
     calls.push([url, opts && opts.body ? JSON.parse(opts.body) : null]);
-    return Promise.resolve({ ok: true, json: () => Promise.resolve(
-      { ok: true, terminal: "Terminal", cwd: "/repo" }) });
+    const url2 = String(url || "");
+    const body = url2.indexOf("/api/conversation") >= 0
+      ? { ok: true, id: "c1", thread: [["YOU", "hi"], ["CLAUDE", "hello"]] }
+      : { ok: true, terminal: "Terminal", cwd: "/repo" };
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   },
   setInterval: () => 0, setTimeout: (f) => { if (f) f(); return 0; },
   clearTimeout() {}, navigator: {}, store
@@ -398,6 +401,18 @@ class NoInventedDataTests(BridgeTestCase):
         self.assertIn('max-width:740px;text-wrap:pretty">A holistic view', out)
         self.assertIn('max-width:740px;text-wrap:pretty">Your Claude Code '
                       'conversations', out)
+
+    def test_opening_a_conversation_fetches_its_full_thread(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("loadThread(c.id)", out)
+        self.assertNotIn("open: () => this.setState({ convSel: c.id })", out)
+
+    def test_the_fetched_thread_replaces_the_preview_in_place(self):
+        got = self.run_js(
+            "window.__hcConvos = [{ id: 'c1', thread: [['YOU', 'preview']] }];"
+            "window.__hcPromptUI.loadThread('c1').then(function () {"
+            "  return window.__hcConvos[0].thread; });")
+        self.assertEqual([["YOU", "hi"], ["CLAUDE", "hello"]], got)
 
     def test_the_inspector_always_opens_on_context(self):
         out = self.patched_bundle("out;")

@@ -237,6 +237,41 @@ def _first(value, default=""):
     return default
 
 
+def thread_rows(turns, limit, chars):
+    """A conversation as the artifact renders it.
+
+    It splits the two sides by comparing the first element to "YOU", so the
+    label is load-bearing, not decoration. Assistant turns belong here too:
+    a thread of only one voice is not the conversation the user had.
+    """
+    rows = []
+    for turn in (turns or [])[:limit]:
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        who = "YOU" if turn.get("role") == "user" else "CLAUDE"
+        rows.append([who, text[:chars]])
+    return rows
+
+
+def conversation_thread(trajdir, session_id, limit=400, chars=6000):
+    """The full thread for one conversation, fetched only when it is opened.
+
+    The list payload is polled while analysis runs, so it carries a short
+    preview; the whole transcript would make every poll pay for a screen the
+    user is usually not looking at.
+    """
+    from . import discover as D
+    try:
+        sessions = D.discover(30)
+    except Exception:                        # noqa: BLE001 - advisory listing
+        return None
+    for session in sessions:
+        if session.get("session_id") == session_id:
+            return thread_rows(session.get("turns"), limit, chars)
+    return None
+
+
 def conversation_rows(trajdir, limit=200):
     """The conversations this vault actually holds, analyzed or not.
 
@@ -293,8 +328,7 @@ def conversation_rows(trajdir, limit=200):
             "goal": titles.get(goal_id, "")[:60],
             "repo": Path(session.get("cwd") or "").name,
             "done": sid in analyzed,
-            "thread": [["user", t["text"][:200]] for t in turns
-                       if t.get("role") == "user"][:6],
+            "thread": thread_rows(turns, limit=6, chars=200),
         })
     rows.sort(key=lambda row: row["meta"], reverse=True)
     return rows
@@ -639,6 +673,13 @@ class H(BaseHTTPRequestHandler):
                         "add_dirs": dirs,
                         "references": refs,
                     })
+            elif self.path.startswith("/api/conversation"):
+                from urllib.parse import urlparse, parse_qs
+                sid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
+                thread = (None if self.server.chat_scoped
+                          else conversation_thread(self.server.trajdir, sid))
+                self._send(200, {"ok": thread is not None,
+                                 "id": sid, "thread": thread or []})
             elif self.path == "/api/setup":
                 self._send(200, {"ok": True, **setup_state(self.server.trajdir)}
                            if not self.server.chat_scoped

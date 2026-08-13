@@ -928,3 +928,47 @@ class ConversationGoalAttributionTests(unittest.TestCase):
         rows = self._rows(goals, [{"session_id": "abcdef12-0000-0000-0000-x",
                                    "turns": [{"role": "user", "text": "hi"}]}])
         self.assertEqual(rows[0]["goalId"], "g1a")
+
+
+class ConversationThreadTests(unittest.TestCase):
+    """The artifact splits the two sides on the label; it has to be right."""
+
+    TURNS = [{"role": "user", "text": "why is it empty?"},
+             {"role": "assistant", "text": "the label was wrong"},
+             {"role": "user", "text": "fix it"}]
+
+    def test_the_user_side_is_labelled_the_way_the_artifact_reads_it(self):
+        rows = ui.thread_rows(self.TURNS, limit=10, chars=100)
+        self.assertEqual(["YOU", "CLAUDE", "YOU"], [r[0] for r in rows])
+
+    def test_claudes_replies_are_part_of_the_conversation(self):
+        rows = ui.thread_rows(self.TURNS, limit=10, chars=100)
+        self.assertIn(["CLAUDE", "the label was wrong"], rows)
+
+    def test_order_is_preserved(self):
+        rows = ui.thread_rows(self.TURNS, limit=10, chars=100)
+        self.assertEqual(["why is it empty?", "the label was wrong", "fix it"],
+                         [r[1] for r in rows])
+
+    def test_empty_turns_are_dropped_rather_than_rendered_blank(self):
+        rows = ui.thread_rows([{"role": "user", "text": "   "}] + self.TURNS,
+                              limit=10, chars=100)
+        self.assertEqual(3, len(rows))
+
+    def test_the_preview_is_bounded(self):
+        rows = ui.thread_rows(self.TURNS, limit=2, chars=3)
+        self.assertEqual(2, len(rows))
+        self.assertEqual("why", rows[0][1])
+
+    def test_a_conversation_the_vault_does_not_have_reports_nothing(self):
+        with mock.patch("human_compact.trajectory.discover.discover",
+                        return_value=[]):
+            self.assertIsNone(ui.conversation_thread(Path("/nowhere"), "nope"))
+
+    def test_the_full_thread_comes_back_for_a_known_conversation(self):
+        session = {"session_id": "abc", "turns": self.TURNS}
+        with mock.patch("human_compact.trajectory.discover.discover",
+                        return_value=[session]):
+            rows = ui.conversation_thread(Path("/nowhere"), "abc")
+        self.assertEqual(3, len(rows))
+        self.assertEqual("YOU", rows[0][0])
