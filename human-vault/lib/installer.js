@@ -611,7 +611,7 @@ async function install(options) {
     }
     const setupArgs = [
       'setup',
-      '--global-vault', options.choices.globalVault === '1' ? 'yes' : 'no',
+      '--global-vault', options.choices.globalVault === '1' ? 'yes' : 'keep',
       '--goals', options.choices.goals === '1' ? 'yes' : 'no',
     ];
     const setupEnv = { ...env, HC_EXECUTABLE: switched.launcher };

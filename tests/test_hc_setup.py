@@ -233,3 +233,30 @@ class HcSetupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReinstallPreservesCaptureTests(unittest.TestCase):
+    """An upgrade must not turn off a vault the user already enabled."""
+
+    def setUp(self):
+        if str(HC_SRC) not in sys.path:
+            sys.path.insert(0, str(HC_SRC))
+
+    def test_keep_touches_neither_switch(self):
+        from human_compact import cli
+        with mock.patch("human_compact.global_vault.disable_always_on") as off, \
+             mock.patch("human_compact.global_vault.enable_always_on") as on, \
+             mock.patch.object(cli, "install_main") as install, \
+             mock.patch.object(cli, "_validate_claude_cli"):
+            cli.setup_main(["--global-vault", "keep", "--goals", "no"])
+        off.assert_not_called()
+        on.assert_not_called()
+        install.assert_called_once_with([])      # the plugin is still installed
+
+    def test_an_explicit_no_still_disables(self):
+        from human_compact import cli
+        with mock.patch("human_compact.global_vault.disable_always_on") as off, \
+             mock.patch.object(cli, "install_main"), \
+             mock.patch.object(cli, "_validate_claude_cli"):
+            cli.setup_main(["--global-vault", "no", "--goals", "no"])
+        off.assert_called_once()

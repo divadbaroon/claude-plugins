@@ -390,7 +390,8 @@ def setup_main(argv=None):
     ap = argparse.ArgumentParser(
         prog="hc setup",
         description="Install /hc-ui and optionally initialize global Vault state.")
-    ap.add_argument("--global-vault", required=True, choices=["yes", "no"])
+    ap.add_argument("--global-vault", required=True,
+                    choices=["yes", "no", "keep"])
     ap.add_argument("--goals", required=True, choices=["yes", "no"])
     args = ap.parse_args(argv or [])
     if args.goals == "yes" and args.global_vault != "yes":
@@ -399,6 +400,13 @@ def setup_main(argv=None):
     # This is deliberately first: /hc-ui remains installed even when optional
     # global-history setup fails later and the user retries the installer.
     install_main([])
+    if args.global_vault == "keep":
+        # The installer has no opinion: onboarding happens in the UI. Saying
+        # "no" here would silently stop capturing a vault the user already
+        # turned on, and they would lose history without being told.
+        say("global Vault unchanged by this install")
+        _validate_claude_cli()
+        return
     if args.global_vault == "no":
         from . import global_vault
         global_vault.disable_always_on()
