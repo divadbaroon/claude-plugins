@@ -455,13 +455,13 @@ async function buildRuntime(options) {
     let compatible = false;
     try { compatible = compatiblePython(runner, candidate); } catch {}
     if (!compatible) continue;
-    output.write(`  runtime      building with ${candidate}\n`);
+    output.write(`  building the runtime with ${candidate}\u2026\n`);
     try {
       if (createRuntimeWithPython(runner, candidate, staging, vendor.wheelPath, vendor.version, env)) return;
     } catch {}
     removeManaged(root, staging);
   }
-  output.write(`  runtime      no usable python venv; bootstrapping uv ${UV_VERSION}\n`);
+  output.write(`  no usable python venv; bootstrapping uv ${UV_VERSION}\u2026\n`);
   const uv = await ensureUv({ root, target, runner, download });
   ensureManagedDirectory(root, path.join('cache', 'uv'));
   ensureManagedDirectory(root, 'python');
@@ -600,7 +600,6 @@ async function install(options) {
       staging = null;
       createdRuntime = true;
     } else {
-      output.write(`  runtime      ${vendor.version} (already verified)\n`);
     }
 
     let switched;

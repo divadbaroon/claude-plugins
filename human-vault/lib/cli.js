@@ -130,20 +130,23 @@ async function run(deps = {}) {
         });
       }
     }
-    output.write('\nInstalled. Nothing is captured or analyzed yet.\n');
-    output.write('\nNext — set up your Vault and build your goals:\n\n    hc ui\n');
-    if (reach && reach.linked) {
-      output.write(`\n\`hc\` is ready now — linked into ${path.dirname(reach.linked)}, already on your PATH.\n`);
-    } else if (reach && !reach.onPath) {
-      if (reach.added) {
-        output.write(`\nAdded ${reach.line} to ${reach.profile}.\nOpen a new terminal first, or run this once in this one:\n\n    ${reach.line}\n`);
-      } else if (reach.present) {
-        // The profile is already right; this shell just predates it.
-        output.write(`\n${reach.profile} already puts \`hc\` on PATH — this shell predates it.\nOpen a new terminal, or run this once in this one:\n\n    ${reach.line}\n`);
-      } else {
-        output.write(`\n\`hc\` is not on your PATH yet. Add this to your shell profile:\n\n    ${reach.line}\n`);
-      }
+    // One status block, then one instruction. Anything the user must do to
+    // make that instruction work belongs above it, not after it.
+    if (reach && reach.onPath) {
+      output.write(`  hc           ready in this terminal\n`);
+    } else if (reach) {
+      output.write(`  hc           needs one more step (below)\n`);
     }
+    output.write('\nInstalled. Nothing is captured or analyzed yet.\n');
+    if (reach && !reach.onPath) {
+      output.write(reach.added
+        ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`
+        : reach.present
+        ? `\nThis terminal predates ${reach.profile}. Run this once here:\n\n    ${reach.line}\n`
+        : `\nAdd this to your shell profile, then run it here:\n\n    ${reach.line}\n`);
+    }
+    const needsPathStep = !!(reach && !reach.onPath);
+    output.write(`\n${needsPathStep ? 'Then set up' : 'Next \u2014 set up'} your Vault and build your goals:\n\n    hc ui\n`);
     output.write('\nIt walks you through the rest.\n');
     return 0;
   } catch (error) {

@@ -131,29 +131,36 @@ async function installOutput({ onPath, added, present, linked }) {
 
 test('a reachable launcher gets no PATH advice', async () => {
   const text = await installOutput({ onPath: true, added: false });
-  assert.match(text, /hc ui/);
-  assert.doesNotMatch(text, /PATH/);
+  assert.match(text, /hc {11}ready in this terminal/);
+  assert.match(text, /Next — set up your Vault/);
+  assert.doesNotMatch(text, /export PATH/);
+  assert.doesNotMatch(text, /Then set up/);
 });
 
-test('an unreachable launcher says what was changed and what to run now', async () => {
+test('an unreachable launcher says what to run now, before the next step', async () => {
   const text = await installOutput({ onPath: false, added: true });
-  assert.match(text, /Added export PATH="\$HOME\/\.human-compact\/bin:\$PATH" to \/home\/u\/\.zshrc/);
-  assert.match(text, /Open a new terminal/);
+  assert.match(text, /Run this once in this terminal/);
+  assert.match(text, /new terminals get it from \/home\/u\/\.zshrc/);
+  // The order is the point: an instruction the user cannot yet follow must
+  // not come before the one that makes it work.
+  assert.ok(text.indexOf('export PATH') < text.indexOf('hc ui'));
 });
 
 test('a profile that could not be edited tells the user what to add', async () => {
   const text = await installOutput({ onPath: false, added: false });
-  assert.match(text, /not on your PATH yet/);
+  assert.match(text, /Add this to your shell profile/);
   assert.match(text, /export PATH="\$HOME\/\.human-compact\/bin:\$PATH"/);
+  assert.ok(text.indexOf('export PATH') < text.indexOf('hc ui'));
 });
 
 test('a profile that is already correct says the shell is stale, not the config', async () => {
   const text = await installOutput({ onPath: false, added: false, present: true });
-  assert.match(text, /already puts `hc` on PATH — this shell predates it/);
+  assert.match(text, /This terminal predates \/home\/u\/\.zshrc/);
   assert.doesNotMatch(text, /Add this to your shell profile/);
 });
 
 test('a linked launcher says it works right now', async () => {
   const text = await installOutput({ onPath: true, linked: '/home/u/.local/bin/hc' });
-  assert.match(text, /`hc` is ready now — linked into \/home\/u\/\.local\/bin/);
+  assert.match(text, /hc {11}ready in this terminal/);
+  assert.doesNotMatch(text, /needs one more step/);
 });
