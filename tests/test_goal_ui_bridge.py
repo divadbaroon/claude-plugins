@@ -26,6 +26,26 @@ function El(tag) {
   this.className = ""; this.id = ""; this.textContent = "";
   this.appendChild = (n) => { this.children.push(n); n.parentNode = this; return n; };
   this.focus = () => {};
+  this.insertBefore = (n, ref) => {
+    const at = ref ? this.children.indexOf(ref) : -1;
+    if (at < 0) this.children.push(n); else this.children.splice(at, 0, n);
+    n.parentNode = this;
+    return n;
+  };
+  Object.defineProperty(this, "firstChild",
+    { get: () => this.children[0] || null });
+  this.querySelector = (sel) => {
+    const want = sel.replace(/^\./, "");
+    const walk = (node) => {
+      for (const child of node.children) {
+        if (child.className === want) return child;
+        const deep = walk(child);
+        if (deep) return deep;
+      }
+      return null;
+    };
+    return walk(this);
+  };
   this.setAttribute = () => {};
   this.removeChild = (n) => { this.children = this.children.filter(c => c !== n); };
   made.push(this);
@@ -437,3 +457,60 @@ class EmptyVaultTests(BridgeTestCase):
     def test_a_seeded_tree_still_loads(self):
         payload = self.run_js("JSON.parse(store['hc-vault-ui-v1']);")
         self.assertEqual(1, len(payload["goals"]))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class AnalysisBannerTests(BridgeTestCase):
+    """Work happening outside the page has to be visible inside it."""
+
+    RUNNING = {"ok": True, "sv": 9, "storage": True, "analysis": "claude",
+               "done": False, "running": True, "phase": "extracting",
+               "conversations": {"total": 89, "analyzed": 12, "pending": 77},
+               "current": {"id": "aaaaaaaa", "title": "Debugging the overlay"},
+               "convos": []}
+
+    def banner(self, setup):
+        return self.run_js(
+            "window.__hcSetupTest = %s;" % json.dumps(setup) +
+            "window.__hcPromptUI.setSetupForTest(window.__hcSetupTest);"
+            "window.__hcPromptUI.renderBanner();"
+            "var b = made.filter(function (e) {"
+            "  return e.className === 'hc-banner'; })[0];"
+            "b ? b.children.map(function (c) { return c.textContent; }) : null;")
+
+    def test_it_names_what_is_running_and_which_conversation(self):
+        parts = self.banner(self.RUNNING)
+        self.assertIn("Analyzing your conversations", parts)
+        self.assertIn("now: Debugging the overlay", parts)
+        self.assertIn("12 of 89", parts)
+
+    def test_it_says_when_it_is_building_goals_instead(self):
+        setup = dict(self.RUNNING, phase="synthesizing")
+        self.assertIn("Building your goal tree", self.banner(setup))
+
+    def test_it_explains_the_wait_when_no_conversation_is_named(self):
+        setup = dict(self.RUNNING, current=None)
+        self.assertIn("goals appear here as this finishes", self.banner(setup))
+
+    def test_it_disappears_when_nothing_is_running(self):
+        setup = dict(self.RUNNING, running=False, current=None,
+                     conversations={"total": 89, "analyzed": 89, "pending": 0})
+        self.assertIsNone(self.banner(setup))
+
+    def test_a_partial_history_is_not_mistaken_for_work_in_progress(self):
+        # Some conversations never yield an extraction, so analyzed < total is
+        # a resting state. Claiming otherwise leaves a banner up forever.
+        setup = dict(self.RUNNING, running=False, current=None,
+                     conversations={"total": 89, "analyzed": 60, "pending": 0})
+        self.assertIsNone(self.banner(setup))
+
+    def test_a_queued_backlog_still_shows_it(self):
+        setup = dict(self.RUNNING, running=False, current=None,
+                     conversations={"total": 89, "analyzed": 60, "pending": 29})
+        self.assertIsNotNone(self.banner(setup))
+
+    def test_the_empty_tree_explains_where_goals_come_from(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("inferred once your conversations have all been analyzed",
+                      out)
+        self.assertIn("__hcAnalysisPending", out)

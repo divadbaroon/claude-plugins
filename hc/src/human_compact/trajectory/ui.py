@@ -303,6 +303,13 @@ def setup_state(trajdir):
         except Exception:                  # noqa: BLE001 - progress is advisory
             pass
     goals, _ = GM.load(trajdir)
+    processing = ST.processing()
+    rows = conversation_rows(trajdir) if storage else []
+    current = None
+    if processing and processing.get("current"):
+        sid = str(processing["current"])
+        title = next((r["title"] for r in rows if r["id"] == sid), "")
+        current = {"id": sid, "title": title}
     return {
         "sv": 9,
         "storage": bool(storage),
@@ -311,8 +318,12 @@ def setup_state(trajdir):
         "done": bool(storage and (analysis or goals.get("goals"))),
         "conversations": counts,
         "goals": len(goals.get("goals", [])),
-        "running": bool(ST.processing()),
-        "convos": conversation_rows(trajdir) if storage else [],
+        "running": bool(processing),
+        # Which conversation the worker has open right now, so the UI can name
+        # it instead of animating an anonymous bar.
+        "current": current,
+        "phase": (processing or {}).get("phase") if processing else None,
+        "convos": rows,
     }
 
 

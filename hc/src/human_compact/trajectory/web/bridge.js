@@ -616,6 +616,9 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      // An empty tree is not a dead end during onboarding: goals arrive when
+      // the analysis finishes. Say so, rather than only offering a manual add.
+      ["emptyLabel: filter === 'done' ? 'Nothing completed yet.' : filter === 'inprog' ? 'Nothing in progress \u2014 set a goal\\u2019s status in the inspector.' : 'No goals yet \u2014 add one below.',", "emptyLabel: filter === 'done' ? 'Nothing completed yet.' : filter === 'inprog' ? 'Nothing in progress \u2014 set a goal\\u2019s status in the inspector.' : (window.__hcAnalysisPending && window.__hcAnalysisPending() ? 'No goals yet \\u2014 they are inferred once your conversations have all been analyzed. You can add one yourself below in the meantime.' : 'No goals yet \\u2014 they are inferred from your analyzed conversations, or add one below.'),"],
       // An empty vault is a real state, not a missing one. Without this the
       // artifact falls back to its built-in sample tree, and the sync then
       // writes those sample goals into the user's vault as if they authored
@@ -677,6 +680,84 @@
   }
 
   window.__hcAsk = ask;
+
+  // --- a banner for work happening outside the page ------------------------
+  // Analysis runs in a detached worker over the user's whole history. Without
+  // a standing statement of what is running and which conversation it is on,
+  // an empty goal tree just looks broken.
+
+  var banner = null;
+
+  window.__hcAnalysisPending = function () {
+    // Work is pending only while a worker holds it or the queue is non-empty.
+    // Not every conversation yields an extraction, so analyzed < total is a
+    // normal resting state, not a claim that something is running.
+    if (!setupState) return false;
+    var counts = setupState.conversations || {};
+    return !!(setupState.running || (counts.pending || 0) > 0);
+  };
+
+  function ensureBannerStyles() {
+    if (document.getElementById("hc-banner-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-banner-style";
+    style.textContent = [
+      ".hc-banner{position:sticky;top:0;z-index:9000;display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--panel2,#f6f6f6);border-bottom:1px solid var(--bd,#e3e3e3);font:11px/1.45 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-banner-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-pulse 1.4s ease-in-out infinite}",
+      "@keyframes hc-pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}",
+      ".hc-banner-what{flex:none;font-weight:600}",
+      ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#555);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-banner-count{flex:none;color:var(--fnt,#777)}",
+      ".hc-banner-bar{position:absolute;left:0;bottom:-1px;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
+    ].join("");
+    document.head.appendChild(style);
+  }
+
+  function renderBanner() {
+    var pending = window.__hcAnalysisPending();
+    if (!pending) {
+      if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
+      banner = null;
+      return;
+    }
+    ensureBannerStyles();
+    var host = document.querySelector(".hc") || document.body;
+    if (!banner || !document.documentElement.contains(banner)) {
+      banner = document.createElement("div");
+      banner.className = "hc-banner";
+      banner.setAttribute("role", "status");
+      banner.setAttribute("aria-live", "polite");
+      banner.style.position = "relative";
+      ["hc-banner-dot", "hc-banner-what", "hc-banner-now", "hc-banner-count",
+       "hc-banner-bar"].forEach(function (cls) {
+        var part = document.createElement("div");
+        part.className = cls;
+        banner.appendChild(part);
+      });
+      host.insertBefore(banner, host.firstChild || null);
+    }
+    var counts = (setupState && setupState.conversations) || { total: 0, analyzed: 0 };
+    var current = setupState && setupState.current;
+    var goalPhase = setupState && setupState.phase === "synthesizing";
+    banner.querySelector(".hc-banner-what").textContent = goalPhase
+      ? "Building your goal tree" : "Analyzing your conversations";
+    banner.querySelector(".hc-banner-now").textContent = current && current.title
+      ? "now: " + current.title
+      : (current ? "now: " + String(current.id).slice(0, 8)
+                 : "goals appear here as this finishes");
+    banner.querySelector(".hc-banner-count").textContent =
+      counts.analyzed + " of " + counts.total;
+    banner.querySelector(".hc-banner-bar").style.width =
+      (counts.total ? Math.round(counts.analyzed / counts.total * 100) : 0) + "%";
+  }
+
+  function watchAnalysis() {
+    setInterval(function () {
+      if (!window.__hcAnalysisPending() && !setupState) return;
+      refreshSetup().then(renderBanner);
+    }, 2000);
+    renderBanner();
+  }
 
   window.__hcAgent = {
     launch: function (goalId) {
@@ -775,7 +856,10 @@
     agentOf: agentOf,
     artifactOf: artifactOf,
     promptRows: promptRows,
-    ask: ask
+    ask: ask,
+    renderBanner: renderBanner,
+    analysisPending: function () { return window.__hcAnalysisPending(); },
+    setSetupForTest: function (value) { setupState = value; }
   };
 
   seed();
@@ -785,6 +869,7 @@
   patchBundleTemplate();
   function boot() {
     watchGoals();
+    watchAnalysis();
     watchSelection();
     setInterval(refreshState, 1500);
     setTimeout(refreshState, 0);
