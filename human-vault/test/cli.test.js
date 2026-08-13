@@ -104,7 +104,7 @@ test('explicit flags are still honoured for scripted installs', async () => {
 
 // The install ends by telling the user to run `hc ui`. If their shell cannot
 // find `hc`, that instruction is wrong and the install has not landed.
-async function installOutput({ onPath, added }) {
+async function installOutput({ onPath, added, present, linked }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-path-'));
   try {
     fixturePackage(root);
@@ -119,7 +119,7 @@ async function installOutput({ onPath, added }) {
       errorOutput: capture().stream,
       install: async () => ({ launcher: '/home/u/.human-compact/bin/hc' }),
       ensureLauncherOnPath: () => ({
-        onPath, added, profile: '/home/u/.zshrc',
+        onPath, added, present, linked, profile: '/home/u/.zshrc',
         line: 'export PATH="$HOME/.human-compact/bin:$PATH"',
       }),
     });
@@ -145,4 +145,15 @@ test('a profile that could not be edited tells the user what to add', async () =
   const text = await installOutput({ onPath: false, added: false });
   assert.match(text, /not on your PATH yet/);
   assert.match(text, /export PATH="\$HOME\/\.human-compact\/bin:\$PATH"/);
+});
+
+test('a profile that is already correct says the shell is stale, not the config', async () => {
+  const text = await installOutput({ onPath: false, added: false, present: true });
+  assert.match(text, /already puts `hc` on PATH — this shell predates it/);
+  assert.doesNotMatch(text, /Add this to your shell profile/);
+});
+
+test('a linked launcher says it works right now', async () => {
+  const text = await installOutput({ onPath: true, linked: '/home/u/.local/bin/hc' });
+  assert.match(text, /`hc` is ready now — linked into \/home\/u\/\.local\/bin/);
 });

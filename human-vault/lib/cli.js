@@ -134,9 +134,14 @@ async function run(deps = {}) {
     if (reach && reach.linked) {
       output.write(`\n\`hc\` is ready now — linked into ${path.dirname(reach.linked)}, already on your PATH.\n`);
     } else if (reach && !reach.onPath) {
-      output.write(reach.added
-        ? `\nAdded ${reach.line} to ${reach.profile}.\nOpen a new terminal first, or run this once in this one:\n\n    ${reach.line}\n`
-        : `\n\`hc\` is not on your PATH yet. Add this to your shell profile:\n\n    ${reach.line}\n`);
+      if (reach.added) {
+        output.write(`\nAdded ${reach.line} to ${reach.profile}.\nOpen a new terminal first, or run this once in this one:\n\n    ${reach.line}\n`);
+      } else if (reach.present) {
+        // The profile is already right; this shell just predates it.
+        output.write(`\n${reach.profile} already puts \`hc\` on PATH — this shell predates it.\nOpen a new terminal, or run this once in this one:\n\n    ${reach.line}\n`);
+      } else {
+        output.write(`\n\`hc\` is not on your PATH yet. Add this to your shell profile:\n\n    ${reach.line}\n`);
+      }
     }
     output.write('\nThen start a new Claude Code session (or /reload-plugins) and use /hc-ui inside a chat.\n');
     return 0;

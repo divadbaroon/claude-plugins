@@ -727,7 +727,7 @@ function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
     if (error.code !== 'ENOENT') throw error;
   }
   if (existing.includes(launcherDir) || existing.includes(relative)) {
-    return { onPath: false, profile, added: false, linked: null, line };
+    return { onPath: false, profile, added: false, present: true, linked: null, line };
   }
   files.appendFileSync(profile, `\n# human-vault (runtime on PATH)\n${line}\n`);
   return { onPath: false, profile, added: true, linked: null, line };
