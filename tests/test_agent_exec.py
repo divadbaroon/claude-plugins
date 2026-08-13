@@ -445,6 +445,8 @@ class LaunchTests(unittest.TestCase):
         self.assertIn(f"cd '{self.project}'", body)
         self.assertEqual(0o700, script.stat().st_mode & 0o777)
 
+    @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(),
+                         "expect drives the injection; absent on some systems")
     def test_the_session_starts_with_the_goal_typed_but_unsent(self):
         AE.write_launch_script(self.trajdir, "g1a", str(self.project),
                                ["hc", "work", "g1a"], "Work on goal g1a.")
@@ -459,12 +461,26 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual("Work on goal g1a.", prompt.read_text())
 
     def test_a_multiline_prompt_is_flattened_so_it_cannot_submit_early(self):
-        AE.write_launch_script(self.trajdir, "g1a", str(self.project),
-                               ["hc", "work", "g1a"],
-                               "first line\nsecond line\n\nthird")
-        body = (AE.runs_dir(self.trajdir) / "launch" / "g1a.prompt").read_text()
-        self.assertEqual("first line second line third", body)
-        self.assertNotIn("\n", body)
+        # Holds on every platform: a newline in the injected text would press
+        # Enter for the user.
+        self.assertEqual("first line second line third",
+                         AE.single_line("first line\nsecond line\n\nthird"))
+        self.assertNotIn("\n", AE.single_line("a\rb\nc"))
+
+    def test_without_expect_the_command_is_pre_typed_instead(self):
+        # No injection is possible, so the session is not started for the user;
+        # the command waits at the shell prompt.
+        original = AE.EXPECT_BIN
+        AE.EXPECT_BIN = "/nonexistent/expect"
+        try:
+            script = AE.write_launch_script(
+                self.trajdir, "g1a", str(self.project),
+                ["hc", "work", "g1a", "--start"], "Work on goal g1a.")
+        finally:
+            AE.EXPECT_BIN = original
+        body = script.read_text()
+        self.assertIn("HC_LAUNCH_CMD='hc work g1a --start'", body)
+        self.assertNotIn("exec hc work", body)
 
     def test_without_a_prompt_it_falls_back_to_a_pre_typed_command(self):
         script = AE.write_launch_script(

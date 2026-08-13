@@ -293,6 +293,11 @@ EXPECT_BIN = "/usr/bin/expect"
 LAUNCH_SETTLE_SECONDS = "2500"      # let the TUI finish drawing before typing
 
 
+def single_line(prompt: str) -> str:
+    """Collapse a prompt to one line: a newline in it would press Enter."""
+    return " ".join(str(prompt or "").split())
+
+
 def _write_expect_launch(directory: Path, goal_id: str, command: List[str],
                          prompt: str) -> Optional[Path]:
     """Start Claude, type the goal into its composer, hand over the terminal.
@@ -306,8 +311,7 @@ def _write_expect_launch(directory: Path, goal_id: str, command: List[str],
     """
     if not Path(EXPECT_BIN).exists() or not prompt:
         return None
-    # A newline would submit it. One line, always.
-    body = " ".join(str(prompt).split())
+    body = single_line(prompt)
     prompt_file = directory / f"{goal_id}.prompt"
     prompt_file.write_text(body, encoding="utf-8")
     prompt_file.chmod(0o600)

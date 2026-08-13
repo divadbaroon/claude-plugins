@@ -74,7 +74,7 @@ class HcOnboardingTests(unittest.TestCase):
         )
         response = json.loads(result.stdout)
         self.assertEqual("block", response["decision"])
-        self.assertIn("npx human-compact", response["reason"])
+        self.assertIn("npx human-vault", response["reason"])
 
 
 if __name__ == "__main__":
