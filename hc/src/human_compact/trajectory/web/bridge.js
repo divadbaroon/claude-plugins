@@ -756,22 +756,33 @@
     // would be talking over the questions it is still asking.
     if (!setupState.done) return false;
     var counts = setupState.conversations || {};
+    var total = counts.total || 0;
+    var analyzed = counts.analyzed || 0;
+    // Nothing left to analyze: say nothing, even if a lock is still held.
+    // The goal-tree build is the one thing worth reporting past that point.
+    if (total && analyzed >= total && setupState.phase !== "synthesizing") {
+      return false;
+    }
     return !!(setupState.running || (counts.pending || 0) > 0);
   };
 
-  function ensureBannerStyles() {
-    if (document.getElementById("hc-banner-style")) return;
-    var style = document.createElement("style");
-    style.id = "hc-banner-style";
-    style.textContent = [
-      ".hc-banner{position:relative;margin:10px 0 2px;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+  // Full width of the panel it sits above: it shares that panel's container,
+  // so 100% of the container is 100% of the panel.
+  var BANNER_CSS = [
+      ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:14px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
       ".hc-banner-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-pulse 1.4s ease-in-out infinite}",
       "@keyframes hc-pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}",
       ".hc-banner-what{flex:none;font-weight:600}",
       ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
       ".hc-banner-bar{position:absolute;left:0;bottom:0;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
-    ].join("");
+  ].join("");
+
+  function ensureBannerStyles() {
+    if (document.getElementById("hc-banner-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-banner-style";
+    style.textContent = BANNER_CSS;
     document.head.appendChild(style);
   }
 
@@ -781,9 +792,14 @@
     // parented inside it — so re-anchor on mutation, not on a timer.
     if (!banner) return;
     var sub = document.querySelector(".hc-sub");
-    if (sub && sub.parentNode) {
-      if (sub.nextSibling !== banner) {
-        sub.parentNode.insertBefore(banner, sub.nextSibling);
+    // Sit between the page description and the panel below it, as a sibling
+    // of that panel rather than a child of the header — same container, so
+    // it spans exactly the panel's width instead of the header's.
+    var header = sub && sub.parentNode;
+    var row = (header && header.parentNode) ? header : sub;
+    if (row && row.parentNode) {
+      if (row.nextSibling !== banner) {
+        row.parentNode.insertBefore(banner, row.nextSibling);
       }
       return;
     }
@@ -960,6 +976,7 @@
     promptRows: promptRows,
     ask: ask,
     renderBanner: renderBanner,
+    bannerCss: function () { return BANNER_CSS; },
     watchAnalysis: watchAnalysis,
     loadThread: loadThread,
     briefingSections: briefingSections,

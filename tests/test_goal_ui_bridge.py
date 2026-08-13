@@ -61,8 +61,10 @@ function El(tag) {
 }
 const root = new El("html");
 const app = new El("div"); app.className = "hc"; root.appendChild(app);
-// The page subtitle the banner anchors itself under.
-const sub = new El("div"); sub.className = "hc-sub"; app.appendChild(sub);
+// The real shape: a header block holding the subtitle, then the panel.
+const header = new El("div"); header.className = "hc-head"; app.appendChild(header);
+const sub = new El("div"); sub.className = "hc-sub"; header.appendChild(sub);
+const panel = new El("div"); panel.className = "conv-panel"; app.appendChild(panel);
 const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
   body: root, addEventListener() {},
@@ -80,6 +82,7 @@ XHR.prototype.send = function () {
 };
 const sandbox = {
   console, document, XMLHttpRequest: XHR, made, require, calls, app, sub,
+  header, panel,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
   fetch: (url, opts) => {
     calls.push([url, opts && opts.body ? JSON.parse(opts.body) : null]);
@@ -597,27 +600,52 @@ class AnalysisBannerTests(BridgeTestCase):
             setup=self.RUNNING)
         self.assertEqual(1, out)
 
-    def test_it_sits_directly_under_the_page_description(self):
+    def test_it_spans_the_panel_by_sharing_its_container(self):
+        # A child of the header would take the header's width; the banner has
+        # to be the panel's sibling to line up with it.
         order = json.loads(self.run_js(
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
             "window.__hcPromptUI.renderBanner();"
             "JSON.stringify(app.children.map(function (c) "
             "{ return c.className; }));"))
-        self.assertEqual(["hc-sub", "hc-banner"], order)
+        self.assertEqual(["hc-head", "hc-banner", "conv-panel"], order)
 
-    def test_a_re_render_that_replaces_the_subtitle_takes_it_along(self):
-        # The artifact rebuilds this subtree on every state change.
+    def test_it_is_full_width(self):
+        width = self.run_js(
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
+            "window.__hcPromptUI.renderBanner();"
+            "window.__hcPromptUI.bannerCss();")
+        self.assertIn("width:100%", width)
+        self.assertIn("box-sizing:border-box", width)
+
+    def test_a_re_render_that_replaces_the_header_takes_it_along(self):
         order = json.loads(self.run_js(
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
             "window.__hcPromptUI.renderBanner();"
-            "app.removeChild(sub);"
-            "var other = document.createElement('div');"
-            "other.className = 'hc-sub';"
-            "app.insertBefore(other, app.firstChild);"
+            "app.removeChild(header);"
+            "var again = document.createElement('div');"
+            "again.className = 'hc-head';"
+            "var s2 = document.createElement('div'); s2.className = 'hc-sub';"
+            "again.appendChild(s2);"
+            "app.insertBefore(again, app.firstChild);"
             "window.__hcPromptUI.renderBanner();"
             "JSON.stringify(app.children.map(function (c) "
             "{ return c.className; }));"))
-        self.assertEqual(["hc-sub", "hc-banner"], order)
+        self.assertEqual(["hc-head", "hc-banner", "conv-panel"], order)
+
+    def test_it_goes_away_once_every_conversation_is_analyzed(self):
+        finished = dict(self.RUNNING, running=True, phase="extracting",
+                        conversations={"total": 89, "analyzed": 89, "pending": 0})
+        self.assertFalse(self.run_js(
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(finished) +
+            "window.__hcPromptUI.analysisPending();"))
+
+    def test_but_the_goal_build_after_it_still_reports(self):
+        building = dict(self.RUNNING, running=True, phase="synthesizing",
+                        conversations={"total": 89, "analyzed": 89, "pending": 0})
+        self.assertTrue(self.run_js(
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(building) +
+            "window.__hcPromptUI.analysisPending();"))
 
     def test_it_stays_quiet_until_onboarding_is_finished(self):
         # The wizard is asking questions; a banner behind it talks over them.
