@@ -177,3 +177,54 @@ class AnalysisEntryPointTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 cli.analyze_main([])
         self.assertEqual(1, done.call_count)
+
+
+class MachineSessionTests(unittest.TestCase):
+    """hc's own calls to the Claude CLI must not come back as the user's work."""
+
+    def _session(self, text):
+        from human_compact.trajectory import discover as D
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "sid" / "conv.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"type": "user", "cwd": "/p",
+                                    "message": {"content": text}}) + "\n"
+                        + json.dumps({"type": "assistant",
+                                      "message": {"content": "ok"}}) + "\n")
+        return D.load_session(path, "2026-08-13")
+
+    def test_the_extraction_prompt_is_not_a_conversation(self):
+        self.assertIsNone(self._session(
+            "You are analyzing one conversation between a user and Claude "
+            "Code. Each turn below has a stable id."))
+
+    def test_the_goal_tree_prompt_is_not_a_conversation(self):
+        self.assertIsNone(self._session(
+            "You will construct the FULL GOAL TREE for a user from structured "
+            "extractions of their recent conversations."))
+
+    def test_a_launched_goal_session_is_not_a_conversation(self):
+        self.assertIsNone(self._session("Work on my Vault goal g1a1: ship it"))
+
+    def test_a_real_conversation_still_loads(self):
+        got = self._session("why is the overlay not showing up?")
+        self.assertIsNotNone(got)
+        self.assertEqual(1, got["user_turn_count"])
+
+    def test_the_filtered_prefixes_match_the_prompts_actually_sent(self):
+        # If a prompt is reworded, this fails rather than silently re-admitting
+        # the analyzer's own sessions into the user's history.
+        from human_compact.trajectory import discover as D
+        extract_src = (ROOT / "hc" / "src" / "human_compact" / "trajectory"
+                       / "extract.py").read_text()
+        synth_src = (ROOT / "hc" / "src" / "human_compact" / "trajectory"
+                     / "goal_synth.py").read_text()
+        for prefix in ("You are analyzing one conversation between a user and "
+                       "Claude Code",):
+            self.assertIn(prefix, extract_src)
+            self.assertIn(prefix, D.MACHINE_SESSION_PREFIXES)
+        for prefix in ("You will construct the FULL GOAL TREE",
+                       "Write the missing one-sentence description"):
+            self.assertIn(prefix, synth_src)
+            self.assertIn(prefix, D.MACHINE_SESSION_PREFIXES)

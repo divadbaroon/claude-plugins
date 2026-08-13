@@ -27,6 +27,19 @@ def _text_of(msg):
     return ""
 
 
+# Prompts hc itself sends to the Claude CLI. Kept as literal prefixes so a
+# reworded prompt fails loudly in tests rather than silently re-admitting the
+# machine's own sessions.
+MACHINE_SESSION_PREFIXES = (
+    "You are analyzing one conversation between a user and Claude Code",
+    "You will construct the FULL GOAL TREE",
+    "Write the missing one-sentence description",
+    "You translate a user's natural-language feedback",
+    "You are given a set of per-conversation extractions",
+    "Work on my Vault goal ",
+)
+
+
 def _clean(t):
     t = " ".join(t.split())
     return t[:MAX_TURN_CHARS] + "…" if len(t) > MAX_TURN_CHARS else t
@@ -63,6 +76,11 @@ def load_session(conv_path: Path, day: str):
     n_user = sum(1 for t in turns if t["role"] == "user")
     if n_user == 0:
         return None          # nothing observable, not merely "short"
+    first_user = next((t["text"] for t in turns if t["role"] == "user"), "")
+    if first_user.startswith(MACHINE_SESSION_PREFIXES):
+        # Our own provider subprocesses leave transcripts too. Analyzing them
+        # would list the analyzer's prompts as if they were the user's work.
+        return None
     return {
         "session_id": sid, "date": day, "cwd": cwd, "turns": turns,
         "user_turn_count": n_user,
