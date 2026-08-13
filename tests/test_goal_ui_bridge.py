@@ -101,6 +101,17 @@ class BridgeTestCase(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         return json.loads(result.stdout)
 
+
+    def patched_bundle(self, tail):
+        """Apply patchBundleSource to the checked-in artifact, then evaluate."""
+        return self.run_js(
+            "var fs = require('fs');"
+            "var html = fs.readFileSync(%s, 'utf8');"
+            "var src = JSON.parse(html.match("
+            "  /<script type=\"__bundler\\/template\">\\s*([\\s\\S]*?)\\s*<\\/script>/)[1]);"
+            "var out = window.__hcPromptUI.patchBundleSource(src);"
+            % json.dumps(str(BUNDLE)) + tail)
+
     def roots(self, state=None):
         return self.run_js(
             "window.__hcPromptUI.rootsFromState(%s);" % json.dumps(state or STATE))
@@ -306,3 +317,26 @@ class MergeTests(BridgeTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoInventedDataTests(BridgeTestCase):
+    """Nothing on screen may be a sample list or a simulated duration."""
+
+    def test_the_progress_simulation_is_gone(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn("p + 0.9 + Math.random()", out)
+        self.assertIn("setup.progress().then", out)
+
+    def test_no_hardcoded_conversation_count_survives(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn("total: 63", out)
+        self.assertNotIn("63 conversations", out)
+
+    def test_the_sample_conversation_list_defers_to_the_vault(self):
+        self.assertIn("window.__hcConvos) return window.__hcConvos",
+                      self.patched_bundle("out;"))
+
+    def test_the_patch_is_idempotent(self):
+        self.assertTrue(self.patched_bundle(
+            "out === window.__hcPromptUI.patchBundleSource(out);"))

@@ -230,6 +230,56 @@ def _spawn_analysis(provider, trajdir):
             close_fds=True, start_new_session=True)
 
 
+def _first(value, default=""):
+    """First entry of a list field that may be present but empty."""
+    if isinstance(value, list) and value:
+        return str(value[0])
+    return default
+
+
+def conversation_rows(trajdir, limit=200):
+    """The conversations this vault actually holds, analyzed or not.
+
+    The artifact ships a sample list for its own demo; this replaces it, so a
+    count on screen is a count of the user's own history.
+    """
+    from . import discover as D
+    rows, analyzed = [], {}
+    convdir = Path(trajdir) / "conversations"
+    if convdir.is_dir():
+        for path in convdir.glob("*.json"):
+            try:
+                extracted = json.loads(path.read_text()).get("extracted", {})
+            except (OSError, ValueError):
+                continue
+            analyzed[path.stem] = extracted
+    try:
+        sessions = D.discover(30)
+    except Exception:                        # noqa: BLE001 - advisory listing
+        sessions = []
+    for session in sessions[:limit]:
+        sid = session["session_id"]
+        extracted = analyzed.get(sid)
+        turns = session.get("turns") or []
+        first = next((t["text"] for t in turns if t.get("role") == "user"), "")
+        title = ""
+        if extracted:
+            title = (_first(extracted.get("apparent_objectives"))
+                     or _first(extracted.get("projects_or_topics")))
+        rows.append({
+            "id": sid,
+            "title": (title or first or "Untitled conversation")[:90],
+            "meta": f"{session.get('date', '')} · {len(turns)} messages",
+            "goal": _first((extracted or {}).get("projects_or_topics"))[:60],
+            "repo": Path(session.get("cwd") or "").name,
+            "done": sid in analyzed,
+            "thread": [["user", t["text"][:200]] for t in turns
+                       if t.get("role") == "user"][:6],
+        })
+    rows.sort(key=lambda row: row["meta"], reverse=True)
+    return rows
+
+
 def setup_state(trajdir):
     """What onboarding still has to answer, read from the vault itself.
 
@@ -262,6 +312,7 @@ def setup_state(trajdir):
         "conversations": counts,
         "goals": len(goals.get("goals", [])),
         "running": bool(ST.processing()),
+        "convos": conversation_rows(trajdir) if storage else [],
     }
 
 

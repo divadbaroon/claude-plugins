@@ -64,14 +64,21 @@ class HcOnboardingTests(unittest.TestCase):
             "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
             "hook_event_name": "UserPromptExpansion",
         })
-        result = subprocess.run(
-            ["/bin/bash", str(script)],
-            input=payload,
-            text=True,
-            capture_output=True,
-            env={**os.environ, "PATH": "/usr/bin:/bin"},
-            check=True,
-        )
+        # The hook resolves hc from HC_EXECUTABLE, then ~/.human-compact/bin,
+        # then PATH. A developer with a real install would otherwise satisfy the
+        # second of those and open an actual server from a unit test.
+        with tempfile.TemporaryDirectory() as empty_home:
+            environment = {**os.environ, "PATH": "/usr/bin:/bin",
+                           "HOME": empty_home}
+            environment.pop("HC_EXECUTABLE", None)
+            result = subprocess.run(
+                ["/bin/bash", str(script)],
+                input=payload,
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=True,
+            )
         response = json.loads(result.stdout)
         self.assertEqual("block", response["decision"])
         self.assertIn("npx human-vault", response["reason"])

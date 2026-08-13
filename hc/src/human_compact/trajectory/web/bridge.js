@@ -386,7 +386,12 @@
       setup.open("GET", "/api/setup", false);
       setup.send();
       var answered = JSON.parse(setup.responseText);
-      if (answered && answered.ok) setupState = answered;
+      if (answered && answered.ok) {
+        setupState = answered;
+        if (answered.convos && answered.convos.length) {
+          window.__hcConvos = answered.convos;
+        }
+      }
     } catch (e) {
       setupState = null;
     }
@@ -609,6 +614,13 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      // Its analysis screen animated random progress over a sample list for a
+      // fixed ~30s. Replaced with what the vault actually reports.
+      ["  startAnalysis() {\n    clearInterval(this._anT);\n    const n = this.CONVOS.length;\n    this.set(() => ({ page: 'convos', convSel: null, an: { phase: 'convs', total: n, prog: Array(n).fill(0) } }));\n    this._anT = setInterval(() => {\n      const a = this.state.an;\n      if (!a) { clearInterval(this._anT); return; }\n      // up to 5 concurrent, ~15s each\n      let active = 0;\n      const prog = a.prog.map(p => {\n        if (p >= 100) return p;\n        if (active >= 5) return p;\n        active++;\n        return Math.min(100, p + 0.9 + Math.random() * 1.0);\n      });\n      this.setState({ an: { ...a, prog } });\n      if (prog.every(p => p >= 100)) {\n        clearInterval(this._anT);\n        setTimeout(() => {\n          this.set(() => ({ page: 'goals', an: { phase: 'goals', total: 63, done: 0 } }));\n          this._anT = setInterval(() => {   // ~30s for 63 conversations\n            const g = this.state.an;\n            if (!g) { clearInterval(this._anT); return; }\n            const gd = Math.min(g.total, g.done + 1);\n            this.setState({ an: { ...g, done: gd } });\n            if (gd >= g.total) { clearInterval(this._anT); setTimeout(() => this.setState({ an: null }), 1200); }\n          }, 470);\n        }, 1000);\n      }\n    }, 200);\n  }\n", "  startAnalysis() {\n    clearInterval(this._anT);\n    // Real progress: the vault reports how many conversations it has and how\n    // many it has finished. Nothing here invents a duration.\n    const tick = () => {\n      const setup = window.__hcSetup;\n      if (!setup) { clearInterval(this._anT); this.setState({ an: null }); return; }\n      setup.progress().then((s) => {\n        if (!s) return;\n        const counts = s.conversations || { total: 0, analyzed: 0 };\n        const total = counts.total || (window.__hcConvos || []).length;\n        const done = Math.min(counts.analyzed || 0, total);\n        const prog = Array.from({ length: total }, (_, k) =>\n          k < done ? 100 : (k === done && s.running ? 50 : 0));\n        this.setState({ an: { phase: 'convs', total, prog, done } });\n        if (total && done >= total && !s.running) {\n          clearInterval(this._anT);\n          this.set(() => ({ page: 'goals', an: { phase: 'goals', total, done } }));\n          setTimeout(() => this.setState({ an: null }), 1500);\n        }\n      });\n    };\n    this.set(() => ({ page: 'convos', convSel: null,\n      an: { phase: 'convs', total: (window.__hcConvos || []).length, prog: [], done: 0 } }));\n    tick();\n    this._anT = setInterval(tick, 2000);\n  }\n"],
+      // Its sample conversation list becomes the user's own history when the
+      // server has some; the sample survives for a standalone artifact.
+      ["get CONVOS() {\n    return [",
+       "get CONVOS() {\n    if (typeof window !== 'undefined' && window.__hcConvos) return window.__hcConvos;\n    return ["],
       // Step 1 of onboarding: turning capture on is a real act — it imports
       // existing transcripts — so it goes to the vault, not just to state.
       ["obNext: () => this.set(s => ({ setup: { ...s.setup, sv: 9, storage: true }, obStep: 2 }))",
@@ -659,7 +671,11 @@
     return fetch("/api/setup", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (body) {
-        if (body && body.ok) setupState = body;
+        if (body && body.ok) {
+          setupState = body;
+          // The artifact reads this getter for its conversation list.
+          if (body.convos && body.convos.length) window.__hcConvos = body.convos;
+        }
         return setupState;
       })
       .catch(function () { return setupState; });
@@ -683,6 +699,7 @@
         });
     },
     progress: refreshSetup,
+    convos: function () { return (setupState && setupState.convos) || null; },
     state: function () { return setupState; }
   };
 
