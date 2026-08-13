@@ -554,7 +554,7 @@ class AnalysisBannerTests(BridgeTestCase):
     """Work happening outside the page has to be visible inside it."""
 
     RUNNING = {"ok": True, "sv": 9, "storage": True, "analysis": "claude",
-               "done": False, "running": True, "phase": "extracting",
+               "done": True, "running": True, "phase": "extracting",
                "conversations": {"total": 89, "analyzed": 12, "pending": 77},
                "current": {"id": "aaaaaaaa", "title": "Debugging the overlay"},
                "convos": []}
@@ -597,27 +597,37 @@ class AnalysisBannerTests(BridgeTestCase):
             setup=self.RUNNING)
         self.assertEqual(1, out)
 
-    def test_it_hangs_off_the_document_not_the_artifact(self):
-        # The artifact re-renders its own subtree constantly. A banner parented
-        # inside it is removed without warning; body is not its to rebuild.
-        where = self.run_js(
+    def test_it_sits_directly_under_the_page_description(self):
+        order = json.loads(self.run_js(
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
             "window.__hcPromptUI.renderBanner();"
-            "document.body.children.filter(function (c) {"
-            "  return c.className === 'hc-banner'; }).length;")
-        self.assertEqual(1, where)
+            "JSON.stringify(app.children.map(function (c) "
+            "{ return c.className; }));"))
+        self.assertEqual(["hc-sub", "hc-banner"], order)
 
-    def test_a_re_render_that_drops_it_gets_it_back(self):
-        again = self.run_js(
+    def test_a_re_render_that_replaces_the_subtitle_takes_it_along(self):
+        # The artifact rebuilds this subtree on every state change.
+        order = json.loads(self.run_js(
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
             "window.__hcPromptUI.renderBanner();"
-            "var b = document.body.children.filter(function (c) {"
-            "  return c.className === 'hc-banner'; })[0];"
-            "document.body.removeChild(b);"
+            "app.removeChild(sub);"
+            "var other = document.createElement('div');"
+            "other.className = 'hc-sub';"
+            "app.insertBefore(other, app.firstChild);"
             "window.__hcPromptUI.renderBanner();"
-            "document.body.children.filter(function (c) {"
-            "  return c.className === 'hc-banner'; }).length;")
-        self.assertEqual(1, again)
+            "JSON.stringify(app.children.map(function (c) "
+            "{ return c.className; }));"))
+        self.assertEqual(["hc-sub", "hc-banner"], order)
+
+    def test_it_stays_quiet_until_onboarding_is_finished(self):
+        # The wizard is asking questions; a banner behind it talks over them.
+        during = dict(self.RUNNING, done=False)
+        shown = self.run_js(
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(during) +
+            "window.__hcPromptUI.renderBanner();"
+            "made.filter(function (e) {"
+            "  return e.className === 'hc-banner'; }).length;")
+        self.assertEqual(0, shown)
 
     def test_a_partial_history_is_not_mistaken_for_work_in_progress(self):
         # Some conversations never yield an extraction, so analyzed < total is

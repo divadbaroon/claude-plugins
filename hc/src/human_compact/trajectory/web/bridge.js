@@ -752,6 +752,9 @@
     // Not every conversation yields an extraction, so analyzed < total is a
     // normal resting state, not a claim that something is running.
     if (!setupState) return false;
+    // During onboarding the wizard is the thing to read; a banner behind it
+    // would be talking over the questions it is still asking.
+    if (!setupState.done) return false;
     var counts = setupState.conversations || {};
     return !!(setupState.running || (counts.pending || 0) > 0);
   };
@@ -761,15 +764,42 @@
     var style = document.createElement("style");
     style.id = "hc-banner-style";
     style.textContent = [
-      ".hc-banner{position:fixed;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;gap:10px;padding:9px 16px;background:#a5492a;border-top:1px solid rgba(0,0,0,.15);font:12px/1.45 'Source Code Pro',ui-monospace,monospace;color:#fff;box-shadow:0 -2px 12px rgba(0,0,0,.12)}",
-      ".hc-banner-dot{flex:none;width:8px;height:8px;border-radius:50%;background:#fff;animation:hc-pulse 1.4s ease-in-out infinite}",
+      ".hc-banner{position:relative;margin:10px 0 2px;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-banner-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-pulse 1.4s ease-in-out infinite}",
       "@keyframes hc-pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}",
       ".hc-banner-what{flex:none;font-weight:600}",
-      ".hc-banner-now{flex:1;min-width:0;color:rgba(255,255,255,.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".hc-banner-count{flex:none;color:rgba(255,255,255,.9)}",
-      ".hc-banner-bar{position:absolute;left:0;top:0;height:2px;background:#fff;transition:width .4s ease}"
+      ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
+      ".hc-banner-bar{position:absolute;left:0;bottom:0;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
     ].join("");
     document.head.appendChild(style);
+  }
+
+  function anchorBanner() {
+    // It belongs with the text that explains the page. The artifact rebuilds
+    // that subtree whenever its state changes, which silently drops anything
+    // parented inside it — so re-anchor on mutation, not on a timer.
+    if (!banner) return;
+    var sub = document.querySelector(".hc-sub");
+    if (sub && sub.parentNode) {
+      if (sub.nextSibling !== banner) {
+        sub.parentNode.insertBefore(banner, sub.nextSibling);
+      }
+      return;
+    }
+    // No subtitle on screen (a modal, say): keep it in the document rather
+    // than dropping it, so nothing flickers when the page comes back.
+    var host = document.body || document.documentElement;
+    if (banner.parentNode !== host) host.appendChild(banner);
+  }
+
+  function watchBannerAnchor() {
+    if (typeof MutationObserver !== "function") return;
+    var observer = new MutationObserver(function () {
+      if (banner && document.documentElement.contains(banner)) anchorBanner();
+      else if (banner) { banner = null; renderBanner(); }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   function renderBanner() {
@@ -780,13 +810,12 @@
       return;
     }
     ensureBannerStyles();
-    var host = document.body || document.documentElement;
     if (!banner || !document.documentElement.contains(banner)) {
       banner = document.createElement("div");
       banner.className = "hc-banner";
       banner.setAttribute("role", "status");
       banner.setAttribute("aria-live", "polite");
-      banner.style.position = "fixed";
+      banner.style.position = "relative";
       ["hc-banner-dot", "hc-banner-what", "hc-banner-now", "hc-banner-count",
        "hc-banner-bar"].forEach(function (cls) {
         var part = document.createElement("div");
@@ -794,9 +823,7 @@
         banner.appendChild(part);
       });
     }
-    // Re-attach every pass: a re-render can drop it, and a banner that
-    // vanishes is worse than one that was never promised.
-    if (banner.parentNode !== host) host.appendChild(banner);
+    anchorBanner();
     var counts = (setupState && setupState.conversations) || { total: 0, analyzed: 0 };
     var current = setupState && setupState.current;
     var goalPhase = setupState && setupState.phase === "synthesizing";
@@ -819,6 +846,7 @@
     var idle = 0;
     function tick() { return refreshSetup().then(renderBanner); }
     var first = tick();
+    watchBannerAnchor();
     setInterval(function () {
       if (window.__hcAnalysisPending()) {
         idle = 0;
