@@ -394,3 +394,68 @@ test('PATH: an unrecognised shell is instructed, not edited', () => {
   assert.equal(got.added, false);
   assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
 });
+
+test('PATH: the launcher is linked into a directory the shell already searches', () => {
+  const links = [];
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin:/home/u/.local/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: {
+      lstatSync() { const e = new Error('nope'); e.code = 'ENOENT'; throw e; },
+      symlinkSync(from, to) { links.push([from, to]); },
+      appendFileSync() { throw new Error('must not edit a profile'); },
+    },
+  });
+  assert.equal(got.onPath, true);
+  assert.equal(got.linked, '/home/u/.local/bin/hc');
+  assert.deepEqual(links, [['/home/u/.human-compact/bin/hc', '/home/u/.local/bin/hc']]);
+});
+
+test('PATH: an hc that is not ours is never overwritten', () => {
+  const appended = [];
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/home/u/.local/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: {
+      lstatSync: () => ({ isSymbolicLink: () => false }),
+      symlinkSync() { throw new Error('must not clobber'); },
+      readFileSync: () => '',
+      appendFileSync(file, text) { appended.push(file); },
+    },
+  });
+  assert.equal(got.linked, null);
+  assert.equal(got.added, true);          // falls back to the profile
+  assert.deepEqual(appended, ['/home/u/.zshrc']);
+});
+
+test('PATH: re-running the installer reuses its own link', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/home/u/.local/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: {
+      lstatSync: () => ({ isSymbolicLink: () => true }),
+      readlinkSync: () => '/home/u/.human-compact/bin/hc',
+      symlinkSync() { throw new Error('must not relink'); },
+    },
+  });
+  assert.equal(got.onPath, true);
+  assert.equal(got.linked, '/home/u/.local/bin/hc');
+});
+
+test('PATH: a directory on PATH but not a known bin dir is left alone', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin:/opt/homebrew/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: {
+      symlinkSync() { throw new Error('must not write outside the home bins'); },
+      readFileSync: () => '',
+      appendFileSync() {},
+    },
+  });
+  assert.equal(got.linked, null);
+  assert.equal(got.added, true);
+});

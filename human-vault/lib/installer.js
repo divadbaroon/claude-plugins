@@ -687,14 +687,39 @@ function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
   const files = fileSystem || fs;
   const entries = String(env.PATH || '').split(path.delimiter).filter(Boolean);
   if (entries.some((entry) => path.resolve(entry) === path.resolve(launcherDir))) {
-    return { onPath: true, profile: null, added: false, line: null };
+    return { onPath: true, profile: null, added: false, linked: null, line: null };
+  }
+  // A child process cannot change its parent shell's PATH, so editing a
+  // profile always costs the user a new terminal. Linking into a directory
+  // the shell already searches costs them nothing: `hc` works immediately.
+  const source = path.join(launcherDir, 'hc');
+  for (const entry of entries) {
+    const dir = path.resolve(entry);
+    if (dir !== path.resolve(homedir, '.local', 'bin')
+        && dir !== path.resolve(homedir, 'bin')) continue;
+    const link = path.join(dir, 'hc');
+    try {
+      const existing = files.lstatSync(link);
+      // Something is already called hc here. Ours to update, or not ours to touch.
+      if (!existing.isSymbolicLink()) continue;
+      if (path.resolve(files.readlinkSync(link)) !== path.resolve(source)) continue;
+      return { onPath: true, profile: null, added: false, linked: link, line: null };
+    } catch (error) {
+      if (error.code !== 'ENOENT') continue;
+    }
+    try {
+      files.symlinkSync(source, link);
+      return { onPath: true, profile: null, added: false, linked: link, line: null };
+    } catch (error) {
+      // Unwritable or racing another install: fall through to the profile.
+    }
   }
   const relative = launcherDir.startsWith(homedir + path.sep)
     ? '$HOME' + launcherDir.slice(homedir.length)
     : launcherDir;
   const line = `export PATH="${relative}:$PATH"`;
   const profile = shellProfileFor(env, homedir);
-  if (!profile) return { onPath: false, profile: null, added: false, line };
+  if (!profile) return { onPath: false, profile: null, added: false, linked: null, line };
   let existing = '';
   try {
     existing = files.readFileSync(profile, 'utf8');
@@ -702,10 +727,10 @@ function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
     if (error.code !== 'ENOENT') throw error;
   }
   if (existing.includes(launcherDir) || existing.includes(relative)) {
-    return { onPath: false, profile, added: false, line };
+    return { onPath: false, profile, added: false, linked: null, line };
   }
   files.appendFileSync(profile, `\n# human-vault (runtime on PATH)\n${line}\n`);
-  return { onPath: false, profile, added: true, line };
+  return { onPath: false, profile, added: true, linked: null, line };
 }
 
 module.exports = {

@@ -818,11 +818,24 @@
   }
 
   function watchAnalysis() {
+    // Never decide from state that has not been fetched. Guarding the poll on
+    // "is anything running" deadlocked: the answer is false until the first
+    // fetch, and the first fetch was what the guard skipped.
+    var idle = 0;
+    function tick() { return refreshSetup().then(renderBanner); }
+    var first = tick();
     setInterval(function () {
-      if (!window.__hcAnalysisPending() && !setupState) return;
-      refreshSetup().then(renderBanner);
+      if (window.__hcAnalysisPending()) {
+        idle = 0;
+        tick();
+      } else if (++idle >= 5) {
+        // Quiet: keep looking, just less often, so an analysis started from
+        // another window or the CLI still shows up here.
+        idle = 0;
+        tick();
+      }
     }, 2000);
-    renderBanner();
+    return first;                    // so a caller can await the first paint
   }
 
   window.__hcAgent = {
@@ -924,6 +937,7 @@
     promptRows: promptRows,
     ask: ask,
     renderBanner: renderBanner,
+    watchAnalysis: watchAnalysis,
     loadThread: loadThread,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },

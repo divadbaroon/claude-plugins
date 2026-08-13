@@ -86,6 +86,8 @@ const sandbox = {
     const url2 = String(url || "");
     const body = url2.indexOf("/api/conversation") >= 0
       ? { ok: true, id: "c1", thread: [["YOU", "hi"], ["CLAUDE", "hello"]] }
+      : url2.indexOf("/api/setup") >= 0
+      ? JSON.parse(process.env.HC_SETUP || '{"ok":true}')
       : { ok: true, terminal: "Terminal", cwd: "/repo" };
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   },
@@ -584,6 +586,16 @@ class AnalysisBannerTests(BridgeTestCase):
         setup = dict(self.RUNNING, running=False, current=None,
                      conversations={"total": 89, "analyzed": 89, "pending": 0})
         self.assertIsNone(self.banner(setup))
+
+    def test_it_appears_without_anything_priming_the_state_first(self):
+        # The watcher used to skip its own first fetch: "is anything running"
+        # is false until something is fetched, so nothing ever was.
+        out = self.run_js(
+            "window.__hcPromptUI.watchAnalysis().then(function () {"
+            "  return made.filter(function (e) {"
+            "    return e.className === 'hc-banner'; }).length; });",
+            setup=self.RUNNING)
+        self.assertEqual(1, out)
 
     def test_it_sits_directly_under_the_page_description(self):
         order = json.loads(self.run_js(

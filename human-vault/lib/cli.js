@@ -131,7 +131,9 @@ async function run(deps = {}) {
       }
     }
     output.write('\nInstalled. Nothing is captured or analyzed yet — finish setup in the UI:\n\n    hc ui\n');
-    if (reach && !reach.onPath) {
+    if (reach && reach.linked) {
+      output.write(`\n\`hc\` is ready now — linked into ${path.dirname(reach.linked)}, already on your PATH.\n`);
+    } else if (reach && !reach.onPath) {
       output.write(reach.added
         ? `\nAdded ${reach.line} to ${reach.profile}.\nOpen a new terminal first, or run this once in this one:\n\n    ${reach.line}\n`
         : `\n\`hc\` is not on your PATH yet. Add this to your shell profile:\n\n    ${reach.line}\n`);
