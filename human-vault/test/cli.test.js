@@ -101,3 +101,48 @@ test('explicit flags are still honoured for scripted installs', async () => {
   assert.throws(() => parseArgs(['--global-vault', '2', '--goals', '1']),
     /requires --global-vault 1/);
 });
+
+// The install ends by telling the user to run `hc ui`. If their shell cannot
+// find `hc`, that instruction is wrong and the install has not landed.
+async function installOutput({ onPath, added }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-path-'));
+  try {
+    fixturePackage(root);
+    const output = capture();
+    await run({
+      argv: ['--non-interactive', '--global-vault', '2'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      output: output.stream,
+      errorOutput: capture().stream,
+      install: async () => ({ launcher: '/home/u/.human-compact/bin/hc' }),
+      ensureLauncherOnPath: () => ({
+        onPath, added, profile: '/home/u/.zshrc',
+        line: 'export PATH="$HOME/.human-compact/bin:$PATH"',
+      }),
+    });
+    return output.read();
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('a reachable launcher gets no PATH advice', async () => {
+  const text = await installOutput({ onPath: true, added: false });
+  assert.match(text, /hc ui/);
+  assert.doesNotMatch(text, /PATH/);
+});
+
+test('an unreachable launcher says what was changed and what to run now', async () => {
+  const text = await installOutput({ onPath: false, added: true });
+  assert.match(text, /Added export PATH="\$HOME\/\.human-compact\/bin:\$PATH" to \/home\/u\/\.zshrc/);
+  assert.match(text, /Open a new terminal/);
+});
+
+test('a profile that could not be edited tells the user what to add', async () => {
+  const text = await installOutput({ onPath: false, added: false });
+  assert.match(text, /not on your PATH yet/);
+  assert.match(text, /export PATH="\$HOME\/\.human-compact\/bin:\$PATH"/);
+});

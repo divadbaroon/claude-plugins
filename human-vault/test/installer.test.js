@@ -11,6 +11,7 @@ const test = require('node:test');
 const {
   ensureUv,
   ensureManagedDirectory,
+  ensureLauncherOnPath,
   establishOwnership,
   inspectVendor,
   install,
@@ -323,4 +324,73 @@ test('the runtime check asks for the python distribution, not the npm package', 
   const distribution = pyproject.match(/^name\s*=\s*"([^"]+)"/m);
   assert.equal(lookup[1], distribution[1],
     'the check must name whatever pyproject actually builds');
+});
+
+// A one-command install that ends by telling the user to run a command their
+// shell cannot find is not installed. This is the check that was missing.
+test('PATH: an already-reachable launcher is left alone', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin:/home/u/.human-compact/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: { readFileSync() { throw new Error('must not read'); },
+                  appendFileSync() { throw new Error('must not write'); } },
+  });
+  assert.equal(got.onPath, true);
+  assert.equal(got.added, false);
+});
+
+test('PATH: a launcher the shell cannot find is added to the zsh profile', () => {
+  const writes = [];
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: {
+      readFileSync() { const e = new Error('nope'); e.code = 'ENOENT'; throw e; },
+      appendFileSync(file, text) { writes.push([file, text]); },
+    },
+  });
+  assert.equal(got.onPath, false);
+  assert.equal(got.added, true);
+  assert.equal(got.profile, '/home/u/.zshrc');
+  assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
+  assert.equal(writes.length, 1);
+  assert.match(writes[0][1], /human-vault \(runtime on PATH\)/);
+});
+
+test('PATH: ZDOTDIR is honoured over the home directory', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin', SHELL: '/bin/zsh', ZDOTDIR: '/home/u/cfg' },
+    homedir: '/home/u',
+    fileSystem: { readFileSync: () => '', appendFileSync() {} },
+  });
+  assert.equal(got.profile, '/home/u/cfg/.zshrc');
+});
+
+test('PATH: the profile is never given the same line twice', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin', SHELL: '/bin/zsh' },
+    homedir: '/home/u',
+    fileSystem: {
+      readFileSync: () => 'export PATH="$HOME/.human-compact/bin:$PATH"\n',
+      appendFileSync() { throw new Error('must not append twice'); },
+    },
+  });
+  assert.equal(got.added, false);
+  assert.equal(got.onPath, false);
+});
+
+test('PATH: an unrecognised shell is instructed, not edited', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '/home/u/.human-compact/bin',
+    env: { PATH: '/usr/bin', SHELL: '/usr/bin/fish' },
+    homedir: '/home/u',
+    fileSystem: { appendFileSync() { throw new Error('must not write'); } },
+  });
+  assert.equal(got.profile, null);
+  assert.equal(got.added, false);
+  assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
 });

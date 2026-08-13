@@ -669,8 +669,49 @@ async function install(options) {
   }
 }
 
+// The launcher is installed to a directory the tool owns; nothing has ever put
+// that directory on PATH. Telling the user to run `hc ui` when their shell
+// cannot find `hc` makes a one-command install fail at its last step.
+function shellProfileFor(env, homedir) {
+  const shell = path.basename(String(env.SHELL || ''));
+  if (shell === 'zsh') {
+    return path.join(env.ZDOTDIR || homedir, '.zshrc');
+  }
+  if (shell === 'bash') {
+    return path.join(homedir, '.bashrc');
+  }
+  return null;                       // fish and friends: instruct, do not edit
+}
+
+function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
+  const files = fileSystem || fs;
+  const entries = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  if (entries.some((entry) => path.resolve(entry) === path.resolve(launcherDir))) {
+    return { onPath: true, profile: null, added: false, line: null };
+  }
+  const relative = launcherDir.startsWith(homedir + path.sep)
+    ? '$HOME' + launcherDir.slice(homedir.length)
+    : launcherDir;
+  const line = `export PATH="${relative}:$PATH"`;
+  const profile = shellProfileFor(env, homedir);
+  if (!profile) return { onPath: false, profile: null, added: false, line };
+  let existing = '';
+  try {
+    existing = files.readFileSync(profile, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (existing.includes(launcherDir) || existing.includes(relative)) {
+    return { onPath: false, profile, added: false, line };
+  }
+  files.appendFileSync(profile, `\n# human-vault (runtime on PATH)\n${line}\n`);
+  return { onPath: false, profile, added: true, line };
+}
+
 module.exports = {
   INSTALL_SCHEMA,
+  ensureLauncherOnPath,
+  shellProfileFor,
   MIN_CLAUDE_VERSION,
   MIN_CLAUDE_VERSION_TEXT,
   OWNER,

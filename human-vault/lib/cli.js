@@ -2,7 +2,12 @@
 
 const os = require('os');
 const path = require('path');
-const { install, inspectVendor, supportedTarget } = require('./installer');
+const {
+  ensureLauncherOnPath,
+  install,
+  inspectVendor,
+  supportedTarget,
+} = require('./installer');
 
 class UsageError extends Error {}
 class InputCancelled extends Error {}
@@ -96,13 +101,14 @@ async function run(deps = {}) {
         || path.join(os.homedir(), '.human-compact'),
     );
 
+    let reach = null;
     output.write('\nhuman-compact · Claude Code goal workspaces\n\n');
     if (options.dryRun) {
       output.write(`Verified bundled backend ${vendor.version} (${vendor.sha256.slice(0, 12)}).\n`);
       output.write(`Target: ${target.name}; managed runtime: ${managedRoot}\n`);
       output.write(`Plan: global Vault ${choices.globalVault === '1' ? 'enabled' : 'disabled'}; global goals ${choices.goals === '1' ? 'build now' : 'skip'}.\n`);
     } else {
-      await (deps.install || install)({
+      const installed = await (deps.install || install)({
         packageRoot,
         packageVersion: packageJson.version,
         managedRoot,
@@ -114,8 +120,23 @@ async function run(deps = {}) {
         errorOutput,
         deps: deps.installerDeps || {},
       });
+      // Only claim `hc ui` works once the shell can actually find `hc`.
+      const launcher = installed && installed.launcher;
+      if (launcher) {
+        reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
+          launcherDir: path.dirname(launcher),
+          env: process.env,
+          homedir: os.homedir(),
+        });
+      }
     }
-    output.write('\nInstalled. Nothing is captured or analyzed yet — finish setup in the UI:\n\n    hc ui\n\nThen start a new Claude Code session (or /reload-plugins) and use /hc-ui inside a chat.\n');
+    output.write('\nInstalled. Nothing is captured or analyzed yet — finish setup in the UI:\n\n    hc ui\n');
+    if (reach && !reach.onPath) {
+      output.write(reach.added
+        ? `\nAdded ${reach.line} to ${reach.profile}.\nOpen a new terminal first, or run this once in this one:\n\n    ${reach.line}\n`
+        : `\n\`hc\` is not on your PATH yet. Add this to your shell profile:\n\n    ${reach.line}\n`);
+    }
+    output.write('\nThen start a new Claude Code session (or /reload-plugins) and use /hc-ui inside a chat.\n');
     return 0;
   } catch (error) {
     if (error instanceof InputCancelled) {
