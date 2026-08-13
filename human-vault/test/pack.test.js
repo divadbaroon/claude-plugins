@@ -30,10 +30,14 @@ test('packed npm artifact contains and executes the verified wheel', () => {
     ], { cwd: packageRoot });
     const [{ filename, files, name, version }] = JSON.parse(packed.stdout);
     assert.equal(name, 'human-vault');
-    assert.equal(version, '0.16.0');
+    // Pinning a literal here means every release breaks the test; what matters
+    // is that the packed artifact and the vendored wheel agree.
+    assert.equal(version, metadata.version);
     const paths = files.map((entry) => entry.path);
     assert(paths.includes('vendor/manifest.json'));
     assert.equal(paths.filter((entry) => entry.endsWith('.whl')).length, 1);
+    assert(paths.includes(`vendor/human_compact-${metadata.version}-py3-none-any.whl`),
+      'the packed wheel must be the one this version vendors');
     assert.equal(paths.some((entry) => entry.startsWith('test/')), false);
 
     const prefix = path.join(fixture, 'prefix');
@@ -48,7 +52,7 @@ test('packed npm artifact contains and executes the verified wheel', () => {
     ], {
       env: { ...process.env, HUMAN_COMPACT_HOME: managed },
     });
-    assert.match(invocation.stdout, /Verified bundled backend 0\.16\.0/);
+    assert.match(invocation.stdout, new RegExp(`Verified bundled backend ${metadata.version.replace(/\./g, '\.')}`));
     assert.match(invocation.stdout, /run \/hc-ui\./);
     assert.equal(fs.existsSync(managed), false);
   } finally {
