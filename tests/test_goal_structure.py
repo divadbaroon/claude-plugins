@@ -1,5 +1,6 @@
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -271,3 +272,85 @@ class PromotionTests(unittest.TestCase):
                        "text_match": "finish audit"}])
         child = [g for g in goals["goals"] if g["parent_goal_id"] == "g1"][0]
         self.assertEqual("completed", child["status"])
+
+
+class AutomaticDescriptionTests(unittest.TestCase):
+    """A tree built from scratch arrives described, with no manual step."""
+
+    def setUp(self):
+        import json
+        from human_compact.trajectory import goal_synth as GS
+        self.GS = GS
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name)
+        (self.trajdir / "evidence_index.json").write_text(json.dumps(
+            {"a#1": {"role": "user", "text": "make capture work on mac"}}))
+        self.goals = {"goals": [
+            {"id": "g1", "title": "Blank", "description": "",
+             "evidence_ids": ["a#1"], "todos": []}]}
+
+    def _provider(self, payload):
+        class Stub:
+            def generate_json(_, prompt):
+                return payload
+        return Stub()
+
+    def test_it_writes_the_descriptions_onto_the_tree(self):
+        written = self.GS.backfill_descriptions(
+            self._provider({"descriptions": {"g1": "Capture on macOS."}}),
+            self.trajdir, self.goals)
+        self.assertEqual({"g1": "Capture on macOS."}, written)
+        self.assertEqual("Capture on macOS.",
+                         self.goals["goals"][0]["description"])
+
+    def test_a_fully_described_tree_never_calls_the_provider(self):
+        class Boom:
+            def generate_json(self, prompt):
+                raise AssertionError("should not call the provider")
+        self.goals["goals"][0]["description"] = "already set"
+        self.assertEqual({}, self.GS.backfill_descriptions(
+            Boom(), self.trajdir, self.goals))
+
+    def test_a_missing_evidence_index_is_not_fatal(self):
+        (self.trajdir / "evidence_index.json").unlink()
+        self.assertEqual({}, self.GS.backfill_descriptions(
+            self._provider({"descriptions": {"g1": "x"}}),
+            self.trajdir, self.goals))
+
+
+class InferredProjectDirectoryTests(unittest.TestCase):
+    """CODE CONTEXT starts from the directory the goal's own turns came from."""
+
+    def setUp(self):
+        import json
+        from human_compact.trajectory import worker as W
+        self.W = W
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name) / "traj"
+        self.trajdir.mkdir()
+        self.project = Path(self.tmp.name) / "project"
+        self.project.mkdir()
+        (self.trajdir / "evidence_index.json").write_text(json.dumps(
+            {"a#1": {"role": "user", "text": "hi", "cwd": str(self.project)}}))
+        self.goals = {"goals": [
+            {"id": "g1", "title": "Work", "evidence_ids": ["a#1"]}]}
+
+    def test_the_goals_own_directory_is_attached(self):
+        self.assertEqual(1, self.W.attach_project_dirs(self.trajdir, self.goals))
+        self.assertEqual([{"id": "s1", "type": "local",
+                           "label": str(self.project)}],
+                         self.goals["goals"][0]["sources"])
+
+    def test_a_source_the_user_chose_is_never_replaced(self):
+        mine = [{"id": "s1", "type": "github", "label": "octo/repo"}]
+        self.goals["goals"][0]["sources"] = mine
+        self.assertEqual(0, self.W.attach_project_dirs(self.trajdir, self.goals))
+        self.assertEqual(mine, self.goals["goals"][0]["sources"])
+
+    def test_a_directory_that_no_longer_exists_is_not_attached(self):
+        import shutil
+        shutil.rmtree(self.project)
+        self.assertEqual(0, self.W.attach_project_dirs(self.trajdir, self.goals))
+        self.assertNotIn("sources", self.goals["goals"][0])

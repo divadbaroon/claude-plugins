@@ -370,9 +370,53 @@ class NoInventedDataTests(BridgeTestCase):
         self.assertNotIn("Goal: {{ cv.goal }}", out)
         self.assertIn("{{ cv.goalLine }}", out)
 
+    def test_the_tab_subtitles_say_what_each_page_holds(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("A holistic view of your goals, subgoals, and suggested "
+                      "tasks \u2014 inferred from your Claude Code "
+                      "conversation history.", out)
+        self.assertIn("preserved beyond Claude\u2019s default 30-day history",
+                      out)
+        self.assertNotIn("Goals, subgoals, and suggested tasks inferred from "
+                         "your Claude Code history.", out)
+
     def test_the_patch_is_idempotent(self):
         self.assertTrue(self.patched_bundle(
             "out === window.__hcPromptUI.patchBundleSource(out);"))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class BriefingPanelTests(BridgeTestCase):
+    """Everything the briefing knows has to reach a panel that shows it."""
+
+    def sections(self, brief):
+        return json.loads(self.run_js(
+            "JSON.stringify(window.__hcPromptUI.briefingSections(%s));"
+            % json.dumps(brief)))
+
+    def test_open_questions_reach_the_blockers_panel(self):
+        got = self.sections({"sections": [
+            {"title": "PROBLEMS HIT BEFORE", "lines": ["  - the pty ate it"]},
+            {"title": "STILL OPEN", "lines": ["  - which port?"]},
+        ]})
+        self.assertEqual("the pty ate it\nwhich port?", got["hit"])
+
+    def test_open_questions_alone_still_fill_the_panel(self):
+        got = self.sections({"sections": [
+            {"title": "STILL OPEN", "lines": ["  - which port?"]}]})
+        self.assertEqual("which port?", got["hit"])
+
+    def test_the_settled_and_built_sections_stay_separate(self):
+        got = self.sections({"sections": [
+            {"title": "ALREADY DECIDED \u2014 settled", "lines": ["  - hooks"]},
+            {"title": "ALREADY BUILT", "lines": ["  - the launcher"]},
+        ]})
+        self.assertEqual("hooks", got["decided"])
+        self.assertEqual("the launcher", got["built"])
+
+    def test_an_empty_section_leaves_the_panel_empty(self):
+        self.assertEqual({}, self.sections({"sections": [
+            {"title": "STILL OPEN", "lines": []}]}))
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")

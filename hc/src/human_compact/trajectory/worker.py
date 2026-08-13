@@ -159,6 +159,36 @@ def _update_goals(sy, days, new_sids, log):
                                        resp.get("operations"), max_new_top_level=1)
                 for ch in changes:
                     log("worker: goal " + ch)
+        described = GS.backfill_descriptions(sy, trajdir, goals)
+        if described:
+            log(f"worker: described {len(described)} goals")
+        attached = attach_project_dirs(trajdir, goals)
+        if attached:
+            log(f"worker: attached a project directory to {attached} goals")
         GM.save(trajdir, goals, important)
     except Exception as e:                                   # noqa: BLE001
         log(f"worker: goal update failed (non-fatal): {e}")
+
+
+def attach_project_dirs(trajdir, goals):
+    """Give each goal the directory its own turns were typed in.
+
+    The evidence already records a working directory per turn, so CODE CONTEXT
+    does not have to start empty and wait to be filled in by hand. Only a
+    directory that still exists is attached, only to a goal with no sources of
+    its own, so this never overwrites the user's choices.
+    """
+    from . import agent_exec as AE
+    from pathlib import Path as _P
+    changed = 0
+    for goal in goals["goals"]:
+        if goal.get("sources"):
+            continue
+        try:
+            cwd = AE.goal_cwd(trajdir, goals, goal["id"])
+        except Exception:                                    # noqa: BLE001
+            cwd = None
+        if cwd and _P(cwd).is_dir():
+            goal["sources"] = [{"id": "s1", "type": "local", "label": cwd}]
+            changed += 1
+    return changed

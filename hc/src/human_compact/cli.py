@@ -694,6 +694,14 @@ def goals_main(argv=None):
         print(f"  inferring goal tree from {len(ext)} conversations…")
         goals = GM.sanitize(GS.rebuild(provider, ext,
                     corrections_text=_goal_corrections_text(trajdir)))
+        try:
+            described = GS.backfill_descriptions(provider, trajdir, goals)
+            if described:
+                print(f"  described {len(described)} goals from their evidence")
+        except Exception as exc:                             # noqa: BLE001
+            print(f"  descriptions skipped (non-fatal): {exc}")
+        if W.attach_project_dirs(trajdir, goals):
+            print("  attached each goal's project directory")
         GM.save(trajdir, goals, important)
     if args.describe or args.redescribe:
         if args.redescribe:

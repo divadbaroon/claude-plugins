@@ -501,6 +501,29 @@
     }
   }
 
+  function briefingSections(brief) {
+    // The briefing is written to be read as a prompt; the inspector shows the
+    // same material as panels. One section can feed one panel, and one panel
+    // can need two sections: BLOCKERS & OPEN QUESTIONS is blockers *and*
+    // whatever is still open.
+    var sections = {};
+    array((brief || {}).sections).forEach(function (section) {
+      var body = array(section.lines).map(function (line) {
+        return line.replace(/^ {2}/, "").replace(/^- /, "");
+      }).join("\n").trim();
+      var title = str(section.title);
+      if (!body) return;
+      if (title.indexOf("IN THEIR WORDS") >= 0) sections.said = body;
+      else if (title.indexOf("ALREADY DECIDED") === 0) sections.decided = body;
+      else if (title.indexOf("ALREADY BUILT") === 0) sections.built = body;
+      else if (title.indexOf("PROBLEMS HIT") === 0 ||
+               title.indexOf("STILL OPEN") === 0) {
+        sections.hit = sections.hit ? sections.hit + "\n" + body : body;
+      }
+    });
+    return sections;
+  }
+
   function loadDetail(goalId) {
     if (!goalId || details[goalId] || detailPending[goalId]) return;
     if (serverState.scope === "chat") return;
@@ -513,17 +536,7 @@
     };
     Promise.all([get("/api/briefing"), get("/api/review")]).then(function (both) {
       var brief = both[0] || {}, review = both[1] || {};
-      var sections = {};
-      array(brief.sections).forEach(function (section) {
-        var body = array(section.lines).map(function (line) {
-          return line.replace(/^ {2}/, "").replace(/^- /, "");
-        }).join("\n").trim();
-        var title = str(section.title);
-        if (title.indexOf("IN THEIR WORDS") >= 0) sections.said = body;
-        else if (title.indexOf("ALREADY DECIDED") === 0) sections.decided = body;
-        else if (title.indexOf("ALREADY BUILT") === 0) sections.built = body;
-        else if (title.indexOf("PROBLEMS HIT") === 0) sections.hit = body;
-      });
+      var sections = briefingSections(brief);
       details[goalId] = { sections: sections, opening: str(brief.opening),
                           cwd: str(brief.cwd), review: array(review.runs) };
       delete detailPending[goalId];
@@ -616,6 +629,8 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code conversation history."],
+      ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -862,6 +877,7 @@
     promptRows: promptRows,
     ask: ask,
     renderBanner: renderBanner,
+    briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; }
   };

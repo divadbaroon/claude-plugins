@@ -1,6 +1,7 @@
 """Goal inference: full-tree rebuild over cached extractions, plus incremental
 classification of each newly analyzed conversation into the existing tree."""
 import json
+from pathlib import Path
 
 REBUILD_PROMPT = """You will construct the FULL GOAL TREE for a user from
 structured extractions of their recent conversations. This is inference from
@@ -167,6 +168,30 @@ def describe(provider, goals, evidence_index, max_excerpts=6):
     return {gid: " ".join(str(text).split())[:600]
             for gid, text in proposed.items()
             if gid in blank_ids and isinstance(text, str) and text.strip()}
+
+
+def backfill_descriptions(provider, trajdir, goals):
+    """Describe every goal that still lacks one, from its own evidence.
+
+    A tree is inferred in two shapes — a full rebuild and per-conversation
+    classification — and neither produces descriptions, so the UI's OBJECTIVE
+    panel stayed empty for goals the vault could perfectly well describe.
+    Running this wherever the tree changes means a from-scratch analysis
+    arrives already described, with no manual `hc goals --describe` step.
+    """
+    import json as _j
+    if not any(not str(g.get("description") or "").strip()
+               for g in goals["goals"]):
+        return {}
+    try:
+        index = _j.loads((Path(trajdir) / "evidence_index.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    written = describe(provider, goals, index)
+    for goal in goals["goals"]:
+        if goal["id"] in written:
+            goal["description"] = written[goal["id"]]
+    return written
 
 
 def classify(provider, goals, extraction):
