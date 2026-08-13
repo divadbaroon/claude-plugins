@@ -631,6 +631,13 @@
     var parts = [
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code conversation history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
+      // Both subtitles were sized for the shorter copy they replaced, so the
+      // longer sentences wrapped mid-clause. Widen the two of them only —
+      // matched after the copy patches above, on the new text.
+      ['max-width:560px;text-wrap:pretty">A holistic view',
+       'max-width:740px;text-wrap:pretty">A holistic view'],
+      ['max-width:560px;text-wrap:pretty">Your Claude Code conversations',
+       'max-width:740px;text-wrap:pretty">Your Claude Code conversations'],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.

@@ -380,6 +380,14 @@ class NoInventedDataTests(BridgeTestCase):
         self.assertNotIn("Goals, subgoals, and suggested tasks inferred from "
                          "your Claude Code history.", out)
 
+    def test_the_subtitles_are_wide_enough_for_their_new_copy(self):
+        # The width was chosen for the shorter sentences these replaced.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("max-width:560px", out)
+        self.assertIn('max-width:740px;text-wrap:pretty">A holistic view', out)
+        self.assertIn('max-width:740px;text-wrap:pretty">Your Claude Code '
+                      'conversations', out)
+
     def test_the_patch_is_idempotent(self):
         self.assertTrue(self.patched_bundle(
             "out === window.__hcPromptUI.patchBundleSource(out);"))
