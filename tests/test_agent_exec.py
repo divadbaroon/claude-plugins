@@ -955,4 +955,5 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual("ollama", config["extract_provider"])
         self.assertEqual("ollama", config["synth_provider"])
         popen.assert_called_once()
-        self.assertIn("refresh", popen.call_args[0][0])
+        self.assertIn("analyze", popen.call_args[0][0])
+        self.assertNotIn("refresh", popen.call_args[0][0])

@@ -126,3 +126,54 @@ class FirstRunTests(unittest.TestCase):
                  if "GOALS NEEDING DESCRIPTIONS" in p]
         self.assertEqual(1, len(asked))
         self.assertIn("ship the goal ui", asked[0])
+
+
+class AnalysisEntryPointTests(unittest.TestCase):
+    """What the UI's analysis button runs must end with a goal tree.
+
+    `hc refresh` extracts and rebuilds the lens and stops there. Spawning it
+    for the button left a vault full of analyzed conversations and no goals,
+    which on screen is indistinguishable from a failed analysis.
+    """
+
+    def test_the_ui_spawns_the_command_that_builds_goals(self):
+        source = (ROOT / "hc" / "src" / "human_compact"
+                  / "trajectory" / "ui.py").read_text()
+        self.assertIn('"human_compact.cli", "analyze"', source)
+        self.assertNotIn('"human_compact.cli", "refresh"', source)
+
+    def test_analyze_runs_the_extraction_then_the_rebuild(self):
+        from human_compact import cli
+        order = []
+        with mock.patch.object(cli, "refresh_main",
+                               side_effect=lambda a: order.append(("refresh", a))), \
+             mock.patch.object(cli, "goals_main",
+                               side_effect=lambda a: order.append(("goals", a))), \
+             mock.patch("human_compact.trajectory.state.set_processing"), \
+             mock.patch("human_compact.trajectory.state.clear_processing"):
+            cli.analyze_main([])
+        self.assertEqual(["refresh", "goals"], [step for step, _ in order])
+        self.assertIn("--rebuild", order[1][1])
+        self.assertIn("--no-interact", order[1][1])
+
+    def test_the_goal_build_reports_itself_so_the_banner_stays_up(self):
+        from human_compact import cli
+        phases = []
+        with mock.patch.object(cli, "refresh_main"), \
+             mock.patch.object(cli, "goals_main"), \
+             mock.patch("human_compact.trajectory.state.set_processing",
+                        side_effect=lambda sid, phase="extracting": phases.append(phase)), \
+             mock.patch("human_compact.trajectory.state.clear_processing") as done:
+            cli.analyze_main([])
+        self.assertEqual(["synthesizing"], phases)
+        self.assertEqual(1, done.call_count)
+
+    def test_a_failed_rebuild_still_clears_the_running_marker(self):
+        from human_compact import cli
+        with mock.patch.object(cli, "refresh_main"), \
+             mock.patch.object(cli, "goals_main", side_effect=RuntimeError("no provider")), \
+             mock.patch("human_compact.trajectory.state.set_processing"), \
+             mock.patch("human_compact.trajectory.state.clear_processing") as done:
+            with self.assertRaises(RuntimeError):
+                cli.analyze_main([])
+        self.assertEqual(1, done.call_count)

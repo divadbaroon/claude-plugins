@@ -657,6 +657,32 @@ def refresh_main(argv=None):
     status_main()
 
 
+def analyze_main(argv=None):
+    """Everything the UI's analysis button promises, in one command.
+
+    `refresh` extracts conversations and rebuilds the lens; it has never built
+    the goal tree. Spawning it alone left a vault with 91 analyzed
+    conversations and no goals — indistinguishable, on screen, from an
+    analysis that silently failed.
+    """
+    import argparse
+    ap = argparse.ArgumentParser(prog="hc analyze",
+        description="Analyze the vaulted history and build the goal tree.")
+    ap.add_argument("--days", type=int, default=30)
+    ap.add_argument("--workers", type=int, default=4)
+    args = ap.parse_args(argv or [])
+    from .trajectory import state as ST
+    refresh_main(["--days", str(args.days), "--workers", str(args.workers)])
+    say("building your goal tree…")
+    # Keep the UI's banner up for this phase: the tree is the part the user is
+    # waiting for, and it is the longest silence in the whole run.
+    ST.set_processing(None, phase="synthesizing")
+    try:
+        goals_main(["--rebuild", "--days", str(args.days), "--no-interact"])
+    finally:
+        ST.clear_processing()
+
+
 def worker_main(argv=None):
     from .trajectory import worker
     worker.drain(log=print)
@@ -1380,6 +1406,8 @@ def hc_main():
         status_main(rest)
     elif cmd == "refresh":
         refresh_main(rest)
+    elif cmd == "analyze":
+        analyze_main(rest)
     elif cmd == "worker":
         worker_main(rest)
     else:

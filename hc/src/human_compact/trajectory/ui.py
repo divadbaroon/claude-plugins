@@ -225,7 +225,7 @@ def _spawn_analysis(provider, trajdir):
     log = Path(trajdir) / "analysis.log"
     with open(log, "ab", buffering=0) as stream:
         subprocess.Popen(
-            [sys.executable, "-m", "human_compact.cli", "refresh"],
+            [sys.executable, "-m", "human_compact.cli", "analyze"],
             stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
             close_fds=True, start_new_session=True)
 
