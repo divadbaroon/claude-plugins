@@ -19,6 +19,7 @@ HARNESS = r"""
 const fs = require("fs");
 const vm = require("vm");
 const store = {};
+const calls = [];
 const made = [];
 function El(tag) {
   this.tagName = tag; this.children = []; this.style = {}; this.value = "";
@@ -47,9 +48,13 @@ XHR.prototype.send = function () {
     : (process.env.HC_STATE || "{}");
 };
 const sandbox = {
-  console, document, XMLHttpRequest: XHR, made, require,
+  console, document, XMLHttpRequest: XHR, made, require, calls,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
-  fetch: () => Promise.reject(new Error("not used")),
+  fetch: (url, opts) => {
+    calls.push([url, opts && opts.body ? JSON.parse(opts.body) : null]);
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(
+      { ok: true, terminal: "Terminal", cwd: "/repo" }) });
+  },
   setInterval: () => 0, setTimeout: (f) => { if (f) f(); return 0; },
   clearTimeout() {}, navigator: {}, store
 };
@@ -145,11 +150,12 @@ class NodeMappingTests(BridgeTestCase):
         self.assertEqual(["design-notes.md"], [d["label"] for d in ctx["docs"]])
         self.assertEqual("Stand up the goal model.", ctx["objective"])
 
-    def test_a_goal_without_a_description_leaves_the_field_alone(self):
-        # Absent means "the artifact keeps its own copy", not "blank".
+    def test_a_goal_without_a_description_is_blank_not_borrowed(self):
+        # Leaving the field unset makes the artifact fall back to its own demo
+        # copy, which reads as this goal's objective. Blank is the honest value.
         state = json.loads(json.dumps(STATE))
         state["goals"][0]["description"] = ""
-        self.assertNotIn("objective", self.roots(state)[0]["ctx"])
+        self.assertEqual("", self.roots(state)[0]["ctx"]["objective"])
 
     def test_a_run_becomes_the_agent_panel(self):
         agent = self.roots()[0]["agent"]
@@ -340,3 +346,67 @@ class NoInventedDataTests(BridgeTestCase):
     def test_the_patch_is_idempotent(self):
         self.assertTrue(self.patched_bundle(
             "out === window.__hcPromptUI.patchBundleSource(out);"))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoSampleLeakageTests(BridgeTestCase):
+    """A goal the vault knows nothing about must show nothing, not a sample."""
+
+    def ctx_of(self, goal_id, state=None):
+        return self.run_js(
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            "function find(ns, id) { for (var i = 0; i < ns.length; i++) {"
+            "  if (ns[i].id === id) return ns[i];"
+            "  var f = find(ns[i].children || [], id); if (f) return f; } return null; }"
+            "find(roots, %s).ctx;" % (json.dumps(state or STATE), json.dumps(goal_id)))
+
+    def test_every_context_field_is_set_even_when_empty(self):
+        # The artifact substitutes its own demo copy for any field left null,
+        # which would attribute another goal's decisions to this one.
+        ctx = self.ctx_of("g1a")
+        for key in ("objective", "said", "decided", "built", "hit"):
+            self.assertIn(key, ctx, f"{key} must be set explicitly")
+            self.assertEqual("", ctx[key])
+
+    def test_a_known_goal_still_carries_its_own_text(self):
+        ctx = self.ctx_of("g1")
+        self.assertEqual("Stand up the goal model.", ctx["objective"])
+
+    def test_code_and_docs_are_always_arrays(self):
+        ctx = self.ctx_of("g1a")
+        self.assertEqual([], ctx["code"])
+        self.assertEqual([], ctx["docs"])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoSimulatedAgentTests(BridgeTestCase):
+    """The agent panel must reflect a real session, never imitate one."""
+
+    def test_the_fabricated_diff_stats_are_gone(self):
+        out = self.patched_bundle("out;")
+        # Added and removed line counts derived from the length of a filename.
+        self.assertNotIn("(p.length * 7) % 60", out)
+        self.assertNotIn("(p.length * 3) % 25", out)
+
+    def test_the_hardcoded_file_list_is_gone(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn("compact_focus/state.py", out)
+        self.assertNotIn("hooks/guard.sh", out)
+
+    def test_the_templated_result_summary_is_gone(self):
+        self.assertNotIn("summary: 'Implemented", self.patched_bundle("out;"))
+
+    def test_both_entry_points_start_a_real_session(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("window.__hcAgent.launch(id)", out)
+        self.assertIn("this.runAgent();", out)      # generate todos defers to it
+
+    def test_launching_posts_the_op_and_reports_where_it_opened(self):
+        posted = self.run_js(
+            "window.__hcAgent.launch('g1');"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 20; i += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return calls.filter(function (c) {"
+            "  return c[0] === '/api/op'; }); });")
+        self.assertEqual(1, len(posted), "exactly one launch")
+        self.assertEqual({"op": "launch_agent_run", "goal_id": "g1"}, posted[0][1])

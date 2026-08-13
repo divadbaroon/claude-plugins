@@ -246,13 +246,15 @@
       docs: sources.filter(function (s) { return s && s.type === "doc"; })
         .map(function (s) { return { id: s.id, type: "doc", label: str(s.label) }; })
     };
-    // Absent fields fall back to the artifact's own copy, so only set what the
-    // Vault actually knows about this goal.
-    if (str(goal && goal.description)) ctx.objective = goal.description;
+    // Every text field is set, including to "", because the artifact falls
+    // back to its own sample copy for anything left null — which would show a
+    // demo goal's decisions and blockers as if they were this goal's.
     var sections = (detail && detail.sections) || {};
-    ["said", "decided", "built", "hit"].forEach(function (key) {
-      if (sections[key]) ctx[key] = sections[key];
-    });
+    ctx.objective = str(goal && goal.description);
+    ctx.said = str(sections.said);
+    ctx.decided = str(sections.decided);
+    ctx.built = str(sections.built);
+    ctx.hit = str(sections.hit);
     return ctx;
   }
 
@@ -614,6 +616,11 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      // Its agent panel simulated a session: templated todos, a hardcoded file
+      // list, and diff stats computed from the length of each filename. Both
+      // entry points now start a real goal-bound session instead.
+      ["  genTodos() {\n    const id = this.state.selId; if (!id) return;\n    clearInterval(this._agT);\n    const todos = this.buildSteps(id).map(t => ({ t, s: 'todo' }));\n    this.set(s => ({ goals: this.up(s.goals, id, x => ({ ...x, agent: { status: 'planned', ts: Date.now(), todos } })) }), true);\n  }\n", "  genTodos() {\n    // A plan is what a real session produces; fabricating one from a template\n    // would put words in the agent's mouth. Launching is what produces it.\n    this.runAgent();\n  }\n"],
+      ["  runAgent() {\n    const id = this.state.selId; if (!id) return;\n    const promptText = this._draftEl ? this._draftEl.value : '';\n    this.recordPrompt(promptText);\n    const tr = this.path(this.state.goals, id);\n    const node = tr ? tr[tr.length - 1] : null;\n    const planned = (node && node.agent && node.agent.status === 'planned' && node.agent.todos && node.agent.todos.length) ? node.agent.todos.map(o => o.t) : null;\n    const AF = { 'Scan repo for related code': 'Scanning repo for related code\u2026', 'Draft the changes': 'Drafting the changes\u2026', 'Run tests and fix failures': 'Running tests and fixing failures\u2026', 'Summarize results': 'Summarizing results\u2026' };\n    const steps = planned || this.buildSteps(id);\n    const todos = steps.map((t, i) => ({ t, s: i === 0 ? 'doing' : 'todo', af: AF[t] || ('Working on: ' + t + '\u2026') }));\n    const slug = ((node && node.title) || 'goal').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 28);\n    const branch = 'agent/' + (slug || 'run');\n    const now = () => new Date().toLocaleTimeString('en-US', { hour12: false });\n    const log0 = [{ ts: now(), m: 'session started \u2014 branch ' + branch }, { ts: now(), m: 'task started: ' + todos[0].t }];\n    this.set(s => ({ goals: this.up(s.goals, id, x => ({ ...x, done: false, status: 'inprog', agent: { status: 'running', ts: Date.now(), todos, branch, prompt: promptText, lastFile: null, log: log0 } })) }), true);\n    clearInterval(this._agT);\n    const FILES = ['compact_focus/cli.py', 'compact_focus/state.py', 'hooks/guard.sh', 'ui/server.py', 'CHANGELOG.md'];\n    let ticks = 0;\n    this._agT = setInterval(() => {\n      if (++ticks > steps.length * 2 + 5) { clearInterval(this._agT); return; }\n      this.set(s => ({ goals: this.up(s.goals, id, x => {\n        if (!x.agent || x.agent.status !== 'running') return x;\n        const a = { ...x.agent, todos: (x.agent.todos || []).map(o => ({ ...o })), log: (x.agent.log || []).slice() };\n        const t2 = new Date().toLocaleTimeString('en-US', { hour12: false });\n        const i = a.todos.findIndex(o => o.s === 'doing');\n        if (ticks % 2 === 1 && i >= 0) {\n          const f = FILES[(ticks >> 1) % FILES.length];\n          a.lastFile = f;\n          a.edited = a.edited || [];\n          if (a.edited.indexOf(f) < 0) a.edited = a.edited.concat([f]);\n          a.log.push({ ts: t2, m: 'edited ' + f });\n          return { ...x, agent: a };\n        }\n        if (i >= 0) { a.todos[i].s = 'done'; a.log.push({ ts: t2, m: 'task completed: ' + a.todos[i].t }); }\n        const nx = a.todos.findIndex(o => o.s === 'todo');\n        if (nx >= 0) { a.todos[nx].s = 'doing'; a.log.push({ ts: t2, m: 'task started: ' + a.todos[nx].t }); return { ...x, agent: a }; }\n        a.status = 'done';\n        a.log.push({ ts: t2, m: 'run finished \u2014 ' + a.todos.length + ' tasks completed' });\n        const fl = (a.edited && a.edited.length ? a.edited : ['compact_focus/cli.py']).map(p => ({ path: p, plus: (p.length * 7) % 60 + 8, minus: (p.length * 3) % 25 + 2 }));\n        return { ...x, agent: a, artifact: { ts: Date.now(), branch: a.branch, status: 'pending', note: '', summary: 'Implemented \"' + (x.title || 'Untitled') + '\" on ' + a.branch + '. ' + a.todos.length + ' tasks completed; changes staged for review.', files: fl } };\n      }) }));\n    }, 1600);\n  }\n", "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
       // Its analysis screen animated random progress over a sample list for a
       // fixed ~30s. Replaced with what the vault actually reports.
       ["  startAnalysis() {\n    clearInterval(this._anT);\n    const n = this.CONVOS.length;\n    this.set(() => ({ page: 'convos', convSel: null, an: { phase: 'convs', total: n, prog: Array(n).fill(0) } }));\n    this._anT = setInterval(() => {\n      const a = this.state.an;\n      if (!a) { clearInterval(this._anT); return; }\n      // up to 5 concurrent, ~15s each\n      let active = 0;\n      const prog = a.prog.map(p => {\n        if (p >= 100) return p;\n        if (active >= 5) return p;\n        active++;\n        return Math.min(100, p + 0.9 + Math.random() * 1.0);\n      });\n      this.setState({ an: { ...a, prog } });\n      if (prog.every(p => p >= 100)) {\n        clearInterval(this._anT);\n        setTimeout(() => {\n          this.set(() => ({ page: 'goals', an: { phase: 'goals', total: 63, done: 0 } }));\n          this._anT = setInterval(() => {   // ~30s for 63 conversations\n            const g = this.state.an;\n            if (!g) { clearInterval(this._anT); return; }\n            const gd = Math.min(g.total, g.done + 1);\n            this.setState({ an: { ...g, done: gd } });\n            if (gd >= g.total) { clearInterval(this._anT); setTimeout(() => this.setState({ an: null }), 1200); }\n          }, 470);\n        }, 1000);\n      }\n    }, 200);\n  }\n", "  startAnalysis() {\n    clearInterval(this._anT);\n    // Real progress: the vault reports how many conversations it has and how\n    // many it has finished. Nothing here invents a duration.\n    const tick = () => {\n      const setup = window.__hcSetup;\n      if (!setup) { clearInterval(this._anT); this.setState({ an: null }); return; }\n      setup.progress().then((s) => {\n        if (!s) return;\n        const counts = s.conversations || { total: 0, analyzed: 0 };\n        const total = counts.total || (window.__hcConvos || []).length;\n        const done = Math.min(counts.analyzed || 0, total);\n        const prog = Array.from({ length: total }, (_, k) =>\n          k < done ? 100 : (k === done && s.running ? 50 : 0));\n        this.setState({ an: { phase: 'convs', total, prog, done } });\n        if (total && done >= total && !s.running) {\n          clearInterval(this._anT);\n          this.set(() => ({ page: 'goals', an: { phase: 'goals', total, done } }));\n          setTimeout(() => this.setState({ an: null }), 1500);\n        }\n      });\n    };\n    this.set(() => ({ page: 'convos', convSel: null,\n      an: { phase: 'convs', total: (window.__hcConvos || []).length, prog: [], done: 0 } }));\n    tick();\n    this._anT = setInterval(tick, 2000);\n  }\n"],
@@ -664,6 +671,52 @@
   }
 
   window.__hcAsk = ask;
+
+  window.__hcAgent = {
+    launch: function (goalId) {
+      return post({ op: "launch_agent_run", goal_id: goalId })
+        .then(function (body) {
+          if (!body || body.ok !== true) {
+            notify("Could not start a session: " +
+              ((body && body.error) || "the launcher refused") +
+              (body && body.command ? "\n\nRun it yourself:\n" + body.command : ""));
+            return body;
+          }
+          notify("Opened " + body.terminal + " in " + body.cwd +
+            "\n\nThe goal is typed into the composer there — press Enter to " +
+            "start. Its tasks will appear here as it creates them.");
+          return body;
+        });
+    }
+  };
+
+  function notify(message) {
+    ensureDialogStyles();
+    var overlay = document.createElement("div");
+    overlay.className = "hc-ask";
+    var box = document.createElement("div");
+    box.className = "hc-ask-box";
+    var body = document.createElement("div");
+    body.className = "hc-ask-title";
+    body.style.whiteSpace = "pre-wrap";
+    body.style.fontWeight = "400";
+    body.textContent = message;
+    var row = document.createElement("div");
+    row.className = "hc-ask-row";
+    var ok = document.createElement("button");
+    ok.className = "hc-ask-btn hc-ask-ok";
+    ok.textContent = "OK";
+    ok.onclick = function () {
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    };
+    overlay.onclick = function (e) { if (e.target === overlay) ok.onclick(); };
+    row.appendChild(ok);
+    box.appendChild(body);
+    box.appendChild(row);
+    overlay.appendChild(box);
+    (document.querySelector(".hc") || document.body).appendChild(overlay);
+    setTimeout(function () { ok.focus(); }, 0);
+  }
 
   // --- onboarding: the artifact asks, the vault answers -------------------
 
