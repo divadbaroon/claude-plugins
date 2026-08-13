@@ -30,6 +30,108 @@ def _toks(s):
             if w not in STOP and len(w) > 2}
 
 
+# Text this system generated and typed into a session on the user's behalf.
+# It is not something the user said, so it never counts as their intent.
+MACHINE_PROMPT_PREFIXES = ("Work on my Vault goal ",)
+
+
+def _machine_authored(text: str) -> bool:
+    stripped = str(text or "").lstrip()
+    return any(stripped.startswith(p) for p in MACHINE_PROMPT_PREFIXES)
+
+
+SOURCE_TYPES = ("github", "local", "doc")
+
+
+def source_type(label: str) -> str:
+    """Classify an attached source by what it plainly is."""
+    text = str(label or "").strip()
+    lowered = text.lower()
+    if "github.com" in lowered or re.fullmatch(r"[\w.-]+/[\w.-]+", text):
+        return "github"
+    if text.startswith(("/", "~", "./")) and not re.search(r"\.\w{1,5}$", text):
+        return "local"
+    if text.startswith(("http://", "https://")):
+        return "doc"
+    return "local" if text.startswith(("/", "~", "./")) else "doc"
+
+
+def normalize_sources(value):
+    """Accept plain strings or typed rows; always store typed rows."""
+    out, seen = [], set()
+    for entry in (value if isinstance(value, list) else [])[:20]:
+        if isinstance(entry, str):
+            entry = {"label": entry}
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get("label") or "").strip()[:300]
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        kind = entry.get("type")
+        if kind not in SOURCE_TYPES:
+            kind = source_type(label)
+        out.append({"id": str(entry.get("id") or f"s{len(out) + 1}")[:40],
+                    "type": kind, "label": label})
+    return out
+
+
+def evidence_prompts(trajdir: Path):
+    """The user's own turns, as assignable prompts for the global tree.
+
+    Chat scope keeps a prompts.json per session; the global tree never had an
+    equivalent, so its prompt panel had nothing to show. But the evidence index
+    already holds every turn with its role, and goals already cite those ids —
+    the human half of it *is* the prompt list. Newest last, so the UI's
+    recency ordering has something monotonic to sort on.
+    """
+    try:
+        idx = json.loads((trajdir / "evidence_index.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(idx, dict):
+        return []
+    rows = [
+        (str(record.get("date") or ""), str(turn_id), record)
+        for turn_id, record in idx.items()
+        if isinstance(record, dict) and record.get("role") == "user"
+        and isinstance(record.get("text"), str) and record["text"].strip()
+        and not _machine_authored(record["text"])
+    ]
+    rows.sort()
+    return [
+        {"id": turn_id, "role": "user", "text": record["text"],
+         "created_at": date or None, "ordinal": ordinal,
+         "session_id": record.get("session_id")}
+        for ordinal, (date, turn_id, record) in enumerate(rows, start=1)
+    ]
+
+
+def link_evidence_prompts(goals, prompts):
+    """Attach the prompts inference already cited as evidence for a goal.
+
+    A prompt's id *is* its evidence id, so a goal citing one has already been
+    judged to belong with it — linking costs no inference and invents no
+    association. Links the user removed stay removed: a detach is a decision,
+    not a gap to refill. The machine-made subset stays labelled so the UI can
+    distinguish it from what the user chose.
+    """
+    known = {p.get("id") for p in prompts}
+    for g in goals.get("goals", []):
+        if not isinstance(g, dict):
+            continue
+        detached = set(g.get("detached_prompt_ids") or [])
+        links = list(g.get("prompt_ids") or [])
+        automatic = set(g.get("auto_prompt_ids") or [])
+        for eid in g.get("evidence_ids") or []:
+            if eid in known and eid not in detached and eid not in links:
+                links.append(eid)
+                automatic.add(eid)
+        g["prompt_ids"] = links
+        g["auto_prompt_ids"] = [pid for pid in links if pid in automatic]
+    return goals
+
+
 def load(trajdir: Path):
     def j(name, default):
         try:
@@ -43,6 +145,7 @@ def load(trajdir: Path):
 def save(trajdir: Path, goals, important):
     root = trajdir.parent
     secure_dir(trajdir, root)
+    link_evidence_prompts(goals, evidence_prompts(trajdir))
     goals["generated_at"] = _now()
     for name, obj in (("goals.json", goals), ("important.json", important)):
         atomic_write_json(trajdir / name, obj, root=root)
@@ -53,6 +156,77 @@ def next_goal_id(goals):
     ns = [int(g["id"][1:]) for g in goals["goals"]
           if re.fullmatch(r"g\d+", g.get("id", ""))]
     return f"g{max(ns) + 1 if ns else 1}"
+
+
+def child_goal_id(goals, parent_id):
+    """A stable id under *parent_id*: g1a -> g1a1, g1a2, …"""
+    taken = {g.get("id") for g in goals["goals"]}
+    for n in range(1, 1000):
+        candidate = f"{parent_id}{n}"
+        if candidate not in taken:
+            return candidate
+    return next_goal_id(goals)
+
+
+def new_goal(gid, title, parent_id=None, **fields):
+    """One shape for every node, at every depth."""
+    goal = {"id": gid, "title": str(title or "Untitled")[:120],
+            "status": "active", "parent_goal_id": parent_id,
+            "evidence_ids": [], "todos": [], "important_item_ids": [],
+            "prompt_ids": [], "auto_prompt_ids": [], "detached_prompt_ids": [],
+            "description": "", "priority": "normal", "notes": "",
+            "sources": [], "opening": "",
+            "origin": "inferred", "updated_at": _now()}
+    goal.update(fields)
+    return goal
+
+
+def promote_todos(goals):
+    """Make every node in the tree the same kind of thing.
+
+    A goal, a subgoal and a next action are all goals — only their depth
+    differs. Todos used to be ``{text, done, evidence_ids}`` dicts nested
+    inside a goal, so they could not carry a status, a description, prompt
+    links or an execution run, and the UI had to special-case them at every
+    turn. Inference still finds it natural to emit todos, so this accepts them
+    as an input shape and converts them in place. Idempotent: a tree with no
+    todos passes through untouched.
+    """
+    for parent in list(goals.get("goals", [])):
+        todos = parent.get("todos") or []
+        if not isinstance(todos, list) or not todos:
+            parent["todos"] = []
+            continue
+        existing = {str(g.get("title") or ""): g for g in goals["goals"]
+                    if g.get("parent_goal_id") == parent.get("id")}
+        for todo in todos:
+            if not isinstance(todo, dict):
+                continue
+            title = str(todo.get("text") or "").strip()[:120]
+            if not title:
+                continue
+            done = bool(todo.get("done"))
+            evidence = [e for e in (todo.get("evidence_ids") or [])
+                        if isinstance(e, str)]
+            prior = existing.get(title)
+            if prior is not None:
+                # Promoted once already, then re-emitted by inference: keep the
+                # node the user may have edited and fold in any new evidence.
+                prior["evidence_ids"] = list(dict.fromkeys(
+                    list(prior.get("evidence_ids") or []) + evidence))
+                if done and prior.get("status") == "active":
+                    prior["status"] = "completed"
+                continue
+            child = new_goal(
+                child_goal_id(goals, parent.get("id") or "g"), title,
+                parent.get("id"),
+                status="completed" if done else "active",
+                evidence_ids=evidence,
+                origin=parent.get("origin", "inferred"))
+            goals["goals"].append(child)
+            existing[title] = child
+        parent["todos"] = []
+    return goals
 
 
 def by_id(goals, gid):
@@ -67,8 +241,12 @@ def depth(goals, gid, seen=None):
     return 1 + depth(goals, g["parent_goal_id"], seen | {gid})
 
 
+MAX_DEPTH = 4          # a next action is a goal, one level below its subgoal
+
+
 def sanitize(goals):
-    """Structural guardrails: parents must exist, depth<=3, statuses legal."""
+    """Structural guardrails: parents must exist, depth<=4, statuses legal."""
+    promote_todos(goals)
     ids = {g.get("id") for g in goals["goals"]}
     for g in goals["goals"]:
         if g.get("parent_goal_id") not in ids:
@@ -77,14 +255,18 @@ def sanitize(goals):
             g["status"] = "active"
         g.setdefault("evidence_ids", []); g.setdefault("todos", [])
         g.setdefault("important_item_ids", [])
-        raw_prompt_ids = g.setdefault("prompt_ids", [])
-        if not isinstance(raw_prompt_ids, list):
-            raw_prompt_ids = []
-        g["prompt_ids"] = list(dict.fromkeys(
-            pid for pid in raw_prompt_ids if isinstance(pid, str)))
+        for key in ("prompt_ids", "auto_prompt_ids", "detached_prompt_ids"):
+            raw = g.get(key)
+            g[key] = list(dict.fromkeys(
+                pid for pid in raw if isinstance(pid, str))) \
+                if isinstance(raw, list) else []
         g.setdefault("updated_at", _now())
         g.setdefault("priority", "normal"); g.setdefault("notes", "")
         g.setdefault("description", "")
+        g.setdefault("opening", "")
+        # Extra context the user chose to attach. Never inferred — a local
+        # path here widens what a launched session may read.
+        g["sources"] = normalize_sources(g.get("sources"))
         if g["priority"] not in ("urgent", "high", "normal"):
             g["priority"] = "normal"
     # A model response or imported browser snapshot can name valid parents and
@@ -101,7 +283,7 @@ def sanitize(goals):
             parent = by_id(goals, parent_id)
             parent_id = parent.get("parent_goal_id") if parent else None
     for g in goals["goals"]:
-        if depth(goals, g["id"]) > 3:
+        if depth(goals, g["id"]) > MAX_DEPTH:
             g["parent_goal_id"] = None
     return goals
 
@@ -119,16 +301,26 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
             if new:
                 g["updated_at"] = _now(); changes.append(f"evidence → {g['title'][:40]}")
         elif op == "add_todo" and g:
-            g["todos"].append({"text": o.get("text", ""), "done": False,
-                               "evidence_ids": o.get("evidence_ids", [])})
-            g["updated_at"] = _now(); changes.append(f"todo + {o.get('text','')[:44]}")
+            # A next action is a goal one level down, not a second data type.
+            text = str(o.get("text") or "").strip()[:120]
+            if text and not any(
+                    c.get("title") == text and c.get("parent_goal_id") == g["id"]
+                    for c in goals["goals"]):
+                goals["goals"].append(new_goal(
+                    child_goal_id(goals, g["id"]), text, g["id"],
+                    evidence_ids=[e for e in o.get("evidence_ids", [])
+                                  if isinstance(e, str)]))
+                g["updated_at"] = _now()
+                changes.append(f"goal + {text[:44]}")
         elif op == "complete_todo" and g:
             tt = _toks(o.get("text_match", o.get("text", "")))
-            for t in g["todos"]:
-                if tt and tt <= _toks(t["text"]) | tt & _toks(t["text"]) and \
-                   len(tt & _toks(t["text"])) / max(1, len(tt)) >= 0.5 and not t["done"]:
-                    t["done"] = True; g["updated_at"] = _now()
-                    changes.append(f"todo ✓ {t['text'][:44]}"); break
+            for c in goals["goals"]:
+                if c.get("parent_goal_id") != g["id"] or c["status"] == "completed":
+                    continue
+                ct = _toks(c["title"])
+                if tt and len(tt & ct) / max(1, len(tt)) >= 0.5:
+                    c["status"] = "completed"; c["updated_at"] = _now()
+                    changes.append(f"✓ {c['title'][:44]}"); break
         elif op == "new_goal":
             parent_id = o.get("parent_goal_id")
             if parent_id and not by_id(goals, parent_id):
@@ -141,18 +333,11 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                     continue
             gid = next_goal_id(goals)
             title = str(o.get("title") or "Untitled goal")[:120]
-            goals["goals"].append({
-                "id": gid, "title": title, "status": "active",
-                "parent_goal_id": parent_id,
-                "evidence_ids": o.get("evidence_ids", []),
-                "todos": [{"text": str(t.get("text") or "")[:160],
-                           "done": bool(t.get("done")),
-                           "evidence_ids": t.get("evidence_ids", [])}
-                          for t in o.get("todos", []) if isinstance(t, dict)],
-                "important_item_ids": [], "prompt_ids": [],
-                "description": str(o.get("description") or "")[:600],
-                "priority": "normal", "notes": "", "origin": "inferred",
-                "updated_at": _now()})
+            goals["goals"].append(new_goal(
+                gid, title, parent_id,
+                evidence_ids=o.get("evidence_ids", []),
+                todos=[t for t in o.get("todos", []) if isinstance(t, dict)],
+                description=str(o.get("description") or "")[:600]))
             sanitize(goals)
             changes.append(f"goal + {title[:44]}")
         elif op == "set_status" and g and o.get("status") in ("active", "in_progress", "completed", "abandoned"):
@@ -172,7 +357,6 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
             if src and dst and src is not dst:
                 dst["evidence_ids"] += [e for e in src["evidence_ids"]
                                         if e not in dst["evidence_ids"]]
-                dst["todos"] += src["todos"]
                 dst["important_item_ids"] += src["important_item_ids"]
                 dst["prompt_ids"] += [pid for pid in src.get("prompt_ids", [])
                                       if pid not in dst["prompt_ids"]]
@@ -184,14 +368,10 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
         elif op == "demote_to_todo" and g:
             parent = by_id(goals, o.get("parent_goal_id", "")) or \
                      by_id(goals, g.get("parent_goal_id", ""))
-            if parent:
-                parent["todos"].append({"text": g["title"], "done": g["status"] == "completed",
-                                        "evidence_ids": g["evidence_ids"][:4]})
-                for ch in goals["goals"]:
-                    if ch.get("parent_goal_id") == g["id"]:
-                        ch["parent_goal_id"] = parent["id"]
-                goals["goals"].remove(g); parent["updated_at"] = _now()
-                changes.append(f"demoted {g['title'][:34]} to todo")
+            if parent and parent is not g:
+                g["parent_goal_id"] = parent["id"]
+                g["updated_at"] = parent["updated_at"] = _now()
+                changes.append(f"moved {g['title'][:34]} under {parent['title'][:30]}")
         elif op == "attach_important":
             it = next((i for i in important["items"] if i["id"] == o.get("item_id")), None)
             tgt = by_id(goals, o.get("goal_id", ""))
@@ -212,7 +392,9 @@ def mark_important(trajdir, goals, important, text, session_id=None, turn_id=Non
         best, score = None, 0.0
         tt = _toks(text)
         for g in goals["goals"]:
-            gt = _toks(g["title"]) | set().union(*[_toks(t["text"]) for t in g["todos"]] or [set()])
+            kids = [c["title"] for c in goals["goals"]
+                    if c.get("parent_goal_id") == g["id"]]
+            gt = _toks(" ".join([g["title"]] + kids))
             s = len(tt & gt) / max(1, len(tt))
             if s > score:
                 best, score = g, s
@@ -254,23 +436,14 @@ def render(goals, important, show_all=False):
              n_of({"kind": "goal", "obj": g}) + dim(f" {g['id']}"))
         child_prefix = prefix + ("" if root else ("   " if last else "│  "))
         rows = []
-        for t in g["todos"]:
-            if t["done"] and not show_all and len(g["todos"]) > 4:
-                continue
-            rows.append(("todo", t))
         for iid in g["important_item_ids"]:
             if iid in items:
                 rows.append(("imp", items[iid]))
         kids = children(g["id"])
         for i, (kind, obj) in enumerate(rows):
             elbow = "└─ " if (i == len(rows) - 1 and not kids) else "├─ "
-            if kind == "todo":
-                mark = green("✓") if obj["done"] else cyan("→")
-                line(child_prefix + elbow, f"{mark} {obj['text']} " +
-                     n_of({"kind": "todo", "obj": obj, "goal": g}))
-            else:
-                line(child_prefix + elbow, star("★ ") + obj["text"][:70] + " " +
-                     n_of({"kind": "important", "obj": obj}))
+            line(child_prefix + elbow, star("★ ") + obj["text"][:70] + " " +
+                 n_of({"kind": "important", "obj": obj}))
         for i, k in enumerate(kids):
             emit(k, child_prefix, i == len(kids) - 1)
 
@@ -299,9 +472,6 @@ def write_goal_context(trajdir: Path, goals, important):
     items = {i["id"]: i for i in important["items"]}
     def emit(g, ind):
         lines.append(f"{'  ' * ind}- {g['title']} [" + g["status"].replace("_", " ") + "]")
-        for t in g["todos"]:
-            if not t["done"]:
-                lines.append(f"{'  ' * (ind + 1)}- TODO: {t['text']}")
         for iid in g["important_item_ids"][:3]:
             if iid in items:
                 lines.append(f"{'  ' * (ind + 1)}- IMPORTANT: {items[iid]['text'][:120]}")

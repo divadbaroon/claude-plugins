@@ -667,6 +667,10 @@ def goals_main(argv=None):
     ap = argparse.ArgumentParser(prog="hc goals",
         description="Your goal tree, inferred from your work. Correct it in plain language.")
     ap.add_argument("--rebuild", action="store_true", help="re-infer the full tree")
+    ap.add_argument("--describe", action="store_true",
+                    help="fill in missing goal descriptions, changing nothing else")
+    ap.add_argument("--redescribe", metavar="IDS",
+                    help="clear these goals' descriptions first (comma-separated)")
     ap.add_argument("--all", dest="show_all", action="store_true",
                     help="include completed/abandoned")
     ap.add_argument("--days", type=int, default=30)
@@ -691,6 +695,34 @@ def goals_main(argv=None):
         goals = GM.sanitize(GS.rebuild(provider, ext,
                     corrections_text=_goal_corrections_text(trajdir)))
         GM.save(trajdir, goals, important)
+    if args.describe or args.redescribe:
+        if args.redescribe:
+            wanted = {gid.strip() for gid in args.redescribe.split(",") if gid.strip()}
+            for g in goals["goals"]:
+                if g["id"] in wanted:
+                    g["description"] = ""
+        blanks = [g for g in goals["goals"]
+                  if not str(g.get("description") or "").strip()]
+        if not blanks:
+            print("  every goal already has a description")
+        else:
+            print(f"  describing {len(blanks)} goals from their own evidence…")
+            try:
+                idx = _j.loads((trajdir / "evidence_index.json").read_text())
+            except (OSError, ValueError):
+                idx = {}
+            written = GS.describe(provider, goals, idx)
+            for g in goals["goals"]:
+                if g["id"] in written:
+                    g["description"] = written[g["id"]]
+                    g["updated_at"] = GM._now()
+            GM.save(trajdir, goals, important)
+            for gid, text in written.items():
+                print(f"    {gid}: {text[:72]}")
+            missing = [g["id"] for g in blanks if g["id"] not in written]
+            if missing:
+                print(f"  left empty (evidence did not support one): "
+                      f"{', '.join(missing)}")
     _, _, idx = L.load(trajdir)
     itemmap = GM.render(goals, important, show_all=args.show_all)
     if args.no_interact:
@@ -843,9 +875,108 @@ def ui_main(argv=None):
         description="Open the local goal-state browser.")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--no-replace", action="store_true",
+                    help="leave any server already running in place")
     args = ap.parse_args(argv or [])
     from .trajectory import ui
-    ui.run(port=args.port, open_browser=not args.no_open)
+    ui.run(port=args.port, open_browser=not args.no_open,
+           replace=not args.no_replace)
+
+
+def _resolve_work_goal(goals, wanted):
+    """Accept a goal id, or an unambiguous case-insensitive title fragment."""
+    from .trajectory import goals as GM
+    exact = GM.by_id(goals, wanted)
+    if exact:
+        return exact, []
+    needle = wanted.strip().lower()
+    matches = [g for g in goals["goals"] if needle in g.get("title", "").lower()]
+    if len(matches) == 1:
+        return matches[0], []
+    return None, matches
+
+
+def work_main(argv=None):
+    """Start Claude on one Vault goal, with that goal bound to the session."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="hc work",
+        description="Launch Claude Code to work on a Vault goal or subgoal.")
+    ap.add_argument("goal", nargs="?", help="goal id (g3) or title fragment")
+    ap.add_argument("--list", action="store_true",
+                    help="list goals you can work on")
+    ap.add_argument("--print-context", action="store_true",
+                    help="print the goal briefing this session would receive")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="bind nothing and print the launch command")
+    ap.add_argument("--start", action="store_true",
+                    help="open the session on the goal instead of an empty prompt")
+    ap.epilog = "anything after `--` is passed straight through to claude"
+    # argparse.REMAINDER would swallow `hc work g2 --dry-run`, so split on the
+    # explicit passthrough marker instead.
+    argv = list(argv or [])
+    passthrough = []
+    if "--" in argv:
+        marker = argv.index("--")
+        argv, passthrough = argv[:marker], argv[marker + 1:]
+    args = ap.parse_args(argv)
+    from .trajectory import agent_exec as AE, goals as GM, state
+    trajdir = state.trajdir()
+    goals, _ = GM.load(trajdir)
+    GM.sanitize(goals)
+
+    if args.list or not args.goal:
+        active = [g for g in goals["goals"] if g["status"] in ("active", "in_progress")]
+        if not active:
+            print("no active goals yet — run `hc goals` or `hc ui` first")
+            return 0
+        print("\n  goals you can work on:\n")
+        for g in active:
+            parent = GM.by_id(goals, g.get("parent_goal_id") or "")
+            trail = f"  ({parent['title'][:34]})" if parent else ""
+            print(f"  {g['id']:>4}  {g['title'][:56]}{trail}")
+        print("\n  hc work <id>\n")
+        return 0
+
+    goal, near = _resolve_work_goal(goals, args.goal)
+    if goal is None:
+        if near:
+            print(f"'{args.goal}' matches {len(near)} goals:")
+            for g in near[:8]:
+                print(f"  {g['id']:>4}  {g['title'][:60]}")
+        else:
+            print(f"no goal matches '{args.goal}' — try `hc work --list`")
+        return 2
+
+    if args.print_context:
+        print(AE.goal_context(trajdir, goals, goal["id"]))
+        return 0
+
+    directories, _references = AE.goal_sources(goals, goal["id"])
+    for directory in directories:
+        passthrough = passthrough + ["--add-dir", directory]
+    if args.start:
+        opening = AE.launch_prompt(goals, goal["id"])
+        if opening:
+            passthrough = passthrough + [opening]
+    claude = os.environ.get("HC_CLAUDE_BIN") or shutil.which("claude")
+    if args.dry_run or not claude:
+        if not claude and not args.dry_run:
+            print("could not find the `claude` CLI on PATH "
+                  "(set HC_CLAUDE_BIN to override)", file=sys.stderr)
+        print(f"{AE.GOAL_ENV}={goal['id']} "
+              f"{claude or 'claude'} {' '.join(passthrough)}".strip())
+        return 0 if args.dry_run else 1
+
+    print(f"\n  working on {goal['id']}: {goal['title'][:60]}")
+    print("  Claude's execution plan will appear on this goal in `hc ui`\n",
+          flush=True)
+    env = os.environ.copy()
+    # The hooks Claude spawns inherit this, which is what binds the session it
+    # is about to create to this goal. A stale claim would bind the wrong one.
+    env[AE.GOAL_ENV] = goal["id"]
+    AE.clear_claim(trajdir)
+    os.execvpe(claude, [claude] + passthrough, env)
+    return 0
 
 
 def _request_chat_refresh(session_id):
@@ -881,6 +1012,15 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             }, stdout)
             stdout.write("\n")
         return 0
+
+    # Claude's live task list for a Vault goal is execution state, not goal
+    # state, so it is observed into its own store and never edits goals.json.
+    run = None
+    try:
+        from .trajectory import agent_exec as AE
+        run = AE.observe_hook(payload)
+    except Exception:  # noqa: BLE001 - a hook may never block Claude
+        run = None
 
     if event == "UserPromptExpansion":
         # Launch from the hook rather than a skill `!` shell expansion. This
@@ -924,6 +1064,16 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             context = context_path.read_text(encoding="utf-8")[:8000]
         except OSError:
             context = ""
+        if run is not None and event == "SessionStart":
+            try:
+                from .trajectory import goals as GM, state as ST
+                trajdir = ST.trajdir()
+                tree = GM.sanitize(GM.load(trajdir)[0])
+                briefing = AE.goal_context(trajdir, tree, run["vault_goal_id"])
+            except Exception:  # noqa: BLE001 - context is best-effort
+                briefing = ""
+            if briefing.strip():
+                context = (briefing + "\n" + context)[:12000]
         if context.strip():
             json.dump({
                 "hookSpecificOutput": {
@@ -1176,6 +1326,7 @@ def hc_main():
     if not args or args[0] in ("-h", "--help"):
         print("usage: hc <command>\n\n"
               "  goals       your goal tree + important items (primary)\n"
+              "  work        start Claude working on one goal\n"
               "  ui          goal tree in the browser (localhost)\n"
               "  chat-ui     goal tree for one Claude chat\n"
               "  mark        mark something important — never lose it\n"
@@ -1201,6 +1352,8 @@ def hc_main():
         lens_main(rest)
     elif cmd == "goals":
         goals_main(rest)
+    elif cmd == "work":
+        raise SystemExit(work_main(rest) or 0)
     elif cmd == "ui":
         ui_main(rest)
     elif cmd == "chat-ui":

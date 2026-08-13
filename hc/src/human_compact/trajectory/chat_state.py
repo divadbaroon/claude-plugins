@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
+from .goals import link_evidence_prompts, promote_todos  # noqa: F401
 from .secure_io import secure_dir
 
 
@@ -1097,10 +1098,14 @@ def request_analysis(
 
 
 def _ensure_prompt_ids(goals: Dict[str, Any]) -> Dict[str, Any]:
+    # Chat goals are the same model: a next action is a goal one level down.
+    promote_todos(goals)
     for goal in goals.get("goals", []):
-        if isinstance(goal, dict):
-            goal.setdefault("prompt_ids", [])
-            goal["prompt_ids"] = list(dict.fromkeys(goal["prompt_ids"]))
+        if not isinstance(goal, dict):
+            continue
+        for key in ("prompt_ids", "auto_prompt_ids", "detached_prompt_ids"):
+            value = goal.get(key)
+            goal[key] = list(dict.fromkeys(value)) if isinstance(value, list) else []
     return goals
 
 
@@ -1239,12 +1244,11 @@ def save_goals(
             current_goals, current_important
         ):
             return False
-        goals = _ensure_prompt_ids(goals)
+        prompts = load_prompts(session_id, root)
+        goals = link_evidence_prompts(_ensure_prompt_ids(goals), prompts)
         goals["generated_at"] = _now()
         _atomic_json(p.goals, goals)
         _atomic_json(p.important, important)
-        text = _goal_context_text(
-            session_id, goals, important, load_prompts(session_id, root)
-        )
+        text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))
         return True

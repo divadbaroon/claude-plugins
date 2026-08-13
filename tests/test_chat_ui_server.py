@@ -152,10 +152,13 @@ class ChatUiServerTests(unittest.TestCase):
             self.assertEqual(["bp"], [p["id"] for p in state_b["prompts"]])
             self.assertEqual("idle", state_a["analyzer"]["status"])
             self.assertIsInstance(state_a["revision"], str)
+            health = get_json(url_a + "/api/health")
             self.assertEqual(
                 {"ok": True, "scope": "chat", "session_id": "chat-a"},
-                get_json(url_a + "/api/health"),
+                {k: health[k] for k in ("ok", "scope", "session_id")},
             )
+            # Reported so a launcher can tell a stale server from a current one.
+            self.assertIsInstance(health["version"], str)
 
             self.assertEqual(
                 {"ok": True},

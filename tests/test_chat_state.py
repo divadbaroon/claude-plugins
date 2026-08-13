@@ -553,6 +553,63 @@ class ChatStateTests(unittest.TestCase):
         self.assertEqual(1, state["last_analyzed_ordinal"])
         self.assertIsNone(state["error"])
 
+    def _chat_with_prompts(self):
+        write_jsonl(self.transcript, [
+            user_record("wire the goal to the task list", uuid="u1", prompt_id="p1"),
+            user_record("unrelated aside", uuid="u2", prompt_id="p2"),
+        ])
+        CS.ingest_transcript(SID, self.transcript, root=self.base)
+        return [p["id"] for p in CS.load_prompts(SID, self.base)]
+
+    def test_prompts_cited_as_evidence_attach_to_their_goal(self):
+        first, second = self._chat_with_prompts()
+        CS.save_goals(SID, {"version": 1, "goals": [
+            {"id": "g1", "title": "Connect the goal", "evidence_ids": [first],
+             "todos": []}]}, {"items": []}, self.base)
+        goal = CS.load_goals(SID, self.base)[0]["goals"][0]
+        self.assertEqual([first], goal["prompt_ids"])
+        self.assertEqual([first], goal["auto_prompt_ids"])
+        self.assertNotIn(second, goal["prompt_ids"])
+
+    def test_evidence_that_is_not_a_prompt_never_becomes_a_link(self):
+        self._chat_with_prompts()
+        CS.save_goals(SID, {"version": 1, "goals": [
+            {"id": "g1", "title": "Connect the goal", "todos": [],
+             "evidence_ids": ["tool:abc", "result:def", "prompt:not-in-chat"]}]},
+            {"items": []}, self.base)
+        goal = CS.load_goals(SID, self.base)[0]["goals"][0]
+        self.assertEqual([], goal["prompt_ids"])
+
+    def test_a_detached_prompt_is_not_re_linked_by_later_analysis(self):
+        first, _ = self._chat_with_prompts()
+        base = {"id": "g1", "title": "Connect the goal", "todos": [],
+                "evidence_ids": [first]}
+        CS.save_goals(SID, {"version": 1, "goals": [dict(base)]},
+                      {"items": []}, self.base)
+
+        goals, important = CS.load_goals(SID, self.base)
+        goal = goals["goals"][0]
+        goal["prompt_ids"] = []
+        goal["auto_prompt_ids"] = []
+        goal["detached_prompt_ids"] = [first]     # what the UI records on detach
+        CS.save_goals(SID, goals, important, self.base)
+
+        # The analyzer keeps citing the same evidence on every later pass.
+        goals, important = CS.load_goals(SID, self.base)
+        goals["goals"][0]["evidence_ids"] = [first, "tool:xyz"]
+        CS.save_goals(SID, goals, important, self.base)
+        self.assertEqual([], CS.load_goals(SID, self.base)[0]["goals"][0]["prompt_ids"])
+
+    def test_a_user_link_survives_and_is_not_labelled_automatic(self):
+        first, second = self._chat_with_prompts()
+        CS.save_goals(SID, {"version": 1, "goals": [
+            {"id": "g1", "title": "Connect the goal", "todos": [],
+             "evidence_ids": [first], "prompt_ids": [second]}]},
+            {"items": []}, self.base)
+        goal = CS.load_goals(SID, self.base)[0]["goals"][0]
+        self.assertEqual([second, first], goal["prompt_ids"])
+        self.assertEqual([first], goal["auto_prompt_ids"])
+
     def test_session_id_rejects_traversal(self):
         for bad in ("", "../escape", "a/b", ".", " space", "x" * 201):
             with self.subTest(bad=bad), self.assertRaises(ValueError):

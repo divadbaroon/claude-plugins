@@ -330,7 +330,11 @@ def handle_hook(payload: Dict, output=None) -> None:
             })
         _snapshot(transcript, base / "conversation.jsonl", event)
         goal_context = root / "trajectory" / "goal_context.md"
-        if goal_context.is_file():
+        # A session launched against one goal gets a briefing scoped to it from
+        # the chat hook. Adding the whole tree on top would spend most of the
+        # budget on unrelated goals and invite the session to drift into them.
+        bound = bool(os.environ.get("HC_VAULT_GOAL_ID"))
+        if goal_context.is_file() and not bound:
             response = {"hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": goal_context.read_text(),

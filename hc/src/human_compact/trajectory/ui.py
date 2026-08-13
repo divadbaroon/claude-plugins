@@ -14,11 +14,118 @@ from http.server import ThreadingHTTPServer as _ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
-from . import chat_state as CS, goals as GM, state
+from . import agent_exec as AE, chat_state as CS, goals as GM, state
 
 
 DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
+SERVER_REGISTRY = "server.json"
+
+
+def _version():
+    try:
+        from importlib.metadata import version
+        return version("human-compact")
+    except Exception:                     # noqa: BLE001 - a label, never logic
+        return "unknown"
+
+
+def _registry_path(trajdir):
+    return Path(trajdir) / SERVER_REGISTRY
+
+
+def _read_registry(trajdir):
+    try:
+        value = json.loads(_registry_path(trajdir).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _write_registry(trajdir, url):
+    from .secure_io import atomic_write_json
+    atomic_write_json(_registry_path(trajdir), {
+        "schema_version": 1, "scope": "global", "pid": os.getpid(),
+        "url": url, "version": _version(), "started_at": time.time(),
+    }, root=Path(trajdir).parent)
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _server_identity(record):
+    """Confirm the recorded pid really is our server before signalling it.
+
+    A pid outlives its process and gets recycled, so aliveness alone is not
+    identity. Only a loopback server that answers as this scope is ours to
+    stop; anything else is left strictly alone.
+    """
+    import http.client
+    from urllib.parse import urlparse
+    if not isinstance(record, dict) or not _pid_alive(record.get("pid")):
+        return None
+    url = record.get("url")
+    if not isinstance(url, str):
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
+        return None
+    connection = None
+    try:
+        # Speak HTTP directly to loopback: urllib would inherit system proxy
+        # settings, and this probe must never leave the machine.
+        connection = http.client.HTTPConnection("127.0.0.1", parsed.port,
+                                                timeout=0.5)
+        connection.request("GET", "/api/health", headers={"Host": parsed.netloc})
+        response = connection.getresponse()
+        body = json.loads(response.read())
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
+        return None
+    finally:
+        if connection is not None:
+            connection.close()
+    if not (isinstance(body, dict) and response.status == 200
+            and body.get("ok") is True and body.get("scope") == "global"):
+        return None
+    return {"pid": int(record["pid"]), "url": url,
+            "version": body.get("version") or record.get("version")}
+
+
+def stop_existing(trajdir, timeout=6.0):
+    """Stop the global server this trajdir already owns; return what it was.
+
+    Without this, every launch scanned upward for a free port and left the
+    previous one serving whatever code it started with — a browser tab could
+    sit on a months-old build and look like a missing feature.
+    """
+    import signal
+    current = _server_identity(_read_registry(trajdir))
+    if current is None:
+        _registry_path(trajdir).unlink(missing_ok=True)
+        return None
+    try:
+        os.kill(current["pid"], signal.SIGTERM)
+    except OSError:
+        return None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(current["pid"]):
+            break
+        time.sleep(0.05)
+    else:
+        try:
+            os.kill(current["pid"], signal.SIGKILL)
+        except OSError:
+            pass
+    _registry_path(trajdir).unlink(missing_ok=True)
+    return current
 
 
 class ThreadingHTTPServer(_ThreadingHTTPServer):
@@ -75,21 +182,17 @@ def _save_goals(trajdir, goals, important, chat_scoped):
 
 
 def _load_prompts(trajdir, chat_scoped=False):
-    """Read assignable human prompts from this chat only.
+    """Read assignable human prompts for this scope.
 
-    Accept the early list-shaped store defensively; the durable store is
-    ``{"prompts": [...]}``. Malformed/incomplete rows never reach the UI.
+    Chat scope has a per-session prompt store; the global tree derives its
+    prompts from the evidence index, whose user turns are the same records
+    goals already cite. Malformed/incomplete rows never reach the UI.
     """
     if chat_scoped:
         session_id, root = _chat_identity(trajdir)
         rows = CS.load_prompts(session_id, root)
     else:
-        try:
-            raw = json.loads((trajdir / "prompts.json").read_text())
-        except (OSError, ValueError, TypeError):
-            return []
-        rows = raw if isinstance(raw, list) else raw.get("prompts", []) \
-            if isinstance(raw, dict) else []
+        rows = GM.evidence_prompts(trajdir)
     out, seen = [], set()
     for prompt in rows:
         if not (isinstance(prompt, dict) and prompt.get("role") == "user"
@@ -100,6 +203,15 @@ def _load_prompts(trajdir, chat_scoped=False):
         seen.add(prompt["id"])
         out.append(prompt)
     return out
+
+
+def _configured_provider(trajdir):
+    """Which analysis provider this vault uses, for the artifact's setup state."""
+    try:
+        config = json.loads((Path(trajdir) / "config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return config.get("synth_provider") or config.get("extract_provider")
 
 
 def _goal_revision(goals, important):
@@ -138,11 +250,19 @@ def _payload(trajdir=None, chat_scoped=None):
         if chat_scoped:
             session_id, root = _chat_identity(trajdir)
             analyzer = CS.get_analyzer_state(session_id, root)
+        # Agent execution state is scoped to the goal tree it was launched
+        # against; chat-scoped goal ids live in a different namespace.
+        runs, claim = ({}, None) if chat_scoped else (
+            AE.plans(trajdir), AE.pending_claim(trajdir))
         return {"goals": goals["goals"], "items": important["items"],
                 "prompts": _load_prompts(trajdir, chat_scoped),
                 "generated_at": goals.get("generated_at", ""),
                 "sessions": ana.get("sessions_analyzed"),
                 "analyzer": analyzer,
+                "agent_runs": runs,
+                "agent_claim": claim,
+                "scope": "chat" if chat_scoped else "global",
+                "provider": _configured_provider(trajdir),
                 "revision": _goal_revision(goals, important)}
 
 
@@ -154,6 +274,40 @@ def _apply(op, trajdir=None, chat_scoped=None):
         GM.sanitize(goals)
         kind = op.get("op")
         g = GM.by_id(goals, op.get("goal_id", ""))
+        # Execution-state ops touch the agent-run store only: choosing to work
+        # on a goal must not rewrite the goal itself.
+        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run"):
+            if chat_scoped:
+                return {"ok": False, "error": "agent runs attach to Vault goals"}
+            if kind == "cancel_agent_run":
+                AE.clear_claim(trajdir)
+                return {"ok": True}
+            if not g:
+                return {"ok": False, "error": "goal not found"}
+            if kind == "start_agent_run":
+                return {"ok": True, "command": f"hc work {g['id']}",
+                        "claim": AE.arm(trajdir, g["id"], g.get("title", ""))}
+            # Open a real interactive session in the goal's own project, with
+            # the goal as its opening message. Nothing runs unattended.
+            cwd = AE.goal_cwd(trajdir, goals, g["id"])
+            if not cwd:
+                return {"ok": False, "error":
+                        "no project directory is recorded for this goal yet"}
+            # No --start: the session opens with an empty composer and the
+            # launcher types the goal into it, leaving the Enter to the user.
+            command = ["hc", "work", g["id"]]
+            prompt = AE.launch_prompt(goals, g["id"])
+            try:
+                script = AE.write_launch_script(
+                    trajdir, g["id"], cwd, command, prompt)
+                app = AE.open_terminal(script)
+            except (OSError, RuntimeError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)[:200],
+                        "command": f"cd {cwd} && hc work {g['id']} --start"}
+
+            AE.clear_claim(trajdir)
+            return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
+                    "command": f"cd {cwd} && hc work {g['id']} --start"}
         if kind == "rename_goal" and g and op.get("title", "").strip():
             g["title"] = op["title"].strip()[:120]
         elif kind == "set_status" and g and op.get("status") in ("active", "in_progress", "completed", "abandoned"):
@@ -162,17 +316,31 @@ def _apply(op, trajdir=None, chat_scoped=None):
             g["priority"] = op["priority"]
         elif kind == "set_notes" and g:
             g["notes"] = str(op.get("notes", ""))[:4000]
+        elif kind == "set_sources" and g:
+            raw = op.get("sources")
+            if not isinstance(raw, list):
+                return {"ok": False, "error": "sources must be a list"}
+            # Accepts plain strings or the typed rows the artifact edits.
+            g["sources"] = GM.normalize_sources(raw)
+            g["updated_at"] = GM._now()
+        elif kind == "set_opening" and g:
+            g["opening"] = str(op.get("opening", "")).strip()[:400]
+            g["updated_at"] = GM._now()
         elif kind == "set_description" and g:
             g["description"] = str(op.get("description", ""))[:600]
         elif kind == "toggle_todo" and g:
+            kids = [c for c in goals["goals"] if c.get("parent_goal_id") == g["id"]]
             try:
-                t = g["todos"][int(op.get("index", -1))]
-                t["done"] = not t["done"]
+                child = kids[int(op.get("index", -1))]
             except (IndexError, ValueError, TypeError):
-                return {"ok": False, "error": "no such todo"}
+                return {"ok": False, "error": "no such subgoal"}
+            child["status"] = ("active" if child["status"] == "completed"
+                               else "completed")
+            child["updated_at"] = GM._now()
         elif kind == "add_todo" and g and op.get("text", "").strip():
-            g["todos"].append({"text": op["text"].strip()[:160], "done": False,
-                               "evidence_ids": []})
+            goals["goals"].append(GM.new_goal(
+                GM.child_goal_id(goals, g["id"]),
+                op["text"].strip()[:120], g["id"], origin="user"))
         elif kind in ("attach_prompt", "detach_prompt"):
             if not g:
                 return {"ok": False, "error": "goal not found in this chat"}
@@ -181,22 +349,30 @@ def _apply(op, trajdir=None, chat_scoped=None):
             if not isinstance(prompt_id, str) or prompt_id not in valid:
                 return {"ok": False, "error": "prompt not found in this chat"}
             links = g.setdefault("prompt_ids", [])
-            if kind == "attach_prompt" and prompt_id not in links:
-                links.append(prompt_id)
-            elif kind == "detach_prompt":
+            removed = g.setdefault("detached_prompt_ids", [])
+            automatic = g.setdefault("auto_prompt_ids", [])
+            # Both directions are the user overruling inference, so both clear
+            # the machine label: an auto link the user keeps becomes theirs,
+            # and one they drop must not be re-linked by the next analysis.
+            g["auto_prompt_ids"] = [pid for pid in automatic if pid != prompt_id]
+            if kind == "attach_prompt":
+                if prompt_id not in links:
+                    links.append(prompt_id)
+                g["detached_prompt_ids"] = [pid for pid in removed
+                                            if pid != prompt_id]
+            else:
                 g["prompt_ids"] = [pid for pid in links if pid != prompt_id]
+                if prompt_id not in removed:
+                    removed.append(prompt_id)
             g["updated_at"] = GM._now()
         elif kind == "add_goal":
             parent = op.get("parent_goal_id") or None
             if parent and not GM.by_id(goals, parent):
                 return {"ok": False, "error": "parent not found"}
             gid = GM.next_goal_id(goals)
-            goals["goals"].append({"id": gid, "title": (op.get("title") or "Untitled").strip()[:120],
-                                   "status": "active", "parent_goal_id": parent,
-                                   "evidence_ids": [], "todos": [], "important_item_ids": [],
-                                   "prompt_ids": [],
-                                   "priority": "normal", "notes": "",
-                                   "updated_at": GM._now(), "origin": "user"})
+            goals["goals"].append(GM.new_goal(
+                gid, (op.get("title") or "Untitled").strip()[:120], parent,
+                origin="user"))
         else:
             return {"ok": False, "error": "unknown or invalid op"}
         GM.sanitize(goals)
@@ -272,10 +448,47 @@ class H(BaseHTTPRequestHandler):
             elif self.path == "/api/state":
                 self._send(200, _payload(
                     self.server.trajdir, self.server.chat_scoped))
+            elif self.path.startswith("/api/briefing"):
+                # Exactly what a session launched on this goal would receive,
+                # so the context is inspectable before it is spent.
+                from urllib.parse import urlparse, parse_qs
+                goal_id = parse_qs(urlparse(self.path).query).get("goal", [""])[0]
+                if self.server.chat_scoped:
+                    self._send(200, {"ok": False,
+                                     "error": "briefings are for Vault goals"})
+                else:
+                    trajdir = self.server.trajdir
+                    goals, _ = GM.load(trajdir)
+                    GM.sanitize(goals)
+                    text = AE.goal_context(trajdir, goals, goal_id)
+                    dirs, refs = AE.goal_sources(goals, goal_id)
+                    parts = AE.prompt_sections(trajdir, goals, goal_id) or {}
+                    self._send(200, {
+                        "ok": bool(text),
+                        "goal_id": goal_id,
+                        "briefing": text,
+                        "intro": parts.get("intro", []),
+                        "sections": parts.get("sections", []),
+                        "footer": parts.get("footer", []),
+                        "opening": AE.launch_prompt(goals, goal_id),
+                        "cwd": AE.goal_cwd(trajdir, goals, goal_id),
+                        "add_dirs": dirs,
+                        "references": refs,
+                    })
+            elif self.path.startswith("/api/review"):
+                from urllib.parse import urlparse, parse_qs
+                goal_id = parse_qs(urlparse(self.path).query).get("goal", [""])[0]
+                if self.server.chat_scoped:
+                    self._send(200, {"ok": False, "runs": []})
+                else:
+                    goals, _ = GM.load(self.server.trajdir)
+                    GM.sanitize(goals)
+                    self._send(200, AE.review(self.server.trajdir, goals, goal_id))
             elif self.path == "/api/health":
                 self._send(200, {
                     "ok": True,
                     "scope": "chat" if self.server.chat_scoped else "global",
+                    "version": _version(),
                     "session_id": (self.server.trajdir.name
                                    if self.server.chat_scoped else None),
                 })
@@ -388,7 +601,7 @@ def _watch_idle(server, timeout, stop):
 
 
 def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
-        label="Vault goals", idle_timeout=None):
+        label="Vault goals", idle_timeout=None, replace=True):
     chat_scoped = trajdir is not None
     trajdir = _scope(trajdir)
     from .secure_io import secure_dir, secure_existing_tree
@@ -396,6 +609,11 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
         secure_dir(trajdir, trajdir.parent)
     else:
         secure_existing_tree(trajdir, trajdir.parent)
+    replaced = None
+    if replace and not chat_scoped:
+        # One scope, one server. A second one would serve its own snapshot of
+        # the code at whatever port happened to be free.
+        replaced = stop_existing(trajdir)
     for p in range(port, port + 20):
         try:
             srv = ThreadingHTTPServer(("127.0.0.1", p), H)
@@ -406,12 +624,28 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
     else:
         print("  no free port found"); return
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
+    if not chat_scoped:
+        _write_registry(trajdir, url)
     # Detached launchers redirect this output to a private diagnostic log.
     # Flush before readiness so a blocked child still exposes its last stage.
     print(f"\n  {label} · {url}", flush=True)
+    if replaced:
+        print(f"  replaced the server at {replaced['url']} "
+              f"(was version {replaced['version']})", flush=True)
     print("  Ctrl-C to stop\n", flush=True)
     idle_stop = threading.Event()
     idle_thread = None
+    # Being replaced arrives as SIGTERM, whose default action skips every
+    # cleanup path below. Turn it into the interrupt this loop already knows
+    # how to end on, so the socket closes and the registry is released.
+    previous_term = None
+    if threading.current_thread() is threading.main_thread():
+        import signal
+        try:
+            previous_term = signal.signal(
+                signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
+        except (ValueError, OSError):
+            previous_term = None
     try:
         if ready_callback is not None:
             ready_callback(url, srv)
@@ -430,14 +664,25 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
         print("\n  stopped")
     finally:
         idle_stop.set()
+        if previous_term is not None:
+            import signal
+            try:
+                signal.signal(signal.SIGTERM, previous_term)
+            except (ValueError, OSError):
+                pass
         srv.server_close()
+        if not chat_scoped:
+            owner = _read_registry(trajdir)
+            if isinstance(owner, dict) and owner.get("pid") == os.getpid():
+                _registry_path(trajdir).unlink(missing_ok=True)
         if idle_thread is not None and idle_thread is not threading.current_thread():
             idle_thread.join(timeout=1)
 
 
 def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
     """Map the Claude Design app's nested node tree back into the goals model.
-    Node ids are preserved; `t:<gid>:<i>` nodes are that goal's todos. Nodes
+    Node ids are preserved; legacy `t:<gid>:<i>` nodes from a browser cached
+    before todos became goals are resolved to their promoted child. Nodes
     missing from the payload are marked abandoned (history kept, never
     destroyed). Evidence links and important-item associations survive."""
     if not isinstance(nested, list):
@@ -459,21 +704,30 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
         old = {g["id"]: g for g in goals["goals"]}
         seen, out = set(), []
 
+        used = set(old)
+
+        def resolve(nid, title, parent_gid):
+            """Give a legacy todo node a real goal id.
+
+            A browser cached before promotion still sends `t:<gid>:<i>` nodes.
+            They are goals now, so reuse the promoted child already carrying
+            this title under this parent rather than creating a duplicate.
+            """
+            if not nid.startswith("t:"):
+                return nid
+            match = next((g for g in goals["goals"]
+                          if g.get("parent_goal_id") == parent_gid
+                          and g.get("title") == title), None)
+            if match is not None and match["id"] not in seen:
+                return match["id"]
+            minted = GM.child_goal_id({"goals": [{"id": i} for i in used]},
+                                      parent_gid or "g")
+            used.add(minted)
+            return minted
+
         def walk(node, parent_gid):
-            nid = str(node.get("id", ""))
             title = (node.get("title") or "Untitled").strip()[:120]
-            if nid.startswith("t:"):
-                gid = nid.split(":")[1] if nid.count(":") >= 2 else parent_gid
-                host = next((g for g in out if g["id"] == gid), None) or \
-                       next((g for g in out if g["id"] == parent_gid), None)
-                if host is not None:
-                    host["todos"].append({"text": title, "done": bool(node.get("done")),
-                                          "evidence_ids": host.pop("_tev", {}).get(
-                                              nid, []) if False else
-                                          old.get(host["id"], {}).get("_", []) or []})
-                for ch in node.get("children") or []:
-                    walk(ch, parent_gid)
-                return
+            nid = resolve(str(node.get("id", "")), title, parent_gid)
             seen.add(nid)
             prev = old.get(nid, {})
             done = bool(node.get("done"))
@@ -486,6 +740,10 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "todos": [],
                         "important_item_ids": prev.get("important_item_ids", []),
                         "prompt_ids": prev.get("prompt_ids", []),
+                        "sources": prev.get("sources", []),
+                        "opening": prev.get("opening", ""),
+                        "auto_prompt_ids": prev.get("auto_prompt_ids", []),
+                        "detached_prompt_ids": prev.get("detached_prompt_ids", []),
                         "priority": node.get("prio") if node.get("prio") in
                             ("urgent", "high", "normal") else "normal",
                         "notes": str(node.get("notes") or "")[:4000],
@@ -498,23 +756,16 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
 
         for n in nested:
             walk(n, None)
-        # preserve todo evidence where text still matches the old todo
         for g in out:
             prev = old.get(g["id"])
             if not prev:
                 g["updated_at"] = GM._now()
                 continue
-            oldtd = {t["text"]: t for t in prev.get("todos", [])}
-            for t in g["todos"]:
-                if t["text"] in oldtd:
-                    t["evidence_ids"] = oldtd[t["text"]].get("evidence_ids", [])
             if (g["title"], g["status"], g["parent_goal_id"], g["priority"],
-                g["notes"], g["description"],
-                [(t["text"], t["done"]) for t in g["todos"]]) != \
+                g["notes"], g["description"]) != \
                (prev.get("title"), prev.get("status"), prev.get("parent_goal_id"),
                 prev.get("priority", "normal"), prev.get("notes", ""),
-                prev.get("description", ""),
-                [(t["text"], t["done"]) for t in prev.get("todos", [])]):
+                prev.get("description", "")):
                 g["updated_at"] = GM._now()
         # anything the app deleted -> abandoned, kept
         for gid, prev in old.items():

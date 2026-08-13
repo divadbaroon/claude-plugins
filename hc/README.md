@@ -52,6 +52,26 @@ tree; rebuilding alone would have no extraction cache on a fresh install.
 - The prompt picker is newest-first, scrollable, and fuzzy-searchable. Prompt
   links are durable across UI imports and later inference.
 
+## Working a goal with Claude
+
+`hc work <goal>` starts Claude Code bound to one Vault goal (`hc work --list`
+shows the candidates; a title fragment works as well as an id). The session
+receives a briefing for that goal alone — its parent, description, notes,
+human-authored todos, and what earlier sessions did — never the whole tree.
+The Goals UI offers the same thing on the selected goal, and the next session
+to start picks up that claim.
+
+While the session runs, its `TaskCreate` / `TaskUpdate` / `TaskList` calls are
+observed from the existing hooks into `trajectory/agent-runs/<session>.json`
+and shown under CLAUDE'S PLAN in the Goals UI. That store is execution state:
+one record per session, tagged with `vault_goal_id`, `source: agent`, and the
+final task states, saved when the session ends.
+
+The two layers stay separate on purpose. The Vault goal is the source of truth
+for intent; Claude's task list is the source of truth for the current agent
+plan. An agent completing its own task never completes the human goal or its
+todos — promotion, if it ever happens, is a separate explicit action.
+
 ## Inference data boundary
 
 The state store and web server are local. Goal inference is not necessarily
