@@ -308,3 +308,19 @@ test('switchLauncher refuses an unmanaged existing launcher', () => {
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test('the runtime check asks for the python distribution, not the npm package', () => {
+  // These names are deliberately different: the npm package is human-vault,
+  // the wheel it carries is human-compact. Asking for the wrong one made a
+  // published install fail its version check on the user's first command.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'installer.js'), 'utf8');
+  const lookup = source.match(/importlib\.metadata\.version\("([^"]+)"\)/);
+  assert(lookup, 'the runtime version check should still exist');
+  assert.equal(lookup[1], 'human-compact');
+
+  const pyproject = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'hc', 'pyproject.toml'), 'utf8');
+  const distribution = pyproject.match(/^name\s*=\s*"([^"]+)"/m);
+  assert.equal(lookup[1], distribution[1],
+    'the check must name whatever pyproject actually builds');
+});

@@ -321,7 +321,9 @@ function validateRuntime(runner, runtime, version) {
   try {
     const result = runner(python, [
       '-c',
-      `import importlib.metadata; raise SystemExit(0 if importlib.metadata.version("human-vault") == ${JSON.stringify(version)} else 1)`,
+      // The Python distribution is named for the module it ships, not for the
+      // npm package that carries it. These are deliberately different names.
+      `import importlib.metadata; raise SystemExit(0 if importlib.metadata.version("human-compact") == ${JSON.stringify(version)} else 1)`,
     ], { stdio: ['ignore', 'pipe', 'pipe'] });
     return result.status === 0;
   } catch {
