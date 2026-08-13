@@ -40,8 +40,12 @@ const document = {
   querySelectorAll: () => []
 };
 function XHR() {}
-XHR.prototype.open = function () {};
-XHR.prototype.send = function () { this.responseText = process.env.HC_STATE || "{}"; };
+XHR.prototype.open = function (method, url) { this._url = String(url || ""); };
+XHR.prototype.send = function () {
+  this.responseText = this._url.indexOf("/api/setup") >= 0
+    ? (process.env.HC_SETUP || "{}")
+    : (process.env.HC_STATE || "{}");
+};
 const sandbox = {
   console, document, XMLHttpRequest: XHR, made, require,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
@@ -86,9 +90,12 @@ STATE = {
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class BridgeTestCase(unittest.TestCase):
-    def run_js(self, expression, state=None):
+    def run_js(self, expression, state=None, setup=None):
         import os
-        env = dict(os.environ, HC_STATE=json.dumps(state or STATE))
+        env = dict(os.environ, HC_STATE=json.dumps(state or STATE),
+                   HC_SETUP=json.dumps(setup if setup is not None else
+                                       {"ok": True, "sv": 9, "storage": True,
+                                        "analysis": "claude", "done": True}))
         result = subprocess.run([NODE, "-e", HARNESS, str(BRIDGE), expression],
                                 capture_output=True, text=True, check=False, env=env)
         self.assertEqual(0, result.returncode, result.stderr)
@@ -150,26 +157,29 @@ class NodeMappingTests(BridgeTestCase):
 class SeedTests(BridgeTestCase):
     """The artifact must boot into the goal view, not its own onboarding."""
 
-    def test_the_seed_answers_the_setup_gate(self):
-        payload = self.run_js(
-            "var roots = window.__hcPromptUI.rootsFromState(%s);"
-            "window.__hcPromptUI.seedPayload(%s, roots, null);"
-            % (json.dumps(STATE), json.dumps(STATE)))
+    def seeded(self, setup=None):
+        return self.run_js("JSON.parse(store['hc-vault-ui-v1']);", setup=setup)
+
+    def test_a_set_up_vault_skips_the_wizard(self):
+        payload = self.seeded()
         self.assertEqual(6, payload["v"])
-        self.assertEqual({"sv": 9, "storage": True, "done": True,
-                          "analysis": "claude"}, payload["setup"])
+        self.assertTrue(payload["setup"]["done"])
+        self.assertEqual("claude", payload["setup"]["analysis"])
         self.assertEqual("goals", payload["page"])
         self.assertEqual("context", payload["paneTab"])
-        self.assertEqual("g1", payload["selId"])
 
-    def test_an_on_device_vault_seeds_local_analysis(self):
-        state = json.loads(json.dumps(STATE))
-        state["provider"] = "ollama"
-        payload = self.run_js(
-            "var r = window.__hcPromptUI.rootsFromState(%s);"
-            "window.__hcPromptUI.seedPayload(%s, r, null);"
-            % (json.dumps(state), json.dumps(state)))
-        self.assertEqual("local", payload["setup"]["analysis"])
+    def test_a_fresh_vault_shows_the_wizard(self):
+        # The seed reports what the vault was actually told, so onboarding is
+        # skipped only when it genuinely happened.
+        payload = self.seeded({"ok": True, "sv": 9, "storage": False,
+                               "analysis": None, "done": False})
+        self.assertFalse(payload["setup"]["done"])
+        self.assertFalse(payload["setup"]["storage"])
+        self.assertIsNone(payload["setup"]["analysis"])
+
+    def test_an_unreachable_server_does_not_claim_setup_is_done(self):
+        payload = self.seeded({"ok": False})
+        self.assertFalse(payload["setup"]["done"])
 
     def test_seeding_writes_the_store_the_artifact_reads(self):
         saved = self.run_js("JSON.parse(store['hc-vault-ui-v1']);")

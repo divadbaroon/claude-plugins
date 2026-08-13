@@ -13,10 +13,18 @@ npx human-vault
 ```
 
 It installs a managed `hc` runtime plus the Claude Code hooks and `/hc-ui`
-skill. It then asks whether to enable the global Vault (`1` yes, `2` no). If
-you choose yes, it separately asks whether to infer global goals now. The
-second opt-in sends bounded conversation-derived digests through your own
-authenticated Claude Code CLI.
+skill, and nothing else: no history is captured and nothing is analyzed until
+you say so. Finish setup in the goal UI, which asks the same two questions
+with their consequences visible:
+
+```bash
+hc ui
+```
+
+Step one enables the global Vault and imports existing Claude Code
+transcripts. Step two optionally infers goals from that history — on-device
+with Ollama, or through your own authenticated Claude CLI, which sends bounded
+conversation-derived digests to Anthropic. Declining leaves both off.
 
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 

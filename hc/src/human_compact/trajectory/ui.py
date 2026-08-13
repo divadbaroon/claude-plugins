@@ -205,6 +205,66 @@ def _load_prompts(trajdir, chat_scoped=False):
     return out
 
 
+def _spawn_analysis(provider, trajdir):
+    """Run the analysis the user just asked for, without holding the request.
+
+    It can take minutes over a long history, so it runs detached and reports
+    progress through /api/setup rather than blocking the browser.
+    """
+    import subprocess
+    import sys
+    from .secure_io import atomic_write_json
+    config = {}
+    try:
+        config = json.loads((Path(trajdir) / "config.json").read_text())
+    except (OSError, ValueError):
+        pass
+    config.update({"extract_provider": provider, "synth_provider": provider})
+    atomic_write_json(Path(trajdir) / "config.json", config,
+                      root=Path(trajdir).parent)
+    log = Path(trajdir) / "analysis.log"
+    with open(log, "ab", buffering=0) as stream:
+        subprocess.Popen(
+            [sys.executable, "-m", "human_compact.cli", "refresh"],
+            stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
+            close_fds=True, start_new_session=True)
+
+
+def setup_state(trajdir):
+    """What onboarding still has to answer, read from the vault itself.
+
+    The UI asks the questions; this reports the answers already on disk, so a
+    reinstall or a second browser never re-asks something already settled.
+    """
+    from .. import global_vault
+    from . import state as ST
+    try:
+        storage = global_vault.is_enabled()
+    except Exception:                      # noqa: BLE001 - absent is "not yet"
+        storage = False
+    provider = _configured_provider(trajdir)
+    analysis = {"ollama": "local", "claude": "claude"}.get(provider)
+    counts = {"total": 0, "analyzed": 0, "pending": 0}
+    if storage:
+        try:
+            snap = ST.snapshot()
+            counts = {"total": snap["total"], "analyzed": snap["analyzed"],
+                      "pending": snap["newer_pending"]}
+        except Exception:                  # noqa: BLE001 - progress is advisory
+            pass
+    goals, _ = GM.load(trajdir)
+    return {
+        "sv": 9,
+        "storage": bool(storage),
+        "analysis": analysis,
+        # Settled once capture is chosen and either analysis ran or was declined.
+        "done": bool(storage and (analysis or goals.get("goals"))),
+        "conversations": counts,
+        "goals": len(goals.get("goals", [])),
+        "running": bool(ST.processing()),
+    }
+
+
 def _configured_provider(trajdir):
     """Which analysis provider this vault uses, for the artifact's setup state."""
     try:
@@ -276,6 +336,28 @@ def _apply(op, trajdir=None, chat_scoped=None):
         g = GM.by_id(goals, op.get("goal_id", ""))
         # Execution-state ops touch the agent-run store only: choosing to work
         # on a goal must not rewrite the goal itself.
+        if kind in ("enable_capture", "start_analysis"):
+            if chat_scoped:
+                return {"ok": False, "error": "global scope only"}
+            from .. import global_vault
+            if kind == "enable_capture":
+                # Nothing is read until the user asks for it here.
+                if op.get("enabled") is False:
+                    global_vault.disable_always_on()
+                    return {"ok": True, **setup_state(trajdir)}
+                global_vault.enable_always_on()
+                counts = global_vault.backfill()
+                return {"ok": True, "imported": counts.get("imported", 0),
+                        **setup_state(trajdir)}
+            choice = op.get("provider")
+            if choice not in ("local", "claude", "none"):
+                return {"ok": False, "error": "unknown analysis provider"}
+            if choice == "none":
+                return {"ok": True, **setup_state(trajdir)}
+            if not global_vault.is_enabled():
+                return {"ok": False, "error": "enable capture first"}
+            _spawn_analysis("ollama" if choice == "local" else "claude", trajdir)
+            return {"ok": True, **setup_state(trajdir)}
         if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run"):
             if chat_scoped:
                 return {"ok": False, "error": "agent runs attach to Vault goals"}
@@ -475,6 +557,10 @@ class H(BaseHTTPRequestHandler):
                         "add_dirs": dirs,
                         "references": refs,
                     })
+            elif self.path == "/api/setup":
+                self._send(200, {"ok": True, **setup_state(self.server.trajdir)}
+                           if not self.server.chat_scoped
+                           else {"ok": False, "error": "global scope only"})
             elif self.path.startswith("/api/review"):
                 from urllib.parse import urlparse, parse_qs
                 goal_id = parse_qs(urlparse(self.path).query).get("goal", [""])[0]

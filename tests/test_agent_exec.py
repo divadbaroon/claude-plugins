@@ -885,3 +885,74 @@ class ReviewTests(unittest.TestCase):
         row = AE.review(self.trajdir, self.goals, "g1")["runs"][0]
         self.assertTrue(row["committed"])
         self.assertIn("log --oneline", row["how"][0]["command"])
+
+
+class OnboardingTests(unittest.TestCase):
+    """The UI asks; these are the effects it can actually cause."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.vault = Path(self.temp.name) / "vault"
+        self.trajdir = self.vault / "trajectory"
+        self.trajdir.mkdir(parents=True)
+        from human_compact.trajectory import discover, state as ST
+        for module, attr, value in ((discover, "VAULT", self.vault),):
+            patch = mock.patch.object(module, attr, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        home = mock.patch.dict(os.environ, {"HC_HOME": str(self.temp.name),
+                                            "CLAUDE_VAULT_DIR": str(self.vault)})
+        home.start()
+        self.addCleanup(home.stop)
+        # is_enabled() honours a legacy CLAUDE_VAULT=1 export when no explicit
+        # choice is recorded, and the developer running these may have one.
+        os.environ.pop("CLAUDE_VAULT", None)
+        GM.save(self.trajdir, {"version": 1, "goals": []}, {"items": []})
+
+    def test_the_legacy_environment_optin_still_counts_as_capture(self):
+        os.environ["CLAUDE_VAULT"] = "1"
+        self.assertTrue(ui.setup_state(self.trajdir)["storage"])
+
+    def test_a_fresh_vault_reports_nothing_answered(self):
+        state = ui.setup_state(self.trajdir)
+        self.assertFalse(state["storage"])
+        self.assertIsNone(state["analysis"])
+        self.assertFalse(state["done"])
+
+    def test_analysis_is_refused_until_capture_is_enabled(self):
+        # Order matters: analysing history you never agreed to keep is not a
+        # thing this can be talked into doing.
+        result = ui._apply({"op": "start_analysis", "provider": "claude"},
+                           self.trajdir, chat_scoped=False)
+        self.assertFalse(result["ok"])
+        self.assertIn("enable capture first", result["error"])
+
+    def test_an_unknown_provider_is_refused(self):
+        result = ui._apply({"op": "start_analysis", "provider": "sneaky"},
+                           self.trajdir, chat_scoped=False)
+        self.assertFalse(result["ok"])
+
+    def test_declining_analysis_starts_nothing(self):
+        with mock.patch.object(ui, "_spawn_analysis") as spawned:
+            result = ui._apply({"op": "start_analysis", "provider": "none"},
+                               self.trajdir, chat_scoped=False)
+        self.assertTrue(result["ok"])
+        spawned.assert_not_called()
+
+    def test_the_chat_workspace_cannot_change_global_capture(self):
+        result = ui._apply({"op": "enable_capture", "enabled": True},
+                           self.trajdir, chat_scoped=True)
+        self.assertFalse(result["ok"])
+
+    def test_the_chosen_provider_is_written_before_analysis_runs(self):
+        from human_compact import global_vault
+        with mock.patch.object(global_vault, "is_enabled", return_value=True), \
+             mock.patch("subprocess.Popen") as popen:
+            ui._apply({"op": "start_analysis", "provider": "local"},
+                      self.trajdir, chat_scoped=False)
+        config = json.loads((self.trajdir / "config.json").read_text())
+        self.assertEqual("ollama", config["extract_provider"])
+        self.assertEqual("ollama", config["synth_provider"])
+        popen.assert_called_once()
+        self.assertIn("refresh", popen.call_args[0][0])

@@ -14,6 +14,7 @@
   var lastObservedGoals = null;
   var refreshPending = false;
   var syncBusy = false;
+  var setupState = null;
   var details = Object.create(null);
   var detailPending = Object.create(null);
 
@@ -349,10 +350,9 @@
         saved.themeMode : null,
       view: saved.view === "tree" || saved.view === "inspect" ? saved.view : "split",
       page: saved.page === "convos" ? "convos" : "goals",
-      // The artifact hides the goal view behind its own onboarding until these
-      // are answered. The Vault has already answered them.
-      setup: { sv: 9, storage: true, done: true,
-               analysis: st.provider === "ollama" ? "local" : "claude" }
+      // Onboarding is the artifact's, and these are the real answers: what the
+      // vault has actually been told, not an assumption that it is set up.
+      setup: setupState || { sv: 9, storage: false, analysis: null, done: false }
     };
   }
 
@@ -381,6 +381,15 @@
   }
 
   function seed() {
+    try {
+      var setup = new XMLHttpRequest();
+      setup.open("GET", "/api/setup", false);
+      setup.send();
+      var answered = JSON.parse(setup.responseText);
+      if (answered && answered.ok) setupState = answered;
+    } catch (e) {
+      setupState = null;
+    }
     try {
       var request = new XMLHttpRequest();
       request.open("GET", "/api/state", false);   // sync: must beat app boot
@@ -600,6 +609,17 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      // Step 1 of onboarding: turning capture on is a real act — it imports
+      // existing transcripts — so it goes to the vault, not just to state.
+      ["obNext: () => this.set(s => ({ setup: { ...s.setup, sv: 9, storage: true }, obStep: 2 }))",
+       "obNext: () => { window.__hcSetup.capture(true); this.set(s => ({ setup: { ...s.setup, sv: 9, storage: true }, obStep: 2 })); }"],
+      // Step 2: each choice starts the analysis it names, or declines it.
+      ["obLocal: () => { this.set(s => ({ setup: { ...s.setup, analysis: 'local', done: true } })); this.startAnalysis(); }",
+       "obLocal: () => { window.__hcSetup.analyze('local'); this.set(s => ({ setup: { ...s.setup, analysis: 'local', done: true } })); this.startAnalysis(); }"],
+      ["obClaude: () => { this.set(s => ({ setup: { ...s.setup, analysis: 'claude', done: true } })); this.startAnalysis(); }",
+       "obClaude: () => { window.__hcSetup.analyze('claude'); this.set(s => ({ setup: { ...s.setup, analysis: 'claude', done: true } })); this.startAnalysis(); }"],
+      ["obSkip: () => this.set(s => ({ setup: { ...s.setup, analysis: 'none', done: true } }))",
+       "obSkip: () => { window.__hcSetup.analyze('none'); this.set(s => ({ setup: { ...s.setup, analysis: 'none', done: true } })); }"],
       ["codeAddGh: () => setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: 'github', label: 'owner/repo' }]))",
        "codeAddGh: () => window.__hcAsk('github').then(function (v) { if (v) setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: 'github', label: v }])); })"],
       ["codeAddLocal: () => setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: 'local', label: '~/path/to/project' }]))",
@@ -632,6 +652,39 @@
   }
 
   window.__hcAsk = ask;
+
+  // --- onboarding: the artifact asks, the vault answers -------------------
+
+  function refreshSetup() {
+    return fetch("/api/setup", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (body && body.ok) setupState = body;
+        return setupState;
+      })
+      .catch(function () { return setupState; });
+  }
+
+  window.__hcSetup = {
+    // Enabling capture imports existing transcripts, so it is only ever done
+    // from an explicit click here.
+    capture: function (enabled) {
+      return post({ op: "enable_capture", enabled: enabled !== false })
+        .then(function (body) {
+          if (body && body.ok) setupState = body;
+          return body;
+        });
+    },
+    analyze: function (provider) {
+      return post({ op: "start_analysis", provider: provider })
+        .then(function (body) {
+          if (body && body.ok) setupState = body;
+          return body;
+        });
+    },
+    progress: refreshSetup,
+    state: function () { return setupState; }
+  };
 
 
   window.__hcPromptUI = {

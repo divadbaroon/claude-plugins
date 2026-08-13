@@ -2,30 +2,11 @@
 
 const os = require('os');
 const path = require('path');
-const readline = require('readline');
 const { install, inspectVendor, supportedTarget } = require('./installer');
 
 class UsageError extends Error {}
 class InputCancelled extends Error {}
 
-function createAnswerReader(input, output) {
-  const interface_ = readline.createInterface({
-    input,
-    output,
-    terminal: Boolean(input.isTTY && output.isTTY),
-    crlfDelay: Infinity,
-  });
-  const iterator = interface_[Symbol.asyncIterator]();
-  return {
-    async question(prompt) {
-      output.write(prompt);
-      const answer = await iterator.next();
-      if (answer.done) throw new Error('end of input');
-      return answer.value;
-    },
-    close() { interface_.close(); },
-  };
-}
 
 function usage() {
   return `Usage: npx human-vault [options]
@@ -75,64 +56,18 @@ function parseArgs(argv) {
   return result;
 }
 
-async function promptChoice(rl, output, question, options) {
-  output.write(`${question}\n`);
-  for (const [value, label] of options) output.write(`  ${value}. ${label}\n`);
-  for (;;) {
-    let answer;
-    try {
-      answer = (await rl.question('Choose [1/2]: ')).trim();
-    } catch (error) {
-      throw new InputCancelled('input closed before installation choices were complete', { cause: error });
-    }
-    if (answer === '1' || answer === '2') return answer;
-    output.write('Enter 1 or 2.\n');
-  }
-}
 
-async function resolveChoices(options, io = {}) {
-  const input = io.input || process.stdin;
-  const output = io.output || process.stdout;
-  let { globalVault, goals } = options;
-  if (options.nonInteractive) {
-    if (globalVault === null) {
-      throw new UsageError('--non-interactive requires --global-vault 1 or 2');
-    }
-    if (globalVault === '1' && goals === null) {
-      throw new UsageError('--non-interactive with Vault enabled requires --goals 1 or 2');
-    }
-    return { globalVault, goals: goals || '2' };
+async function resolveChoices(options) {
+  // Onboarding moved into the goal UI, where the same two questions are asked
+  // with their consequences visible. The installer only installs; it never
+  // enables capture or sends anything on the user's behalf. Explicit flags are
+  // still honoured for scripted installs.
+  const globalVault = options.globalVault === null ? '2' : options.globalVault;
+  const goals = options.goals === null ? '2' : options.goals;
+  if (globalVault === '2' && goals === '1') {
+    throw new UsageError('--goals 1 requires --global-vault 1');
   }
-
-  const rl = io.readline || createAnswerReader(input, output);
-  const ownsReadline = !io.readline;
-  try {
-    if (globalVault === null) {
-      globalVault = await promptChoice(
-        rl,
-        output,
-        'Enable the global Vault?',
-        [['1', 'Yes'], ['2', 'No']],
-      );
-    }
-    if (globalVault === '1' && goals === null) {
-      goals = await promptChoice(
-        rl,
-        output,
-        'Infer global goals now?',
-        [
-          ['1', 'Yes — analyze history now (Claude mode sends bounded conversation digests to Anthropic)'],
-          ['2', 'No'],
-        ],
-      );
-    }
-    if (globalVault === '2' && goals === '1') {
-      throw new UsageError('--goals 1 requires --global-vault 1');
-    }
-    return { globalVault, goals: goals || '2' };
-  } finally {
-    if (ownsReadline) rl.close();
-  }
+  return { globalVault, goals };
 }
 
 async function run(deps = {}) {
@@ -148,7 +83,6 @@ async function run(deps = {}) {
     const choices = await resolveChoices(options, {
       input: deps.input,
       output,
-      readline: deps.readline,
     });
     const packageRoot = deps.packageRoot || path.resolve(__dirname, '..');
     const packageJson = require(path.join(packageRoot, 'package.json'));
@@ -181,7 +115,7 @@ async function run(deps = {}) {
         deps: deps.installerDeps || {},
       });
     }
-    output.write('\nDone. Start a new Claude Code session (or run /reload-plugins), then run /hc-ui.\n');
+    output.write('\nInstalled. Nothing is captured or analyzed yet — finish setup in the UI:\n\n    hc ui\n\nThen start a new Claude Code session (or /reload-plugins) and use /hc-ui inside a chat.\n');
     return 0;
   } catch (error) {
     if (error instanceof InputCancelled) {
@@ -199,10 +133,8 @@ async function run(deps = {}) {
 module.exports = {
   InputCancelled,
   UsageError,
-  createAnswerReader,
   numericChoice,
   parseArgs,
-  promptChoice,
   resolveChoices,
   run,
   usage,
