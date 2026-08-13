@@ -102,7 +102,7 @@ async function run(deps = {}) {
     );
 
     let reach = null;
-    output.write('\nhuman-compact · Claude Code goal workspaces\n\n');
+    output.write(`\nhuman-vault ${packageJson.version}\n\n`);
     if (options.dryRun) {
       output.write(`Verified bundled backend ${vendor.version} (${vendor.sha256.slice(0, 12)}).\n`);
       output.write(`Target: ${target.name}; managed runtime: ${managedRoot}\n`);
@@ -130,7 +130,8 @@ async function run(deps = {}) {
         });
       }
     }
-    output.write('\nInstalled. Nothing is captured or analyzed yet — finish setup in the UI:\n\n    hc ui\n');
+    output.write('\nInstalled. Nothing is captured or analyzed yet.\n');
+    output.write('\nNext — set up your Vault and build your goals:\n\n    hc ui\n');
     if (reach && reach.linked) {
       output.write(`\n\`hc\` is ready now — linked into ${path.dirname(reach.linked)}, already on your PATH.\n`);
     } else if (reach && !reach.onPath) {
@@ -143,7 +144,7 @@ async function run(deps = {}) {
         output.write(`\n\`hc\` is not on your PATH yet. Add this to your shell profile:\n\n    ${reach.line}\n`);
       }
     }
-    output.write('\nThen start a new Claude Code session (or /reload-plugins) and use /hc-ui inside a chat.\n');
+    output.write('\nIt walks you through the rest.\n');
     return 0;
   } catch (error) {
     if (error instanceof InputCancelled) {

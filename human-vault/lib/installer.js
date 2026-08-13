@@ -455,13 +455,13 @@ async function buildRuntime(options) {
     let compatible = false;
     try { compatible = compatiblePython(runner, candidate); } catch {}
     if (!compatible) continue;
-    output.write(`Creating the managed runtime with ${candidate}...\n`);
+    output.write(`  runtime      building with ${candidate}\n`);
     try {
       if (createRuntimeWithPython(runner, candidate, staging, vendor.wheelPath, vendor.version, env)) return;
     } catch {}
     removeManaged(root, staging);
   }
-  output.write(`No usable Python venv found; bootstrapping pinned uv ${UV_VERSION}...\n`);
+  output.write(`  runtime      no usable python venv; bootstrapping uv ${UV_VERSION}\n`);
   const uv = await ensureUv({ root, target, runner, download });
   ensureManagedDirectory(root, path.join('cache', 'uv'));
   ensureManagedDirectory(root, 'python');
@@ -551,6 +551,7 @@ async function install(options) {
   const deps = options.deps || {};
   const runner = deps.runCommand || runCommand;
   const output = options.output || process.stdout;
+  const errorOutput = options.errorOutput || process.stderr;
   const env = deps.env || process.env;
   const target = supportedTarget(options.platform, options.arch, options.processReport);
   const vendor = inspectVendor(options.packageRoot, options.packageVersion);
@@ -599,7 +600,7 @@ async function install(options) {
       staging = null;
       createdRuntime = true;
     } else {
-      output.write(`Reusing verified backend ${vendor.version}.\n`);
+      output.write(`  runtime      ${vendor.version} (already verified)\n`);
     }
 
     let switched;
@@ -641,9 +642,12 @@ async function install(options) {
     try {
       setup = runner(switched.launcher, setupArgs, {
         env: setupEnv,
-        stdio: 'inherit',
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
       if (setup.error || setup.status !== 0) {
+        // Only now is its output worth showing: it says what went wrong.
+        const detail = `${setup.stdout || ''}${setup.stderr || ''}`.trim();
+        if (detail) errorOutput.write(`${detail}\n`);
         throw new Error(`hc setup failed${setup.error ? `: ${setup.error.message}` : ` with exit code ${setup.status}`}`);
       }
       atomicWrite(path.join(root, 'install.json'), `${JSON.stringify({
@@ -661,7 +665,7 @@ async function install(options) {
       }, null, 2)}\n`);
       throw error;
     }
-    output.write(`Installed backend ${vendor.version} and repaired the Claude Code integration.\n`);
+    output.write(`  runtime      ${vendor.version}\n  Claude Code  plugin and /hc-ui installed\n`);
     return { runtime, launcher: switched.launcher };
   } finally {
     if (staging) removeManaged(root, staging);
