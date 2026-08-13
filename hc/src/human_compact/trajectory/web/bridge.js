@@ -616,6 +616,10 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      // A bare "Goal:" with nothing after it reads as missing data. The line
+      // now states the link or its absence, and is computed from which goals
+      // actually cite this conversation.
+      ["Goal: {{ cv.goal }}", "{{ cv.goalLine }}"],
       // An empty tree is not a dead end during onboarding: goals arrive when
       // the analysis finishes. Say so, rather than only offering a manual add.
       ["emptyLabel: filter === 'done' ? 'Nothing completed yet.' : filter === 'inprog' ? 'Nothing in progress \u2014 set a goal\\u2019s status in the inspector.' : 'No goals yet \u2014 add one below.',", "emptyLabel: filter === 'done' ? 'Nothing completed yet.' : filter === 'inprog' ? 'Nothing in progress \u2014 set a goal\\u2019s status in the inspector.' : (window.__hcAnalysisPending && window.__hcAnalysisPending() ? 'No goals yet \\u2014 they are inferred once your conversations have all been analyzed. You can add one yourself below in the meantime.' : 'No goals yet \\u2014 they are inferred from your analyzed conversations, or add one below.'),"],

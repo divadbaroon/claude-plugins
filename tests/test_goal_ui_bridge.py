@@ -365,6 +365,11 @@ class NoInventedDataTests(BridgeTestCase):
         self.assertIn("window.__hcConvos) return window.__hcConvos",
                       self.patched_bundle("out;"))
 
+    def test_a_conversation_never_shows_a_label_with_nothing_after_it(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn("Goal: {{ cv.goal }}", out)
+        self.assertIn("{{ cv.goalLine }}", out)
+
     def test_the_patch_is_idempotent(self):
         self.assertTrue(self.patched_bundle(
             "out === window.__hcPromptUI.patchBundleSource(out);"))

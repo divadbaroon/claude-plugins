@@ -257,6 +257,19 @@ def conversation_rows(trajdir, limit=200):
         sessions = D.discover(30)
     except Exception:                        # noqa: BLE001 - advisory listing
         sessions = []
+    # Which goal a conversation fed is not a guess: goals cite its turns as
+    # evidence. Prefer the most specific goal that cites it most often.
+    goals, _ = GM.load(trajdir)
+    GM.sanitize(goals)
+    depth_of = {g["id"]: GM.depth(goals, g["id"]) for g in goals["goals"]}
+    cited = {}
+    for goal in goals["goals"]:
+        for evidence_id in goal.get("evidence_ids") or []:
+            prefix = str(evidence_id).split("#", 1)[0]
+            if prefix:
+                cited.setdefault(prefix, {}).setdefault(goal["id"], 0)
+                cited[prefix][goal["id"]] += 1
+    titles = {g["id"]: g.get("title", "") for g in goals["goals"]}
     for session in sessions[:limit]:
         sid = session["session_id"]
         extracted = analyzed.get(sid)
@@ -266,11 +279,18 @@ def conversation_rows(trajdir, limit=200):
         if extracted:
             title = (_first(extracted.get("apparent_objectives"))
                      or _first(extracted.get("projects_or_topics")))
+        counts_for = cited.get(sid[:8], {})
+        goal_id = max(counts_for,
+                      key=lambda gid: (counts_for[gid], depth_of.get(gid, 0)),
+                      default=None)
         rows.append({
             "id": sid,
+            "goalId": goal_id,
+            "goalLine": ("Goal: " + titles[goal_id]) if goal_id
+                        else "No goal drawn from this yet",
             "title": (title or first or "Untitled conversation")[:90],
             "meta": f"{session.get('date', '')} · {len(turns)} messages",
-            "goal": _first((extracted or {}).get("projects_or_topics"))[:60],
+            "goal": titles.get(goal_id, "")[:60],
             "repo": Path(session.get("cwd") or "").name,
             "done": sid in analyzed,
             "thread": [["user", t["text"][:200]] for t in turns

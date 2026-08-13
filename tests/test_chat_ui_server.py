@@ -886,3 +886,45 @@ class ChatUiServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConversationGoalAttributionTests(unittest.TestCase):
+    """A conversation is linked to the goal that cites it, or to nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name)
+        (self.trajdir / "conversations").mkdir()
+
+    def _rows(self, goals, sessions):
+        (self.trajdir / "goals.json").write_text(json.dumps(goals))
+        with mock.patch("human_compact.trajectory.discover.discover",
+                        return_value=sessions):
+            return ui.conversation_rows(self.trajdir)
+
+    def test_it_names_the_goal_that_cites_the_conversation(self):
+        goals = {"goals": [{"id": "g1", "title": "Ship the vault",
+                            "evidence_ids": ["abcdef12#003"]}]}
+        rows = self._rows(goals, [{"session_id": "abcdef12-0000-0000-0000-x",
+                                   "turns": [{"role": "user", "text": "hi"}]}])
+        self.assertEqual(rows[0]["goalId"], "g1")
+        self.assertEqual(rows[0]["goalLine"], "Goal: Ship the vault")
+
+    def test_an_uncited_conversation_says_so_instead_of_showing_a_bare_label(self):
+        rows = self._rows({"goals": []},
+                          [{"session_id": "abcdef12-0000-0000-0000-x",
+                            "turns": [{"role": "user", "text": "hi"}]}])
+        self.assertIsNone(rows[0]["goalId"])
+        self.assertEqual(rows[0]["goalLine"], "No goal drawn from this yet")
+        self.assertEqual(rows[0]["goal"], "")
+
+    def test_the_most_specific_goal_wins_a_tie(self):
+        goals = {"goals": [
+            {"id": "g1", "title": "Parent", "evidence_ids": ["abcdef12#001"]},
+            {"id": "g1a", "title": "Child", "parent_goal_id": "g1",
+             "evidence_ids": ["abcdef12#002"]},
+        ]}
+        rows = self._rows(goals, [{"session_id": "abcdef12-0000-0000-0000-x",
+                                   "turns": [{"role": "user", "text": "hi"}]}])
+        self.assertEqual(rows[0]["goalId"], "g1a")
