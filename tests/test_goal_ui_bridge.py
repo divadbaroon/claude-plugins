@@ -597,28 +597,27 @@ class AnalysisBannerTests(BridgeTestCase):
             setup=self.RUNNING)
         self.assertEqual(1, out)
 
-    def test_it_sits_directly_under_the_page_description(self):
-        order = json.loads(self.run_js(
+    def test_it_hangs_off_the_document_not_the_artifact(self):
+        # The artifact re-renders its own subtree constantly. A banner parented
+        # inside it is removed without warning; body is not its to rebuild.
+        where = self.run_js(
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
             "window.__hcPromptUI.renderBanner();"
-            "JSON.stringify(app.children.map(function (c) "
-            "{ return c.className; }));"))
-        self.assertEqual(["hc-sub", "hc-banner"], order)
+            "document.body.children.filter(function (c) {"
+            "  return c.className === 'hc-banner'; }).length;")
+        self.assertEqual(1, where)
 
-    def test_it_follows_the_subtitle_of_whichever_page_is_shown(self):
-        # Switching pages swaps one subtitle element for the other; the banner
-        # must move with it rather than strand itself on the old one.
-        order = json.loads(self.run_js(
+    def test_a_re_render_that_drops_it_gets_it_back(self):
+        again = self.run_js(
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
             "window.__hcPromptUI.renderBanner();"
-            "app.removeChild(sub);"
-            "var other = document.createElement('div');"
-            "other.className = 'hc-sub';"
-            "app.insertBefore(other, app.firstChild);"
+            "var b = document.body.children.filter(function (c) {"
+            "  return c.className === 'hc-banner'; })[0];"
+            "document.body.removeChild(b);"
             "window.__hcPromptUI.renderBanner();"
-            "JSON.stringify(app.children.map(function (c) "
-            "{ return c.className; }));"))
-        self.assertEqual(["hc-sub", "hc-banner"], order)
+            "document.body.children.filter(function (c) {"
+            "  return c.className === 'hc-banner'; }).length;")
+        self.assertEqual(1, again)
 
     def test_a_partial_history_is_not_mistaken_for_work_in_progress(self):
         # Some conversations never yield an extraction, so analyzed < total is

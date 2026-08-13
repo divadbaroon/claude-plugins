@@ -372,7 +372,7 @@ def setup_state(trajdir):
         "done": bool(storage and (analysis or goals.get("goals"))),
         "conversations": counts,
         "goals": len(goals.get("goals", [])),
-        "running": bool(processing),
+        "running": bool(processing) or ST.worker_active(),
         # Which conversation the worker has open right now, so the UI can name
         # it instead of animating an anonymous bar.
         "current": current,

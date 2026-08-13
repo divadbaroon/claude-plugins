@@ -105,6 +105,13 @@ def extract_all(sessions, provider, outdir: Path, refresh=False, log=print, work
     def job(m):
         sess, key, cache_file = m
         tick("extracting", sess)
+        # The UI polls this to say what is being analyzed right now. Without
+        # it a long extraction is indistinguishable from a hung one.
+        try:
+            from . import state as _state
+            _state.set_processing(sess["session_id"], phase="extracting")
+        except Exception:                            # noqa: BLE001 - advisory
+            pass
         data = provider.generate_json(_payload(sess))
         return _finish(sess, data, key, provider, cache_file)
 

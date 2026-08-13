@@ -761,13 +761,13 @@
     var style = document.createElement("style");
     style.id = "hc-banner-style";
     style.textContent = [
-      ".hc-banner{position:relative;margin-top:10px;display:flex;align-items:center;gap:10px;padding:7px 11px;background:var(--panel2,#f6f6f6);border:1px solid var(--bd,#e3e3e3);border-radius:2px;font:11px/1.45 'Source Code Pro',monospace;color:var(--ink,#111)}",
-      ".hc-banner-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-pulse 1.4s ease-in-out infinite}",
+      ".hc-banner{position:fixed;left:0;right:0;bottom:0;z-index:2147483000;display:flex;align-items:center;gap:10px;padding:9px 16px;background:#a5492a;border-top:1px solid rgba(0,0,0,.15);font:12px/1.45 'Source Code Pro',ui-monospace,monospace;color:#fff;box-shadow:0 -2px 12px rgba(0,0,0,.12)}",
+      ".hc-banner-dot{flex:none;width:8px;height:8px;border-radius:50%;background:#fff;animation:hc-pulse 1.4s ease-in-out infinite}",
       "@keyframes hc-pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}",
       ".hc-banner-what{flex:none;font-weight:600}",
-      ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#555);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".hc-banner-count{flex:none;color:var(--fnt,#777)}",
-      ".hc-banner-bar{position:absolute;left:0;bottom:-1px;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
+      ".hc-banner-now{flex:1;min-width:0;color:rgba(255,255,255,.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-banner-count{flex:none;color:rgba(255,255,255,.9)}",
+      ".hc-banner-bar{position:absolute;left:0;top:0;height:2px;background:#fff;transition:width .4s ease}"
     ].join("");
     document.head.appendChild(style);
   }
@@ -780,14 +780,13 @@
       return;
     }
     ensureBannerStyles();
-    var sub = document.querySelector(".hc-sub");
-    var host = document.querySelector(".hc") || document.body;
+    var host = document.body || document.documentElement;
     if (!banner || !document.documentElement.contains(banner)) {
       banner = document.createElement("div");
       banner.className = "hc-banner";
       banner.setAttribute("role", "status");
       banner.setAttribute("aria-live", "polite");
-      banner.style.position = "relative";
+      banner.style.position = "fixed";
       ["hc-banner-dot", "hc-banner-what", "hc-banner-now", "hc-banner-count",
        "hc-banner-bar"].forEach(function (cls) {
         var part = document.createElement("div");
@@ -795,13 +794,9 @@
         banner.appendChild(part);
       });
     }
-    // Re-anchor every pass: switching pages swaps one subtitle for the other,
-    // and the banner should follow the visible one rather than strand itself.
-    if (sub && sub.parentNode && sub.nextSibling !== banner) {
-      sub.parentNode.insertBefore(banner, sub.nextSibling);
-    } else if (!sub && !banner.parentNode) {
-      host.insertBefore(banner, host.firstChild || null);
-    }
+    // Re-attach every pass: a re-render can drop it, and a banner that
+    // vanishes is worse than one that was never promised.
+    if (banner.parentNode !== host) host.appendChild(banner);
     var counts = (setupState && setupState.conversations) || { total: 0, analyzed: 0 };
     var current = setupState && setupState.current;
     var goalPhase = setupState && setupState.phase === "synthesizing";

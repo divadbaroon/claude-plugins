@@ -65,6 +65,20 @@ def acquire_lock(wait_s=0):
             time.sleep(0.5)
 
 
+def worker_active():
+    """Is any analysis running, by whatever entry point?
+
+    `processing` is written per conversation and cleared between phases; the
+    lock is held for the whole run. Reporting only the former made a live
+    analysis look idle whenever it was between two conversations.
+    """
+    try:
+        owner = int((lockdir() / "pid").read_text())
+    except (OSError, ValueError):
+        return False
+    return _pid_alive(owner)
+
+
 def release_lock():
     try:
         (lockdir() / "pid").unlink(missing_ok=True)
