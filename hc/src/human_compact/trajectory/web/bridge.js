@@ -341,7 +341,7 @@
     var selection = typeof saved.selId === "string" && flat[saved.selId] ?
       saved.selId : (roots.length ? roots[0].id : null);
     return {
-      v: 6,
+      v: 7,
       goals: roots,
       selId: selection,
       filter: filters[saved.filter] ? saved.filter : "active",
@@ -616,6 +616,12 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
+      // An empty vault is a real state, not a missing one. Without this the
+      // artifact falls back to its built-in sample tree, and the sync then
+      // writes those sample goals into the user's vault as if they authored
+      // them. The seed marks itself v7 so only a seeded store qualifies.
+      ["if (saved && saved.v >= 4 && Array.isArray(saved.goals) && saved.goals.length && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);",
+       "if (saved && saved.v >= 4 && Array.isArray(saved.goals) && (saved.goals.length || saved.v >= 7) && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);"],
       // Its agent panel simulated a session: templated todos, a hardcoded file
       // list, and diff stats computed from the length of each filename. Both
       // entry points now start a real goal-bound session instead.

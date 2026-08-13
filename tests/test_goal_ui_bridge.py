@@ -179,7 +179,9 @@ class SeedTests(BridgeTestCase):
 
     def test_a_set_up_vault_skips_the_wizard(self):
         payload = self.seeded()
-        self.assertEqual(6, payload["v"])
+        # v7 marks a store this bridge seeded, which is what lets an empty
+        # goal list be trusted instead of replaced by the sample tree.
+        self.assertEqual(7, payload["v"])
         self.assertTrue(payload["setup"]["done"])
         self.assertEqual("claude", payload["setup"]["analysis"])
         self.assertEqual("goals", payload["page"])
@@ -410,3 +412,28 @@ class NoSimulatedAgentTests(BridgeTestCase):
             "  return c[0] === '/api/op'; }); });")
         self.assertEqual(1, len(posted), "exactly one launch")
         self.assertEqual({"op": "launch_agent_run", "goal_id": "g1"}, posted[0][1])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class EmptyVaultTests(BridgeTestCase):
+    """An empty vault is a real state; the artifact must not invent goals."""
+
+    EMPTY = {"scope": "global", "provider": "claude", "revision": "r0",
+             "goals": [], "prompts": [], "agent_runs": {}}
+
+    def test_the_seed_declares_the_version_the_gate_trusts(self):
+        # Without this the artifact treats an empty list as "nothing saved" and
+        # falls back to its sample tree, which the sync then persists as the
+        # user's own goals.
+        payload = self.run_js("JSON.parse(store['hc-vault-ui-v1']);",
+                              state=self.EMPTY)
+        self.assertGreaterEqual(payload["v"], 7)
+        self.assertEqual([], payload["goals"])
+
+    def test_the_sample_tree_cannot_load_over_an_empty_vault(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("(saved.goals.length || saved.v >= 7)", out)
+
+    def test_a_seeded_tree_still_loads(self):
+        payload = self.run_js("JSON.parse(store['hc-vault-ui-v1']);")
+        self.assertEqual(1, len(payload["goals"]))
