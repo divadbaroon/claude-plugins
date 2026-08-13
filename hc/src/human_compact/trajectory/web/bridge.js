@@ -629,15 +629,20 @@
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
     var parts = [
-      ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code conversation history."],
+      ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
       // Both subtitles were sized for the shorter copy they replaced, so the
-      // longer sentences wrapped mid-clause. Widen the two of them only —
-      // matched after the copy patches above, on the new text.
-      ['max-width:560px;text-wrap:pretty">A holistic view',
-       'max-width:740px;text-wrap:pretty">A holistic view'],
-      ['max-width:560px;text-wrap:pretty">Your Claude Code conversations',
-       'max-width:740px;text-wrap:pretty">Your Claude Code conversations'],
+      // longer sentences wrapped mid-clause. Widening them also tags them:
+      // the analysis banner sits directly under whichever one is on screen,
+      // and needs a stable handle on it.
+      ['<div style="margin-top:6px;font-size:11.5px;line-height:1.6;color:var(--mut);max-width:560px;text-wrap:pretty">A holistic view',
+       '<div class="hc-sub" style="margin-top:6px;font-size:11.5px;line-height:1.6;color:var(--mut);max-width:740px;text-wrap:pretty">A holistic view'],
+      ['<div style="margin-top:6px;font-size:11.5px;line-height:1.6;color:var(--mut);max-width:560px;text-wrap:pretty">Your Claude Code conversations',
+       '<div class="hc-sub" style="margin-top:6px;font-size:11.5px;line-height:1.6;color:var(--mut);max-width:740px;text-wrap:pretty">Your Claude Code conversations'],
+      // The inspector always opens on Context. Restoring the last pane meant
+      // landing on Agent or Artifact for a goal that has neither.
+      ["paneTab: (saved && saved.v >= 6 && ['prompt', 'agent', 'artifact'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',",
+       "paneTab: 'context',"],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -728,7 +733,7 @@
     var style = document.createElement("style");
     style.id = "hc-banner-style";
     style.textContent = [
-      ".hc-banner{position:sticky;top:0;z-index:9000;display:flex;align-items:center;gap:10px;padding:7px 14px;background:var(--panel2,#f6f6f6);border-bottom:1px solid var(--bd,#e3e3e3);font:11px/1.45 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-banner{position:relative;margin-top:10px;display:flex;align-items:center;gap:10px;padding:7px 11px;background:var(--panel2,#f6f6f6);border:1px solid var(--bd,#e3e3e3);border-radius:2px;font:11px/1.45 'Source Code Pro',monospace;color:var(--ink,#111)}",
       ".hc-banner-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-pulse 1.4s ease-in-out infinite}",
       "@keyframes hc-pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}",
       ".hc-banner-what{flex:none;font-weight:600}",
@@ -747,6 +752,7 @@
       return;
     }
     ensureBannerStyles();
+    var sub = document.querySelector(".hc-sub");
     var host = document.querySelector(".hc") || document.body;
     if (!banner || !document.documentElement.contains(banner)) {
       banner = document.createElement("div");
@@ -760,6 +766,12 @@
         part.className = cls;
         banner.appendChild(part);
       });
+    }
+    // Re-anchor every pass: switching pages swaps one subtitle for the other,
+    // and the banner should follow the visible one rather than strand itself.
+    if (sub && sub.parentNode && sub.nextSibling !== banner) {
+      sub.parentNode.insertBefore(banner, sub.nextSibling);
+    } else if (!sub && !banner.parentNode) {
       host.insertBefore(banner, host.firstChild || null);
     }
     var counts = (setupState && setupState.conversations) || { total: 0, analyzed: 0 };

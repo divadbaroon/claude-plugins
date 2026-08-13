@@ -34,6 +34,11 @@ function El(tag) {
   };
   Object.defineProperty(this, "firstChild",
     { get: () => this.children[0] || null });
+  Object.defineProperty(this, "nextSibling", { get: () => {
+    if (!this.parentNode) return null;
+    const at = this.parentNode.children.indexOf(this);
+    return (at >= 0 ? this.parentNode.children[at + 1] : null) || null;
+  } });
   this.querySelector = (sel) => {
     const want = sel.replace(/^\./, "");
     const walk = (node) => {
@@ -47,17 +52,23 @@ function El(tag) {
     return walk(this);
   };
   this.setAttribute = () => {};
+  this.contains = (n) => {
+    if (n === this) return true;
+    return this.children.some((c) => c.contains && c.contains(n));
+  };
   this.removeChild = (n) => { this.children = this.children.filter(c => c !== n); };
   made.push(this);
 }
 const root = new El("html");
 const app = new El("div"); app.className = "hc"; root.appendChild(app);
+// The page subtitle the banner anchors itself under.
+const sub = new El("div"); sub.className = "hc-sub"; app.appendChild(sub);
 const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
   body: root, addEventListener() {},
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
-  querySelector: (s) => (s === ".hc" ? app : null),
+  querySelector: (s) => (s === ".hc" ? app : root.querySelector(s)),
   querySelectorAll: () => []
 };
 function XHR() {}
@@ -68,7 +79,7 @@ XHR.prototype.send = function () {
     : (process.env.HC_STATE || "{}");
 };
 const sandbox = {
-  console, document, XMLHttpRequest: XHR, made, require, calls,
+  console, document, XMLHttpRequest: XHR, made, require, calls, app, sub,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
   fetch: (url, opts) => {
     calls.push([url, opts && opts.body ? JSON.parse(opts.body) : null]);
@@ -373,8 +384,8 @@ class NoInventedDataTests(BridgeTestCase):
     def test_the_tab_subtitles_say_what_each_page_holds(self):
         out = self.patched_bundle("out;")
         self.assertIn("A holistic view of your goals, subgoals, and suggested "
-                      "tasks \u2014 inferred from your Claude Code "
-                      "conversation history.", out)
+                      "tasks \u2014 inferred from your Claude "
+                      "Code\u00a0conversation\u00a0history.", out)
         self.assertIn("preserved beyond Claude\u2019s default 30-day history",
                       out)
         self.assertNotIn("Goals, subgoals, and suggested tasks inferred from "
@@ -387,6 +398,11 @@ class NoInventedDataTests(BridgeTestCase):
         self.assertIn('max-width:740px;text-wrap:pretty">A holistic view', out)
         self.assertIn('max-width:740px;text-wrap:pretty">Your Claude Code '
                       'conversations', out)
+
+    def test_the_inspector_always_opens_on_context(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("paneTab: 'context',", out)
+        self.assertNotIn("indexOf(saved.paneTab)", out)
 
     def test_the_patch_is_idempotent(self):
         self.assertTrue(self.patched_bundle(
@@ -553,6 +569,29 @@ class AnalysisBannerTests(BridgeTestCase):
         setup = dict(self.RUNNING, running=False, current=None,
                      conversations={"total": 89, "analyzed": 89, "pending": 0})
         self.assertIsNone(self.banner(setup))
+
+    def test_it_sits_directly_under_the_page_description(self):
+        order = json.loads(self.run_js(
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
+            "window.__hcPromptUI.renderBanner();"
+            "JSON.stringify(app.children.map(function (c) "
+            "{ return c.className; }));"))
+        self.assertEqual(["hc-sub", "hc-banner"], order)
+
+    def test_it_follows_the_subtitle_of_whichever_page_is_shown(self):
+        # Switching pages swaps one subtitle element for the other; the banner
+        # must move with it rather than strand itself on the old one.
+        order = json.loads(self.run_js(
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.RUNNING) +
+            "window.__hcPromptUI.renderBanner();"
+            "app.removeChild(sub);"
+            "var other = document.createElement('div');"
+            "other.className = 'hc-sub';"
+            "app.insertBefore(other, app.firstChild);"
+            "window.__hcPromptUI.renderBanner();"
+            "JSON.stringify(app.children.map(function (c) "
+            "{ return c.className; }));"))
+        self.assertEqual(["hc-sub", "hc-banner"], order)
 
     def test_a_partial_history_is_not_mistaken_for_work_in_progress(self):
         # Some conversations never yield an extraction, so analyzed < total is
