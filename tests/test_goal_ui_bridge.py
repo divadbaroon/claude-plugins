@@ -839,6 +839,17 @@ class LiveFeedTests(BridgeTestCase):
         css = self.run_js("window.__hcPromptUI.liveCss();")
         self.assertIn(".hc-live-log{max-height:320px;overflow-y:auto", css)
 
+    def test_the_open_button_is_secondary_not_accent(self):
+        # Opening a terminal is not the decision on this pane; approve is.
+        css = self.run_js("window.__hcPromptUI.liveCss();")
+        self.assertIn(".hc-live-open{flex:none;border:1px solid "
+                      "var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);"
+                      "color:var(--mut,#575757)", css)
+        # the decision box keeps the accent; only the button loses it
+        button = css[css.index(".hc-live-open{"):css.index(".hc-live-open:hover")]
+        self.assertNotIn("--acc", button)
+        self.assertIn("var(--accbg,#f5e2d9)", css)
+
     def test_a_run_with_no_session_offers_no_button(self):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
@@ -852,6 +863,15 @@ class LiveFeedTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         self.assertIn('value="{{ showArt }}" hint-placeholder-val="{{ false }}">'
                       '\n<div class="hc-live"></div>', out)
+
+    def test_the_decision_sits_with_the_artifact_it_is_about(self):
+        out = self.patched_bundle("out;")
+        summary = out.index("{{ artSummary }}")
+        decide = out.index("request revisions")
+        files = out.index("{{ artFiles }}")
+        self.assertLess(summary, decide)
+        self.assertLess(decide, files)
+        self.assertEqual(1, out.count("request revisions"))
 
     def test_review_opens_as_soon_as_a_run_exists(self):
         # It carries the live feed now, so gating it on completion would hide
