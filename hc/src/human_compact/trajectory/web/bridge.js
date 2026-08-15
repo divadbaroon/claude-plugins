@@ -999,6 +999,54 @@
     return true;
   }
 
+  // The marker for a session in flight, drawn straight into the tree.
+  //
+  // It cannot travel through the artifact's own state: that is read at boot,
+  // so a run starting now would not show until the page was reloaded -- which
+  // is the whole point of a live marker. So the rows are found by the goal id
+  // they carry and the dot is placed by hand, on every poll, because the same
+  // redraw that would carry the state also destroys anything put in the row.
+  function runDotFor(goalId) {
+    var goal = { id: goalId };
+    return liveOf(goal, serverState.runs, serverState.claim);
+  }
+
+  function renderRunDots() {
+    if (!document.querySelectorAll) return 0;
+    var rows = document.querySelectorAll("[data-hc-goal]");
+    var drawn = 0;
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i];
+      var id = row.getAttribute ? row.getAttribute("data-hc-goal") : "";
+      var live = id ? runDotFor(id) : null;
+      var dot = row.querySelector ? row.querySelector(".hc-run-dot") : null;
+      if (!live) {
+        if (dot && dot.parentNode) dot.parentNode.removeChild(dot);
+        continue;
+      }
+      ensurePaneStyles();
+      if (!dot) {
+        dot = document.createElement("span");
+        // Before the title, where a status light belongs, and after the
+        // caret and the completion circle so the row still lines up.
+        var title = row.querySelector("span");
+        row.insertBefore
+          ? row.insertBefore(dot, title ? title.nextSibling : null)
+          : row.appendChild(dot);
+      }
+      var needs = live.label === "NEEDS YOU";
+      dot.className = "hc-run-dot" + (needs ? " hc-run-dot-needs" : "");
+      if (dot.setAttribute) dot.setAttribute("title", live.title);
+      drawn++;
+    }
+    return drawn;
+  }
+
+  function watchRunDots() {
+    renderRunDots();
+    setInterval(renderRunDots, 900);
+  }
+
   function watchPromptAdd() {
     renderPromptAdd();
     setInterval(renderPromptAdd, 700);
@@ -1182,9 +1230,6 @@
       ".hc-pick-when{display:block;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:3px}",
       ".hc-pick-text{display:block;white-space:pre-wrap;word-break:break-word}",
       ".hc-pick-none{padding:12px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
-      ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
-      ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
   ].join("");
 
   function ensureDialogStyles() {
@@ -1416,13 +1461,15 @@
        "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"],
       ["<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span>",
        "<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ hr.when }}<span style=\"color:var(--bd2);padding:0 6px\">\u00b7</span>{{ hr.conv }}</span>"],
-      // A session in flight, marked on the row. Until now the only way
-      // to know whether anything was running was to open each goal and
-      // look, which is the question a tree should answer at a glance.
+      // Each row names its goal. The session marker is drawn into the
+      // DOM rather than carried through the artifact's state -- the
+      // artifact reads that at boot, so a run starting now would only
+      // appear after a reload -- and a row with no id is a row nothing
+      // can be attached to.
       ["        isSel, isEdit, showTitle: !isEdit,\n",
-       "        isSel, isEdit, showTitle: !isEdit,\n        liveShow: !!(n.live && n.live.on),\n        liveLab: (n.live && n.live.label) || '',\n        liveTitle: (n.live && n.live.title) || '',\n        liveBg: (n.live && n.live.solid) ? 'var(--acc)' : 'transparent',\n        liveFg: (n.live && n.live.solid) ? 'var(--onacc)' : 'var(--acc)',\n"],
-      ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
-       "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if><sc-if value=\"{{ row.liveShow }}\" hint-placeholder-val=\"{{ false }}\"><span title=\"{{ row.liveTitle }}\" style=\"flex:none;padding:0.5px 5px;border:1px solid var(--acc);border-radius:2px;background:{{ row.liveBg }};font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:{{ row.liveFg }};white-space:nowrap\">{{ row.liveLab }}</span></sc-if>"],
+       "        isSel, isEdit, showTitle: !isEdit, gid: n.id,\n"],
+      ["<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;",
+       "<div data-hc-goal=\"{{ row.gid }}\" sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
@@ -1497,6 +1544,15 @@
   // browser triangle, no divider, no section heading. It was never a
   // styling problem, it was a stylesheet that was never on the page.
   var PANE_CSS = [
+      ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
+      ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
+      // Light on purpose: it marks a row without competing with the title
+      // beside it. A run that is blocked on the reader breathes harder.
+      ".hc-run-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--acc,#a5492a);opacity:.45;animation:hc-breathe 2.6s ease-in-out infinite}",
+      ".hc-run-dot-needs{opacity:.9;animation-duration:1.3s}",
+      "@keyframes hc-breathe{0%,100%{opacity:.18;transform:scale(.82)}50%{opacity:.75;transform:scale(1)}}",
+      "@media (prefers-reduced-motion: reduce){.hc-run-dot{animation:none;opacity:.7}}",
       ".hc-promptbox{margin-top:14px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6)}",
       ".hc-promptsum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
       ".hc-promptsum::-webkit-details-marker{display:none}",
@@ -1746,6 +1802,7 @@
     agentOf: agentOf,
     artifactOf: artifactOf,
     liveOf: liveOf,
+    renderRunDots: renderRunDots,
     promptRows: promptRows,
     ask: ask,
     renderBanner: renderBanner,
@@ -1778,6 +1835,7 @@
   function boot() {
     ensurePaneStyles();
     watchPromptAdd();
+    watchRunDots();
     watchGoals();
     watchAnalysis();
     watchSelection();
