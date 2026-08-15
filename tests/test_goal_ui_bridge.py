@@ -1690,8 +1690,8 @@ class AnalysisBannerTests(BridgeTestCase):
     def banner_with(self, setup, spinner):
         return self.run_js(
             ("var host = document.documentElement;"
-             "var s = document.createElement('span');"
-             "s.textContent = 'Building Goals';"
+             "var s = document.createElement('div');"
+             "s.className = 'hc-anpanel';"
              "host.appendChild(s);" if spinner else "") +
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(setup) +
             "window.__hcPromptUI.renderBanner();"
@@ -1723,14 +1723,24 @@ class AnalysisBannerTests(BridgeTestCase):
         # the marker clears only when nothing is running any more
         self.assertIn("if (!s.running) {", run)
 
-    def test_the_goals_phase_is_what_the_spinner_is_gated_on(self):
+    def test_the_panel_reports_any_analysis_not_only_the_tree_build(self):
+        # Switching to the goals tab while conversations are still being read
+        # used to show a banner over an empty tree.
         out = self.patched_bundle("out;")
-        self.assertIn("anGoals: !!(anx && anx.phase === 'goals')", out)
+        self.assertIn("anGoals: !!(window.__hcAnalysisNow && "
+                      "window.__hcAnalysisNow().running)", out)
         self.assertIn("{{ anSpin }}", out)
-        self.assertIn("Building Goals", out)
+        self.assertIn("{{ anTitle }}", out)
+        self.assertIn("'Building Goals' : 'Reading your conversations'", out)
         # and the tree list steps aside for it
-        self.assertIn("treeListDisp: (anx && anx.phase === 'goals') "
-                      "? 'none' : 'block'", out)
+        self.assertIn("treeListDisp: (window.__hcAnalysisNow && "
+                      "window.__hcAnalysisNow().running) ? 'none' : 'block'", out)
+
+    def test_the_panel_is_found_by_class_not_by_the_words_in_it(self):
+        # The heading names the phase now, so matching its text would break
+        # the moment the phase changed.
+        out = self.patched_bundle("out;")
+        self.assertIn('class="hc-anpanel"', out)
 
     def test_there_is_no_blinking_dot(self):
         css = self.run_js("window.__hcPromptUI.bannerCss();")
@@ -1751,12 +1761,41 @@ class AnalysisBannerTests(BridgeTestCase):
         self.assertIn("@keyframes hc-sweep{0%{left:-45%}100%{left:100%}}", css)
         self.assertIn("prefers-reduced-motion", css)
 
-    def test_only_the_conversation_being_read_is_animated(self):
-        # Every unfinished row used to carry the same animation, which said
-        # the machine was busy on all of them at once.
+    def test_rows_are_marked_by_conversation_not_by_position(self):
+        # The list is filtered and re-sorted, so an index into a progress
+        # array marks whichever row happens to be sitting there.
         out = self.patched_bundle("out;")
-        self.assertIn("barShow: !!(ph && p > 0 && p < 100)", out)
-        self.assertIn("qShow: !!(ph && p <= 0)", out)
+        self.assertIn("stShow: !!c.done", out)
+        self.assertIn("an.active[c.id]", out)
+        self.assertNotIn("anx.prog[i]", out)
+
+    def test_every_conversation_in_the_pool_is_animated(self):
+        # Extraction runs eight at a time. Marking one understated what was
+        # happening by the size of the pool.
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.setSetupForTest({ running: true,"
+            "  phase: 'extracting', active: ['s5','s6','s7','s8','s9','s10','s11','s12'],"
+            "  conversations: { total: 20, analyzed: 5, pending: 15 } });"
+            "var an = window.__hcAnalysisNow();"
+            "var rows = [];"
+            "for (var k = 0; k < 20; k++) {"
+            "  var c = { id: 's' + k, done: k < 5 };"
+            "  rows.push(c.done ? 'analyzed'"
+            "    : (an.running && an.active[c.id]) ? 'analyzing' : 'queued'); }"
+            "JSON.stringify(rows.reduce(function (acc, r) {"
+            "  acc[r] = (acc[r] || 0) + 1; return acc; }, {}));"))
+        self.assertEqual({"analyzed": 5, "analyzing": 8, "queued": 7}, got)
+
+    def test_synthesis_animates_nothing_because_it_reads_them_all(self):
+        # No single row is the one being worked on, so marking one would be
+        # a claim about an order that does not exist.
+        got = self.run_js(
+            "window.__hcPromptUI.setSetupForTest({ running: true,"
+            "  phase: 'synthesizing', active: ['s1','s2'],"
+            "  conversations: { total: 2, analyzed: 2, pending: 0 } });"
+            "var an = window.__hcAnalysisNow();"
+            "[an.running, !!an.active['s1'], !!an.active['s2']].join(',');")
+        self.assertEqual("true,false,false", got)
 
     def test_every_row_says_which_of_the_three_states_it_is_in(self):
         out = self.patched_bundle("out;")

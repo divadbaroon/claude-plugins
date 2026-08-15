@@ -617,15 +617,29 @@
   // takes it away while the tree is still being built. Inferring would then
   // silence the banner too, and the page would report nothing at all.
   function treeSpinnerShown() {
-    if (!document.querySelectorAll) return false;
-    var nodes = document.querySelectorAll("span, div");
-    for (var i = 0; i < nodes.length; i++) {
-      var node = nodes[i];
-      if (node.children && node.children.length) continue;
-      if (str(node.textContent).trim() === "Building Goals") return true;
-    }
-    return false;
+    return !!(document.querySelector && document.querySelector(".hc-anpanel"));
   }
+
+  // What the vault is doing right now, read from the server on every poll
+  // rather than from state the artifact keeps in memory. A reload must not
+  // be able to make a running analysis invisible.
+  window.__hcAnalysisNow = function () {
+    var counts = (setupState && setupState.conversations) || {};
+    var active = Object.create(null);
+    array(setupState && setupState.active).forEach(function (sid) {
+      active[str(sid)] = true;
+    });
+    var phase = str(setupState && setupState.phase);
+    return {
+      running: !!(setupState && setupState.running),
+      phase: phase,
+      // Synthesis reads every conversation at once, so no single row is the
+      // one being worked on; extraction has a real handful.
+      active: phase === "synthesizing" ? Object.create(null) : active,
+      total: counts.total || 0,
+      analyzed: counts.analyzed || 0
+    };
+  };
 
   function selectedPane() {
     try {
@@ -1297,8 +1311,10 @@
       // happening to them, which said the machine was busy on all of
       // them at once. And every state now says what it is, in one
       // column, so the list can be read straight down.
+      ["        const ph = anx && anx.phase === 'convs';\n        const p = ph ? (anx.prog[i] || 0) : 0;\n",
+       "        const an = window.__hcAnalysisNow ? window.__hcAnalysisNow() : null;\n"],
       ["          stShow: !!(ph && p >= 100), st: '\u2713 analyzed', stC: 'var(--mut)',\n          qShow: false,\n          barShow: !!(ph && p < 100),\n          barW: Math.round(p) + '%',\n",
-       "          stShow: !!(ph && p >= 100), st: '\u2713 analyzed', stC: 'var(--mut)',\n          qShow: !!(ph && p <= 0),\n          barShow: !!(ph && p > 0 && p < 100),\n          barW: Math.round(p) + '%',\n"],
+       "          stShow: !!c.done, st: '\u2713 analyzed', stC: 'var(--mut)',\n          qShow: !!(an && an.running && !c.done && !an.active[c.id]),\n          barShow: !!(an && an.running && !c.done && !!an.active[c.id]),\n          barW: '',\n"],
       ["<span style=\"display:inline-flex;width:78px;justify-content:flex-end;align-items:center\"><sc-if value=\"{{ cv.stShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:{{ cv.stC }}\">{{ cv.st }}</span></sc-if><sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-block;width:72px;height:3px;border-radius:2px;background:var(--accbg);overflow:hidden\"><span style=\"display:block;height:100%;width:{{ cv.barW }};background:var(--acc)\"></span></span></sc-if></span>",
        "<span style=\"display:inline-flex;width:118px;justify-content:flex-end;align-items:center\"><sc-if value=\"{{ cv.stShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:{{ cv.stC }}\">{{ cv.st }}</span></sc-if><sc-if value=\"{{ cv.qShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt)\">in queue</span></sc-if><sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-flex;flex-direction:column;align-items:flex-end;gap:3px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:var(--acc)\">analyzing\u2026</span><span class=\"hc-rowbar\"><span></span></span></span></sc-if></span>"],
       // Launching should land the reader where the work will appear, and
@@ -1409,6 +1425,15 @@
        "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"],
       ["<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span>",
        "<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ hr.when }}<span style=\"color:var(--bd2);padding:0 6px\">\u00b7</span>{{ hr.conv }}</span>"],
+      // The goals panel reports any analysis, not only the tree build:
+      // switching to this tab while conversations are still being read
+      // used to show a banner over an empty tree. It is also read from
+      // the server rather than from state held in memory, so a reload
+      // cannot make a running analysis invisible.
+      ["      anGoals: !!(anx && anx.phase === 'goals'),\n      treeListDisp: (anx && anx.phase === 'goals') ? 'none' : 'block',\n",
+       "      anGoals: !!(window.__hcAnalysisNow && window.__hcAnalysisNow().running),\n      anTitle: (window.__hcAnalysisNow && window.__hcAnalysisNow().phase === 'synthesizing')\n        ? 'Building Goals' : 'Reading your conversations',\n      treeListDisp: (window.__hcAnalysisNow && window.__hcAnalysisNow().running) ? 'none' : 'block',\n"],
+      ["<sc-if value=\"{{ anGoals }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px\">{{ anSpin }}<span style=\"font:600 13.5px 'Source Code Pro',monospace;color:var(--ink)\">Building Goals</span><span style=\"font:10.5px 'Source Code Pro',monospace;color:var(--fnt)\">{{ anCount }}</span></div>\n</sc-if>",
+       "<sc-if value=\"{{ anGoals }}\" hint-placeholder-val=\"{{ false }}\">\n<div class=\"hc-anpanel\" style=\"flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px\">{{ anSpin }}<span style=\"font:600 13.5px 'Source Code Pro',monospace;color:var(--ink)\">{{ anTitle }}</span><span style=\"font:10.5px 'Source Code Pro',monospace;color:var(--fnt)\">{{ anCount }}</span></div>\n</sc-if>"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
@@ -1747,6 +1772,7 @@
     paneCss: function () { return PANE_CSS; },
     watchAnalysis: watchAnalysis,
     treeSpinnerShown: function () { return treeSpinnerShown(); },
+    analysisNow: function () { return window.__hcAnalysisNow(); },
     loadThread: loadThread,
     loadPlan: loadPlan,
     renderLive: renderLive,

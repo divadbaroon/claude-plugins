@@ -421,8 +421,11 @@ def setup_state(trajdir):
         # it instead of animating an anonymous bar.
         "current": current,
         "phase": (processing or {}).get("phase") if processing else None,
-        # How many conversations are in flight, so the UI can say "4 at a
-        # time" rather than naming one of four.
+        # Which conversations are in flight, not how many: the UI marks rows
+        # by id, so a filtered or reordered list still marks the right ones.
+        # Extraction runs eight at a time, and showing one understated it by
+        # the size of the pool.
+        "active": [str(sid) for sid in (processing or {}).get("active") or []],
         "inflight": len((processing or {}).get("active") or []),
         "convos": rows,
     }
