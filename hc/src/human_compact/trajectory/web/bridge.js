@@ -664,6 +664,9 @@
   function renderLive(goalId, runs) {
     var host = document.querySelector(".hc-live");
     if (!host) return false;
+    // The decision about the run sits between the question and the log, so
+    // the buttons stay under the thing they answer.
+    var below = document.querySelector(".hc-live-rest") || host;
     var run = array(runs)[0];
     var rows = run ? liveRows(run) : [];
     var stamp = goalId + "|" + JSON.stringify(rows);
@@ -679,6 +682,9 @@
     host.appendChild(head);
     // The log scrolls in place: a run of any length otherwise pushes
     // everything below it off the page.
+    while (below !== host && below.firstChild) {
+      below.removeChild(below.firstChild);
+    }
     var log = document.createElement("div");
     log.className = "hc-live-log";
     var LOGGED = { did: true, wait: true, idle: true };
@@ -687,10 +693,11 @@
       node.className = "hc-live-" + row[0];
       node.textContent = row[1];
       if (row[0] === "head") head.appendChild(node);
+      else if (row[0] === "ask") host.appendChild(node);
       else if (LOGGED[row[0]]) {
-        if (!log.parentNode) host.appendChild(log);
+        if (!log.parentNode) below.appendChild(log);
         log.appendChild(node);
-      } else host.appendChild(node);
+      } else below.appendChild(node);
     });
     var session = run && str(run.session_id);
     if (session) {
@@ -1022,7 +1029,7 @@
       ["<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if>",
        "<!--approve moved up-->"],
       ["{{ artSummary }}</div>\n",
-       "{{ artSummary }}</div>\n<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if><div class=\"hc-live\"></div>"],
+       "{{ artSummary }}</div>\n<div class=\"hc-live\"></div><sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if><div class=\"hc-live-rest\"></div>"],
       // The prompt is what the run sends, so it belongs with the run —
       // behind a disclosure, because it is long and rarely the thing the
       // reader came for.
@@ -1123,7 +1130,7 @@
       ".hc-live-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}",
       ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
       ".hc-live-wait{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
-      ".hc-live-ask{margin:0 0 8px;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
+      ".hc-live-ask{margin:0 0 8px;max-height:220px;overflow-y:auto;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
       ".hc-live-log{max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
       ".hc-live-idle{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);padding-bottom:3px}",
       ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",

@@ -854,6 +854,44 @@ class LiveFeedTests(BridgeTestCase):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
 
+    def test_the_question_sits_above_the_decision_and_the_log_below(self):
+        split = json.loads(self.run_js(
+            "var top = document.createElement('div');"
+            "top.className = 'hc-live';"
+            "document.body.appendChild(top);"
+            "var rest = document.createElement('div');"
+            "rest.className = 'hc-live-rest';"
+            "document.body.appendChild(rest);"
+            "window.__hcPromptUI.renderLive('g1', %s);"
+            % json.dumps([dict(self.RUN, attention="Migrate or not?")]) +
+            "JSON.stringify([top.children.map(function (c) "
+            "{ return c.className; }), rest.children.map(function (c) "
+            "{ return c.className; })]);"))
+        self.assertIn("hc-live-ask", split[0])
+        self.assertIn("hc-live-log", split[1])
+        self.assertNotIn("hc-live-log", split[0])
+
+    def test_the_question_box_scrolls_rather_than_growing(self):
+        css = self.run_js("window.__hcPromptUI.liveCss();")
+        self.assertIn(".hc-live-ask{margin:0 0 8px;max-height:220px;"
+                      "overflow-y:auto", css)
+
+    def test_the_split_target_does_not_stack_between_renders(self):
+        # It is a second host; leaving it alone would append on every poll.
+        counts = json.loads(self.run_js(
+            "var top = document.createElement('div');"
+            "top.className = 'hc-live';"
+            "document.body.appendChild(top);"
+            "var rest = document.createElement('div');"
+            "rest.className = 'hc-live-rest';"
+            "document.body.appendChild(rest);"
+            "window.__hcPromptUI.renderLive('g1', %s);" % json.dumps([self.RUN]) +
+            "var once = rest.children.length;"
+            "window.__hcPromptUI.renderLive('g2', %s);" % json.dumps([self.RUN]) +
+            "JSON.stringify([once, rest.children.length]);"))
+        self.assertEqual(counts[0], counts[1])
+        self.assertGreater(counts[0], 0)
+
     def test_a_question_is_marked_out(self):
         rows = dict((c, t) for c, t in
                     self.drawn(dict(self.RUN, attention="Migrate or not?")))
@@ -867,12 +905,14 @@ class LiveFeedTests(BridgeTestCase):
         self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
         self.assertEqual(1, out.count('class="hc-live"'))
 
-    def test_review_reads_artifact_then_decision_then_log(self):
+    def test_review_reads_artifact_question_decision_log(self):
         out = self.patched_bundle("out;")
         summary = out.index("{{ artSummary }}")
+        question = out.index('<div class="hc-live"></div>')
         decide = out.index("request revisions")
-        log = out.index('<div class="hc-live"></div>')
-        self.assertLess(summary, decide)
+        log = out.index('<div class="hc-live-rest"></div>')
+        self.assertLess(summary, question)
+        self.assertLess(question, decide)
         self.assertLess(decide, log)
         self.assertEqual(1, out.count("request revisions"))
         self.assertEqual(1, out.count('class="hc-live"'))
