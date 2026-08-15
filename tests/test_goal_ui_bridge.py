@@ -566,6 +566,23 @@ class LaunchedRunTests(BridgeTestCase):
         self.assertEqual(["Read the code", "Make the change"],
                          [t["t"] for t in got["todos"]])
 
+    def test_the_prompt_is_no_longer_a_tab_of_its_own(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("prompt folded into agent", out)
+        self.assertNotIn('sc-camel-on-click="{{ tabPrompt }}"', out)
+
+    def test_the_prompt_renders_inside_the_agent_pane(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("showPrompt: !!sel && paneTab === 'agent'", out)
+        self.assertNotIn("showPrompt: !!sel && paneTab === 'prompt'", out)
+
+    def test_the_prompt_is_collapsed_and_says_where_it_comes_from(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("<details class=\"hc-promptbox\">", out)
+        self.assertIn("built from CONTEXT", out)
+        # collapsed by default: no `open` attribute on the details element
+        self.assertNotIn('<details class="hc-promptbox" open>', out)
+
     def test_running_it_switches_to_the_pane_that_shows_the_work(self):
         out = self.patched_bundle("out;")
         self.assertIn("this.set(() => ({ paneTab: 'agent' }));", out)
