@@ -1324,21 +1324,45 @@ class RaiseWindowTests(unittest.TestCase):
         self.assertIn('tell application "Terminal"', AE._RAISE_WINDOW)
 
     def test_a_window_that_is_gone_reports_failure(self):
-        with mock.patch("subprocess.run") as run:
+        with mock.patch("sys.platform", "darwin"), \
+             mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=1, stdout="", stderr="x")
             self.assertFalse(AE.raise_window("4242"))
 
     def test_a_live_window_reports_success_and_focuses_terminal(self):
-        with mock.patch("subprocess.run") as run:
+        # Pinned to darwin: what is under test is the AppleScript sequencing,
+        # not the platform gate. Without this the assertion could only hold on
+        # a Mac, and the suite passed locally while failing on Linux CI.
+        with mock.patch("sys.platform", "darwin"), \
+             mock.patch("subprocess.run") as run:
             run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
             self.assertTrue(AE.raise_window("4242"))
         # first the window ordering, then bringing Terminal forward
         self.assertEqual(2, run.call_count)
 
     def test_no_window_id_is_not_an_attempt(self):
-        with mock.patch("subprocess.run") as run:
+        with mock.patch("sys.platform", "darwin"), \
+             mock.patch("subprocess.run") as run:
             self.assertFalse(AE.raise_window(""))
         run.assert_not_called()
+
+    def test_raising_a_window_is_a_macos_idea_and_says_so_elsewhere(self):
+        # The gate itself, tested rather than relied on: it is what made
+        # every other case in this class pass on Linux for the wrong reason.
+        for system in ("linux", "win32"):
+            with mock.patch("sys.platform", system), \
+                 mock.patch("subprocess.run") as run:
+                self.assertFalse(AE.raise_window("4242"), system)
+            run.assert_not_called()
+
+    def test_a_launch_off_macos_refuses_rather_than_pretending(self):
+        for system in ("linux", "win32"):
+            with mock.patch("sys.platform", system), \
+                 mock.patch("subprocess.run") as run:
+                with self.assertRaises(RuntimeError) as caught:
+                    AE.open_terminal("/tmp/launch.sh")
+                self.assertIn("macOS", str(caught.exception))
+            run.assert_not_called()
 
 
 class IdleInferenceTests(unittest.TestCase):
