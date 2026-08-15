@@ -451,16 +451,15 @@ end run
 
 # Raising the window that is already running the session, rather than
 # starting a second one beside it.
+# Terminal only. The System Events half needs Accessibility permission, and
+# an osascript that fails anywhere fails everywhere — so bundling them made a
+# raise that would have worked report failure, and the caller opened a second
+# session instead of surfacing the one already running.
 _RAISE_WINDOW = """
 on run argv
   set winId to (item 1 of argv) as integer
   tell application "Terminal"
     set index of window id winId to 1
-  end tell
-  tell application "System Events"
-    tell process "Terminal"
-      perform action "AXRaise" of (first window whose value of attribute "AXMain" is true)
-    end tell
   end tell
 end run
 """
@@ -476,7 +475,7 @@ def raise_window(window_id: str) -> bool:
                           input=_RAISE_WINDOW, capture_output=True,
                           text=True, timeout=10)
     if done.returncode != 0:
-        return False
+        return False          # the window is gone; resuming is all that is left
     subprocess.run(["osascript", "-e",
                     'tell application "Terminal" to activate'],
                    capture_output=True, text=True, timeout=10)

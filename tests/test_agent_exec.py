@@ -1311,3 +1311,31 @@ class TerminalWindowTests(unittest.TestCase):
                              "cwd": str(self.trajdir)}, self.trajdir, goals)
         run = AE.load_runs(self.trajdir)[0]
         self.assertEqual("77", run["terminal_window"])
+
+
+class RaiseWindowTests(unittest.TestCase):
+    """Surfacing the session's own window, not opening a second one."""
+
+    def test_the_script_does_not_need_accessibility(self):
+        # System Events needs an Accessibility grant, and one osascript that
+        # fails anywhere fails everywhere — bundling them made a raise that
+        # would have worked report failure and open a duplicate session.
+        self.assertNotIn("System Events", AE._RAISE_WINDOW)
+        self.assertIn('tell application "Terminal"', AE._RAISE_WINDOW)
+
+    def test_a_window_that_is_gone_reports_failure(self):
+        with mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=1, stdout="", stderr="x")
+            self.assertFalse(AE.raise_window("4242"))
+
+    def test_a_live_window_reports_success_and_focuses_terminal(self):
+        with mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
+            self.assertTrue(AE.raise_window("4242"))
+        # first the window ordering, then bringing Terminal forward
+        self.assertEqual(2, run.call_count)
+
+    def test_no_window_id_is_not_an_attempt(self):
+        with mock.patch("subprocess.run") as run:
+            self.assertFalse(AE.raise_window(""))
+        run.assert_not_called()
