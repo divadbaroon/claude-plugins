@@ -751,11 +751,38 @@ class LiveFeedTests(BridgeTestCase):
             % json.dumps(st) + "roots[0].artifact.finished;")
         self.assertTrue(got)
 
+    def test_a_new_run_does_not_hide_a_finished_one(self):
+        # Reading rows[0] hid every past artifact the moment a run started.
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [], "agent_runs": {"g1": [
+                  {"status": "running", "tasks": [], "files": []},
+                  {"status": "finished", "tasks": [],
+                   "files": [{"path": "a.py", "edits": 2}]}]}}
+        got = self.run_js(
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(st) + "roots[0].artifact;")
+        self.assertTrue(got["finished"])
+        self.assertEqual(["a.py"], [f["path"] for f in got["files"]])
+
+    def test_changes_come_from_the_run_that_changed_something(self):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [], "agent_runs": {"g1": [
+                  {"status": "finished", "tasks": [], "files": []},
+                  {"status": "finished", "tasks": [],
+                   "files": [{"path": "real.py", "edits": 6}]}]}}
+        got = self.run_js(
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(st) + "roots[0].artifact.files;")
+        self.assertEqual(["real.py"], [f["path"] for f in got])
+
     def test_a_running_run_keeps_review_hidden(self):
         st = {"scope": "global", "revision": "r1", "generated_at": "",
               "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
               "prompts": [],
-              "agent_runs": {"g1": [{"status": "running", "tasks": []}]}}
+              "agent_runs": {"g1": [{"status": "running", "tasks": [],
+                                     "files": []}]}}
         got = self.run_js(
             "window.__hcPromptUI.setDetailForTest('g1', %s);"
             % json.dumps({"review": [{"state": "running"}], "sections": {}}) +

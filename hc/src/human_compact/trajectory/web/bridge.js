@@ -306,9 +306,22 @@
     var rows = array(runs && runs[goal.id]);
     var reviewed = (detail && array(detail.review)) || [];
     if (!rows.length && !reviewed.length) return null;
-    var run = rows[0] || {};
-    var latest = reviewed[0] || {};
-    var files = array(latest.files);
+    // REVIEW is about what a completed run left behind, so it follows the
+    // newest finished run. Reading rows[0] hid every past artifact the
+    // moment a new run started.
+    function done(row) {
+      var state = str(row && (row.state || row.status));
+      return state === "finished" || state === "failed";
+    }
+    var finished = rows.filter(done);
+    // Prefer a finished run that actually changed something: a later run that
+    // only read files would otherwise hide the one that did the work.
+    var run = finished.filter(function (r) {
+      return array(r.files).length;
+    })[0] || finished[0] || rows[0] || {};
+    var latest = reviewed.filter(done)[0] || reviewed[0] || {};
+    var files = array(latest.files).length ? array(latest.files)
+      : array(run.files);
     // The question this pane answers: what has it done, and does it need me?
     var state = str(latest.state) || (run.status === "finished" ? "finished"
                                                                : "running");
@@ -337,9 +350,9 @@
       ts: Date.parse(run.finished_at || run.started_at || "") || Date.now(),
       branch: str(run.git_branch),
       status: run.status === "finished" ? "ready" : "pending",
-      // REVIEW is for what a finished run left behind.
-      finished: str(latest.state) === "finished" || str(latest.state) === "failed"
-        || run.status === "finished",
+      // Any completed run is something to review, even while a newer one
+      // is still going.
+      finished: finished.length > 0 || reviewed.some(done),
       note: "",
       summary: str(run.summary) || str(latest.summary),
       files: files.map(function (f) {

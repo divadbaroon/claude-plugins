@@ -1056,6 +1056,11 @@ def plans(trajdir: Path) -> Dict[str, List[Dict[str, Any]]]:
             "user_prompt": str(run.get("user_prompt") or "")[:400],
             "summary": str(run.get("summary") or "")[:400],
             "counts": _counts(run),
+            # What the run changed, so REVIEW can show it from the state the
+            # page loads at boot rather than waiting on a second fetch.
+            "files": [{"path": str(f.get("path") or ""),
+                       "edits": int(f.get("edits") or 0)}
+                      for f in (run.get("files") or [])][:40],
             "tasks": [{
                 "task_id": task.get("task_id"),
                 "subject": task.get("subject") or task.get("description", "")[:80],
