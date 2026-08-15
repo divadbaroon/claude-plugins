@@ -1055,9 +1055,9 @@
        "void 0;\n"],
       ["placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"",
        "placeholder=\"Add any other thoughts you would like the agent to know...\""],
-      // ARTIFACT opens the pane, so the leading gap only pushed it down.
-      ["<div style=\"margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ARTIFACT</span>",
-       "<div style=\"display:flex;align-items:center;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ARTIFACT</span>"],
+      // The section reports the run's state, not only a task list.
+      [">AGENT TODOS</div>",
+       ">AGENT STATUS</div>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1135,13 +1135,13 @@
   ].join("");
 
   var LIVE_CSS = [
-      ".hc-live{margin-top:14px}",
+      ".hc-live{margin-top:0}",
       ".hc-live-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}",
       ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
       ".hc-live-wait{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-ask{margin:0 0 8px;max-height:220px;overflow-y:auto;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
-      ".hc-live-title{margin-top:20px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
-      ".hc-live-log{margin-top:7px;max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
+      ".hc-live-title{margin-top:14px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
+      ".hc-live-log{margin-top:6px;max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
       ".hc-live-idle{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);padding-bottom:3px}",
       ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",

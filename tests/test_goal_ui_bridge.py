@@ -827,25 +827,27 @@ class LiveFeedTests(BridgeTestCase):
             dict(self.RUN, state="waiting", quiet_for="4 min"))]
         self.assertNotIn("hc-live-idle", classes)
 
-    def test_the_log_is_its_own_titled_section(self):
+    def test_the_log_is_its_own_box_like_changes(self):
         rows = self.drawn(self.RUN)
-        titles = [t for c, t in rows if c == "hc-live-title"]
-        self.assertEqual(["ACTIVITY"], titles)
+        self.assertEqual(["ACTIVITY"],
+                         [t for c, t in rows if c == "hc-live-title"])
         css = self.run_js("window.__hcPromptUI.liveCss();")
-        self.assertIn(".hc-live-title{margin-top:20px;padding-top:14px;"
-                      "border-top:1px solid var(--bd,#e6e6e6)", css)
+        # CHANGES is a heading at 14px then a bordered box at 6px
+        self.assertIn(".hc-live-title{margin-top:14px", css)
+        self.assertIn(".hc-live-log{margin-top:6px", css)
+
+    def test_nothing_pads_the_top_of_the_run_state(self):
+        self.assertIn(".hc-live{margin-top:0}",
+                      self.run_js("window.__hcPromptUI.liveCss();"))
+
+    def test_the_agent_section_is_named_for_status(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("AGENT STATUS", out)
+        self.assertNotIn("AGENT TODOS", out)
 
     def test_a_run_with_no_actions_gets_no_activity_heading(self):
         classes = [c for c, _ in self.drawn(dict(self.RUN, did=[]))]
         self.assertNotIn("hc-live-title", classes)
-
-    def test_the_artifact_heading_has_no_leading_gap(self):
-        out = self.patched_bundle("out;")
-        self.assertIn('<div style="display:flex;align-items:center;'
-                      'justify-content:space-between;gap:12px"><span '
-                      "style=\"font:600 9.5px 'Source Code Pro',monospace;"
-                      'letter-spacing:1px;color:var(--mut)">ARTIFACT</span>',
-                      out)
 
     def test_the_prompt_is_separated_like_the_other_sections(self):
         self.assertIn(".hc-promptbox{margin-top:20px;padding-top:14px;"
@@ -946,7 +948,8 @@ class LiveFeedTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         self.assertLess(out.index(">AGENT</div>"), out.index("hc-promptbox"))
         self.assertLess(out.index("hc-promptbox"), out.index("ADDITIONAL NOTES"))
-        self.assertLess(out.index("ADDITIONAL NOTES"), out.index("{{ runAgent }}"))
+        self.assertLess(out.index("ADDITIONAL NOTES"), out.index("AGENT STATUS"))
+        self.assertLess(out.index("AGENT STATUS"), out.index("{{ runAgent }}"))
 
     def test_the_notes_box_moved_to_the_agent_pane(self):
         out = self.patched_bundle("out;")
