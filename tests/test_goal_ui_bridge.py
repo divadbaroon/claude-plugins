@@ -1193,21 +1193,136 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("{{ hr.when }}", out)
         self.assertIn("{{ histEmpty }}", out)
 
-    def test_the_words_sit_between_the_objective_and_its_sources(self):
+    def test_the_words_close_the_pane_rather_than_open_it(self):
+        # The panels above are the reading; this is the record they were read
+        # from, so it sits last and does not push them down the page.
         out = self.patched_bundle("out;")
-        self.assertLess(out.index(">OBJECTIVE</span>"),
+        self.assertLess(out.index(">ALREADY BUILT</span>"),
                         out.index("WHAT YOU ASKED FOR"))
         self.assertLess(out.index("WHAT YOU ASKED FOR"),
-                        out.index(">CODE CONTEXT</span>"))
-        # exactly one of each header: the patch inserts, it does not duplicate
-        self.assertEqual(1, out.count(">CODE CONTEXT</span>"))
+                        out.index("ADDITIONAL NOTES"))
         self.assertEqual(1, out.count("WHAT YOU ASKED FOR"))
 
     def test_a_long_history_scrolls_rather_than_pushing_the_pane_down(self):
         out = self.patched_bundle("out;")
         at = out.index('<sc-for list="{{ histRows }}"')
         box = out[out.rindex("<div", 0, at):at]
-        self.assertIn("max-height:260px;overflow-y:auto", box)
+        self.assertIn("max-height:300px;overflow-y:auto", box)
+
+    def test_the_stamp_is_the_date_that_was_recorded_not_a_clock(self):
+        # created_at is a date. Every prompt ever captured showed 5:00 PM,
+        # which was the formatter inventing a time nobody recorded.
+        out = self.patched_bundle("out;")
+        at = out.index("when: (() => { const d2 = new Date(p.ts);")
+        expr = out[at:out.index("})(),", at)]
+        self.assertIn("day: 'numeric', year: 'numeric'", expr)
+        self.assertNotIn("toLocaleTimeString", expr)
+
+    def test_a_bare_date_is_read_in_the_readers_own_timezone(self):
+        # Date.parse("2026-08-04") is midnight UTC, which west of Greenwich
+        # renders as the 3rd -- the stamp was a day off, not just imprecise.
+        state = json.loads(json.dumps(STATE))
+        state["prompts"][0]["created_at"] = "2026-08-04"
+        ts = self.roots(state)[0]["prompts"][0]["ts"]
+        parts = json.loads(self.run_js(
+            "var d = new Date(%d);" % ts +
+            "JSON.stringify([d.getFullYear(), d.getMonth() + 1, d.getDate()]);"))
+        self.assertEqual([2026, 8, 4], parts)
+
+    def test_the_reader_can_attach_one_of_their_own_prompts(self):
+        # Which of your words belong to which goal is a judgement the
+        # inference only guesses at, so the reader gets to say.
+        out = self.patched_bundle("out;")
+        self.assertIn('<span class="hc-prompt-add"></span>', out)
+        rendered = self.run_js(
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "JSON.stringify([slot.children.length,"
+            " slot.children[0] && slot.children[0].textContent,"
+            " slot.children[0] && slot.children[0].className]);")
+        self.assertEqual([1, "+ add a prompt", "hc-prompt-addbtn"],
+                         json.loads(rendered))
+
+    def test_the_button_is_not_stacked_by_the_poll_that_draws_it(self):
+        count = self.run_js(
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "slot.children.length;")
+        self.assertEqual(1, count)
+
+    PICK_STATE = None                       # built in the test, see below
+
+    def pick_state(self):
+        state = json.loads(json.dumps(STATE))
+        state["prompts"].append(
+            {"id": "a#2", "role": "user", "text": "and record the audio",
+             "created_at": "2026-08-05"})
+        state["prompts"].append(
+            {"id": "a#3", "role": "assistant", "text": "sure, doing that",
+             "created_at": "2026-08-05"})
+        return state
+
+    def test_the_picker_offers_only_prompts_not_already_on_the_goal(self):
+        rows = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            "var box = document.querySelector('.hc-ask').children[0];"
+            "JSON.stringify(box.children[2].children.map(function (r) "
+            "{ return r.children[1] ? r.children[1].textContent : "
+            "r.textContent; }));"))
+        # a#1 is already on g1 and a#3 is Claude, not the reader
+        self.assertEqual(["and record the audio"], rows)
+
+    def test_the_picker_says_so_when_there_is_nothing_left_to_add(self):
+        rows = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(STATE) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            "var box = document.querySelector('.hc-ask').children[0];"
+            "JSON.stringify(box.children[2].children.map(function (r) "
+            "{ return r.textContent; }));"))
+        self.assertEqual(["Every prompt on record is already on this goal."],
+                         rows)
+
+    def test_picking_a_prompt_attaches_it_on_the_server(self):
+        posted = json.loads(self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "slot.children[0].onclick();"
+            "var box = document.querySelector('.hc-ask').children[0];"
+            "box.children[2].children[0].onclick();"
+            # the click resolves a promise; let its handlers run
+            "Promise.resolve().then(function () {}).then(function () {})"
+            "  .then(function () { return JSON.stringify("
+            "    calls.map(function (c) { return c[1]; }).filter(Boolean)); });"))
+        attach = [c for c in posted if c.get("op") == "attach_prompt"]
+        self.assertEqual([{"op": "attach_prompt", "goal_id": "g1",
+                           "prompt_id": "a#2"}], attach)
+
+    def test_opening_the_picker_writes_nothing(self):
+        # Browsing your own history must not edit the goal.
+        posted = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            "JSON.stringify(calls.map(function (c) { return c[1]; })"
+            "  .filter(Boolean));"))
+        self.assertEqual([], posted)
+
+    def test_a_capped_list_says_what_it_left_out(self):
+        # A silently truncated list reads as the whole record.
+        src = BRIDGE.read_text()
+        self.assertIn("var PICK_LIMIT = 200;", src)
+        self.assertIn("Showing the newest ", src)
 
     def test_the_prompts_shown_are_the_ones_the_server_recorded(self):
         state = json.loads(json.dumps(STATE))

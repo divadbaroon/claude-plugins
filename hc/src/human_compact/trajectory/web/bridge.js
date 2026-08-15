@@ -230,7 +230,13 @@
     return array(goal && goal.prompt_ids).map(function (id) {
       var prompt = byId[id];
       if (!prompt) return null;
-      var when = Date.parse(prompt.created_at || "");
+      // created_at is a date, not a datetime. Date.parse reads a bare
+      // "2026-08-04" as midnight UTC, which west of Greenwich renders as
+      // 5pm the day before -- a time nobody recorded, on the wrong day.
+      var parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str(prompt.created_at));
+      var when = parts
+        ? new Date(+parts[1], +parts[2] - 1, +parts[3]).getTime()
+        : Date.parse(prompt.created_at || "");
       return { id: id, text: str(prompt.text),
                ts: isFinite(when) ? when : Date.now() };
     }).filter(Boolean);
@@ -742,6 +748,153 @@
     return true;
   }
 
+  // Linking an existing prompt to a goal. The inference is a guess, and the
+  // reader is the only one who knows which of their own words belong to
+  // which goal -- so attaching is theirs to do. The op already exists
+  // server-side; nothing here writes local-only state.
+  function promptWhen(prompt) {
+    var parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(str(prompt.created_at));
+    var date = parts ? new Date(+parts[1], +parts[2] - 1, +parts[3])
+                     : new Date(Date.parse(prompt.created_at || ""));
+    if (isNaN(date.getTime())) return "";
+    return date.toLocaleDateString("en-US",
+      { month: "short", day: "numeric", year: "numeric" });
+  }
+
+  var PICK_LIMIT = 200;
+
+  function pickPrompt(goalId) {
+    var goal = array(serverState.goals).filter(function (g) {
+      return g && g.id === goalId;
+    })[0];
+    var linked = {};
+    array(goal && goal.prompt_ids).forEach(function (id) { linked[id] = true; });
+    var pool = array(serverState.prompts).filter(function (prompt) {
+      return !linked[prompt.id];
+    }).slice().reverse();
+    return new Promise(function (resolve) {
+      ensureDialogStyles();
+      ensurePaneStyles();
+      var overlay = document.createElement("div");
+      overlay.className = "hc-ask";
+      var box = document.createElement("div");
+      box.className = "hc-ask-box hc-pick-box";
+      var title = document.createElement("div");
+      title.className = "hc-ask-title";
+      title.textContent = "Add one of your prompts to this goal";
+      var filter = document.createElement("input");
+      filter.type = "text";
+      filter.className = "hc-ask-input";
+      filter.placeholder = "Filter your prompts\u2026";
+      var list = document.createElement("div");
+      list.className = "hc-pick-list";
+
+      function close(value) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(value || null);
+      }
+
+      function draw() {
+        var needle = filter.value.trim().toLowerCase();
+        var matched = pool.filter(function (prompt) {
+          return !needle || str(prompt.text).toLowerCase().indexOf(needle) >= 0;
+        });
+        var shown = matched.slice(0, PICK_LIMIT);
+        while (list.firstChild) list.removeChild(list.firstChild);
+        if (!shown.length) {
+          var none = document.createElement("div");
+          none.className = "hc-pick-none";
+          none.textContent = pool.length
+            ? "No prompt of yours matches that."
+            : "Every prompt on record is already on this goal.";
+          list.appendChild(none);
+          return;
+        }
+        shown.forEach(function (prompt) {
+          var row = document.createElement("button");
+          row.className = "hc-pick-row";
+          var when = document.createElement("span");
+          when.className = "hc-pick-when";
+          when.textContent = promptWhen(prompt);
+          var text = document.createElement("span");
+          text.className = "hc-pick-text";
+          text.textContent = str(prompt.text);
+          row.appendChild(when);
+          row.appendChild(text);
+          row.onclick = function () { close(prompt.id); };
+          list.appendChild(row);
+        });
+        // Say what was left out rather than letting a capped list read as
+        // the whole record.
+        if (matched.length > shown.length) {
+          var more = document.createElement("div");
+          more.className = "hc-pick-none";
+          more.textContent = "Showing the newest " + shown.length + " of "
+            + matched.length + ". Filter to narrow it down.";
+          list.appendChild(more);
+        }
+      }
+
+      var row = document.createElement("div");
+      row.className = "hc-ask-row";
+      var cancel = document.createElement("button");
+      cancel.className = "hc-ask-btn";
+      cancel.textContent = "Cancel";
+      cancel.onclick = function () { close(null); };
+      row.appendChild(cancel);
+      filter.oninput = draw;
+      filter.onkeydown = function (e) {
+        if (e.key === "Escape") { e.preventDefault(); close(null); }
+      };
+      overlay.onclick = function (e) { if (e.target === overlay) close(null); };
+      box.appendChild(title);
+      box.appendChild(filter);
+      box.appendChild(list);
+      box.appendChild(row);
+      overlay.appendChild(box);
+      (document.body || document.documentElement).appendChild(overlay);
+      draw();
+      if (filter.focus) filter.focus();
+    });
+  }
+
+  function renderPromptAdd() {
+    var slot = document.querySelector(".hc-prompt-add");
+    if (!slot) return false;
+    if (serverState.scope === "chat") return false;
+    if (slot.children && slot.children.length) return true;
+    ensurePaneStyles();
+    var button = document.createElement("button");
+    button.className = "hc-prompt-addbtn";
+    button.textContent = "+ add a prompt";
+    button.onclick = function () {
+      var goalId = selectedGoalId();
+      if (!goalId) return;
+      pickPrompt(goalId).then(function (promptId) {
+        if (!promptId) return;
+        button.disabled = true;
+        button.textContent = "adding\u2026";
+        post({ op: "attach_prompt", goal_id: goalId,
+               prompt_id: promptId }).then(function (result) {
+          button.disabled = false;
+          button.textContent = (result && result.ok === true)
+            ? "+ add a prompt"
+            : ((result && result.error) || "could not add it");
+          // The list is drawn from state, so the new link only shows once
+          // the next state lands.
+          refreshState();
+        });
+      });
+    };
+    slot.appendChild(button);
+    return true;
+  }
+
+  function watchPromptAdd() {
+    renderPromptAdd();
+    setInterval(renderPromptAdd, 700);
+  }
+
   function watchRunFeed() {
     // The artifact reads its state at boot, so a live feed cannot travel
     // through it. Poll and draw straight into the pane instead.
@@ -911,6 +1064,17 @@
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
+      ".hc-pick-box{width:min(680px,100%)}",
+      ".hc-pick-list{margin-top:10px;max-height:min(52vh,420px);overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa)}",
+      ".hc-pick-row{width:100%;box-sizing:border-box;display:block;text-align:left;border:none;border-bottom:1px solid var(--bd,#e6e6e6);background:transparent;color:var(--dtxt,#333);padding:8px 11px;cursor:pointer;font:11.5px/1.6 'Source Code Pro',monospace}",
+      ".hc-pick-row:last-child{border-bottom:none}",
+      ".hc-pick-row:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
+      ".hc-pick-when{display:block;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:3px}",
+      ".hc-pick-text{display:block;white-space:pre-wrap;word-break:break-word}",
+      ".hc-pick-none{padding:12px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
+      ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
   ].join("");
 
   function ensureDialogStyles() {
@@ -1117,12 +1281,18 @@
        "this.set(() => ({ selId: ids[nx], editId: null, paneTab: 'context' }));"],
       ["this.set(() => ({ page: 'goals', selId: curConv.goalId, editId: null }));",
        "this.set(() => ({ page: 'goals', selId: curConv.goalId, editId: null, paneTab: 'context' }));"],
-      // The user's own words are the evidence every other panel is
-      // derived from. They were only ever reachable through the PROMPT
-      // tab, so removing that tab took them off the screen entirely --
-      // the rows were still being computed, with nothing rendering them.
-      ["\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"display:inline-flex;gap:7px;align-items:center\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">CODE CONTEXT</span>",
-       "\n<div style=\"margin-top:15px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT YOU ASKED FOR</div>\n<div style=\"margin-top:6px;max-height:260px;overflow-y:auto;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span sc-camel-on-click=\"{{ hr.copy }}\" style=\"flex:none;font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc)\">copy</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"display:inline-flex;gap:7px;align-items:center\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">CODE CONTEXT</span>"],
+      // The user's own words are the evidence every other panel is derived
+      // from, and they were only reachable through the PROMPT tab: removing
+      // that tab took them off screen entirely, with histRows still being
+      // computed and nothing left to draw it. They close the pane rather
+      // than open it -- the panels above are the reading, this is the
+      // record they were read from.
+      ["color:var(--dtxt);overflow:hidden\"></textarea></div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\"",
+       "color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT YOU ASKED FOR</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:300px;overflow-y:auto;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span sc-camel-on-click=\"{{ hr.copy }}\" style=\"flex:none;font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc)\">copy</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\""],
+      // The stamp read 5:00 PM on every prompt ever recorded: created_at is
+      // a date, and the clock time was the formatter's invention.
+      ["when: (() => { const d2 = new Date(p.ts); return d2.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + d2.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); })(),",
+       "when: (() => { const d2 = new Date(p.ts); return d2.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); })(),"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
@@ -1456,6 +1626,9 @@
     renderLive: renderLive,
     liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
+    renderPromptAdd: renderPromptAdd,
+    pickPrompt: pickPrompt,
+    dialogCss: function () { return DIALOG_CSS; },
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; },
@@ -1471,6 +1644,7 @@
   patchBundleTemplate();
   function boot() {
     ensurePaneStyles();
+    watchPromptAdd();
     watchGoals();
     watchAnalysis();
     watchSelection();
