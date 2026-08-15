@@ -974,7 +974,7 @@ class LiveFeedTests(BridgeTestCase):
         # of the time — the prompt section rendered as a bare <details>: a
         # browser triangle, no divider, no heading. Adjusting the rules could
         # never fix that, because the sheet was not on the page.
-        for rule in (".hc-promptbox", ".hc-promptsum", ".hc-rowdots"):
+        for rule in (".hc-promptbox", ".hc-promptsum", ".hc-rowbar"):
             self.assertNotIn(rule, self.run_js(
                 "window.__hcPromptUI.bannerCss();"))
             self.assertIn(rule, self.run_js("window.__hcPromptUI.paneCss();"))
@@ -1688,15 +1688,44 @@ class AnalysisBannerTests(BridgeTestCase):
         self.assertNotIn("hc-banner-dot", css)
         self.assertNotIn("hc-pulse", css)
 
-    def test_the_row_indicator_travels_instead_of_claiming_a_percentage(self):
+    def test_the_row_indicator_sweeps_instead_of_claiming_a_percentage(self):
+        # A conversation reports no progress of its own, so a filled bar
+        # would be a number the vault does not have.
         out = self.patched_bundle("out;")
-        self.assertIn("hc-rowdots", out)
+        self.assertIn("hc-rowbar", out)
+        self.assertNotIn("hc-rowdots", out)
         self.assertNotIn("width:{{ cv.barW }}", out)
-        # The dots mark a row being worked on, which outlives any banner, so
-        # they ride on the sheet that is always injected.
+        # It marks a row being worked on, which outlives any banner, so it
+        # rides on the sheet that is always injected.
         css = self.run_js("window.__hcPromptUI.paneCss();")
-        self.assertIn("hc-travel", css)
-        self.assertIn("infinite", css)
+        self.assertIn("animation:hc-sweep 2.8s ease-in-out infinite", css)
+        self.assertIn("@keyframes hc-sweep{0%{left:-45%}100%{left:100%}}", css)
+        self.assertIn("prefers-reduced-motion", css)
+
+    def test_only_the_conversation_being_read_is_animated(self):
+        # Every unfinished row used to carry the same animation, which said
+        # the machine was busy on all of them at once.
+        out = self.patched_bundle("out;")
+        self.assertIn("barShow: !!(ph && p > 0 && p < 100)", out)
+        self.assertIn("qShow: !!(ph && p <= 0)", out)
+
+    def test_every_row_says_which_of_the_three_states_it_is_in(self):
+        out = self.patched_bundle("out;")
+        for said in ("{{ cv.st }}", ">in queue<", ">analyzing"):
+            self.assertIn(said, out)
+        # analyzed / analyzing / queued, in that one column
+        cell = out[out.index("width:118px"):out.index("{{ cv.meta }}")]
+        self.assertLess(cell.index("{{ cv.stShow }}"), cell.index("{{ cv.qShow }}"))
+        self.assertLess(cell.index("{{ cv.qShow }}"), cell.index("{{ cv.barShow }}"))
+
+    def test_the_three_states_line_up_in_one_column(self):
+        # Different widths per state would leave the list ragged down the
+        # side, which is the edge the reader scans.
+        out = self.patched_bundle("out;")
+        self.assertIn('<span style="display:inline-flex;width:118px;'
+                      'justify-content:flex-end;align-items:center">', out)
+        self.assertNotIn("width:78px", out)
+        self.assertEqual(1, out.count("width:118px"))
 
     def test_it_says_why_the_reading_is_happening(self):
         parts = self.banner(self.RUNNING)

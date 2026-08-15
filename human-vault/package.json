@@ -1,6 +1,6 @@
 {
   "name": "human-vault",
-  "version": "0.17.81",
+  "version": "0.17.82",
   "description": "One-command installer for chat-scoped goals and optional global context in Claude Code.",
   "bin": {
     "human-vault": "bin/human-vault.js"

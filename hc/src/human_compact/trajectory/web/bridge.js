@@ -1276,8 +1276,15 @@
       // A part-filled bar claims a conversation is a known fraction done.
       // It is not: one call either returns or it does not. Dots that travel
       // say "working" without inventing a percentage.
-      ["<sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-block;width:72px;height:3px;border-radius:2px;background:var(--accbg);overflow:hidden\"><span style=\"display:block;height:100%;width:{{ cv.barW }};background:var(--acc)\"></span></span></sc-if>",
-       "<sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span class=\"hc-rowdots\"><span></span><span></span><span></span></span></sc-if>"],
+      // Only the conversation actually being read gets the bar; the
+      // rest were showing the same animation while nothing was
+      // happening to them, which said the machine was busy on all of
+      // them at once. And every state now says what it is, in one
+      // column, so the list can be read straight down.
+      ["          stShow: !!(ph && p >= 100), st: '\u2713 analyzed', stC: 'var(--mut)',\n          qShow: false,\n          barShow: !!(ph && p < 100),\n          barW: Math.round(p) + '%',\n",
+       "          stShow: !!(ph && p >= 100), st: '\u2713 analyzed', stC: 'var(--mut)',\n          qShow: !!(ph && p <= 0),\n          barShow: !!(ph && p > 0 && p < 100),\n          barW: Math.round(p) + '%',\n"],
+      ["<span style=\"display:inline-flex;width:78px;justify-content:flex-end;align-items:center\"><sc-if value=\"{{ cv.stShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:{{ cv.stC }}\">{{ cv.st }}</span></sc-if><sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-block;width:72px;height:3px;border-radius:2px;background:var(--accbg);overflow:hidden\"><span style=\"display:block;height:100%;width:{{ cv.barW }};background:var(--acc)\"></span></span></sc-if></span>",
+       "<span style=\"display:inline-flex;width:118px;justify-content:flex-end;align-items:center\"><sc-if value=\"{{ cv.stShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:{{ cv.stC }}\">{{ cv.st }}</span></sc-if><sc-if value=\"{{ cv.qShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt)\">in queue</span></sc-if><sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-flex;flex-direction:column;align-items:flex-end;gap:3px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;color:var(--acc)\">analyzing\u2026</span><span class=\"hc-rowbar\"><span></span></span></span></sc-if></span>"],
       // Launching should land the reader where the work will appear, and
       // the pane must distinguish 'typed, not started' from 'running'.
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
@@ -1469,11 +1476,13 @@
       ".hc-promptsum::before{content:'\\25b8';display:inline-block;font-size:9px;transition:transform .15s ease}",
       ".hc-promptbox[open]>.hc-promptsum::before{transform:rotate(90deg)}",
       ".hc-promptsum:hover{color:var(--acc,#a5492a)}",
-      ".hc-rowdots{display:inline-block;position:relative;width:72px;height:6px;overflow:hidden;vertical-align:middle}",
-      ".hc-rowdots>span{position:absolute;top:1px;left:0;width:4px;height:4px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-travel 1.5s linear infinite}",
-      ".hc-rowdots>span:nth-child(2){animation-delay:.16s}",
-      ".hc-rowdots>span:nth-child(3){animation-delay:.32s}",
-      "@keyframes hc-travel{0%{transform:translateX(-6px);opacity:0}12%{opacity:1}88%{opacity:1}100%{transform:translateX(72px);opacity:0}}",
+      // A conversation takes as long as it takes and reports no progress
+      // of its own, so the bar sweeps rather than claiming a percentage.
+      // Slow on purpose: a fast one reads as a thing about to finish.
+      ".hc-rowbar{display:block;position:relative;width:64px;height:3px;border-radius:2px;background:var(--accbg,#f5e2d9);overflow:hidden}",
+      ".hc-rowbar>span{position:absolute;top:0;bottom:0;left:0;width:45%;border-radius:2px;background:var(--acc,#a5492a);animation:hc-sweep 2.8s ease-in-out infinite}",
+      "@keyframes hc-sweep{0%{left:-45%}100%{left:100%}}",
+      "@media (prefers-reduced-motion: reduce){.hc-rowbar>span{animation:none;left:0;width:100%;opacity:.5}}",
   ].join("");
 
   function ensurePaneStyles() {
