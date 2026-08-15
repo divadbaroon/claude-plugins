@@ -1061,6 +1061,14 @@
       // files do not.
       ["<div style=\"margin-top:8px;display:grid;grid-template-columns:72px 1fr;gap:3px 10px;align-items:baseline\">\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">BRANCH</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ artBranch }}</span>\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span>\n</div>\n</div>\n",
        "<div style=\"margin-top:8px;display:grid;grid-template-columns:72px 1fr;gap:3px 10px;align-items:baseline\">\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span>\n</div>\n</div>\n<div class=\"hc-live\"></div><sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if><div class=\"hc-live-rest\"></div>"],
+      // Running the agent is what produces a plan; a separate button that
+      // only starts the same session was a second door to one room.
+      ["<span sc-camel-on-click=\"{{ genTodos }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">generate todos</span>",
+       "<!--generate todos removed-->"],
+      // The parent trail under a subgoal title: the tree on the left
+      // already shows where the goal sits.
+      ["<sc-if value=\"{{ hasCrumb }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:4px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ crumb }}</div></sc-if>",
+       "<!--crumb removed-->"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];

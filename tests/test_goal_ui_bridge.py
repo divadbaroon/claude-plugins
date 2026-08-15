@@ -840,6 +840,19 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn(".hc-live{margin-top:0}",
                       self.run_js("window.__hcPromptUI.liveCss();"))
 
+    def test_the_subgoal_breadcrumb_is_gone(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn("{{ crumb }}", out)
+        # the title, its status and the description stay
+        self.assertIn("{{ selTitle }}", out)
+        self.assertIn("{{ stBadge }}", out)
+        self.assertIn("{{ descVal }}", out)
+
+    def test_running_the_agent_is_the_only_way_to_get_a_plan(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn(">generate todos<", out)
+        self.assertIn("{{ runAgent }}", out)
+
     def test_the_agent_section_is_named_for_status(self):
         out = self.patched_bundle("out;")
         self.assertIn("AGENT STATUS", out)
