@@ -423,6 +423,17 @@ end run
 """
 
 
+_RAISE_ONE = """
+tell application "System Events"
+  tell process "Terminal"
+    if (count of windows) > 0 then
+      perform action "AXRaise" of window 1
+    end if
+  end tell
+end tell
+"""
+
+
 def open_terminal(script: Path, app: Optional[str] = None,
                   foreground: bool = True) -> str:
     """Open *script* in one terminal window. Returns the app it used."""
@@ -439,10 +450,13 @@ def open_terminal(script: Path, app: Optional[str] = None,
             capture_output=True, text=True, timeout=15)
         if result.returncode == 0:
             if foreground:
-                subprocess.run(
-                    ["osascript", "-e",
-                     'tell application "Terminal" to activate'],
-                    capture_output=True, text=True, timeout=10)
+                # Raise this one window. `activate` would raise every Terminal
+                # window the user has open, which is what buried the screen.
+                # AXRaise moves a single window forward and needs Accessibility
+                # permission; without it we leave the window unraised rather
+                # than dragging the whole app forward.
+                subprocess.run(["osascript", "-e", _RAISE_ONE],
+                               capture_output=True, text=True, timeout=10)
             return app
         # Fall through: a scripting-disabled Terminal is still openable.
     result = subprocess.run(["open", "-a", app, str(script)],
@@ -451,6 +465,54 @@ def open_terminal(script: Path, app: Optional[str] = None,
         raise RuntimeError(
             (result.stderr or f"could not open {app}").strip()[:200])
     return app
+
+
+MAX_ACTIVITY = 60
+
+
+def _first_line(text: str) -> str:
+    for line in str(text or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def describe_call(call: Dict[str, Any]) -> str:
+    """One short phrase for a tool call, or nothing worth reporting.
+
+    Paths and commands only — never file contents, which is the same line the
+    run store already draws.
+    """
+    name = str(call.get("tool_name") or call.get("name") or "")
+    args = call.get("tool_input") if isinstance(call.get("tool_input"), dict) else {}
+    target = str(args.get("file_path") or args.get("path") or "").strip()
+    tail = Path(target).name if target else ""
+    if name in ("Edit", "MultiEdit", "Write", "NotebookEdit"):
+        return ("edited " + tail) if tail else "edited a file"
+    if name in ("Read", "NotebookRead"):
+        return ("read " + tail) if tail else "read a file"
+    if name in ("Grep", "Glob"):
+        return "searched the project"
+    if name == "Bash":
+        command = " ".join(str(args.get("command") or "").split())[:60]
+        return ("ran " + command) if command else "ran a command"
+    if name in ("WebFetch", "WebSearch"):
+        return "looked something up"
+    return ""
+
+
+def note_activity(run: Dict[str, Any], kind: str, text: str) -> bool:
+    """Append one line to the run's activity, newest last. Bounded."""
+    text = " ".join(str(text or "").split())[:200]
+    if not text:
+        return False
+    log = run.setdefault("activity", [])
+    if log and log[-1].get("kind") == kind and log[-1].get("text") == text:
+        return False
+    log.append({"at": _now(), "kind": kind, "text": text})
+    del log[:-MAX_ACTIVITY]
+    return True
 
 
 def _known_goal(goals: Optional[Dict[str, Any]], goal_id: str) -> Optional[Dict[str, Any]]:
@@ -797,6 +859,7 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
             run["user_prompt"] = prompt[:1000]
             dirty = True
     elif event == "PostToolBatch":
+        batch = []
         for call in payload.get("tool_calls") or []:
             if not isinstance(call, dict):
                 continue
@@ -804,6 +867,11 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
                 dirty = True
             if observe_file_call(run, call):
                 dirty = True
+            note = describe_call(call)
+            if note:
+                batch.append(note)
+        if batch and note_activity(run, "did", "; ".join(batch[:3])):
+            dirty = True
     elif event in ("TaskCreated", "TaskCompleted"):
         subject = str(payload.get("task_subject") or "").strip()
         task_id = str(payload.get("task_id") or payload.get("taskId") or "").strip()
@@ -817,10 +885,25 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
                     description=str(payload.get("task_description") or "")[:1000],
                     status="completed" if event == "TaskCompleted" else "pending")
             dirty = dirty or json.dumps(run["tasks"], sort_keys=True) != before
+            if subject:
+                note_activity(run, "task",
+                              ("finished: " if event == "TaskCompleted"
+                               else "planned: ") + subject[:120])
     elif event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
         summary = payload["last_assistant_message"].strip()
         if summary and summary != run.get("summary"):
             run["summary"] = summary[:1200]
+            dirty = True
+        if summary:
+            # A stop is the session handing the turn back: it has either
+            # finished a stretch of work or is asking the user something.
+            note_activity(run, "turn", _first_line(summary)[:160])
+            run["awaiting_user"] = True
+            dirty = True
+
+    elif event == "UserPromptSubmit":
+        if run.get("awaiting_user"):
+            run["awaiting_user"] = False
             dirty = True
     elif event == "SessionEnd":
         run["git_head_after"] = git_head(run.get("cwd"))

@@ -957,3 +957,54 @@ class OnboardingTests(unittest.TestCase):
         popen.assert_called_once()
         self.assertIn("analyze", popen.call_args[0][0])
         self.assertNotIn("refresh", popen.call_args[0][0])
+
+
+class ActivityLogTests(unittest.TestCase):
+    """What the session is doing, as it does it."""
+
+    def setUp(self):
+        self.run = {"tasks": [], "files": []}
+
+    def test_a_tool_batch_becomes_one_readable_line(self):
+        for call, expected in (
+            ({"tool_name": "Read", "tool_input": {"file_path": "/a/b/main.py"}},
+             "read main.py"),
+            ({"tool_name": "Edit", "tool_input": {"file_path": "/a/bridge.js"}},
+             "edited bridge.js"),
+            ({"tool_name": "Bash", "tool_input": {"command": "npm test -- -w"}},
+             "ran npm test -- -w"),
+            ({"tool_name": "Grep", "tool_input": {"pattern": "x"}},
+             "searched the project"),
+        ):
+            self.assertEqual(expected, AE.describe_call(call))
+
+    def test_a_tool_worth_nothing_to_the_reader_is_skipped(self):
+        self.assertEqual("", AE.describe_call({"tool_name": "TaskUpdate"}))
+
+    def test_file_contents_never_reach_the_log(self):
+        got = AE.describe_call({"tool_name": "Write", "tool_input": {
+            "file_path": "/a/secrets.env", "content": "TOKEN=hunter2"}})
+        self.assertEqual("edited secrets.env", got)
+        self.assertNotIn("hunter2", got)
+
+    def test_entries_are_appended_with_a_time_and_a_kind(self):
+        self.assertTrue(AE.note_activity(self.run, "did", "read main.py"))
+        entry = self.run["activity"][0]
+        self.assertEqual("did", entry["kind"])
+        self.assertEqual("read main.py", entry["text"])
+        self.assertTrue(entry["at"])
+
+    def test_the_same_line_twice_running_is_not_repeated(self):
+        AE.note_activity(self.run, "did", "read main.py")
+        self.assertFalse(AE.note_activity(self.run, "did", "read main.py"))
+        self.assertEqual(1, len(self.run["activity"]))
+
+    def test_the_log_is_bounded(self):
+        for i in range(AE.MAX_ACTIVITY + 25):
+            AE.note_activity(self.run, "did", f"read file{i}.py")
+        self.assertEqual(AE.MAX_ACTIVITY, len(self.run["activity"]))
+        self.assertIn("file84", self.run["activity"][-1]["text"])
+
+    def test_an_empty_line_is_not_recorded(self):
+        self.assertFalse(AE.note_activity(self.run, "did", "   "))
+        self.assertEqual([], self.run.get("activity", []))

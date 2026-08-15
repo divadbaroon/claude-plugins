@@ -580,36 +580,34 @@ class LaunchedRunTests(BridgeTestCase):
                   % (json.dumps(goal_id), json.dumps(detail)))
         return self.run_js(
             js + "var roots = window.__hcPromptUI.rootsFromState(%s);"
-            % json.dumps(st) + "roots[0].agent.brief;")
+            % json.dumps(st) + "roots[0].agent.briefText;")
 
     def test_a_goal_that_never_ran_still_says_what_running_would_do(self):
-        rows = self.preview_for()
-        self.assertEqual(["runs in", "can read", "is told", "opens"],
-                         [r["k"] for r in rows])
+        text = self.preview_for()
+        self.assertIn("Opens Claude", text)
+        self.assertIn("press Enter", text)
 
-    def test_it_names_the_command_and_that_nothing_is_sent(self):
-        rows = {r["k"]: r["v"] for r in self.preview_for()}
-        self.assertIn("hc work g1", rows["opens"])
-        self.assertIn("not sent", rows["opens"])
+    def test_it_says_nothing_is_sent_without_the_user(self):
+        text = self.preview_for()
+        self.assertIn("nothing is sent until you press Enter", text)
 
     def test_it_reports_the_real_directory_and_briefing_shape(self):
         detail = {"brief": {"cwd": "/repo", "dirs": ["/repo"], "refs": [],
                             "told": ["5 of your own messages", "3 decisions"]}}
-        rows = {r["k"]: r["v"] for r in self.preview_for(detail=detail)}
-        self.assertEqual("/repo", rows["runs in"])
-        self.assertEqual("/repo", rows["can read"])
-        self.assertIn("5 of your own messages", rows["is told"])
-        self.assertIn("3 decisions", rows["is told"])
+        text = self.preview_for(detail=detail)
+        self.assertIn("Opens Claude in /repo", text)
+        self.assertIn("5 of your own messages", text)
+        self.assertIn("3 decisions", text)
 
     def test_an_uninferred_directory_says_so_rather_than_guessing(self):
-        rows = {r["k"]: r["v"] for r in self.preview_for()}
-        self.assertIn("no project directory inferred", rows["runs in"])
+        self.assertIn("no project directory has been inferred",
+                      self.preview_for())
 
-    def test_the_pane_renders_those_rows(self):
+    def test_the_pane_renders_it_as_a_paragraph(self):
         out = self.patched_bundle("out;")
-        self.assertIn("WHAT RUNNING THIS DOES", out)
-        self.assertIn("{{ bf.k }}", out)
-        self.assertIn("agentBrief: (sel && sel.agent && sel.agent.brief)", out)
+        self.assertIn("{{ agentBriefText }}", out)
+        self.assertIn("agentBriefText: (sel && sel.agent && sel.agent.briefText)",
+                      out)
 
     def test_running_it_switches_to_the_pane_that_shows_the_work(self):
         out = self.patched_bundle("out;")

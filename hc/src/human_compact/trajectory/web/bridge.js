@@ -262,25 +262,23 @@
   var TASK_STATE = { pending: "todo", in_progress: "doing", completed: "done" };
 
   function runPreview(goal, facts) {
-    // Four plain facts, each one true of the launch that is about to happen.
-    var rows = [];
-    rows.push(["runs in", facts && facts.cwd
-      ? facts.cwd
-      : "no project directory inferred yet — it will open where you are"]);
-    var readable = (facts && facts.dirs.length) ? facts.dirs.join(", ")
-      : (facts && facts.cwd ? facts.cwd : "");
-    rows.push(["can read", readable || "nothing attached yet"]);
-    rows.push(["is told", (facts && facts.told.length)
-      ? facts.told.join(" · ")
-      : "this goal and its place in the tree"]);
-    rows.push(["opens", "a terminal running `hc work " + goal.id
-      + "` — the prompt typed, not sent"]);
-    if (facts && facts.refs.length) {
-      rows.push(["cites", facts.refs.join(", ")]);
-    }
-    return rows.map(function (pair) {
-      return { k: pair[0], v: pair[1] };
-    });
+    // Prose, not a table: this is describing an action about to be taken on
+    // the reader's machine, in the order they need it — where it opens, what
+    // it already knows, and what it will not do without them.
+    var where = (facts && facts.cwd)
+      ? "Opens Claude in " + facts.cwd
+      : "Opens Claude where you are — no project directory has been inferred "
+        + "for this goal yet";
+    var knows = (facts && facts.told.length)
+      ? ", already holding this goal, where it sits under the goals above it, "
+        + "and " + facts.told.join(", ")
+      : ", already holding this goal and where it sits under the goals above it";
+    var cites = (facts && facts.refs.length)
+      ? " It is also pointed at " + facts.refs.join(", ") + "."
+      : "";
+    return where + knows + ", so none of it has to be explained again. "
+      + "The prompt is typed into that terminal and left there — nothing is "
+      + "sent until you press Enter." + cites;
   }
 
   function agentOf(goal, runs, claim) {
@@ -291,7 +289,7 @@
       if (proposed.length && !(claim && claim.goal_id === goal.id)) {
         // A proposal, plainly marked. The session's own tasks replace it.
         return { status: "proposed", branch: "", prompt: "", lastFile: "",
-                 brief: runPreview(goal, facts),
+                 briefText: runPreview(goal, facts),
                  todos: proposed.map(function (step) {
                    return { t: str(step), s: "todo", active: "" };
                  }), log: [] };
@@ -300,16 +298,19 @@
       // (which reads as "the button did nothing") or inventing steps.
       if (claim && claim.goal_id === goal.id) {
         return { status: "waiting", branch: "", prompt: str(claim.prompt),
-                 lastFile: "", brief: runPreview(goal, facts),
+                 lastFile: "", briefText: runPreview(goal, facts),
                  todos: [], log: [] };
       }
       // Nothing has run and nothing is proposed: still say what would happen.
       return { status: "idle", branch: "", prompt: "", lastFile: "",
-               brief: runPreview(goal, facts), todos: [], log: [] };
+               briefText: runPreview(goal, facts), todos: [], log: [] };
     }
     var run = rows[0];
+    var facts2 = (details[goal.id] || {}).brief || null;
     return {
       status: run.status === "finished" ? "done" : "running",
+      briefText: runPreview(goal, facts2),
+      awaiting: !!run.awaiting_user,
       branch: str(run.git_branch),
       prompt: str(run.user_prompt),
       lastFile: "",
@@ -318,7 +319,10 @@
                  s: TASK_STATE[task.status] || "todo",
                  active: str(task.activeForm) };
       }),
-      log: []
+      // Newest first on screen; the store appends, so reverse a copy.
+      log: array(run.activity).slice(-24).reverse().map(function (entry) {
+        return { ts: str(entry.at).slice(11, 19), m: str(entry.text) };
+      })
     };
   }
 
@@ -854,9 +858,15 @@
       // what, and by which command. All of it read from the same
       // briefing the prompt is built from.
       ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
-       "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT RUNNING THIS DOES</div><div style=\"margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:8px 11px\"><sc-for list=\"{{ agentBrief }}\" as=\"bf\" hint-placeholder-count=\"4\"><div style=\"display:flex;gap:10px;align-items:baseline;padding:2px 0\"><span style=\"flex:none;width:64px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ bf.k }}</span><span style=\"font:11px/1.55 'Source Code Pro',monospace;color:var(--dtxt);word-break:break-word\">{{ bf.v }}</span></div></sc-for></div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
+       "<div style=\"margin-top:12px;font:11.5px/1.7 'Source Code Pro',monospace;color:var(--mut);max-width:62ch;text-wrap:pretty\">{{ agentBriefText }}</div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
       ["agentLabel: (() => {",
-       "agentBrief: (sel && sel.agent && sel.agent.brief) || [],\n      agentLabel: (() => {"],
+       "agentBriefText: (sel && sel.agent && sel.agent.briefText) || '',\n      agentLabel: (() => {"],
+      // Review is the second half of a run, not a separate destination.
+      // It renders under the agent pane, where the run it reviews is.
+      ["showArt: !!sel && paneTab === 'artifact'",
+       "showArt: !!sel && paneTab === 'agent'"],
+      ["<span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span>\n",
+       "<!--review folded into agent-->\n"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
