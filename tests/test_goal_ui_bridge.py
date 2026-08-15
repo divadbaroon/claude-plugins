@@ -1320,6 +1320,35 @@ class LiveFeedTests(BridgeTestCase):
                           [["g2", "hc-run-dot hc-run-dot-needs"]],
                           []], drawn)
 
+    def test_the_dot_sits_at_the_right_edge_inside_the_delete_control(self):
+        order = json.loads(self.run_js(
+            "var host = document.documentElement;"
+            "var row = document.createElement('div');"
+            "row.setAttribute('data-hc-goal', 'g1');"
+            "host.appendChild(row);"
+            "['caret', 'title', 'del'].forEach(function (name) {"
+            "  var part = document.createElement('span');"
+            "  part.className = name; row.appendChild(part); });"
+            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
+            "  prompts: [], agent_runs: { g1: [{ status: 'running' }] } });"
+            "window.__hcPromptUI.renderRunDots();"
+            "JSON.stringify(row.children.map(function (c) "
+            "{ return c.className; }));"))
+        self.assertEqual(["caret", "title", "hc-run-dot", "del"], order)
+
+    def test_a_row_with_nothing_after_the_title_still_gets_its_dot(self):
+        # An add row, or one being edited, has no delete control to sit inside.
+        drawn = self.run_js(
+            "var host = document.documentElement;"
+            "var row = document.createElement('div');"
+            "row.setAttribute('data-hc-goal', 'g1');"
+            "host.appendChild(row);"
+            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
+            "  prompts: [], agent_runs: { g1: [{ status: 'running' }] } });"
+            "window.__hcPromptUI.renderRunDots();"
+            "row.children.length;")
+        self.assertEqual(1, drawn)
+
     def test_the_dot_comes_back_after_the_pane_redraws_under_it(self):
         # The same redraw that would have carried the state also destroys
         # anything placed in the row, so the poll has to put it back.
@@ -1355,6 +1384,9 @@ class LiveFeedTests(BridgeTestCase):
         css = self.run_js("window.__hcPromptUI.paneCss();")
         self.assertIn(".hc-run-dot{", css)
         self.assertIn("opacity:.45", css)
+        # pushed to the right edge: titles are ragged, so a marker that
+        # follows them lands somewhere different on every row
+        self.assertIn("margin-left:auto", css)
         self.assertIn("animation:hc-breathe 2.6s ease-in-out infinite", css)
         # blocked on the reader breathes harder
         self.assertIn(".hc-run-dot-needs{opacity:.9;animation-duration:1.3s}",

@@ -1027,12 +1027,13 @@
       ensurePaneStyles();
       if (!dot) {
         dot = document.createElement("span");
-        // Before the title, where a status light belongs, and after the
-        // caret and the completion circle so the row still lines up.
-        var title = row.querySelector("span");
-        row.insertBefore
-          ? row.insertBefore(dot, title ? title.nextSibling : null)
-          : row.appendChild(dot);
+        // The right edge, just inside the delete control: titles are ragged,
+        // so a marker that follows them lands in a different place on every
+        // row and stops being scannable as a column.
+        var kids = row.children || [];
+        var last = kids.length ? kids[kids.length - 1] : null;
+        if (last && row.insertBefore) row.insertBefore(dot, last);
+        else row.appendChild(dot);
       }
       var needs = live.label === "NEEDS YOU";
       dot.className = "hc-run-dot" + (needs ? " hc-run-dot-needs" : "");
@@ -1549,7 +1550,7 @@
       ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
       // Light on purpose: it marks a row without competing with the title
       // beside it. A run that is blocked on the reader breathes harder.
-      ".hc-run-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--acc,#a5492a);opacity:.45;animation:hc-breathe 2.6s ease-in-out infinite}",
+      ".hc-run-dot{flex:none;margin-left:auto;width:6px;height:6px;border-radius:50%;background:var(--acc,#a5492a);opacity:.45;animation:hc-breathe 2.6s ease-in-out infinite}",
       ".hc-run-dot-needs{opacity:.9;animation-duration:1.3s}",
       "@keyframes hc-breathe{0%,100%{opacity:.18;transform:scale(.82)}50%{opacity:.75;transform:scale(1)}}",
       "@media (prefers-reduced-motion: reduce){.hc-run-dot{animation:none;opacity:.7}}",
