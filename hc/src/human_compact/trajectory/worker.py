@@ -77,6 +77,9 @@ def synthesize_from_cache(sy, days, log=print):
     return True
 
 
+BACKLOG_WORKERS = 8      # a backlog is a batch; a single arrival is one call
+
+
 def drain(days=30, log=print):
     from .secure_io import secure_existing_tree
     secure_existing_tree(state.trajdir(), D.VAULT)
@@ -95,30 +98,48 @@ def drain(days=30, log=print):
             q = state.pending()
             if not q:
                 break
+            # One conversation arriving is one call; a backlog is a batch.
+            # Extracting a backlog one at a time made catching up take as long
+            # as the conversations took to happen.
+            batch, missing = [], []
             for sid in q:
-                state.set_processing(sid)
                 sess = _session_by_id(sid, days)
-                qfile = state.qdir() / sid
                 if sess is None:
-                    log(f"worker: {sid[:8]} not found in vault window; dropping")
+                    missing.append(sid)
+                else:
+                    batch.append(sess)
+            for sid in missing:
+                log(f"worker: {sid[:8]} not found in vault window; dropping")
+                (state.qdir() / sid).unlink(missing_ok=True)
+            if not batch:
+                continue
+            state.set_processing(batch[0]["session_id"])
+            try:
+                _results, fails = X.extract_all(
+                    batch, ex, state.trajdir() / "conversations",
+                    log=lambda m: log("worker: " + m.strip()),
+                    workers=min(BACKLOG_WORKERS, len(batch)))
+                failed = dict(fails)
+            except Exception as batch_error:             # noqa: BLE001
+                # The batch call itself broke, not one conversation in it.
+                # Every item in the batch is unfinished; recording each keeps
+                # the queue draining instead of retrying the same crash.
+                failed = {s["session_id"]: str(batch_error) for s in batch}
+            for sess in batch:
+                sid = sess["session_id"]
+                qfile = state.qdir() / sid
+                if sid in failed:
+                    log(f"worker: {sid[:8]} failed: {failed[sid]}")
+                    secure_dir(state.fdir(), D.VAULT)
+                    atomic_write_text(state.fdir() / sid, str(failed[sid]),
+                                      root=D.VAULT)
                     qfile.unlink(missing_ok=True)
                     continue
-                try:
-                    res, fails = X.extract_all([sess], ex, state.trajdir() / "conversations",
-                                               log=lambda m: log("worker: " + m.strip()))
-                    if fails:
-                        raise RuntimeError(fails[0][1])
-                    qfile.unlink(missing_ok=True)
-                    handled += 1
-                    did_work = True
-                    new_sids.append(sid)
-                except Exception as e:                   # noqa: BLE001
-                    log(f"worker: {sid[:8]} failed: {e}")
-                    secure_dir(state.fdir(), D.VAULT)
-                    atomic_write_text(state.fdir() / sid, str(e), root=D.VAULT)
-                    qfile.unlink(missing_ok=True)
-                finally:
-                    state.clear_processing()
+                qfile.unlink(missing_ok=True)
+                handled += 1
+                did_work = True
+                new_sids.append(sid)
+            state.clear_processing()
             if did_work or not state.pending():
                 state.set_processing(None, phase="synthesizing")
                 log("worker: synthesizing lens from cached representations…")

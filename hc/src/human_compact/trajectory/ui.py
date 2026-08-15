@@ -377,6 +377,9 @@ def setup_state(trajdir):
         # it instead of animating an anonymous bar.
         "current": current,
         "phase": (processing or {}).get("phase") if processing else None,
+        # How many conversations are in flight, so the UI can say "4 at a
+        # time" rather than naming one of four.
+        "inflight": len((processing or {}).get("active") or []),
         "convos": rows,
     }
 

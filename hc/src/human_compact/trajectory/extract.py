@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import discover as D
+from . import retry as R
 from .secure_io import atomic_write_json, secure_dir
 
 EXTRACTOR_VERSION = "1"
@@ -102,17 +103,42 @@ def extract_all(sessions, provider, outdir: Path, refresh=False, log=print, work
     # higher-evidence conversations first
     misses.sort(key=lambda m: (m[0]["low_evidence"], -m[0]["user_turn_count"]))
 
-    def job(m):
-        sess, key, cache_file = m
-        tick("extracting", sess)
+    gate = R.Gate()
+    inflight = []
+
+    def announce():
         # The UI polls this to say what is being analyzed right now. Without
         # it a long extraction is indistinguishable from a hung one.
         try:
             from . import state as _state
-            _state.set_processing(sess["session_id"], phase="extracting")
+            with lock:
+                active = list(inflight)
+            _state.set_processing(active[0] if active else None,
+                                  phase="extracting", active=active)
         except Exception:                            # noqa: BLE001 - advisory
             pass
-        data = provider.generate_json(_payload(sess))
+
+    def job(m):
+        sess, key, cache_file = m
+        tick("extracting", sess)
+        with lock:
+            inflight.append(sess["session_id"])
+        announce()
+        try:
+            def once():
+                return provider.generate_json(_payload(sess))
+
+            def retried(attempt, delay, error):
+                with lock:
+                    log(f"  retry      {sess['session_id'][:8]} in {delay:.0f}s "
+                        f"(attempt {attempt}): {str(error)[:80]}")
+
+            data = R.call(once, gate=gate, on_retry=retried)
+        finally:
+            with lock:
+                if sess["session_id"] in inflight:
+                    inflight.remove(sess["session_id"])
+            announce()
         return _finish(sess, data, key, provider, cache_file)
 
     if misses:

@@ -469,7 +469,7 @@ def trajectory_main(argv=None):
     ap.add_argument("--synth-model")
     ap.add_argument("--refresh", action="store_true", help="ignore extraction cache")
     ap.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
-    ap.add_argument("--workers", type=int, default=4, help="parallel extraction workers (default 4)")
+    ap.add_argument("--workers", type=int, default=8, help="parallel extraction workers (default 8)")
     ap.add_argument("--no-serve", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--browser", action="store_true", help="also open the legacy browser evidence view")
     ap.add_argument("--no-interact", action="store_true", help="print the lens and exit")
@@ -651,7 +651,7 @@ def refresh_main(argv=None):
     ap = argparse.ArgumentParser(prog="hc refresh",
         description="Process all pending/stale conversations and regenerate the lens.")
     ap.add_argument("--days", type=int, default=30)
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args(argv)
     from .trajectory import state
     if not state.acquire_lock(wait_s=60):
@@ -677,7 +677,7 @@ def analyze_main(argv=None):
     ap = argparse.ArgumentParser(prog="hc analyze",
         description="Analyze the vaulted history and build the goal tree.")
     ap.add_argument("--days", type=int, default=30)
-    ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args(argv or [])
     from .trajectory import state as ST
     refresh_main(["--days", str(args.days), "--workers", str(args.workers)])

@@ -711,6 +711,11 @@
       // arrives; the second setState re-renders it in place.
       ["open: () => this.setState({ convSel: c.id })",
        "open: () => { this.setState({ convSel: c.id }); if (window.__hcPromptUI) window.__hcPromptUI.loadThread(c.id).then((got) => { if (got) this.setState({ convSel: c.id }); }); }"],
+      // A part-filled bar claims a conversation is a known fraction done.
+      // It is not: one call either returns or it does not. Dots that travel
+      // say "working" without inventing a percentage.
+      ["<sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-block;width:72px;height:3px;border-radius:2px;background:var(--accbg);overflow:hidden\"><span style=\"display:block;height:100%;width:{{ cv.barW }};background:var(--acc)\"></span></span></sc-if>",
+       "<sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span class=\"hc-rowdots\"><span></span><span></span><span></span></span></sc-if>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -770,8 +775,11 @@
   // so 100% of the container is 100% of the panel.
   var BANNER_CSS = [
       ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:14px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
-      ".hc-banner-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-pulse 1.4s ease-in-out infinite}",
-      "@keyframes hc-pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}",
+      ".hc-rowdots{display:inline-block;position:relative;width:72px;height:6px;overflow:hidden;vertical-align:middle}",
+      ".hc-rowdots>span{position:absolute;top:1px;left:0;width:4px;height:4px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-travel 1.5s linear infinite}",
+      ".hc-rowdots>span:nth-child(2){animation-delay:.16s}",
+      ".hc-rowdots>span:nth-child(3){animation-delay:.32s}",
+      "@keyframes hc-travel{0%{transform:translateX(-6px);opacity:0}12%{opacity:1}88%{opacity:1}100%{transform:translateX(72px);opacity:0}}",
       ".hc-banner-what{flex:none;font-weight:600}",
       ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
@@ -832,7 +840,7 @@
       banner.setAttribute("role", "status");
       banner.setAttribute("aria-live", "polite");
       banner.style.position = "relative";
-      ["hc-banner-dot", "hc-banner-what", "hc-banner-now", "hc-banner-count",
+      ["hc-banner-what", "hc-banner-now", "hc-banner-count",
        "hc-banner-bar"].forEach(function (cls) {
         var part = document.createElement("div");
         part.className = cls;
@@ -843,14 +851,21 @@
     var counts = (setupState && setupState.conversations) || { total: 0, analyzed: 0 };
     var current = setupState && setupState.current;
     var goalPhase = setupState && setupState.phase === "synthesizing";
+    var inflight = (setupState && setupState.inflight) || 0;
+    // Say what is being done and what it is for. "Analyzing" alone tells the
+    // reader that something is happening to their data without saying why.
     banner.querySelector(".hc-banner-what").textContent = goalPhase
-      ? "Building your goal tree" : "Analyzing your conversations";
-    banner.querySelector(".hc-banner-now").textContent = current && current.title
-      ? "now: " + current.title
-      : (current ? "now: " + String(current.id).slice(0, 8)
-                 : "goals appear here as this finishes");
-    banner.querySelector(".hc-banner-count").textContent =
-      counts.analyzed + " of " + counts.total;
+      ? "Working out your goals from what it read"
+      : "Reading your conversations to work out what you are building";
+    banner.querySelector(".hc-banner-now").textContent = goalPhase
+      ? "grouping related work into goals and subgoals"
+      : (current && current.title ? "reading: " + current.title
+         : (current ? "reading: " + String(current.id).slice(0, 8)
+                    : "your goals appear here when this finishes"));
+    banner.querySelector(".hc-banner-count").textContent = goalPhase
+      ? String(counts.total) + " read"
+      : (counts.analyzed + " of " + counts.total
+         + (inflight > 1 ? "  ·  " + inflight + " at a time" : ""));
     banner.querySelector(".hc-banner-bar").style.width =
       (counts.total ? Math.round(counts.analyzed / counts.total * 100) : 0) + "%";
   }

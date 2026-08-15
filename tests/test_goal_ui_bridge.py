@@ -571,19 +571,50 @@ class AnalysisBannerTests(BridgeTestCase):
             "  return e.className === 'hc-banner'; })[0];"
             "b ? b.children.map(function (c) { return c.textContent; }) : null;")
 
+    def test_there_is_no_blinking_dot(self):
+        css = self.run_js("window.__hcPromptUI.bannerCss();")
+        self.assertNotIn("hc-banner-dot", css)
+        self.assertNotIn("hc-pulse", css)
+
+    def test_the_row_indicator_travels_instead_of_claiming_a_percentage(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("hc-rowdots", out)
+        self.assertNotIn("width:{{ cv.barW }}", out)
+        css = self.run_js("window.__hcPromptUI.bannerCss();")
+        self.assertIn("hc-travel", css)
+        self.assertIn("infinite", css)
+
+    def test_it_says_why_the_reading_is_happening(self):
+        parts = self.banner(self.RUNNING)
+        joined = " ".join(parts)
+        self.assertIn("Reading your conversations to work out what you are "
+                      "building", joined)
+        self.assertIn("reading: Debugging the overlay", joined)
+
+    def test_it_reports_how_many_run_at_once(self):
+        parts = self.banner(dict(self.RUNNING, inflight=8))
+        self.assertIn("8 at a time", " ".join(parts))
+
+    def test_one_at_a_time_is_not_worth_saying(self):
+        parts = self.banner(dict(self.RUNNING, inflight=1))
+        self.assertNotIn("at a time", " ".join(parts))
+
     def test_it_names_what_is_running_and_which_conversation(self):
         parts = self.banner(self.RUNNING)
-        self.assertIn("Analyzing your conversations", parts)
-        self.assertIn("now: Debugging the overlay", parts)
+        self.assertIn("Reading your conversations to work out what you are "
+                      "building", parts)
+        self.assertIn("reading: Debugging the overlay", parts)
         self.assertIn("12 of 89", parts)
 
     def test_it_says_when_it_is_building_goals_instead(self):
         setup = dict(self.RUNNING, phase="synthesizing")
-        self.assertIn("Building your goal tree", self.banner(setup))
+        self.assertIn("Working out your goals from what it read",
+                      self.banner(setup))
 
     def test_it_explains_the_wait_when_no_conversation_is_named(self):
         setup = dict(self.RUNNING, current=None)
-        self.assertIn("goals appear here as this finishes", self.banner(setup))
+        self.assertIn("your goals appear here when this finishes",
+                      self.banner(setup))
 
     def test_it_disappears_when_nothing_is_running(self):
         setup = dict(self.RUNNING, running=False, current=None,

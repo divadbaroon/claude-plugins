@@ -87,10 +87,13 @@ def release_lock():
         pass
 
 
-def set_processing(sid, phase="extracting"):
+def set_processing(sid, phase="extracting", active=None):
     secure_dir(statef().parent, D.VAULT)
     atomic_write_json(statef(),
         {"pid": os.getpid(), "phase": phase, "current": sid,
+         # Several conversations run at once; naming one of them and calling
+         # it "now" understates what is happening by a factor of the pool.
+         "active": list(active or ([sid] if sid else [])),
          "started": int(time.time())}, root=D.VAULT)
 
 
@@ -103,7 +106,9 @@ def processing():
     try:
         st = json.loads(statef().read_text())
         if _pid_alive(st.get("pid")):
-            return {"phase": st.get("phase", "extracting"), "current": st.get("current")}
+            return {"phase": st.get("phase", "extracting"),
+                    "current": st.get("current"),
+                    "active": st.get("active") or []}
     except (OSError, ValueError, KeyError):
         pass
     return None
