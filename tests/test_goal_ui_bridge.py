@@ -888,9 +888,17 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("showNotes: !!sel && paneTab === 'agent'", out)
 
     def test_the_pane_says_what_it_is_for(self):
-        self.assertIn("Run Claude Code on this goal with the context Vault "
-                      "has assembled. Progress appears in REVIEW.",
-                      self.patched_bundle("out;"))
+        self.assertIn("Run Claude Code on this goal with the self-contained "
+                      "context Vault has assembled. Progress appears in "
+                      "REVIEW.", self.patched_bundle("out;"))
+
+    def test_the_prompt_heading_is_the_disclosure_itself(self):
+        # The disclosure replaced the section heading; keeping both printed
+        # RECOMMENDED PROMPT twice, once inside the thing it labels.
+        out = self.patched_bundle("out;")
+        self.assertIn('<summary class="hc-promptsum">RECOMMENDED PROMPT'
+                      "</summary>", out)
+        self.assertEqual(1, out.count("RECOMMENDED PROMPT"))
 
     def test_review_opens_as_soon_as_a_run_exists(self):
         # It carries the live feed now, so gating it on completion would hide
@@ -903,7 +911,8 @@ class LiveFeedTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         self.assertIn("showPrompt: !!sel && paneTab === 'agent'", out)
         self.assertIn('<details class="hc-promptbox">'
-                      '<summary class="hc-promptsum">Prompt</summary>', out)
+                      '<summary class="hc-promptsum">RECOMMENDED PROMPT'
+                      "</summary>", out)
         # collapsed by default, and it is the same editable prompt as before
         self.assertNotIn('<details class="hc-promptbox" open>', out)
         self.assertIn("{{ draft }}", out)
