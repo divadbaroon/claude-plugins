@@ -337,6 +337,9 @@
       ts: Date.parse(run.finished_at || run.started_at || "") || Date.now(),
       branch: str(run.git_branch),
       status: run.status === "finished" ? "ready" : "pending",
+      // REVIEW is for what a finished run left behind.
+      finished: str(latest.state) === "finished" || str(latest.state) === "failed"
+        || run.status === "finished",
       note: "",
       summary: str(run.summary) || str(latest.summary),
       files: files.map(function (f) {
@@ -975,18 +978,17 @@
        "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Opening the modal is not launching: the tab only changes once a\n    // run actually exists to review.\n    if (window.__hcAgent) {\n      window.__hcAgent.launch(id).then((started) => {\n        if (started) this.set(() => ({ paneTab: 'artifact' }));\n      }).catch(() => {});\n    }\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
        "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
-      // Review answers one question: what has the agent done toward this
-      // goal, and what needs the reader. Everything here is recorded by
-      // the hooks; nothing is inferred about work that was not observed.
-      ["<sc-if value=\"{{ hasArtifact }}\" hint-placeholder-val=\"{{ false }}\">\n",
-       "<sc-if value=\"{{ hasArtifact }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"margin-top:16px;font:600 12.5px 'Source Code Pro',monospace;color:var(--ink)\">{{ revHeadline }}</div><sc-if value=\"{{ revHasDid }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:10px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:7px 11px;max-height:190px;overflow-y:auto\"><sc-for list=\"{{ revDid }}\" as=\"rd\" hint-placeholder-count=\"4\"><div style=\"display:flex;gap:9px;align-items:baseline;padding:1.5px 0\"><span style=\"flex:none;font:10.5px 'Source Code Pro',monospace;color:{{ rd.c }}\">{{ rd.mark }}</span><span style=\"font:11px/1.55 'Source Code Pro',monospace;color:var(--dtxt);word-break:break-word\">{{ rd.text }}</span></div></sc-for></div></sc-if><sc-if value=\"{{ revHasAttention }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:10px;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:8px 11px\"><div style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--acc)\">NEEDS YOUR DECISION</div><div style=\"margin-top:5px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap\">{{ revAttention }}</div></div></sc-if><sc-if value=\"{{ revHasChecked }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:12px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">VERIFIED BY RUNNING</div><sc-for list=\"{{ revChecked }}\" as=\"rc\" hint-placeholder-count=\"2\"><div style=\"margin-top:4px;font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ rc.text }}</div></sc-for></sc-if><sc-if value=\"{{ revHasProgress }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:12px;font:11px 'Source Code Pro',monospace;color:var(--mut)\">{{ revProgress }}</div></sc-if><sc-if value=\"{{ revHasResume }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:8px;font:11px 'Source Code Pro',monospace;color:var(--fnt)\">reopen this session: {{ revResume }}</div></sc-if>"],
+      // The live run is drawn by the bridge, above the plan it belongs to.
+      // The artifact reads its own state only at boot, so anything that
+      // changes while the page is open must be rendered directly.
+      ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
+       "<div class=\"hc-live\"></div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
+      // There is nothing to review until a run has finished, and a tab
+      // that only ever says 'no artifact yet' is a dead end.
+      ["<span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span>",
+       "<sc-if value=\"{{ showReviewTab }}\" hint-placeholder-val=\"{{ false }}\"><span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span></sc-if>"],
       ["artFiles: (art ? (art.files || []) : []).map(",
-       "revHeadline: (art && art.headline) || '',\n      revDid: ((art && art.did) || []).map(d => ({\n        text: d.text,\n        mark: d.kind === 'task' ? '\\u2713' : (d.kind === 'turn' ? '\\u2192' : '\\u00b7'),\n        c: d.kind === 'task' ? 'var(--acc)' : 'var(--fnt)' })),\n      revHasDid: !!(art && (art.did || []).length),\n      revAttention: (art && art.attention) || '',\n      revHasAttention: !!(art && art.attention),\n      revChecked: ((art && art.checked) || []).map(t => ({ text: t })),\n      revHasChecked: !!(art && (art.checked || []).length),\n      revProgress: (art && art.progress) || '',\n      revHasProgress: !!(art && art.progress),\n      revResume: (art && art.resume) || '',\n      revHasResume: !!(art && art.resume),\n      artFiles: (art ? (art.files || []) : []).map("],
-      // A place for the bridge to draw the live run into. The artifact
-      // reads its own state only at boot, so anything that changes while
-      // the page is open has to be rendered directly, as the banner is.
-      ["value=\"{{ showArt }}\" hint-placeholder-val=\"{{ false }}\">\n",
-       "value=\"{{ showArt }}\" hint-placeholder-val=\"{{ false }}\">\n<div class=\"hc-live\"></div>\n"],
+       "showReviewTab: !!(art && art.finished),\n      artFiles: (art ? (art.files || []) : []).map("],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];

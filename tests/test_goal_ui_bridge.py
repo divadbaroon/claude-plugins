@@ -739,6 +739,30 @@ class LiveFeedTests(BridgeTestCase):
         classes = [c for c, _ in self.drawn(running)]
         self.assertNotIn("hc-live-wait", classes)
 
+    def test_a_finished_run_lets_review_appear(self):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [],
+              "agent_runs": {"g1": [{"status": "finished", "tasks": []}]}}
+        got = self.run_js(
+            "window.__hcPromptUI.setDetailForTest('g1', %s);"
+            % json.dumps({"review": [{"state": "finished"}], "sections": {}}) +
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(st) + "roots[0].artifact.finished;")
+        self.assertTrue(got)
+
+    def test_a_running_run_keeps_review_hidden(self):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [],
+              "agent_runs": {"g1": [{"status": "running", "tasks": []}]}}
+        got = self.run_js(
+            "window.__hcPromptUI.setDetailForTest('g1', %s);"
+            % json.dumps({"review": [{"state": "running"}], "sections": {}}) +
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(st) + "roots[0].artifact.finished;")
+        self.assertFalse(got)
+
     def test_a_run_with_no_session_offers_no_button(self):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
@@ -748,69 +772,23 @@ class LiveFeedTests(BridgeTestCase):
                     self.drawn(dict(self.RUN, attention="Migrate or not?")))
         self.assertEqual("Migrate or not?", rows["hc-live-ask"])
 
-    def test_the_pane_has_somewhere_to_draw(self):
-        self.assertIn('<div class="hc-live"></div>', self.patched_bundle("out;"))
-
-
-@unittest.skipUnless(NODE, "node is required for bridge.js tests")
-class ReviewReportTests(BridgeTestCase):
-    """Review must answer: what did it do, and does it need me?"""
-
-    def artifact_for(self, review):
-        st = {"scope": "global", "revision": "r1", "generated_at": "",
-              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
-              "prompts": [],
-              "agent_runs": {"g1": [{"status": "running", "tasks": []}]}}
-        return self.run_js(
-            "window.__hcPromptUI.setDetailForTest('g1', %s);"
-            % json.dumps({"review": [review], "sections": {}}) +
-            "var roots = window.__hcPromptUI.rootsFromState(%s);"
-            % json.dumps(st) + "roots[0].artifact;")
-
-    def test_the_headline_is_the_state_and_how_long(self):
-        got = self.artifact_for({"state": "running", "elapsed": "8 min"})
-        self.assertEqual("Running · 8 min", got["headline"])
-
-    def test_waiting_says_so_and_carries_the_question(self):
-        got = self.artifact_for({"state": "waiting", "elapsed": "2 min",
-                                 "attention": "Migrate legacy records?"})
-        self.assertEqual("Waiting on you · 2 min", got["headline"])
-        self.assertEqual("Migrate legacy records?", got["attention"])
-
-    def test_what_it_did_is_chronological_and_typed(self):
-        got = self.artifact_for({"state": "running", "did": [
-            {"at": "10:01:02", "kind": "did", "text": "read a.py"},
-            {"at": "10:02:03", "kind": "task", "text": "finished: wire it up"}]})
-        self.assertEqual(["read a.py", "finished: wire it up"],
-                         [d["text"] for d in got["did"]])
-        self.assertEqual(["did", "task"], [d["kind"] for d in got["did"]])
-
-    def test_progress_counts_steps_and_subgoals(self):
-        got = self.artifact_for({"state": "running",
-                                 "tasks": {"done": 2, "total": 3},
-                                 "subgoals": {"done": 2, "total": 3}})
-        self.assertIn("2/3 steps", got["progress"])
-        self.assertIn("2/3 subgoals complete", got["progress"])
-
-    def test_it_carries_what_was_checked_and_how_to_reopen(self):
-        got = self.artifact_for({"state": "finished",
-                                 "checked": ["npm test"],
-                                 "resume": "claude -r abc-123"})
-        self.assertEqual(["npm test"], got["checked"])
-        self.assertEqual("claude -r abc-123", got["resume"])
-
-    def test_a_run_with_nothing_recorded_claims_nothing(self):
-        got = self.artifact_for({"state": "running"})
-        self.assertEqual([], got["did"])
-        self.assertEqual("", got["attention"])
-        self.assertEqual("", got["progress"])
-
-    def test_the_pane_renders_each_part(self):
+    def test_the_feed_is_drawn_on_the_agent_pane(self):
         out = self.patched_bundle("out;")
-        for token in ("{{ revHeadline }}", "NEEDS YOUR DECISION",
-                      "VERIFIED BY RUNNING", "{{ revProgress }}",
-                      "reopen this session"):
-            self.assertIn(token, out)
+        self.assertIn('<div class="hc-live"></div><div style="margin-top:16px;'
+                      "font:600 9.5px 'Source Code Pro',monospace;"
+                      'letter-spacing:1px;color:var(--mut)">AGENT TODOS</div>',
+                      out)
+
+    def test_review_is_hidden_until_a_run_has_finished(self):
+        out = self.patched_bundle("out;")
+        self.assertIn('<sc-if value="{{ showReviewTab }}"', out)
+        self.assertIn("showReviewTab: !!(art && art.finished)", out)
+
+    def test_review_no_longer_repeats_the_log(self):
+        out = self.patched_bundle("out;")
+        for gone in ("revHeadline", "NEEDS YOUR DECISION",
+                     "VERIFIED BY RUNNING", "reopen this session"):
+            self.assertNotIn(gone, out)
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
