@@ -1181,6 +1181,21 @@ class LiveFeedTests(BridgeTestCase):
             self.assertIn(said, out, state)
         self.assertIn("if (a.awaiting) return 'waiting for your reply", out)
 
+    def test_the_pane_follows_the_selection_back_to_context(self):
+        # Every pane is about the selected goal. Carrying AGENT or REVIEW over
+        # to the next goal lands on a tab that may not be offered for it.
+        out = self.patched_bundle("out;")
+        self.assertIn("selId: n.id, paneTab: 'context'", out)
+        self.assertIn("selId: ids[nx], editId: null, paneTab: 'context'", out)
+        self.assertIn("selId: curConv.goalId, editId: null, paneTab: 'context'",
+                      out)
+
+    def test_starting_a_run_still_opens_the_pane_that_shows_it(self):
+        # The one move away from CONTEXT that the reader asked for.
+        out = self.patched_bundle("out;")
+        self.assertIn("if (started) this.set(() => ({ paneTab: 'artifact' }));",
+                      out)
+
     def test_the_status_carries_no_invented_progress_bar(self):
         # A percentage over a step count the agent invents as it goes is not
         # progress; on a finished run it drew an empty tan track.

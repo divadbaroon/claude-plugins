@@ -1108,6 +1108,15 @@
       // A run blocked on the reader is as urgent as one in flight.
       ["agentC: (sel && sel.agent && sel.agent.status === 'running') ? 'var(--acc)' : 'var(--mut)',",
        "agentC: (sel && sel.agent && (sel.agent.status === 'running' || sel.agent.awaiting)) ? 'var(--acc)' : 'var(--mut)',"],
+      // Every pane is about the selected goal, so the pane must follow the
+      // selection. Landing on another goal's AGENT or REVIEW — a tab that
+      // may not even be offered for this one — reads as an empty pane.
+      ["sel: () => { if (this._justDragged) return; this.set(() => ({ selId: n.id })); },",
+       "sel: () => { if (this._justDragged) return; this.set(() => ({ selId: n.id, paneTab: 'context' })); },"],
+      ["this.set(() => ({ selId: ids[nx], editId: null }));",
+       "this.set(() => ({ selId: ids[nx], editId: null, paneTab: 'context' }));"],
+      ["this.set(() => ({ page: 'goals', selId: curConv.goalId, editId: null }));",
+       "this.set(() => ({ page: 'goals', selId: curConv.goalId, editId: null, paneTab: 'context' }));"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
