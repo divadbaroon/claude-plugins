@@ -676,13 +676,27 @@ class LiveFeedTests(BridgeTestCase):
             "pane.className = 'hc-live';"
             "document.body.appendChild(pane);"
             "window.__hcPromptUI.renderLive('g1', %s);" % json.dumps([run]) +
-            "JSON.stringify(pane.children.map(function (c) {"
-            "  return [c.className, c.textContent]; }));"))
+            "var flat = [];"
+            "pane.children.forEach(function (c) {"
+            "  if (c.children.length) {"
+            "    c.children.forEach(function (k) {"
+            "      flat.push([k.className, k.textContent]); });"
+            "  } else { flat.push([c.className, c.textContent]); } });"
+            "JSON.stringify(flat);"))
 
     def test_it_draws_into_the_pane_itself(self):
         rows = self.drawn(self.RUN)
         self.assertEqual("hc-live-head", rows[0][0])
         self.assertEqual("Running · 2 min", rows[0][1])
+
+    def test_the_heading_is_the_first_thing_drawn(self):
+        first = self.run_js(
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.renderLive('g1', %s);" % json.dumps([self.RUN]) +
+            "pane.children[0].className;")
+        self.assertEqual("hc-live-top", first)
 
     def test_newest_action_first(self):
         rows = [t for c, t in self.drawn(self.RUN) if c == "hc-live-did"]
@@ -699,6 +713,31 @@ class LiveFeedTests(BridgeTestCase):
         rows = dict((c, t) for c, t in
                     self.drawn(dict(self.RUN, session_id="abc-123")))
         self.assertEqual("open the conversation", rows["hc-live-open"])
+
+    def test_the_button_sits_with_the_heading_not_at_the_bottom(self):
+        where = self.run_js(
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.renderLive('g1', %s);"
+            % json.dumps([dict(self.RUN, session_id="abc-123")]) +
+            "JSON.stringify(pane.children[0].children.map(function (c) "
+            "{ return c.className; }));")
+        self.assertEqual(["hc-live-head", "hc-live-open"], json.loads(where))
+
+    def test_a_waiting_run_says_so_on_the_line_itself(self):
+        waiting = dict(self.RUN, state="waiting", did=[
+            {"at": "03:11", "kind": "did", "text": "read a.py"},
+            {"at": "03:12", "kind": "turn", "text": "Migrate the records?"}])
+        rows = dict((c, t) for c, t in self.drawn(waiting))
+        self.assertIn("waiting for your decision", rows["hc-live-wait"])
+        self.assertIn("Migrate the records?", rows["hc-live-wait"])
+
+    def test_a_running_turn_is_not_marked_as_waiting(self):
+        running = dict(self.RUN, state="running", did=[
+            {"at": "03:12", "kind": "turn", "text": "Done with that part."}])
+        classes = [c for c, _ in self.drawn(running)]
+        self.assertNotIn("hc-live-wait", classes)
 
     def test_a_run_with_no_session_offers_no_button(self):
         classes = [c for c, _ in self.drawn(self.RUN)]

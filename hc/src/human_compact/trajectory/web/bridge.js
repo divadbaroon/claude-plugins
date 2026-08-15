@@ -614,10 +614,17 @@
     if (run.elapsed) head += " \u00b7 " + str(run.elapsed);
     rows.push(["head", head]);
     if (run.attention) rows.push(["ask", str(run.attention)]);
-    array(run.did).slice().reverse().forEach(function (entry) {
+    var waiting = str(run.state) === "waiting";
+    array(run.did).slice().reverse().forEach(function (entry, index) {
       var mark = entry.kind === "task" ? "\u2713"
-        : (entry.kind === "turn" ? "\u2192" : "\u00b7");
-      rows.push(["did", str(entry.at) + "  " + mark + "  " + str(entry.text)]);
+        : (entry.kind === "turn" ? "\u23f8" : "\u00b7");
+      // The newest turn is the one the reader is being kept waiting by; say
+      // so on the line itself, not only in the heading.
+      var kind = (waiting && index === 0 && entry.kind === "turn")
+        ? "wait" : "did";
+      var text = str(entry.at) + "  " + mark + "  " + str(entry.text);
+      if (kind === "wait") text += "   \u2014 waiting for your decision";
+      rows.push([kind, text]);
     });
     array(run.checked).forEach(function (command) {
       rows.push(["check", "verified by running: " + str(command)]);
@@ -645,11 +652,14 @@
     while (host.firstChild) host.removeChild(host.firstChild);
     if (!rows.length) return true;
     ensureLiveStyles();
+    var head = document.createElement("div");
+    head.className = "hc-live-top";
+    host.appendChild(head);
     rows.forEach(function (row) {
       var node = document.createElement("div");
       node.className = "hc-live-" + row[0];
       node.textContent = row[1];
-      host.appendChild(node);
+      (row[0] === "head" ? head : host).appendChild(node);
     });
     var session = run && str(run.session_id);
     if (session) {
@@ -669,7 +679,7 @@
             : ((result && result.error) || "could not open it");
         });
       };
-      host.appendChild(open);
+      head.appendChild(open);
     }
     return true;
   }
@@ -1053,12 +1063,14 @@
     style.id = "hc-live-style";
     style.textContent = [
       ".hc-live{margin-top:14px}",
-      ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111);margin-bottom:8px}",
+      ".hc-live-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}",
+      ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-live-wait{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-ask{margin:0 0 8px;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
       ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
       ".hc-live-foot{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      ".hc-live-open{margin-top:10px;border:1px solid var(--acc,#a5492a);background:var(--accbg,#f5e2d9);color:var(--ink,#111);border-radius:2px;padding:5px 12px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
+      ".hc-live-open{flex:none;border:1px solid var(--acc,#a5492a);background:var(--accbg,#f5e2d9);color:var(--ink,#111);border-radius:2px;padding:5px 12px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
       ".hc-live-open:hover{background:var(--acchov,#faf1ec)}",
       ".hc-live-open:disabled{opacity:.6;cursor:default}"
     ].join("");

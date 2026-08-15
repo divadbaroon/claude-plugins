@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .secure_io import atomic_write_json, secure_dir
+from .secure_io import atomic_write_json, atomic_write_text, secure_dir
 
 RUNS_DIRNAME = "agent-runs"
 PENDING_NAME = "pending.json"
@@ -444,9 +444,65 @@ on run argv
     set w to do script ("exec " & quoted form of p)
     set winId to id of (first window whose tabs contains w)
     set index of window id winId to 1
+    return winId
   end tell
 end run
 """
+
+# Raising the window that is already running the session, rather than
+# starting a second one beside it.
+_RAISE_WINDOW = """
+on run argv
+  set winId to (item 1 of argv) as integer
+  tell application "Terminal"
+    set index of window id winId to 1
+  end tell
+  tell application "System Events"
+    tell process "Terminal"
+      perform action "AXRaise" of (first window whose value of attribute "AXMain" is true)
+    end tell
+  end tell
+end run
+"""
+
+
+def raise_window(window_id: str) -> bool:
+    """Bring one Terminal window forward. False when it is gone."""
+    import subprocess
+    import sys
+    if sys.platform != "darwin" or not str(window_id or "").strip():
+        return False
+    done = subprocess.run(["osascript", "-", str(window_id)],
+                          input=_RAISE_WINDOW, capture_output=True,
+                          text=True, timeout=10)
+    if done.returncode != 0:
+        return False
+    subprocess.run(["osascript", "-e",
+                    'tell application "Terminal" to activate'],
+                   capture_output=True, text=True, timeout=10)
+    return True
+
+
+def remember_window(trajdir: Path, goal_id: str, window_id: str) -> None:
+    """Park the window id until the session it opened binds to a run."""
+    if not _GOAL_RE.fullmatch(goal_id) or not str(window_id or "").strip():
+        return
+    directory = runs_dir(trajdir) / "launch"
+    secure_dir(directory, Path(trajdir).parent)
+    path = directory / f"{goal_id}.window"
+    atomic_write_text(path, str(window_id).strip(), root=Path(trajdir).parent)
+    path.chmod(0o600)
+
+
+def take_window(trajdir: Path, goal_id: str) -> str:
+    """Read and consume a parked window id, if the launcher left one."""
+    path = runs_dir(trajdir) / "launch" / f"{goal_id}.window"
+    try:
+        value = path.read_text().strip()
+    except OSError:
+        return ""
+    path.unlink(missing_ok=True)
+    return value
 
 
 _RAISE_ONE = """
@@ -461,10 +517,16 @@ end tell
 
 
 def open_terminal(script: Path, app: Optional[str] = None,
-                  foreground: bool = True) -> str:
-    """Open *script* in one terminal window. Returns the app it used."""
+                  foreground: bool = True, opened_window=None) -> str:
+    """Open *script* in one terminal window. Returns the app it used.
+
+    ``opened_window`` is filled with the Terminal window id when there is
+    one, so a later "open the conversation" can raise that same window
+    instead of starting a second session beside it.
+    """
     import subprocess
     import sys
+    opened_window = opened_window if opened_window is not None else []
     app = app or terminal_app()
     if sys.platform != "darwin":
         raise RuntimeError("one-click launch currently supports macOS only")
@@ -475,6 +537,7 @@ def open_terminal(script: Path, app: Optional[str] = None,
             ["osascript", "-", str(script)], input=_TERMINAL_SCPT,
             capture_output=True, text=True, timeout=15)
         if result.returncode == 0:
+            opened_window[:] = [result.stdout.strip()]
             if foreground:
                 # Raise just this window. AXRaise needs Accessibility
                 # permission; when that is not granted it fails silently and
@@ -623,7 +686,12 @@ def _resolve_binding(trajdir: Path, session_id: str, payload: Dict[str, Any],
         goals = GM.load(trajdir)[0]
     cwd = payload.get("cwd")
     if env_goal:
-        return bind(trajdir, session_id, env_goal, goals, cwd)
+        run = bind(trajdir, session_id, env_goal, goals, cwd)
+        window = take_window(trajdir, env_goal)
+        if run is not None and window and not run.get("terminal_window"):
+            run["terminal_window"] = window
+            save_run(trajdir, run)
+        return run
     run = bind(trajdir, session_id, str(claim["vault_goal_id"]), goals,
                cwd or claim.get("cwd"))
     if run:
@@ -1308,6 +1376,7 @@ def review(trajdir: Path, goals: Dict[str, Any], goal_id: str) -> Dict[str, Any]
                         "command": f"open {listed[0]['full']}"})
         rows.append({
             "session_id": run.get("claude_session_id"),
+            "live_window": bool(run.get("terminal_window")),
             "status": run.get("status"), "started_at": run.get("started_at"),
             "finished_at": run.get("finished_at"), "cwd": cwd,
             "git_branch": run.get("git_branch"),
@@ -1319,6 +1388,7 @@ def review(trajdir: Path, goals: Dict[str, Any], goal_id: str) -> Dict[str, Any]
             # do, and does it need me?
             "state": run_state(run),
             "session_id": run.get("claude_session_id"),
+            "live_window": bool(run.get("terminal_window")),
             "elapsed": _elapsed(run),
             "did": [{"at": str(e.get("at") or "")[11:19],
                      "kind": str(e.get("kind") or ""),

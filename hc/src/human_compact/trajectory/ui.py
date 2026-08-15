@@ -539,6 +539,12 @@ def _apply(op, trajdir=None, chat_scoped=None):
                             and r.get("vault_goal_id") == g["id"]), None)
                 if run is None:
                     return {"ok": False, "error": "no such session for this goal"}
+                # The session is already open somewhere; surfacing that
+                # window is what the reader means by "open the conversation".
+                # Resuming into a new one is the fallback, not the intent.
+                if AE.raise_window(str(run.get("terminal_window") or "")):
+                    return {"ok": True, "raised": True,
+                            "session_id": session}
                 cwd = run.get("cwd") or AE.goal_cwd(trajdir, goals, g["id"])
                 if not cwd:
                     return {"ok": False, "error": "that session has no recorded directory"}
@@ -569,7 +575,10 @@ def _apply(op, trajdir=None, chat_scoped=None):
             try:
                 script = AE.write_launch_script(
                     trajdir, g["id"], cwd, command, prompt, send=confirmed)
-                app = AE.open_terminal(script)
+                window = []
+                app = AE.open_terminal(script, opened_window=window)
+                if window and window[0]:
+                    AE.remember_window(trajdir, g["id"], window[0])
             except (OSError, RuntimeError, ValueError) as exc:
                 return {"ok": False, "error": str(exc)[:200],
                         "command": f"cd {cwd} && hc work {g['id']} --start"}

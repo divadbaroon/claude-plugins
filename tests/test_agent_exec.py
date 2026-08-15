@@ -1277,3 +1277,37 @@ class WaitingOnYouTests(unittest.TestCase):
         row = AE.review(self.trajdir, goals, "g1")["runs"][0]
         self.assertEqual("waiting", row["state"])
         self.assertEqual("Ask?", row["attention"])
+
+
+class TerminalWindowTests(unittest.TestCase):
+    """The session is already open somewhere; remember where."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name) / "vault" / "trajectory"
+        self.trajdir.mkdir(parents=True)
+
+    def test_a_parked_window_is_read_once(self):
+        AE.remember_window(self.trajdir, "g1", "4242")
+        self.assertEqual("4242", AE.take_window(self.trajdir, "g1"))
+        self.assertEqual("", AE.take_window(self.trajdir, "g1"),
+                         "a consumed window must not bind a second session")
+
+    def test_no_window_is_not_an_error(self):
+        self.assertEqual("", AE.take_window(self.trajdir, "g1"))
+
+    def test_a_goal_id_cannot_escape_the_launch_directory(self):
+        AE.remember_window(self.trajdir, "../../etc/passwd", "1")
+        self.assertFalse((self.trajdir / "agent-runs" / "launch").exists())
+
+    def test_a_bound_run_inherits_the_window_its_launcher_opened(self):
+        (self.trajdir / "agent-runs").mkdir(parents=True, exist_ok=True)
+        AE.remember_window(self.trajdir, "g1", "77")
+        goals = {"version": 1, "goals": [goal("g1", "Ship it")]}
+        with mock.patch.dict(os.environ, {AE.GOAL_ENV: "g1"}):
+            AE.observe_hook({"hook_event_name": "SessionStart",
+                             "session_id": "22222222-3333-4444-5555-666666666666",
+                             "cwd": str(self.trajdir)}, self.trajdir, goals)
+        run = AE.load_runs(self.trajdir)[0]
+        self.assertEqual("77", run["terminal_window"])
