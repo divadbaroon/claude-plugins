@@ -604,6 +604,73 @@
       .catch(function () { delete planPending[goalId]; });
   }
 
+  var liveShown = "";
+
+  function liveRows(run) {
+    var rows = [];
+    var head = ({ running: "Running", waiting: "Waiting on you",
+                  finished: "Completed", failed: "Failed"
+                })[str(run.state)] || str(run.state);
+    if (run.elapsed) head += " \u00b7 " + str(run.elapsed);
+    rows.push(["head", head]);
+    if (run.attention) rows.push(["ask", str(run.attention)]);
+    array(run.did).slice().reverse().forEach(function (entry) {
+      var mark = entry.kind === "task" ? "\u2713"
+        : (entry.kind === "turn" ? "\u2192" : "\u00b7");
+      rows.push(["did", str(entry.at) + "  " + mark + "  " + str(entry.text)]);
+    });
+    array(run.checked).forEach(function (command) {
+      rows.push(["check", "verified by running: " + str(command)]);
+    });
+    var tasks = run.tasks || {}, subs = run.subgoals || {};
+    var progress = [];
+    if (tasks.total) progress.push(tasks.done + "/" + tasks.total + " steps");
+    if (subs.total) {
+      progress.push(subs.done + "/" + subs.total + " subgoals complete");
+    }
+    if (progress.length) rows.push(["foot", progress.join("  \u00b7  ")]);
+    if (run.resume) rows.push(["foot", "reopen: " + str(run.resume)]);
+    return rows;
+  }
+
+  function renderLive(goalId, runs) {
+    var host = document.querySelector(".hc-live");
+    if (!host) return false;
+    var run = array(runs)[0];
+    var rows = run ? liveRows(run) : [];
+    var stamp = goalId + "|" + JSON.stringify(rows);
+    if (stamp === liveShown && host.children && host.children.length) {
+      return true;                       // nothing changed; leave the DOM be
+    }
+    liveShown = stamp;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    if (!rows.length) return true;
+    ensureLiveStyles();
+    rows.forEach(function (row) {
+      var node = document.createElement("div");
+      node.className = "hc-live-" + row[0];
+      node.textContent = row[1];
+      host.appendChild(node);
+    });
+    return true;
+  }
+
+  function watchRunFeed() {
+    // The artifact reads its state at boot, so a live feed cannot travel
+    // through it. Poll and draw straight into the pane instead.
+    setInterval(function () {
+      if (selectedPane() !== "artifact") return;
+      var id = selectedGoalId();
+      if (!id || serverState.scope === "chat") return;
+      fetch("/api/review?goal=" + encodeURIComponent(id), { cache: "no-store" })
+        .then(function (r) { return r.json(); })
+        .then(function (body) {
+          if (body && body.ok) renderLive(id, body.runs);
+        })
+        .catch(function () {});
+    }, 2000);
+  }
+
   function watchPane() {
     setInterval(function () {
       if (selectedPane() !== "agent") return;
@@ -886,6 +953,11 @@
        "<sc-if value=\"{{ hasArtifact }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"margin-top:16px;font:600 12.5px 'Source Code Pro',monospace;color:var(--ink)\">{{ revHeadline }}</div><sc-if value=\"{{ revHasDid }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:10px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:7px 11px;max-height:190px;overflow-y:auto\"><sc-for list=\"{{ revDid }}\" as=\"rd\" hint-placeholder-count=\"4\"><div style=\"display:flex;gap:9px;align-items:baseline;padding:1.5px 0\"><span style=\"flex:none;font:10.5px 'Source Code Pro',monospace;color:{{ rd.c }}\">{{ rd.mark }}</span><span style=\"font:11px/1.55 'Source Code Pro',monospace;color:var(--dtxt);word-break:break-word\">{{ rd.text }}</span></div></sc-for></div></sc-if><sc-if value=\"{{ revHasAttention }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:10px;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:8px 11px\"><div style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--acc)\">NEEDS YOUR DECISION</div><div style=\"margin-top:5px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap\">{{ revAttention }}</div></div></sc-if><sc-if value=\"{{ revHasChecked }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:12px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">VERIFIED BY RUNNING</div><sc-for list=\"{{ revChecked }}\" as=\"rc\" hint-placeholder-count=\"2\"><div style=\"margin-top:4px;font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ rc.text }}</div></sc-for></sc-if><sc-if value=\"{{ revHasProgress }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:12px;font:11px 'Source Code Pro',monospace;color:var(--mut)\">{{ revProgress }}</div></sc-if><sc-if value=\"{{ revHasResume }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:8px;font:11px 'Source Code Pro',monospace;color:var(--fnt)\">reopen this session: {{ revResume }}</div></sc-if>"],
       ["artFiles: (art ? (art.files || []) : []).map(",
        "revHeadline: (art && art.headline) || '',\n      revDid: ((art && art.did) || []).map(d => ({\n        text: d.text,\n        mark: d.kind === 'task' ? '\\u2713' : (d.kind === 'turn' ? '\\u2192' : '\\u00b7'),\n        c: d.kind === 'task' ? 'var(--acc)' : 'var(--fnt)' })),\n      revHasDid: !!(art && (art.did || []).length),\n      revAttention: (art && art.attention) || '',\n      revHasAttention: !!(art && art.attention),\n      revChecked: ((art && art.checked) || []).map(t => ({ text: t })),\n      revHasChecked: !!(art && (art.checked || []).length),\n      revProgress: (art && art.progress) || '',\n      revHasProgress: !!(art && art.progress),\n      revResume: (art && art.resume) || '',\n      revHasResume: !!(art && art.resume),\n      artFiles: (art ? (art.files || []) : []).map("],
+      // A place for the bridge to draw the live run into. The artifact
+      // reads its own state only at boot, so anything that changes while
+      // the page is open has to be rendered directly, as the banner is.
+      ["value=\"{{ showArt }}\" hint-placeholder-val=\"{{ false }}\">\n",
+       "value=\"{{ showArt }}\" hint-placeholder-val=\"{{ false }}\">\n<div class=\"hc-live\"></div>\n"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -955,6 +1027,21 @@
       ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
       ".hc-banner-bar{position:absolute;left:0;bottom:0;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
   ].join("");
+
+  function ensureLiveStyles() {
+    if (document.getElementById("hc-live-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-live-style";
+    style.textContent = [
+      ".hc-live{margin-top:14px}",
+      ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111);margin-bottom:8px}",
+      ".hc-live-ask{margin:0 0 8px;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
+      ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
+      ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      ".hc-live-foot{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}"
+    ].join("");
+    document.head.appendChild(style);
+  }
 
   function ensureBannerStyles() {
     if (document.getElementById("hc-banner-style")) return;
@@ -1165,6 +1252,7 @@
     watchAnalysis: watchAnalysis,
     loadThread: loadThread,
     loadPlan: loadPlan,
+    renderLive: renderLive,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; },
@@ -1183,6 +1271,7 @@
     watchAnalysis();
     watchSelection();
     watchPane();
+    watchRunFeed();
     setInterval(refreshState, 1500);
     setTimeout(refreshState, 0);
   }

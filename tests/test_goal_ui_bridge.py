@@ -660,6 +660,52 @@ class NoSimulatedAgentTests(BridgeTestCase):
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class LiveFeedTests(BridgeTestCase):
+    """A live feed cannot travel through state the app reads only at boot."""
+
+    RUN = {"state": "running", "elapsed": "2 min",
+           "did": [{"at": "03:06:39", "kind": "did", "text": "read README.md"},
+                   {"at": "03:07:06", "kind": "task", "text": "finished: scan"}],
+           "checked": ["npm test"], "tasks": {"done": 1, "total": 3},
+           "subgoals": {"done": 0, "total": 2},
+           "resume": "claude -r abc-123"}
+
+    def drawn(self, run):
+        return json.loads(self.run_js(
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.renderLive('g1', %s);" % json.dumps([run]) +
+            "JSON.stringify(pane.children.map(function (c) {"
+            "  return [c.className, c.textContent]; }));"))
+
+    def test_it_draws_into_the_pane_itself(self):
+        rows = self.drawn(self.RUN)
+        self.assertEqual("hc-live-head", rows[0][0])
+        self.assertEqual("Running · 2 min", rows[0][1])
+
+    def test_newest_action_first(self):
+        rows = [t for c, t in self.drawn(self.RUN) if c == "hc-live-did"]
+        self.assertIn("finished: scan", rows[0])
+        self.assertIn("read README.md", rows[1])
+
+    def test_it_carries_checks_progress_and_resume(self):
+        text = " ".join(t for _, t in self.drawn(self.RUN))
+        self.assertIn("verified by running: npm test", text)
+        self.assertIn("1/3 steps", text)
+        self.assertIn("0/2 subgoals complete", text)
+        self.assertIn("reopen: claude -r abc-123", text)
+
+    def test_a_question_is_marked_out(self):
+        rows = dict((c, t) for c, t in
+                    self.drawn(dict(self.RUN, attention="Migrate or not?")))
+        self.assertEqual("Migrate or not?", rows["hc-live-ask"])
+
+    def test_the_pane_has_somewhere_to_draw(self):
+        self.assertIn('<div class="hc-live"></div>', self.patched_bundle("out;"))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class ReviewReportTests(BridgeTestCase):
     """Review must answer: what did it do, and does it need me?"""
 
