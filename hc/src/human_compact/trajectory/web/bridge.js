@@ -1039,7 +1039,7 @@
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
        "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Opening the modal is not launching: the tab only changes once a\n    // run actually exists to review.\n    if (window.__hcAgent) {\n      window.__hcAgent.launch(id).then((started) => {\n        if (started) this.set(() => ({ paneTab: 'artifact' }));\n      }).catch(() => {});\n    }\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
-       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session running';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
+       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const a = sel.agent, td = a.todos || [];\n        const dn = td.filter(o => o.s === 'done').length;\n        const steps = td.length ? ' \u00b7 ' + dn + ' of ' + td.length + ' steps done' : '';\n        if (a.status === 'idle') return 'nothing has run on this goal yet';\n        if (a.status === 'proposed') return 'has not run yet \u00b7 the steps below are a suggestion';\n        if (a.status === 'waiting') return 'the terminal is open with the prompt typed \u00b7 press Enter there to start';\n        if (a.awaiting) return 'waiting for your reply in the terminal' + steps;\n        if (a.status === 'running') return 'running now' + steps;\n        return 'finished' + steps + ' \u00b7 the result is in REVIEW';\n      })(),"],
       ["<span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span>",
        "<sc-if value=\"{{ showReviewTab }}\" hint-placeholder-val=\"{{ false }}\"><span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span></sc-if>"],
       ["artFiles: (art ? (art.files || []) : []).map(",
@@ -1087,6 +1087,27 @@
       // in that conversation, so the corner holds the way in instead.
       ["<span style=\"padding:2px 8px;border:1px solid {{ artBd }};border-radius:2px;background:{{ artBg }};font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:{{ artC }}\">{{ artStatusLab }}</span>",
        "<div class=\"hc-live-open-slot\"></div>"],
+      // A percentage over a step count the agent invents as it goes is not
+      // progress, and on a finished run it drew an empty tan track under a
+      // line that already said the run was done.
+      ["\n<div style=\"margin-top:10px;height:3px;border-radius:2px;background:var(--accbg);overflow:hidden\"><div style=\"height:100%;width:{{ agentPct }};background:var(--acc)\"></div></div>",
+       "\n<!--agent progress bar removed-->"],
+      // The line only ever distinguished running from everything else, so a
+      // goal that had never run announced "finished — output ready to
+      // review". It now says which of the five states this actually is. The
+      // control beside it went too: stop did not stop the session and clear
+      // only blanked local state until the next poll refilled it.
+      ["<div style=\"display:flex;align-items:baseline;gap:14px;margin-top:10px\"><span style=\"font-size:11px;color:{{ agentC }};min-width:0\">{{ agentLabel }}</span><span sc-camel-on-click=\"{{ agentAction }}\" style=\"margin-left:auto;font:600 10.5px 'Source Code Pro',monospace;color:var(--mut);cursor:pointer\" style-hover=\"text-decoration:underline\">{{ agentActionLabel }}</span></div>",
+       "<div style=\"margin-top:10px;font:11.5px/1.6 'Source Code Pro',monospace;color:{{ agentC }}\">{{ agentLabel }}</div>"],
+      // Nothing has run and nothing is proposed: an empty AGENT STATUS
+      // heading is not information.
+      ["agentShow: !!(sel && sel.agent),",
+       "agentShow: !!(sel && sel.agent && (sel.agent.status !== 'idle' || (sel.agent.todos || []).length)),"],
+      ["agentRowShow: !!(sel && sel.agent && sel.agent.status !== 'planned'),",
+       "agentRowShow: !!(sel && sel.agent && sel.agent.status !== 'idle'),"],
+      // A run blocked on the reader is as urgent as one in flight.
+      ["agentC: (sel && sel.agent && sel.agent.status === 'running') ? 'var(--acc)' : 'var(--mut)',",
+       "agentC: (sel && sel.agent && (sel.agent.status === 'running' || sel.agent.awaiting)) ? 'var(--acc)' : 'var(--mut)',"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],

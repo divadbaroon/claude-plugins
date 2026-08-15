@@ -681,7 +681,7 @@ class NoSimulatedAgentTests(BridgeTestCase):
     def test_the_pane_distinguishes_typed_from_started(self):
         out = self.patched_bundle("out;")
         self.assertIn("press Enter there to start", out)
-        self.assertIn("session running", out)
+        self.assertIn("return 'running now' + steps", out)
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -1162,8 +1162,43 @@ class LiveFeedTests(BridgeTestCase):
 
     def test_a_started_session_with_no_steps_reads_plainly(self):
         out = self.patched_bundle("out;")
-        self.assertIn("return 'session running'", out)
+        # With no tasks captured, steps is empty and the line is just the state.
+        self.assertIn("return 'running now' + steps", out)
+        self.assertIn("td.length ? ' \u00b7 ' + dn + ' of ' + td.length", out)
         self.assertNotIn("waiting for its first step", out)
+
+    def test_the_status_line_names_the_state_it_is_actually_in(self):
+        # It only ever asked "is it running?", so a goal that had never run
+        # announced "finished - output ready to review".
+        out = self.patched_bundle("out;")
+        self.assertNotIn("output ready to review", out)
+        for state, said in (
+                ("idle", "nothing has run on this goal yet"),
+                ("proposed", "the steps below are a suggestion"),
+                ("waiting", "press Enter there to start"),
+                ("running", "running now"),
+                ("done", "the result is in REVIEW")):
+            self.assertIn(said, out, state)
+        self.assertIn("if (a.awaiting) return 'waiting for your reply", out)
+
+    def test_the_status_carries_no_invented_progress_bar(self):
+        # A percentage over a step count the agent invents as it goes is not
+        # progress; on a finished run it drew an empty tan track.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("width:{{ agentPct }}", out)
+
+    def test_the_status_offers_no_control_that_does_nothing(self):
+        # "stop" never stopped the session, and "clear" only blanked local
+        # state until the next poll refilled it.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("{{ agentActionLabel }}", out)
+        self.assertNotIn("{{ agentAction }}", out)
+
+    def test_an_untouched_goal_gets_no_empty_status_heading(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("agentShow: !!(sel && sel.agent && "
+                      "(sel.agent.status !== 'idle' || "
+                      "(sel.agent.todos || []).length)),", out)
 
     def test_review_no_longer_repeats_the_log(self):
         out = self.patched_bundle("out;")
