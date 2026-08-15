@@ -322,6 +322,13 @@
     var latest = reviewed.filter(done)[0] || reviewed[0] || {};
     var files = array(latest.files).length ? array(latest.files)
       : array(run.files);
+    // The write-up belongs to whichever run produced one. Reading it off the
+    // run picked for its files left the card blank whenever the run that
+    // explained itself and the run that edited files were different ones —
+    // which, at boot, is the only copy of the summary the page ever sees.
+    var wrote = [latest].concat(finished, rows).filter(function (r) {
+      return r && str(r.summary);
+    })[0];
     // The question this pane answers: what has it done, and does it need me?
     var state = str(latest.state) || (run.status === "finished" ? "finished"
                                                                : "running");
@@ -354,7 +361,7 @@
       // is still going.
       finished: finished.length > 0 || reviewed.some(done),
       note: "",
-      summary: str(run.summary) || str(latest.summary),
+      summary: wrote ? str(wrote.summary) : "",
       files: files.map(function (f) {
         return { path: str(f.path), edits: f.edits || 0 };
       }),
@@ -1062,7 +1069,7 @@
       // is a section like CHANGES, and BRANCH said little the changed
       // files do not.
       ["<div style=\"margin-top:8px;display:grid;grid-template-columns:72px 1fr;gap:3px 10px;align-items:baseline\">\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">BRANCH</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ artBranch }}</span>\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span>\n</div>\n</div>\n",
-       "<div style=\"margin-top:8px;display:grid;grid-template-columns:72px 1fr;gap:3px 10px;align-items:baseline\">\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span>\n</div>\n<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if></div>\n<div class=\"hc-live-rest\"></div>"],
+       "<div style=\"margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap\">\n<div style=\"display:flex;gap:10px;align-items:baseline\"><span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span></div>\n<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;gap:16px;align-items:center\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if>\n</div>\n</div>\n<div class=\"hc-live-rest\"></div>"],
       // Running the agent is what produces a plan; a separate button that
       // only starts the same session was a second door to one room.
       ["<span sc-camel-on-click=\"{{ genTodos }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">generate todos</span>",

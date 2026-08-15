@@ -228,6 +228,31 @@ class NodeMappingTests(BridgeTestCase):
         self.assertEqual([], child["agent"]["todos"])
         self.assertIsNone(child["artifact"])
 
+    def test_the_write_up_comes_from_whichever_run_wrote_one(self):
+        # The card picks the run that changed files, because that is the one
+        # worth reviewing. But an agent that explains itself and an agent that
+        # edits are often different runs, and reading the summary off the
+        # chosen run left the card blank with a real write-up sitting in state.
+        runs = {"g1": [
+            {"status": "finished", "summary": "What I found and why.",
+             "files": [], "finished_at": "2026-08-14T05:43:10+00:00"},
+            {"status": "finished", "summary": "",
+             "files": [{"path": "bridge.js", "edits": 3}],
+             "finished_at": "2026-08-14T06:43:12+00:00"},
+        ]}
+        art = json.loads(self.run_js(
+            "JSON.stringify(window.__hcPromptUI.artifactOf("
+            '{"id": "g1"}, %s, null));' % json.dumps(runs)))
+        self.assertEqual("What I found and why.", art["summary"])
+        self.assertEqual(["bridge.js"], [f["path"] for f in art["files"]])
+
+    def test_a_run_that_wrote_nothing_leaves_the_card_blank(self):
+        runs = {"g1": [{"status": "finished", "summary": "", "files": []}]}
+        art = json.loads(self.run_js(
+            "JSON.stringify(window.__hcPromptUI.artifactOf("
+            '{"id": "g1"}, %s, null));' % json.dumps(runs)))
+        self.assertEqual("", art["summary"])
+
 
 class BriefingSeedTests(BridgeTestCase):
     """The panels are baked in at boot, so their content must arrive first."""
@@ -946,6 +971,20 @@ class LiveFeedTests(BridgeTestCase):
         pane = out.index('value="{{ showArt }}"')
         self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
         self.assertEqual(1, out.count('class="hc-live"'))
+
+    def test_created_sits_opposite_the_decision_on_the_cards_last_line(self):
+        out = self.patched_bundle("out;")
+        row = out.index("justify-content:space-between;align-items:center;"
+                        "gap:16px;flex-wrap:wrap")
+        created = out.index("{{ artWhen }}")
+        decide = out.index("request revisions")
+        end = out.index('<div class="hc-live-rest">')
+        self.assertLess(row, created)
+        self.assertLess(created, decide)
+        self.assertLess(decide, end)
+        # The stamp is not inside the conditional: withdrawing the buttons
+        # while a revision is being written must not take the date with them.
+        self.assertLess(created, out.index("{{ revClosed }}", row))
 
     def test_the_card_holds_the_run_and_activity_stands_apart(self):
         out = self.patched_bundle("out;")
