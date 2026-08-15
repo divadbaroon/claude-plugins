@@ -578,25 +578,6 @@ class LaunchedRunTests(BridgeTestCase):
         self.assertEqual(["Read the code", "Make the change"],
                          [t["t"] for t in got["todos"]])
 
-    def preview_for(self, goal_id="g1", detail=None):
-        st = {"scope": "global", "revision": "r1", "generated_at": "",
-              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
-              "prompts": [], "agent_runs": {}}
-        js = ""
-        if detail is not None:
-            js = ("window.__hcPromptUI.setDetailForTest(%s, %s);"
-                  % (json.dumps(goal_id), json.dumps(detail)))
-        return self.run_js(
-            js + "var roots = window.__hcPromptUI.rootsFromState(%s);"
-            % json.dumps(st) + "roots[0].agent.briefText;")
-
-    def test_the_pane_says_what_the_tab_is_for(self):
-        out = self.patched_bundle("out;")
-        self.assertIn("Run Claude Code with the context needed for this goal "
-                      "and an understanding of how it fits into your broader "
-                      "goal tree. Track agent progress in the Review tab.", out)
-        self.assertIn("font:italic 11.5px/1.65", out)
-
     def test_cancelling_the_preview_launches_nothing(self):
         posted = self.run_js(
             "window.__hcAgent.launch('g1');"

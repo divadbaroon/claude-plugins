@@ -261,27 +261,13 @@
 
   var TASK_STATE = { pending: "todo", in_progress: "doing", completed: "done" };
 
-  function runPreview(goal, facts) {
-    // One short line, italicised in the pane: this describes an action about
-    // to happen on the reader's machine, and the last clause is the one that
-    // matters — it does not act without them.
-    var where = (facts && facts.cwd)
-      ? "Opens Claude in " + facts.cwd
-      : "Opens Claude where you are (no project directory inferred yet)";
-    return where + ", already holding this goal, where it sits in your tree, "
-      + "and what you have said, decided and hit along the way. The prompt is "
-      + "typed in for you — nothing is sent until you press Enter.";
-  }
-
   function agentOf(goal, runs, claim) {
     var rows = array(runs && runs[goal.id]);
     if (!rows.length) {
-      var facts = (details[goal.id] || {}).brief || null;
       var proposed = array(plans[goal.id]);
       if (proposed.length && !(claim && claim.goal_id === goal.id)) {
         // A proposal, plainly marked. The session's own tasks replace it.
         return { status: "proposed", branch: "", prompt: "", lastFile: "",
-                 briefText: runPreview(goal, facts),
                  todos: proposed.map(function (step) {
                    return { t: str(step), s: "todo", active: "" };
                  }), log: [] };
@@ -290,18 +276,16 @@
       // (which reads as "the button did nothing") or inventing steps.
       if (claim && claim.goal_id === goal.id) {
         return { status: "waiting", branch: "", prompt: str(claim.prompt),
-                 lastFile: "", briefText: runPreview(goal, facts),
+                 lastFile: "",
                  todos: [], log: [] };
       }
-      // Nothing has run and nothing is proposed: still say what would happen.
+      // Nothing has run and nothing is proposed.
       return { status: "idle", branch: "", prompt: "", lastFile: "",
-               briefText: runPreview(goal, facts), todos: [], log: [] };
+               todos: [], log: [] };
     }
     var run = rows[0];
-    var facts2 = (details[goal.id] || {}).brief || null;
     return {
       status: run.status === "finished" ? "done" : "running",
-      briefText: runPreview(goal, facts2),
       awaiting: !!run.awaiting_user,
       branch: str(run.git_branch),
       prompt: str(run.user_prompt),
@@ -905,13 +889,6 @@
        "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'artifact' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
        "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
-      // Before it runs, say what running it does: where, with what, told
-      // what, and by which command. All of it read from the same
-      // briefing the prompt is built from.
-      ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
-       "<div style=\"margin-top:12px;font:italic 11.5px/1.65 'Source Code Pro',monospace;color:var(--mut);max-width:62ch;text-wrap:pretty\">Run Claude Code with the context needed for this goal and an understanding of how it fits into your broader goal tree. Track agent progress in the Review tab.</div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
-      ["agentLabel: (() => {",
-       "agentBriefText: (sel && sel.agent && sel.agent.briefText) || '',\n      agentLabel: (() => {"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
