@@ -919,6 +919,42 @@ class ConversationGoalAttributionTests(unittest.TestCase):
         self.assertEqual(rows[0]["goalLine"], "No goal drawn from this yet")
         self.assertEqual(rows[0]["goal"], "")
 
+    def _sized(self, spec):
+        sessions = [{"session_id": f"{name}0000-0000-0000-0000-x",
+                     "date": date,
+                     "turns": [{"role": "user", "text": "t"}] * turns}
+                    for name, date, turns in spec]
+        return [(row["title"], row["turns"]) for row in
+                self._rows({"goals": []}, sessions)]
+
+    def test_the_longest_conversations_come_first(self):
+        # Length is the closest thing to how much a conversation carries, and
+        # it is the order the extractor works in, so the list reads top-down
+        # as the analysis moves through it.
+        got = self._sized([("aaaaaaaa", "2026-08-15", 4),
+                           ("bbbbbbbb", "2026-08-08", 40),
+                           ("cccccccc", "2026-08-11", 1)])
+        self.assertEqual([40, 4, 1], [turns for _, turns in got])
+
+    def test_the_newer_of_two_equal_conversations_comes_first(self):
+        got = self._sized([("aaaaaaaa", "2026-08-04", 24),
+                           ("bbbbbbbb", "2026-08-15", 24)])
+        self.assertEqual([24, 24], [turns for _, turns in got])
+        rows = self._rows({"goals": []}, [
+            {"session_id": "aaaaaaaa-0000-0000-0000-x", "date": "2026-08-04",
+             "turns": [{"role": "user", "text": "t"}] * 24},
+            {"session_id": "bbbbbbbb-0000-0000-0000-x", "date": "2026-08-15",
+             "turns": [{"role": "user", "text": "t"}] * 24}])
+        self.assertEqual("2026-08-15", rows[0]["meta"].split(" ")[0])
+
+    def test_the_row_carries_its_length_as_a_number(self):
+        # The sort needs a number; "40 messages" sorts before "4 messages"
+        # as a string, which put the shorter conversation on top.
+        rows = self._rows({"goals": []},
+                          [{"session_id": "abcdef12-0000-0000-0000-x",
+                            "turns": [{"role": "user", "text": "hi"}] * 7}])
+        self.assertEqual(7, rows[0]["turns"])
+
     def test_the_most_specific_goal_wins_a_tie(self):
         goals = {"goals": [
             {"id": "g1", "title": "Parent", "evidence_ids": ["abcdef12#001"]},

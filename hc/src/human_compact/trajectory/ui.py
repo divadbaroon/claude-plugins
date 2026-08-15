@@ -369,12 +369,16 @@ def conversation_rows(trajdir, limit=200):
                         else "No goal drawn from this yet",
             "title": (title or first or "Untitled conversation")[:90],
             "meta": f"{session.get('date', '')} · {len(turns)} messages",
+            "turns": len(turns),
             "goal": titles.get(goal_id, "")[:60],
             "repo": Path(session.get("cwd") or "").name,
             "done": sid in analyzed,
             "thread": thread_rows(turns, limit=6, chars=200),
         })
-    rows.sort(key=lambda row: row["meta"], reverse=True)
+    # Biggest first: length is the closest thing to how much a conversation
+    # carries, and it is the order the extractor works in, so the list reads
+    # top-down as the analysis moves. Date breaks ties.
+    rows.sort(key=lambda row: (row["turns"], row["meta"]), reverse=True)
     return rows
 
 

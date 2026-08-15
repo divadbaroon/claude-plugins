@@ -1704,6 +1704,35 @@ class AnalysisBannerTests(BridgeTestCase):
         # not twice the information.
         self.assertFalse(self.banner_with(self.SYNTH, spinner=True))
 
+    def test_a_hidden_panel_does_not_silence_the_other_page(self):
+        # The goals panel stays in the document with display:none while the
+        # conversations page is showing. Testing for its presence alone
+        # suppressed the banner on both pages, and the conversations page has
+        # no panel of its own to report instead.
+        hidden = self.run_js(
+            "var host = document.documentElement;"
+            "var s = document.createElement('div');"
+            "s.className = 'hc-anpanel';"
+            "s.offsetParent = null;"           # what display:none reports
+            "host.appendChild(s);"
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.SYNTH) +
+            "window.__hcPromptUI.renderBanner();"
+            "!!made.filter(function (e) { return e.className === 'hc-banner'"
+            "  && e.parentNode; })[0];")
+        self.assertTrue(hidden)
+
+        shown = self.run_js(
+            "var host = document.documentElement;"
+            "var s = document.createElement('div');"
+            "s.className = 'hc-anpanel';"
+            "s.offsetParent = host;"           # laid out, so on screen
+            "host.appendChild(s);"
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(self.SYNTH) +
+            "window.__hcPromptUI.renderBanner();"
+            "!!made.filter(function (e) { return e.className === 'hc-banner'"
+            "  && e.parentNode; })[0];")
+        self.assertFalse(shown)
+
     def test_the_page_is_never_silent_about_an_analysis(self):
         # The spinner lives in state the artifact keeps in memory, so a reload
         # takes it away while the tree is still being built. Inferring the

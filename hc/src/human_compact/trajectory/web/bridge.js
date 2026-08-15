@@ -617,7 +617,16 @@
   // takes it away while the tree is still being built. Inferring would then
   // silence the banner too, and the page would report nothing at all.
   function treeSpinnerShown() {
-    return !!(document.querySelector && document.querySelector(".hc-anpanel"));
+    var node = document.querySelector && document.querySelector(".hc-anpanel");
+    if (!node) return false;
+    // Present is not the same as on screen. The goals panel stays in the
+    // document with display:none while the conversations page is showing, so
+    // testing for it alone suppressed the banner on both pages -- and the
+    // conversations page has no panel of its own to report instead.
+    if (typeof node.offsetParent !== "undefined") {
+      return node.offsetParent !== null;
+    }
+    return true;
   }
 
   // What the vault is doing right now, read from the server on every poll
