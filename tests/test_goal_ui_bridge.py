@@ -864,14 +864,30 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn('value="{{ showArt }}" hint-placeholder-val="{{ false }}">'
                       '\n<div class="hc-live"></div>', out)
 
-    def test_the_decision_sits_with_the_artifact_it_is_about(self):
+    def test_review_reads_artifact_then_decision_then_log(self):
         out = self.patched_bundle("out;")
         summary = out.index("{{ artSummary }}")
         decide = out.index("request revisions")
-        files = out.index("{{ artFiles }}")
+        log = out.index('<div class="hc-live"></div>')
         self.assertLess(summary, decide)
-        self.assertLess(decide, files)
+        self.assertLess(decide, log)
         self.assertEqual(1, out.count("request revisions"))
+        self.assertEqual(1, out.count('class="hc-live"'))
+
+    def test_agent_reads_name_then_prompt_then_notes_then_run(self):
+        out = self.patched_bundle("out;")
+        self.assertLess(out.index(">AGENT</div>"), out.index("hc-promptbox"))
+        self.assertLess(out.index("hc-promptbox"), out.index("ADDITIONAL NOTES"))
+        self.assertLess(out.index("ADDITIONAL NOTES"), out.index("{{ runAgent }}"))
+
+    def test_the_notes_box_moved_to_the_agent_pane(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("showNotes: !!sel && paneTab === 'agent'", out)
+
+    def test_the_pane_says_what_it_is_for(self):
+        self.assertIn("Run Claude Code on this goal with the context Vault "
+                      "has assembled. Progress appears in REVIEW.",
+                      self.patched_bundle("out;"))
 
     def test_review_opens_as_soon_as_a_run_exists(self):
         # It carries the live feed now, so gating it on completion would hide
