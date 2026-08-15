@@ -869,16 +869,37 @@
     });
   }
 
-  function renderPromptAdd() {
+  function promptAddSlot() {
     var slot = document.querySelector(".hc-prompt-add");
-    if (!slot) return false;
+    if (slot) return slot;
+    // The anchor is an empty span in a template the artifact re-renders from
+    // its own state, and an empty element is exactly the kind of thing a
+    // renderer is free to drop. The heading is text the pane has to draw, so
+    // finding that and using its row is the version that cannot go missing.
+    var heads = document.querySelectorAll("span, div");
+    for (var i = 0; i < heads.length; i++) {
+      var node = heads[i];
+      if (node.children && node.children.length) continue;
+      if (str(node.textContent).trim() !== "WHAT YOU ASKED FOR") continue;
+      return node.parentNode || null;
+    }
+    return null;
+  }
+
+  function renderPromptAdd() {
     if (serverState.scope === "chat") return false;
-    if (slot.children && slot.children.length) return true;
+    var slot = promptAddSlot();
+    if (!slot) return false;
+    if (slot.querySelector && slot.querySelector(".hc-prompt-addbtn")) {
+      return true;
+    }
     ensurePaneStyles();
     var button = document.createElement("button");
     button.className = "hc-prompt-addbtn";
     button.textContent = "+ add a prompt";
-    button.onclick = function () {
+    button.onclick = function (event) {
+      // The row may be inside something with its own click handling.
+      if (event && event.stopPropagation) event.stopPropagation();
       var goalId = selectedGoalId();
       if (!goalId) return;
       pickPrompt(goalId).then(function (promptId) {
@@ -1300,7 +1321,7 @@
       // than open it -- the panels above are the reading, this is the
       // record they were read from.
       ["color:var(--dtxt);overflow:hidden\"></textarea></div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\"",
-       "color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT YOU ASKED FOR</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span sc-camel-on-click=\"{{ hr.copy }}\" style=\"flex:none;font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc)\">copy</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\""],
+       "color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT YOU ASKED FOR</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\""],
       // The stamp read 5:00 PM on every prompt ever recorded: created_at is
       // a date, and the clock time was the formatter's invention.
       ["when: (() => { const d2 = new Date(p.ts); return d2.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + d2.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); })(),",
@@ -1320,7 +1341,7 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled') + (n === sel ? '  \\u2190 this one' : '')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n"],
+       "      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n"],
       // A prompt without its conversation is a quote without a source.
       ["        text: p.text,\n",
        "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"],
@@ -1660,6 +1681,7 @@
     liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
+    promptAddSlot: promptAddSlot,
     pickPrompt: pickPrompt,
     dialogCss: function () { return DIALOG_CSS; },
     briefingSections: briefingSections,

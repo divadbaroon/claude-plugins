@@ -71,7 +71,12 @@ const document = {
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
   querySelector: (s) => (s === ".hc" ? app : root.querySelector(s)),
-  querySelectorAll: () => []
+  // Enough for a tag-name sweep: the bridge uses it to find a heading
+  // by its text when the anchor it was given has been re-rendered away.
+  querySelectorAll: (sel) => {
+    const tags = String(sel || '').split(',').map(t => t.trim().toUpperCase());
+    return made.filter(e => tags.includes(String(e.tagName).toUpperCase()));
+  }
 };
 function XHR() {}
 XHR.prototype.open = function (method, url) { this._url = String(url || ""); };
@@ -1217,6 +1222,15 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("here: n === sel ? '  \\u2190 this one' : ''", out)
         self.assertIn("pad: (i * 14) + 'px'", out)
 
+    def test_the_marker_is_a_screen_cue_not_something_the_agent_reads(self):
+        # On the pane an arrow says which row you are on. In a sentence handed
+        # to Claude it is noise about the reader's cursor.
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertNotIn("this one", draft)
+        self.assertIn("Where this sits:", draft)
+        self.assertIn("this one", out)          # still on the pane
+
     def test_the_recommended_prompt_follows_the_pane_it_is_built_from(self):
         out = self.patched_bundle("out;")
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
@@ -1234,6 +1248,13 @@ class LiveFeedTests(BridgeTestCase):
         # it is the last thing said, after the context it is asking about
         self.assertLess(draft.index("'Established decisions:"),
                         draft.index("Implement this subgoal for me."))
+
+    def test_the_prompt_rows_carry_no_controls(self):
+        # The list is the record of what was said, not a place to act.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("{{ hr.copy }}", out)
+        self.assertNotIn("{{ hr.del }}", out)
+        self.assertNotIn("{{ hr.use }}", out)
 
     def test_each_prompt_names_the_conversation_it_came_from(self):
         # A quote without a source cannot be checked.
@@ -1304,6 +1325,36 @@ class LiveFeedTests(BridgeTestCase):
             " slot.children[0] && slot.children[0].className]);")
         self.assertEqual([1, "+ add a prompt", "hc-prompt-addbtn"],
                          json.loads(rendered))
+
+    def test_the_button_finds_its_place_without_the_anchor(self):
+        # The anchor is an empty span in a template the artifact re-renders
+        # from its own state, and an empty element is exactly what a renderer
+        # is free to drop. The heading is text the pane has to draw.
+        got = json.loads(self.run_js(
+            "var row = document.createElement('div');"
+            "document.body.appendChild(row);"
+            "var head = document.createElement('span');"
+            "head.textContent = 'WHAT YOU ASKED FOR';"
+            "row.appendChild(head);"
+            "var found = window.__hcPromptUI.promptAddSlot() === row;"
+            "var drew = window.__hcPromptUI.renderPromptAdd();"
+            "JSON.stringify([found, drew, row.children.map(function (c) "
+            "{ return c.className || c.textContent; })]);"))
+        self.assertEqual([True, True,
+                          ["WHAT YOU ASKED FOR", "hc-prompt-addbtn"]], got)
+
+    def test_the_anchor_still_wins_when_it_survives(self):
+        got = self.run_js(
+            "var row = document.createElement('div');"
+            "document.body.appendChild(row);"
+            "var head = document.createElement('span');"
+            "head.textContent = 'WHAT YOU ASKED FOR';"
+            "row.appendChild(head);"
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.promptAddSlot() === slot;")
+        self.assertTrue(got)
 
     def test_the_button_is_not_stacked_by_the_poll_that_draws_it(self):
         count = self.run_js(
