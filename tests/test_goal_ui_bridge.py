@@ -983,12 +983,12 @@ class LiveFeedTests(BridgeTestCase):
         # A settled vault: nothing pending, so no banner is ever rendered.
         sheet = self.run_js(
             "var s = document.getElementById('hc-pane-style');"
-            "s ? ['.hc-promptbox{', '.hc-run-dot{'].filter(function (r) {"
+            "s ? ['.hc-promptbox{', '.hc-prompt-addbtn{'].filter(function (r) {"
             "  return String(s.textContent).indexOf(r) >= 0; }).join(',') : '';",
             setup={"ok": True, "sv": 9, "storage": True, "analysis": "claude",
                    "done": True, "running": False,
                    "conversations": {"total": 3, "analyzed": 3, "pending": 0}})
-        self.assertEqual(".hc-promptbox{,.hc-run-dot{", sheet)
+        self.assertEqual(".hc-promptbox{,.hc-prompt-addbtn{", sheet)
 
     def test_the_log_scrolls_instead_of_growing(self):
         where = self.run_js(
@@ -1231,176 +1231,13 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("{{ hr.when }}", out)
         self.assertIn("{{ histEmpty }}", out)
 
-    def test_a_goal_with_a_session_on_it_is_marked_in_the_tree(self):
-        # The tree is the only place every goal is visible at once, so it is
-        # the only place that answers "is anything running" without opening
-        # each goal in turn. STATE's g1 has a running run.
-        top = self.roots()[0]
-        self.assertEqual({"on": True, "label": "RUNNING", "solid": False,
-                          "title": "A Claude session is working on this goal"},
-                         top["live"])
-
-    def test_a_run_blocked_on_the_reader_says_so_instead(self):
-        state = json.loads(json.dumps(STATE))
-        state["agent_runs"]["g1"][0]["awaiting_user"] = True
-        live = self.roots(state)[0]["live"]
-        self.assertEqual("NEEDS YOU", live["label"])
-        self.assertTrue(live["solid"])
-
-    def test_a_finished_run_is_something_to_review_not_something_live(self):
-        for status in ("finished", "failed"):
-            state = json.loads(json.dumps(STATE))
-            state["agent_runs"]["g1"][0]["status"] = status
-            self.assertIsNone(self.roots(state)[0]["live"], status)
-
-    def test_a_new_run_over_an_old_artifact_still_reads_as_live(self):
-        state = json.loads(json.dumps(STATE))
-        state["agent_runs"]["g1"].append(dict(state["agent_runs"]["g1"][0],
-                                              status="finished"))
-        self.assertEqual("RUNNING", self.roots(state)[0]["live"]["label"])
-
-    def test_a_launched_session_is_marked_before_its_first_step(self):
-        # The terminal is open with the prompt typed. Saying nothing here
-        # reads as the run button having done nothing at all.
-        state = json.loads(json.dumps(STATE))
-        state["agent_runs"] = {}
-        state["agent_claim"] = {"goal_id": "g1", "prompt": "work on it"}
-        self.assertEqual("STARTING", self.roots(state)[0]["live"]["label"])
-        self.assertIsNone(self.roots(state)[0]["children"][0]["live"])
-
-    def test_a_goal_nobody_is_working_on_is_left_alone(self):
-        state = json.loads(json.dumps(STATE))
-        state["agent_runs"] = {}
-        self.assertIsNone(self.roots(state)[0]["live"])
-
-    def test_every_row_names_the_goal_it_is(self):
-        # The marker is drawn into the row rather than carried through the
-        # artifact's state, which is read at boot: a run starting now would
-        # otherwise not show until the page was reloaded.
-        out = self.patched_bundle("out;")
-        self.assertIn('data-hc-goal="{{ row.gid }}"', out)
-        self.assertIn("gid: n.id", out)
-
-    def test_a_dot_appears_and_clears_without_a_reload(self):
-        drawn = json.loads(self.run_js(
-            "function tree() {"
-            "  var host = document.documentElement;"
-            "  while (host.children.length) host.removeChild(host.children[0]);"
-            "  ['g1', 'g2'].forEach(function (id) {"
-            "    var row = document.createElement('div');"
-            "    row.setAttribute('data-hc-goal', id);"
-            "    host.appendChild(row);"
-            "    var t = document.createElement('span');"
-            "    t.textContent = id; row.appendChild(t); });"
-            "}"
-            "function marks() { var out = [];"
-            "  (function walk(node) { node.children.forEach(function (c) {"
-            "    if (String(c.className).indexOf('hc-run-dot') === 0) {"
-            "      out.push([node.getAttribute('data-hc-goal'), c.className]); }"
-            "    walk(c); }); })(document.documentElement);"
-            "  return out; }"
-            "var seen = [];"
-            "tree();"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: {} });"
-            "window.__hcPromptUI.renderRunDots(); seen.push(marks());"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: { g2: [{ status: 'running' }] } });"
-            "window.__hcPromptUI.renderRunDots(); seen.push(marks());"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: { g2: [{ status: 'running',"
-            "    awaiting_user: true }] } });"
-            "window.__hcPromptUI.renderRunDots(); seen.push(marks());"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: { g2: [{ status: 'finished' }] } });"
-            "window.__hcPromptUI.renderRunDots(); seen.push(marks());"
-            "JSON.stringify(seen);"))
-        self.assertEqual([[],
-                          [["g2", "hc-run-dot"]],
-                          [["g2", "hc-run-dot hc-run-dot-needs"]],
-                          []], drawn)
-
-    def test_the_dot_sits_at_the_right_edge_inside_the_delete_control(self):
-        order = json.loads(self.run_js(
-            "var host = document.documentElement;"
-            "var row = document.createElement('div');"
-            "row.setAttribute('data-hc-goal', 'g1');"
-            "host.appendChild(row);"
-            "['caret', 'title', 'del'].forEach(function (name) {"
-            "  var part = document.createElement('span');"
-            "  part.className = name; row.appendChild(part); });"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: { g1: [{ status: 'running' }] } });"
-            "window.__hcPromptUI.renderRunDots();"
-            "JSON.stringify(row.children.map(function (c) "
-            "{ return c.className; }));"))
-        self.assertEqual(["caret", "title", "hc-run-dot", "del"], order)
-
-    def test_a_row_with_nothing_after_the_title_still_gets_its_dot(self):
-        # An add row, or one being edited, has no delete control to sit inside.
-        drawn = self.run_js(
-            "var host = document.documentElement;"
-            "var row = document.createElement('div');"
-            "row.setAttribute('data-hc-goal', 'g1');"
-            "host.appendChild(row);"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: { g1: [{ status: 'running' }] } });"
-            "window.__hcPromptUI.renderRunDots();"
-            "row.children.length;")
-        self.assertEqual(1, drawn)
-
-    def test_the_dot_comes_back_after_the_pane_redraws_under_it(self):
-        # The same redraw that would have carried the state also destroys
-        # anything placed in the row, so the poll has to put it back.
-        counts = json.loads(self.run_js(
-            "function tree() {"
-            "  var host = document.documentElement;"
-            "  while (host.children.length) host.removeChild(host.children[0]);"
-            "  var row = document.createElement('div');"
-            "  row.setAttribute('data-hc-goal', 'g1');"
-            "  host.appendChild(row);"
-            "}"
-            # reachable from the document, not merely holding a parent: a
-            # dot inside a row that was re-rendered away still has one.
-            "function live() { var n = 0;"
-            "  (function walk(node) { node.children.forEach(function (c) {"
-            "    if (String(c.className).indexOf('hc-run-dot') === 0) n++;"
-            "    walk(c); }); })(document.documentElement);"
-            "  return n; }"
-            "window.__hcPromptUI.acceptState({ scope: 'global', goals: [],"
-            "  prompts: [], agent_runs: { g1: [{ status: 'running' }] } });"
-            "tree(); window.__hcPromptUI.renderRunDots();"
-            "var first = live();"
-            "tree();"
-            "var wiped = live();"
-            "window.__hcPromptUI.renderRunDots();"
-            "var back = live();"
-            "window.__hcPromptUI.renderRunDots();"
-            "window.__hcPromptUI.renderRunDots();"
-            "JSON.stringify([first, wiped, back, live()]);"))
-        self.assertEqual([1, 0, 1, 1], counts)
-
-    def test_the_dot_is_light_and_breathes_rather_than_blinks(self):
-        css = self.run_js("window.__hcPromptUI.paneCss();")
-        self.assertIn(".hc-run-dot{", css)
-        self.assertIn("opacity:.45", css)
-        # pushed to the right edge: titles are ragged, so a marker that
-        # follows them lands somewhere different on every row
-        self.assertIn("margin-left:auto", css)
-        self.assertIn("animation:hc-breathe 2.6s ease-in-out infinite", css)
-        # blocked on the reader breathes harder
-        self.assertIn(".hc-run-dot-needs{opacity:.9;animation-duration:1.3s}",
-                      css)
-        self.assertIn("prefers-reduced-motion", css)
-
-    def test_the_marker_styles_are_on_the_sheet_injected_at_boot(self):
-        # In the dialog sheet they would only arrive once a dialog had been
-        # opened, which is how a section once rendered unstyled for months.
+    def test_the_add_button_is_styled_by_the_sheet_injected_at_boot(self):
+        # On the dialog sheet it would only be styled once a dialog had been
+        # opened, which is how a section once rendered unstyled for weeks.
         pane = self.run_js("window.__hcPromptUI.paneCss();")
         dialog = self.run_js("window.__hcPromptUI.dialogCss();")
-        for rule in (".hc-run-dot{", ".hc-prompt-addbtn{"):
-            self.assertIn(rule, pane)
-            self.assertNotIn(rule, dialog)
+        self.assertIn(".hc-prompt-addbtn{", pane)
+        self.assertNotIn(".hc-prompt-addbtn{", dialog)
 
     def test_the_pane_reads_in_the_order_the_work_is_approached(self):
         # What finishing means, where it sits, what it can read, what is in
