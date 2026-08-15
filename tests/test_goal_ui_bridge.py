@@ -78,6 +78,8 @@ XHR.prototype.open = function (method, url) { this._url = String(url || ""); };
 XHR.prototype.send = function () {
   this.responseText = this._url.indexOf("/api/setup") >= 0
     ? (process.env.HC_SETUP || "{}")
+    : this._url.indexOf("/api/briefings") >= 0
+    ? (process.env.HC_BRIEFS || '{"ok":true,"goals":{}}')
     : (process.env.HC_STATE || "{}");
 };
 const sandbox = {
@@ -134,9 +136,11 @@ STATE = {
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class BridgeTestCase(unittest.TestCase):
-    def run_js(self, expression, state=None, setup=None):
+    def run_js(self, expression, state=None, setup=None, briefs=None):
         import os
         env = dict(os.environ, HC_STATE=json.dumps(state or STATE),
+                   HC_BRIEFS=json.dumps(briefs if briefs is not None
+                                        else {"ok": True, "goals": {}}),
                    HC_SETUP=json.dumps(setup if setup is not None else
                                        {"ok": True, "sv": 9, "storage": True,
                                         "analysis": "claude", "done": True}))
@@ -210,6 +214,33 @@ class NodeMappingTests(BridgeTestCase):
         self.assertEqual("idle", child["agent"]["status"])
         self.assertEqual([], child["agent"]["todos"])
         self.assertIsNone(child["artifact"])
+
+
+class BriefingSeedTests(BridgeTestCase):
+    """The panels are baked in at boot, so their content must arrive first."""
+
+    BRIEFS = {"ok": True, "goals": {"g1": {"cwd": "/repo", "add_dirs": ["/repo"],
+              "references": [], "sections": [
+                  {"title": "ALREADY DECIDED \u2014 settled", "lines": ["  - hooks"]},
+                  {"title": "ALREADY BUILT", "lines": ["  - the launcher"]},
+                  {"title": "PROBLEMS HIT BEFORE", "lines": ["  - the pty"]}]}}}
+
+    def test_the_panels_are_filled_before_the_artifact_boots(self):
+        saved = json.loads(self.run_js(
+            "window.__hcPromptUI.seedForTest();"
+            "store['hc-vault-ui-v1'];", briefs=self.BRIEFS))
+        ctx = saved["goals"][0]["ctx"]
+        self.assertEqual("hooks", ctx["decided"])
+        self.assertEqual("the launcher", ctx["built"])
+        self.assertEqual("the pty", ctx["hit"])
+
+    def test_no_briefings_leaves_them_empty_rather_than_guessing(self):
+        saved = json.loads(self.run_js(
+            "window.__hcPromptUI.seedForTest();"
+            "store['hc-vault-ui-v1'];"))
+        ctx = saved["goals"][0]["ctx"]
+        self.assertEqual("", ctx["decided"])
+        self.assertEqual("", ctx["built"])
 
 
 class SeedTests(BridgeTestCase):

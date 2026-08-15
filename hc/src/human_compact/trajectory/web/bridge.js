@@ -430,6 +430,25 @@
       setupState = null;
     }
     try {
+      // Same reason as the state fetch: the panels are baked into the
+      // artifact's saved state at boot, and anything fetched afterwards has
+      // nowhere to land until the page reloads.
+      var briefs = new XMLHttpRequest();
+      briefs.open("GET", "/api/briefings", false);
+      briefs.send();
+      var all = JSON.parse(briefs.responseText);
+      if (all && all.ok && all.goals) {
+        Object.keys(all.goals).forEach(function (id) {
+          var one = all.goals[id] || {};
+          details[id] = { sections: briefingSections(one), opening: "",
+                          cwd: str(one.cwd), review: [],
+                          brief: briefFacts(one) };
+        });
+      }
+    } catch (e) {
+      // No briefings: the panels stay empty rather than showing a guess.
+    }
+    try {
       var request = new XMLHttpRequest();
       request.open("GET", "/api/state", false);   // sync: must beat app boot
       request.send();
@@ -1172,7 +1191,8 @@
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; },
-    setDetailForTest: function (id, value) { details[id] = value; }
+    setDetailForTest: function (id, value) { details[id] = value; },
+    seedForTest: seed
   };
 
   seed();

@@ -735,6 +735,28 @@ class H(BaseHTTPRequestHandler):
                         "add_dirs": dirs,
                         "references": refs,
                     })
+            elif self.path == "/api/briefings":
+                # Every goal's briefing in one call. The panels are baked into
+                # the artifact's state before it boots, so fetching them one
+                # goal at a time afterwards was too late to be rendered.
+                if self.server.chat_scoped:
+                    self._send(200, {"ok": False, "goals": {}})
+                else:
+                    trajdir = self.server.trajdir
+                    goals, _ = GM.load(trajdir)
+                    GM.sanitize(goals)
+                    out = {}
+                    for goal in goals.get("goals", []):
+                        parts = AE.prompt_sections(trajdir, goals, goal["id"])
+                        if not parts:
+                            continue
+                        dirs, refs = AE.goal_sources(goals, goal["id"])
+                        out[goal["id"]] = {
+                            "sections": parts.get("sections", []),
+                            "cwd": AE.goal_cwd(trajdir, goals, goal["id"]),
+                            "add_dirs": dirs, "references": refs,
+                        }
+                    self._send(200, {"ok": True, "goals": out})
             elif self.path.startswith("/api/plan"):
                 from urllib.parse import urlparse, parse_qs
                 goal_id = parse_qs(urlparse(self.path).query).get("goal", [""])[0]
