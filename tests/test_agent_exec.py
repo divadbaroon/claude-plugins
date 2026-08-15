@@ -1160,3 +1160,35 @@ class LaunchCommandTests(unittest.TestCase):
         seen = self._command(False)
         self.assertEqual(["hc", "work", "g1"], seen["command"])
         self.assertFalse(seen["send"])
+
+
+class StartArgumentOrderTests(unittest.TestCase):
+    """`--add-dir` is variadic, so the prompt cannot follow it."""
+
+    def _argv(self, sources):
+        import human_compact.cli as CLI
+        goals = {"version": 1, "goals": [
+            goal("g1", "Ship it"),
+        ]}
+        goals["goals"][0]["sources"] = sources
+        printed = []
+        with mock.patch.object(CLI, "print", create=True,
+                               side_effect=lambda *a, **k: printed.append(a)), \
+             mock.patch("human_compact.trajectory.goals.load",
+                        return_value=(goals, {"items": []})), \
+             mock.patch("human_compact.trajectory.state.trajdir",
+                        return_value=Path("/nowhere")):
+            CLI.work_main(["g1", "--start", "--dry-run"])
+        return printed[-1][0] if printed else ""
+
+    def test_the_prompt_comes_before_add_dir(self):
+        # goal_sources only offers a directory that really exists.
+        with tempfile.TemporaryDirectory() as real:
+            line = self._argv([{"id": "s1", "type": "local", "label": real}])
+            self.assertIn("--add-dir", line)
+            self.assertLess(line.index("Work on my Vault goal g1"),
+                            line.index("--add-dir"),
+                            "a prompt after --add-dir is read as a directory")
+
+    def test_the_prompt_is_still_passed_without_sources(self):
+        self.assertIn("Work on my Vault goal g1", self._argv([]))

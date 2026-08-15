@@ -999,7 +999,10 @@ def work_main(argv=None):
     if args.start:
         opening = AE.launch_prompt(goals, goal["id"])
         if opening:
-            passthrough = passthrough + [opening]
+            # First, not last: `--add-dir` takes a variadic list, so a prompt
+            # placed after it is swallowed as one more directory and the
+            # session opens with nothing to work on.
+            passthrough = [opening] + passthrough
     claude = os.environ.get("HC_CLAUDE_BIN") or shutil.which("claude")
     if args.dry_run or not claude:
         if not claude and not args.dry_run:
