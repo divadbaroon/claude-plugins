@@ -860,9 +860,12 @@ class LiveFeedTests(BridgeTestCase):
         self.assertEqual("Migrate or not?", rows["hc-live-ask"])
 
     def test_the_feed_is_drawn_on_the_review_pane(self):
+        # Placement within the pane is pinned by the ordering test; here just
+        # that the target exists inside REVIEW and nowhere else.
         out = self.patched_bundle("out;")
-        self.assertIn('value="{{ showArt }}" hint-placeholder-val="{{ false }}">'
-                      '\n<div class="hc-live"></div>', out)
+        pane = out.index('value="{{ showArt }}"')
+        self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
+        self.assertEqual(1, out.count('class="hc-live"'))
 
     def test_review_reads_artifact_then_decision_then_log(self):
         out = self.patched_bundle("out;")
