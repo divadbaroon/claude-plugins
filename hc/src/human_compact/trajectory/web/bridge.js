@@ -1012,18 +1012,18 @@
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
        "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Opening the modal is not launching: the tab only changes once a\n    // run actually exists to review.\n    if (window.__hcAgent) {\n      window.__hcAgent.launch(id).then((started) => {\n        if (started) this.set(() => ({ paneTab: 'artifact' }));\n      }).catch(() => {});\n    }\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
-       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
-      // The live run is drawn by the bridge, above the plan it belongs to.
-      // The artifact reads its own state only at boot, so anything that
-      // changes while the page is open must be rendered directly.
-      ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
-       "<div class=\"hc-live\"></div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
-      // There is nothing to review until a run has finished, and a tab
-      // that only ever says 'no artifact yet' is a dead end.
+       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session running';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
+      // The live run is drawn by the bridge into REVIEW. The artifact
+      // reads its own state only at boot, so anything that changes while
+      // the page is open must be rendered directly.
+      ["value=\"{{ showArt }}\" hint-placeholder-val=\"{{ false }}\">\n",
+       "value=\"{{ showArt }}\" hint-placeholder-val=\"{{ false }}\">\n<div class=\"hc-live\"></div>\n"],
+      // REVIEW carries the live run now, so it opens as soon as there
+      // is one — a tab that appears only at the end would hide it.
       ["<span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span>",
        "<sc-if value=\"{{ showReviewTab }}\" hint-placeholder-val=\"{{ false }}\"><span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span></sc-if>"],
       ["artFiles: (art ? (art.files || []) : []).map(",
-       "showReviewTab: !!(art && art.finished),\n      artFiles: (art ? (art.files || []) : []).map("],
+       "showReviewTab: !!art,\n      artFiles: (art ? (art.files || []) : []).map("],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];

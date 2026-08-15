@@ -656,7 +656,7 @@ class NoSimulatedAgentTests(BridgeTestCase):
     def test_the_pane_distinguishes_typed_from_started(self):
         out = self.patched_bundle("out;")
         self.assertIn("press Enter there to start", out)
-        self.assertIn("waiting for its first step", out)
+        self.assertIn("session running", out)
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -848,17 +848,22 @@ class LiveFeedTests(BridgeTestCase):
                     self.drawn(dict(self.RUN, attention="Migrate or not?")))
         self.assertEqual("Migrate or not?", rows["hc-live-ask"])
 
-    def test_the_feed_is_drawn_on_the_agent_pane(self):
+    def test_the_feed_is_drawn_on_the_review_pane(self):
         out = self.patched_bundle("out;")
-        self.assertIn('<div class="hc-live"></div><div style="margin-top:16px;'
-                      "font:600 9.5px 'Source Code Pro',monospace;"
-                      'letter-spacing:1px;color:var(--mut)">AGENT TODOS</div>',
-                      out)
+        self.assertIn('value="{{ showArt }}" hint-placeholder-val="{{ false }}">'
+                      '\n<div class="hc-live"></div>', out)
 
-    def test_review_is_hidden_until_a_run_has_finished(self):
+    def test_review_opens_as_soon_as_a_run_exists(self):
+        # It carries the live feed now, so gating it on completion would hide
+        # the run while it is the thing worth watching.
         out = self.patched_bundle("out;")
         self.assertIn('<sc-if value="{{ showReviewTab }}"', out)
-        self.assertIn("showReviewTab: !!(art && art.finished)", out)
+        self.assertIn("showReviewTab: !!art,", out)
+
+    def test_a_started_session_with_no_steps_reads_plainly(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("return 'session running'", out)
+        self.assertNotIn("waiting for its first step", out)
 
     def test_review_no_longer_repeats_the_log(self):
         out = self.patched_bundle("out;")
