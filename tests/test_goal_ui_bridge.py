@@ -689,12 +689,20 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("finished: scan", rows[0])
         self.assertIn("read README.md", rows[1])
 
-    def test_it_carries_checks_progress_and_resume(self):
+    def test_it_carries_checks_and_progress(self):
         text = " ".join(t for _, t in self.drawn(self.RUN))
         self.assertIn("verified by running: npm test", text)
         self.assertIn("1/3 steps", text)
         self.assertIn("0/2 subgoals complete", text)
-        self.assertIn("reopen: claude -r abc-123", text)
+
+    def test_a_session_can_be_opened_rather_than_copied(self):
+        rows = dict((c, t) for c, t in
+                    self.drawn(dict(self.RUN, session_id="abc-123")))
+        self.assertEqual("open the conversation", rows["hc-live-open"])
+
+    def test_a_run_with_no_session_offers_no_button(self):
+        classes = [c for c, _ in self.drawn(self.RUN)]
+        self.assertNotIn("hc-live-open", classes)
 
     def test_a_question_is_marked_out(self):
         rows = dict((c, t) for c, t in

@@ -1232,3 +1232,48 @@ class TaskEventShapeTests(unittest.TestCase):
                              "task": {"id": "t9"}})
         self.assertEqual(1, len(tasks))
         self.assertEqual("completed", tasks[0]["status"])
+
+
+class WaitingOnYouTests(unittest.TestCase):
+    """A session that hands the turn back is waiting, message or not."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name) / "vault" / "trajectory"
+        (self.trajdir / "agent-runs").mkdir(parents=True)
+        (self.trajdir / "agent-runs" / "s1.json").write_text(json.dumps({
+            "claude_session_id": "s1", "vault_goal_id": "g1",
+            "status": "running", "started_at": "2026-08-15T03:00:00+00:00",
+            "tasks": [], "files": [], "activity": [], "schema_version": 1}))
+
+    def _run(self, payload):
+        AE.observe_hook(dict(payload, session_id="s1"), self.trajdir, None)
+        return json.loads(
+            (self.trajdir / "agent-runs" / "s1.json").read_text())
+
+    def test_a_stop_without_a_message_still_marks_it_waiting(self):
+        # Gating on last_assistant_message made a waiting run read as running.
+        run = self._run({"hook_event_name": "Stop"})
+        self.assertTrue(run["awaiting_user"])
+        self.assertIn("waiting on you", run["activity"][-1]["text"])
+
+    def test_a_stop_with_a_question_keeps_the_question(self):
+        run = self._run({"hook_event_name": "Stop",
+                         "last_assistant_message": "Migrate the records?"})
+        self.assertTrue(run["awaiting_user"])
+        self.assertEqual("Migrate the records?", run["summary"])
+
+    def test_answering_it_clears_the_flag(self):
+        self._run({"hook_event_name": "Stop",
+                   "last_assistant_message": "Migrate?"})
+        run = self._run({"hook_event_name": "UserPromptSubmit",
+                         "prompt": "yes please"})
+        self.assertFalse(run["awaiting_user"])
+
+    def test_the_review_state_follows(self):
+        goals = {"version": 1, "goals": [goal("g1", "Ship it")]}
+        self._run({"hook_event_name": "Stop", "last_assistant_message": "Ask?"})
+        row = AE.review(self.trajdir, goals, "g1")["runs"][0]
+        self.assertEqual("waiting", row["state"])
+        self.assertEqual("Ask?", row["attention"])

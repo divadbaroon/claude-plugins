@@ -521,7 +521,8 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error": "enable capture first"}
             _spawn_analysis("ollama" if choice == "local" else "claude", trajdir)
             return {"ok": True, **setup_state(trajdir)}
-        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run"):
+        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run",
+                    "resume_agent_run"):
             if chat_scoped:
                 return {"ok": False, "error": "agent runs attach to Vault goals"}
             if kind == "cancel_agent_run":
@@ -529,6 +530,27 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 return {"ok": True}
             if not g:
                 return {"ok": False, "error": "goal not found"}
+            if kind == "resume_agent_run":
+                # Open the session that already exists, rather than starting
+                # another one against the same goal.
+                session = str(op.get("session_id") or "")
+                run = next((r for r in AE.load_runs(trajdir)
+                            if r.get("claude_session_id") == session
+                            and r.get("vault_goal_id") == g["id"]), None)
+                if run is None:
+                    return {"ok": False, "error": "no such session for this goal"}
+                cwd = run.get("cwd") or AE.goal_cwd(trajdir, goals, g["id"])
+                if not cwd:
+                    return {"ok": False, "error": "that session has no recorded directory"}
+                try:
+                    script = AE.write_launch_script(
+                        trajdir, g["id"], cwd,
+                        ["claude", "-r", session], send=True)
+                    app = AE.open_terminal(script)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    return {"ok": False, "error": str(exc)[:200]}
+                return {"ok": True, "resumed": True, "terminal": app,
+                        "cwd": cwd, "command": f"claude -r {session}"}
             if kind == "start_agent_run":
                 return {"ok": True, "command": f"hc work {g['id']}",
                         "claim": AE.arm(trajdir, g["id"], g.get("title", ""))}

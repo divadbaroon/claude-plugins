@@ -884,10 +884,16 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
         run["git_branch"] = run.get("git_branch") or _git_branch(run["cwd"])
         dirty = True
 
-    if event == "UserPromptSubmit" and isinstance(payload.get("prompt"), str):
-        prompt = payload["prompt"].strip()
+    if event == "UserPromptSubmit":
+        # One branch, because this is an if/elif chain: a second
+        # UserPromptSubmit arm below never ran when a prompt was present, so
+        # answering the session never cleared "waiting on you".
+        prompt = str(payload.get("prompt") or "").strip()
         if prompt and not run.get("user_prompt"):
             run["user_prompt"] = prompt[:1000]
+            dirty = True
+        if run.get("awaiting_user"):
+            run["awaiting_user"] = False
             dirty = True
     elif event == "PostToolBatch":
         batch = []
@@ -929,22 +935,20 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
                 note_activity(run, "task",
                               ("finished: " if event == "TaskCompleted"
                                else "planned: ") + subject[:120])
-    elif event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
-        summary = payload["last_assistant_message"].strip()
+    elif event == "Stop":
+        # A stop is the session handing the turn back: it has either finished
+        # a stretch of work or is asking something. That is true whether or
+        # not the payload carries the message — gating the whole branch on
+        # last_assistant_message meant a waiting session read as running.
+        summary = str(payload.get("last_assistant_message") or "").strip()
         if summary and summary != run.get("summary"):
             run["summary"] = summary[:1200]
-            dirty = True
-        if summary:
-            # A stop is the session handing the turn back: it has either
-            # finished a stretch of work or is asking the user something.
-            note_activity(run, "turn", _first_line(summary)[:160])
-            run["awaiting_user"] = True
-            dirty = True
+        note_activity(run, "turn",
+                      _first_line(summary)[:160] if summary
+                      else "handed the turn back \u2014 waiting on you")
+        run["awaiting_user"] = True
+        dirty = True
 
-    elif event == "UserPromptSubmit":
-        if run.get("awaiting_user"):
-            run["awaiting_user"] = False
-            dirty = True
     elif event == "SessionEnd":
         run["git_head_after"] = git_head(run.get("cwd"))
         run["status"] = "finished"
@@ -1314,6 +1318,7 @@ def review(trajdir: Path, goals: Dict[str, Any], goal_id: str) -> Dict[str, Any]
             # What the reader is actually asking: where is this, what did it
             # do, and does it need me?
             "state": run_state(run),
+            "session_id": run.get("claude_session_id"),
             "elapsed": _elapsed(run),
             "did": [{"at": str(e.get("at") or "")[11:19],
                      "kind": str(e.get("kind") or ""),

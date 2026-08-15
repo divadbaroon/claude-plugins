@@ -629,7 +629,6 @@
       progress.push(subs.done + "/" + subs.total + " subgoals complete");
     }
     if (progress.length) rows.push(["foot", progress.join("  \u00b7  ")]);
-    if (run.resume) rows.push(["foot", "reopen: " + str(run.resume)]);
     return rows;
   }
 
@@ -652,6 +651,26 @@
       node.textContent = row[1];
       host.appendChild(node);
     });
+    var session = run && str(run.session_id);
+    if (session) {
+      // Reading the command was never the point: the reader wants to be in
+      // that conversation, especially when it is waiting on them.
+      var open = document.createElement("button");
+      open.className = "hc-live-open";
+      open.textContent = "open the conversation";
+      open.onclick = function () {
+        open.disabled = true;
+        open.textContent = "opening…";
+        post({ op: "resume_agent_run", goal_id: goalId,
+               session_id: session }).then(function (result) {
+          open.disabled = false;
+          open.textContent = (result && result.ok === true)
+            ? "open the conversation"
+            : ((result && result.error) || "could not open it");
+        });
+      };
+      host.appendChild(open);
+    }
     return true;
   }
 
@@ -1038,7 +1057,10 @@
       ".hc-live-ask{margin:0 0 8px;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
       ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
-      ".hc-live-foot{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}"
+      ".hc-live-foot{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-live-open{margin-top:10px;border:1px solid var(--acc,#a5492a);background:var(--accbg,#f5e2d9);color:var(--ink,#111);border-radius:2px;padding:5px 12px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
+      ".hc-live-open:hover{background:var(--acchov,#faf1ec)}",
+      ".hc-live-open:disabled{opacity:.6;cursor:default}"
     ].join("");
     document.head.appendChild(style);
   }
