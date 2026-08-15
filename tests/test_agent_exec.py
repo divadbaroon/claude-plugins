@@ -19,7 +19,8 @@ HC_SRC = ROOT / "hc" / "src"
 if str(HC_SRC) not in sys.path:
     sys.path.insert(0, str(HC_SRC))
 
-from human_compact.trajectory import agent_exec as AE  # noqa: E402
+from human_compact.trajectory import agent_exec as AE
+from human_compact.trajectory import ui as UI  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
 
@@ -1027,18 +1028,21 @@ class ConfirmedLaunchTests(unittest.TestCase):
                                send=send)
         return (AE.runs_dir(self.trajdir) / "launch" / "g1.exp").read_text()
 
-    @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
-    def test_a_confirmed_launch_sends_the_return(self):
-        self.assertIn("send -- \\r", self._script(True))
+    def test_a_confirmed_launch_runs_the_command_itself(self):
+        # No pty typing and no Return to race: --start hands Claude the
+        # opening message as an argument and it submits that itself.
+        AE.write_launch_script(self.trajdir, "g1", str(self.project),
+                               ["hc", "work", "g1", "--start"], "x", send=True)
+        body = (AE.runs_dir(self.trajdir) / "launch" / "g1.sh").read_text()
+        self.assertIn("exec hc work g1 --start", body)
+        self.assertFalse((AE.runs_dir(self.trajdir) / "launch"
+                          / "g1.exp").exists())
 
-    @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
-    def test_the_return_waits_for_the_paste_to_land(self):
-        # Sending both in the same breath can submit before the composer has
-        # taken a long prompt.
-        body = self._script(True)
-        typed = body.index("send -- $body")
-        settle = body.index("after " + AE.SUBMIT_SETTLE_SECONDS, typed)
-        self.assertLess(settle, body.index("send -- \\r", typed))
+    def test_an_unconfirmed_launch_still_waits_for_a_keypress(self):
+        AE.write_launch_script(self.trajdir, "g1", str(self.project),
+                               ["hc", "work", "g1"], "Work on it", send=False)
+        body = (AE.runs_dir(self.trajdir) / "launch" / "g1.sh").read_text()
+        self.assertNotIn("exec hc work g1 --start", body)
 
     @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
     def test_an_unconfirmed_launch_types_and_waits(self):
@@ -1121,3 +1125,38 @@ class RunReportTests(unittest.TestCase):
         row = self._write(status="finished",
                           finished_at="2026-08-14T10:08:00+00:00")
         self.assertEqual("8 min", row["elapsed"])
+
+
+class LaunchCommandTests(unittest.TestCase):
+    """A confirmed run asks for --start; an unconfirmed one does not."""
+
+    def _command(self, confirmed):
+        seen = {}
+
+        def capture(trajdir, goal_id, cwd, command, prompt="", send=False):
+            seen["command"] = command
+            seen["send"] = send
+            return Path("/tmp/never-run.sh")
+
+        goals = {"version": 1, "goals": [goal("g1", "Ship it")]}
+        op = {"op": "launch_agent_run", "goal_id": "g1"}
+        if confirmed:
+            op["confirmed"] = True
+        with mock.patch.object(UI.AE, "write_launch_script", capture), \
+             mock.patch.object(UI.AE, "goal_cwd", return_value="/repo"), \
+             mock.patch.object(UI.AE, "open_terminal", return_value="Terminal"), \
+             mock.patch.object(UI.AE, "clear_claim"), \
+             mock.patch.object(UI.GM, "load", return_value=(goals, {"items": []})), \
+             mock.patch.object(UI.GM, "save"):
+            UI._apply(op, trajdir=Path("/nowhere"), chat_scoped=False)
+        return seen
+
+    def test_a_confirmed_run_starts_the_session(self):
+        seen = self._command(True)
+        self.assertEqual(["hc", "work", "g1", "--start"], seen["command"])
+        self.assertTrue(seen["send"])
+
+    def test_an_unconfirmed_run_leaves_it_to_the_user(self):
+        seen = self._command(False)
+        self.assertEqual(["hc", "work", "g1"], seen["command"])
+        self.assertFalse(seen["send"])

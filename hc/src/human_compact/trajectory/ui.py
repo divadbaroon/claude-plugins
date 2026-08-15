@@ -538,12 +538,12 @@ def _apply(op, trajdir=None, chat_scoped=None):
             if not cwd:
                 return {"ok": False, "error":
                         "no project directory is recorded for this goal yet"}
-            command = ["hc", "work", g["id"]]
-            prompt = AE.launch_prompt(goals, g["id"])
-            # The user confirmed this exact text in the UI, so the launcher
-            # sends it. Without that confirmation it is typed and left for
-            # them, which is the only other honest option.
             confirmed = op.get("confirmed") is True
+            # --start gives Claude the opening message as an argument, so the
+            # session begins on its own. Without it the command is typed into
+            # a shell and waits, which is the other honest option.
+            command = ["hc", "work", g["id"]] + (["--start"] if confirmed else [])
+            prompt = AE.launch_prompt(goals, g["id"])
             try:
                 script = AE.write_launch_script(
                     trajdir, g["id"], cwd, command, prompt, send=confirmed)

@@ -372,6 +372,22 @@ def write_launch_script(trajdir: Path, goal_id: str, cwd: str,
     secure_dir(directory, Path(trajdir).parent)
     line = " ".join(shlex.quote(part) for part in command)
 
+    if send:
+        # Auto-run: `hc work <goal> --start` hands the opening message to
+        # Claude as an argument, which it submits itself. Typing into the TUI
+        # and then sending a Return was a race against the composer for no
+        # benefit once the user has asked for it to just run.
+        path = directory / f"{goal_id}.sh"
+        path.write_text(
+            "#!/bin/sh\n"
+            "# Written by hc. Runs the goal's session immediately, because\n"
+            "# the run was asked for in the Goals UI.\n"
+            f"cd {shlex.quote(cwd)} || exit 1\n"
+            f"exec {line}\n",
+            encoding="utf-8")
+        path.chmod(0o700)
+        return path
+
     driver = _write_expect_launch(directory, goal_id, command, prompt, send=send)
     if driver is not None:
         path = directory / f"{goal_id}.sh"
@@ -460,13 +476,18 @@ def open_terminal(script: Path, app: Optional[str] = None,
             capture_output=True, text=True, timeout=15)
         if result.returncode == 0:
             if foreground:
-                # Raise this one window. `activate` would raise every Terminal
-                # window the user has open, which is what buried the screen.
-                # AXRaise moves a single window forward and needs Accessibility
-                # permission; without it we leave the window unraised rather
-                # than dragging the whole app forward.
-                subprocess.run(["osascript", "-e", _RAISE_ONE],
-                               capture_output=True, text=True, timeout=10)
+                # Raise just this window. AXRaise needs Accessibility
+                # permission; when that is not granted it fails silently and
+                # the window sits behind the browser, so fall back to
+                # activating the app — noisier, but visible beats hidden.
+                raised = subprocess.run(["osascript", "-e", _RAISE_ONE],
+                                        capture_output=True, text=True,
+                                        timeout=10)
+                if raised.returncode != 0:
+                    subprocess.run(
+                        ["osascript", "-e",
+                         'tell application "Terminal" to activate'],
+                        capture_output=True, text=True, timeout=10)
             return app
         # Fall through: a scripting-disabled Terminal is still openable.
     result = subprocess.run(["open", "-a", app, str(script)],
