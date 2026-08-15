@@ -1036,3 +1036,79 @@ class ConfirmedLaunchTests(unittest.TestCase):
         body = self._script(False)
         self.assertIn("send -- $body", body)
         self.assertNotIn("send -- \\r", body)
+
+
+class RunReportTests(unittest.TestCase):
+    """Review answers: what did it do, and does it need me?"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name) / "vault" / "trajectory"
+        (self.trajdir / "agent-runs").mkdir(parents=True)
+        self.goals = {"version": 1, "goals": [
+            goal("g1", "Ship it"),
+            goal("g1a", "First", parent="g1", status="completed"),
+            goal("g1b", "Second", parent="g1"),
+        ]}
+
+    def _write(self, **over):
+        run = {"claude_session_id": "abc-123", "vault_goal_id": "g1",
+               "status": "running", "started_at": "2026-08-14T10:00:00+00:00",
+               "tasks": [], "files": [], "activity": []}
+        run.update(over)
+        (self.trajdir / "agent-runs" / "abc-123.json").write_text(json.dumps(run))
+        return AE.review(self.trajdir, self.goals, "g1")["runs"][0]
+
+    def test_a_live_run_reads_as_running(self):
+        self.assertEqual("running", self._write()["state"])
+
+    def test_a_run_that_handed_the_turn_back_is_waiting_on_you(self):
+        row = self._write(awaiting_user=True, summary="Should I migrate them?")
+        self.assertEqual("waiting", row["state"])
+        self.assertEqual("Should I migrate them?", row["attention"])
+
+    def test_a_finished_run_shows_no_question(self):
+        row = self._write(status="finished", end_reason="clear",
+                          summary="All done.")
+        self.assertEqual("finished", row["state"])
+        self.assertEqual("", row["attention"])
+
+    def test_a_crashed_run_is_not_reported_as_finished(self):
+        self.assertEqual("failed", self._write(status="finished",
+                                               end_reason="error")["state"])
+
+    def test_it_reports_what_was_checked_and_nothing_else(self):
+        row = self._write(activity=[
+            {"at": "2026-08-14T10:01:00+00:00", "kind": "did",
+             "text": "ran npm test -- --watch=false"},
+            {"at": "2026-08-14T10:02:00+00:00", "kind": "did",
+             "text": "ran git status"},
+            {"at": "2026-08-14T10:03:00+00:00", "kind": "did",
+             "text": "edited main.py"},
+        ])
+        self.assertEqual(["npm test -- --watch=false"], row["checked"])
+
+    def test_the_chronology_is_what_it_did(self):
+        row = self._write(activity=[
+            {"at": "2026-08-14T10:01:02+00:00", "kind": "did", "text": "read a.py"},
+            {"at": "2026-08-14T10:02:03+00:00", "kind": "task",
+             "text": "finished: wire it up"},
+        ])
+        self.assertEqual(["read a.py", "finished: wire it up"],
+                         [d["text"] for d in row["did"]])
+        self.assertEqual("10:01:02", row["did"][0]["at"])
+
+    def test_progress_counts_its_tasks_and_the_goals_subgoals(self):
+        row = self._write(tasks=[{"task_id": "1", "status": "completed"},
+                                 {"task_id": "2", "status": "in_progress"}])
+        self.assertEqual({"done": 1, "total": 2}, row["tasks"])
+        self.assertEqual({"done": 1, "total": 2}, row["subgoals"])
+
+    def test_it_says_how_to_reopen_the_session(self):
+        self.assertEqual("claude -r abc-123", self._write()["resume"])
+
+    def test_elapsed_is_reported_for_a_finished_run(self):
+        row = self._write(status="finished",
+                          finished_at="2026-08-14T10:08:00+00:00")
+        self.assertEqual("8 min", row["elapsed"])

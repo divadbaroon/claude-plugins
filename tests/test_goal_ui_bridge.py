@@ -641,6 +641,67 @@ class LaunchedRunTests(BridgeTestCase):
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ReviewReportTests(BridgeTestCase):
+    """Review must answer: what did it do, and does it need me?"""
+
+    def artifact_for(self, review):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [],
+              "agent_runs": {"g1": [{"status": "running", "tasks": []}]}}
+        return self.run_js(
+            "window.__hcPromptUI.setDetailForTest('g1', %s);"
+            % json.dumps({"review": [review], "sections": {}}) +
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(st) + "roots[0].artifact;")
+
+    def test_the_headline_is_the_state_and_how_long(self):
+        got = self.artifact_for({"state": "running", "elapsed": "8 min"})
+        self.assertEqual("Running · 8 min", got["headline"])
+
+    def test_waiting_says_so_and_carries_the_question(self):
+        got = self.artifact_for({"state": "waiting", "elapsed": "2 min",
+                                 "attention": "Migrate legacy records?"})
+        self.assertEqual("Waiting on you · 2 min", got["headline"])
+        self.assertEqual("Migrate legacy records?", got["attention"])
+
+    def test_what_it_did_is_chronological_and_typed(self):
+        got = self.artifact_for({"state": "running", "did": [
+            {"at": "10:01:02", "kind": "did", "text": "read a.py"},
+            {"at": "10:02:03", "kind": "task", "text": "finished: wire it up"}]})
+        self.assertEqual(["read a.py", "finished: wire it up"],
+                         [d["text"] for d in got["did"]])
+        self.assertEqual(["did", "task"], [d["kind"] for d in got["did"]])
+
+    def test_progress_counts_steps_and_subgoals(self):
+        got = self.artifact_for({"state": "running",
+                                 "tasks": {"done": 2, "total": 3},
+                                 "subgoals": {"done": 2, "total": 3}})
+        self.assertIn("2/3 steps", got["progress"])
+        self.assertIn("2/3 subgoals complete", got["progress"])
+
+    def test_it_carries_what_was_checked_and_how_to_reopen(self):
+        got = self.artifact_for({"state": "finished",
+                                 "checked": ["npm test"],
+                                 "resume": "claude -r abc-123"})
+        self.assertEqual(["npm test"], got["checked"])
+        self.assertEqual("claude -r abc-123", got["resume"])
+
+    def test_a_run_with_nothing_recorded_claims_nothing(self):
+        got = self.artifact_for({"state": "running"})
+        self.assertEqual([], got["did"])
+        self.assertEqual("", got["attention"])
+        self.assertEqual("", got["progress"])
+
+    def test_the_pane_renders_each_part(self):
+        out = self.patched_bundle("out;")
+        for token in ("{{ revHeadline }}", "NEEDS YOUR DECISION",
+                      "VERIFIED BY RUNNING", "{{ revProgress }}",
+                      "reopen this session"):
+            self.assertIn(token, out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class EmptyVaultTests(BridgeTestCase):
     """An empty vault is a real state; the artifact must not invent goals."""
 

@@ -1169,6 +1169,65 @@ def prompt_sections(trajdir: Path, goals: Dict[str, Any], goal_id: str):
     }
 
 
+# Commands whose whole purpose is to check something. Anything else a session
+# ran is work, not verification, and claiming otherwise would be worse than
+# saying nothing.
+_CHECKS = (
+    "npm test", "npm run test", "npm run build", "npm run lint", "yarn test",
+    "pnpm test", "pytest", "python -m unittest", "python -m pytest", "tox",
+    "go test", "cargo test", "cargo check", "make test", "make check",
+    "mvn test", "gradle test", "rspec", "jest", "vitest", "mypy", "ruff",
+    "eslint", "tsc", "node --test", "node --check",
+)
+
+
+def _elapsed(run: Dict[str, Any]) -> str:
+    start, end = run.get("started_at"), run.get("finished_at")
+    try:
+        began = datetime.fromisoformat(str(start))
+        ended = (datetime.fromisoformat(str(end)) if end
+                 else datetime.now(timezone.utc))
+    except (TypeError, ValueError):
+        return ""
+    seconds = max(0, int((ended - began).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+def run_state(run: Dict[str, Any]) -> str:
+    """running / waiting on you / finished / failed — in that order of truth."""
+    if run.get("status") == "finished":
+        reason = str(run.get("end_reason") or "")
+        return "failed" if reason in ("error", "crash") else "finished"
+    if run.get("awaiting_user"):
+        return "waiting"
+    return "running"
+
+
+def _checks_run(run: Dict[str, Any]) -> List[str]:
+    seen, out = set(), []
+    for entry in run.get("activity") or []:
+        text = str(entry.get("text") or "")
+        if not text.startswith("ran "):
+            continue
+        command = text[4:].strip()
+        if any(command.startswith(check) for check in _CHECKS):
+            if command not in seen:
+                seen.add(command)
+                out.append(command)
+    return out
+
+
+def _subgoal_progress(goals: Dict[str, Any], goal_id: str) -> Dict[str, int]:
+    children = [g for g in goals.get("goals", [])
+                if g.get("parent_goal_id") == goal_id]
+    done = sum(1 for g in children if g.get("status") == "completed")
+    return {"done": done, "total": len(children)}
+
+
 def review(trajdir: Path, goals: Dict[str, Any], goal_id: str) -> Dict[str, Any]:
     """What each session on this goal left behind, and how to go look at it.
 
@@ -1218,6 +1277,22 @@ def review(trajdir: Path, goals: Dict[str, Any], goal_id: str) -> Dict[str, Any]
             "summary": str(run.get("summary") or "")[:600],
             "counts": _counts(run), "task_total": len(run.get("tasks") or []),
             "files": listed, "files_total": len(files), "how": how,
+            # What the reader is actually asking: where is this, what did it
+            # do, and does it need me?
+            "state": run_state(run),
+            "elapsed": _elapsed(run),
+            "did": [{"at": str(e.get("at") or "")[11:19],
+                     "kind": str(e.get("kind") or ""),
+                     "text": str(e.get("text") or "")}
+                    for e in (run.get("activity") or [])][-25:],
+            "attention": (str(run.get("summary") or "")[:600]
+                          if run.get("awaiting_user") else ""),
+            "checked": _checks_run(run),
+            "tasks": {"done": _counts(run).get("completed", 0),
+                      "total": len(run.get("tasks") or [])},
+            "subgoals": _subgoal_progress(goals, goal_id),
+            "resume": ("claude -r " + str(run.get("claude_session_id"))
+                       if run.get("claude_session_id") else ""),
         })
     known = _digest(_source_extractions(trajdir, goal), "artifacts_or_outputs")
     return {"ok": True, "goal_id": goal_id, "runs": rows[:5], "known": known}
