@@ -699,7 +699,11 @@
   }
 
   function loadDetail(goalId) {
-    if (!goalId || details[goalId] || detailPending[goalId]) return;
+    // Seeding fills `details` with the briefing before boot, so "have an
+    // entry" is not "have fetched the run history" — guarding on the entry
+    // meant /api/review was never called and REVIEW could never fill.
+    if (!goalId || detailPending[goalId]) return;
+    if (details[goalId] && details[goalId].loaded) return;
     if (serverState.scope === "chat") return;
     detailPending[goalId] = true;
     var query = "?goal=" + encodeURIComponent(goalId);
@@ -713,7 +717,7 @@
       var sections = briefingSections(brief);
       details[goalId] = { sections: sections, opening: str(brief.opening),
                           cwd: str(brief.cwd), review: array(review.runs),
-                          brief: briefFacts(brief) };
+                          brief: briefFacts(brief), loaded: true };
       delete detailPending[goalId];
       lastObservedGoals = null;
       refreshState();
@@ -1165,7 +1169,8 @@
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; },
     setDetailForTest: function (id, value) { details[id] = value; },
-    seedForTest: seed
+    seedForTest: seed,
+    loadDetailForTest: loadDetail
   };
 
   seed();

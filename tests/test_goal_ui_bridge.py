@@ -247,6 +247,21 @@ class BriefingSeedTests(BridgeTestCase):
         self.assertEqual("the launcher", ctx["built"])
         self.assertEqual("the pty", ctx["hit"])
 
+    def test_seeding_does_not_stop_the_run_history_being_fetched(self):
+        # The seed fills details[] before boot; guarding loadDetail on the
+        # entry existing meant /api/review was never called and REVIEW could
+        # never fill.
+        asked = self.run_js(
+            "window.__hcPromptUI.seedForTest();"
+            "window.__hcPromptUI.loadDetailForTest('g1');"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 20; i += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return calls.map(function (c) "
+            "{ return String(c[0]); }).filter(function (u) "
+            "{ return u.indexOf('/api/review') === 0; }).length; });",
+            briefs=self.BRIEFS)
+        self.assertEqual(1, asked)
+
     def test_no_briefings_leaves_them_empty_rather_than_guessing(self):
         saved = json.loads(self.run_js(
             "window.__hcPromptUI.seedForTest();"
