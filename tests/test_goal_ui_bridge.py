@@ -132,6 +132,7 @@ STATE = {
          "status": "completed", "prompt_ids": [], "sources": []},
     ],
     "prompts": [{"id": "a#1", "role": "user", "text": "make it a desktop app",
+                 "session_id": "879da390-1c4e-4d0a-9f11-2b7c5e8a1d33",
                  "created_at": "2026-08-01"}],
     "agent_runs": {"g1": [{
         "session_id": "7c9f1a20-x", "status": "running", "git_branch": "main",
@@ -1192,6 +1193,65 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("{{ hr.text }}", out)
         self.assertIn("{{ hr.when }}", out)
         self.assertIn("{{ histEmpty }}", out)
+
+    def test_the_pane_reads_in_the_order_the_work_is_approached(self):
+        # What finishing means, where it sits, what it can read, what is in
+        # the way, what is done. Decisions follow what was built: both are
+        # settled, and neither belongs between the goal and its blockers.
+        out = self.patched_bundle("out;")
+        order = [">OBJECTIVE</span>", "WHERE THIS SITS", ">CODE CONTEXT</span>",
+                 ">DOCUMENT CONTEXT</span>", "BLOCKERS &amp; OPEN QUESTIONS",
+                 ">ALREADY BUILT</span>", ">DECISIONS</span>",
+                 "WHAT YOU ASKED FOR"]
+        at = [out.index(name) for name in order]
+        self.assertEqual(sorted(at), at, order)
+        for name in order:
+            self.assertEqual(1, out.count(name), name)
+
+    def test_the_pane_shows_where_the_goal_sits_in_the_tree(self):
+        out = self.patched_bundle("out;")
+        self.assertIn('<sc-for list="{{ ctxTrail }}" as="tr"', out)
+        self.assertIn("{{ tr.title }}", out)
+        self.assertIn("ctxTrail: (trail || []).map((n, i) => ({", out)
+        # the focused goal is marked, and depth is real indentation
+        self.assertIn("here: n === sel ? '  \\u2190 this one' : ''", out)
+        self.assertIn("pad: (i * 14) + 'px'", out)
+
+    def test_the_recommended_prompt_follows_the_pane_it_is_built_from(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        at = [draft.index(name) for name in
+              ("'Objective:", "'Where this sits:", "'Code context:",
+               "'Document context:", "'Blockers & open questions:",
+               "'Already built:", "'Established decisions:")]
+        self.assertEqual(sorted(at), at)
+
+    def test_the_recommended_prompt_ends_by_asking_for_the_work(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertIn("blocks.push(isSub ? 'Implement this subgoal for me.' : "
+                      "'Implement this goal for me.');", draft)
+        # it is the last thing said, after the context it is asking about
+        self.assertLess(draft.index("'Established decisions:"),
+                        draft.index("Implement this subgoal for me."))
+
+    def test_each_prompt_names_the_conversation_it_came_from(self):
+        # A quote without a source cannot be checked.
+        out = self.patched_bundle("out;")
+        self.assertIn("{{ hr.conv }}", out)
+        self.assertIn("conv: p.conv ? 'conversation ' + p.conv : ''", out)
+        rows = self.roots()[0]["prompts"]
+        self.assertTrue(all(r["conv"] for r in rows), rows)
+
+    def test_the_conversation_is_the_prefix_the_evidence_ids_use(self):
+        state = json.loads(json.dumps(STATE))
+        state["prompts"][0]["session_id"] = "879da390-1c4e-4d0a-9f11-abc"
+        self.assertEqual("879da390", self.roots(state)[0]["prompts"][0]["conv"])
+
+    def test_a_prompt_with_no_session_claims_no_conversation(self):
+        state = json.loads(json.dumps(STATE))
+        state["prompts"][0].pop("session_id", None)
+        self.assertEqual("", self.roots(state)[0]["prompts"][0]["conv"])
 
     def test_the_words_close_the_pane_rather_than_open_it(self):
         # The panels above are the reading; this is the record they were read
