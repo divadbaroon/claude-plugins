@@ -521,8 +521,7 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error": "enable capture first"}
             _spawn_analysis("ollama" if choice == "local" else "claude", trajdir)
             return {"ok": True, **setup_state(trajdir)}
-        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run",
-                    "preview_agent_run"):
+        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run"):
             if chat_scoped:
                 return {"ok": False, "error": "agent runs attach to Vault goals"}
             if kind == "cancel_agent_run":
@@ -530,29 +529,6 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 return {"ok": True}
             if not g:
                 return {"ok": False, "error": "goal not found"}
-            if kind == "preview_agent_run":
-                # Exactly what a confirmed launch would do, computed the same
-                # way the launch computes it — never a description of it.
-                cwd = AE.goal_cwd(trajdir, goals, g["id"])
-                dirs, refs = AE.goal_sources(goals, g["id"])
-                # Two different things, and the modal was only showing the
-                # first: the instruction typed into the composer, and the
-                # briefing the SessionStart hook delivers. Both come from the
-                # same builders the launch uses.
-                parts = AE.prompt_sections(trajdir, goals, g["id"]) or {}
-                titles = [str(sec.get("title") or "")
-                          for sec in parts.get("sections", [])]
-                return {"ok": True, "goal_id": g["id"],
-                        "title": g.get("title", ""),
-                        "cwd": cwd or "",
-                        "command": "hc work " + g["id"],
-                        "add_dirs": dirs, "references": refs,
-                        "prompt": AE.launch_prompt(goals, g["id"]),
-                        # What Claude is sent, and what a human is shown.
-                        "instruction": AE.instruction_text(
-                            AE.launch_prompt(goals, g["id"])),
-                        "context": AE.goal_context(trajdir, goals, g["id"]),
-                        "sections": titles}
             if kind == "start_agent_run":
                 return {"ok": True, "command": f"hc work {g['id']}",
                         "claim": AE.arm(trajdir, g["id"], g.get("title", ""))}

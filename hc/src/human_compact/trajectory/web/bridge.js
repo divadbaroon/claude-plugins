@@ -746,25 +746,6 @@
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
-      ".hc-run-box{width:min(600px,100%);padding:18px 18px 14px}",
-      ".hc-run-goal{margin:1px 0 8px;font:600 13px/1.4 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
-      ".hc-run-note{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
-      ".hc-run-instruction{margin-top:5px;border-left:2px solid var(--acc,#a5492a);padding:3px 0 3px 10px;font:12px/1.6 'Source Code Pro',monospace;color:var(--ink,#111);white-space:pre-wrap}",
-      ".hc-run-more{margin-top:9px}",
-      ".hc-run-sum{cursor:pointer;list-style:none;font:600 10px 'Source Code Pro',monospace;color:var(--mut,#575757);padding:1px 0}",
-      ".hc-run-sum::-webkit-details-marker{display:none}",
-      ".hc-run-sum::before{content:'\\25b8 ';display:inline-block;transition:transform .15s ease}",
-      ".hc-run-more[open]>.hc-run-sum::before{transform:rotate(90deg)}",
-      ".hc-run-sum:hover{color:var(--acc,#a5492a)}",
-      ".hc-run-error{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--del,#8f2b2b)}",
-      ".hc-run-fact{margin-top:3px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757);word-break:break-word}",
-      ".hc-run-label{margin-top:12px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
-      ".hc-run-cancel{border:none;background:none;color:var(--mut,#575757);padding:6px 10px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
-      ".hc-run-cancel:hover{color:var(--ink,#111)}",
-      ".hc-run-go{border:1px solid var(--acc,#a5492a);background:var(--accbg,#f5e2d9);color:var(--ink,#111);border-radius:2px;padding:6px 15px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
-      ".hc-run-go:hover{background:var(--acchov,#faf1ec)}",
-      ".hc-run-go:disabled{opacity:.6;cursor:default}",
-      ".hc-run-prompt{margin:6px 0 0;max-height:34vh;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:8px 10px;font:10.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
   ].join("");
 
   function ensureDialogStyles() {
@@ -773,80 +754,6 @@
     style.id = "hc-ask-style";
     style.textContent = DIALOG_CSS;
     document.head.appendChild(style);
-  }
-
-  function confirmRun(preview, onRun) {
-    return new Promise(function (resolve) {
-      ensureDialogStyles();
-      var overlay = document.createElement("div");
-      overlay.className = "hc-ask";
-      var box = document.createElement("div");
-      box.className = "hc-ask-box hc-run-box";
-
-      function add(parent, cls, tag, text) {
-        var node = document.createElement(tag || "div");
-        node.className = cls;
-        if (text !== undefined) node.textContent = text;
-        parent.appendChild(node);
-        return node;
-      }
-
-      add(box, "hc-ask-title", "div", "Run Agent");
-      add(box, "hc-run-goal", "div", str(preview.title) || str(preview.goal_id));
-      add(box, "hc-run-note", "div",
-          "Claude will use context assembled from this goal and its related "
-          + "conversations.");
-
-      add(box, "hc-run-label", "div", "Instruction");
-      add(box, "hc-run-instruction", "div",
-          str(preview.instruction) || str(preview.prompt));
-
-      var full = add(box, "hc-run-more", "details");
-      add(full, "hc-run-sum", "summary", "Context included");
-      add(full, "hc-run-prompt", "pre", str(preview.context) || str(preview.prompt));
-
-      var details = add(box, "hc-run-more", "details");
-      add(details, "hc-run-sum", "summary", "Details");
-      var readable = array(preview.add_dirs).map(str);
-      [["command", str(preview.command)],
-       ["working directory", str(preview.cwd) || "not inferred"],
-       ["readable", readable.join(", ") || "the working directory only"]
-      ].forEach(function (pair) {
-        add(details, "hc-run-fact", "div", pair[0] + ": " + pair[1]);
-      });
-
-      var problem = add(box, "hc-run-error", "div", "");
-      problem.style.display = "none";
-
-      var row = add(box, "hc-ask-row", "div");
-      var cancel = add(row, "hc-run-cancel", "button", "Cancel");
-      var go = add(row, "hc-run-go", "button", "Run Claude");
-
-      function close(value) {
-        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        resolve(value);
-      }
-      cancel.onclick = function () { close(null); };
-      go.onclick = function () {
-        // Stay put until the launch actually succeeds: a failure belongs on
-        // this screen, not behind a tab switch the user did not ask for.
-        go.textContent = "Launching…";
-        go.disabled = true;
-        problem.style.display = "none";
-        Promise.resolve(onRun()).then(function (result) {
-          close(result);
-        }).catch(function (error) {
-          go.textContent = "Run Claude";
-          go.disabled = false;
-          problem.textContent = str(error && error.message) || "launch failed";
-          problem.style.display = "";
-        });
-      };
-      overlay.onclick = function (e) { if (e.target === overlay) close(null); };
-      overlay.appendChild(box);
-      (document.body || document.documentElement).appendChild(overlay);
-      go.focus();
-    });
   }
 
   function ask(kind) {
@@ -1153,26 +1060,19 @@
 
   window.__hcAgent = {
     launch: function (goalId) {
-      // Preview, confirm, launch — and the launch happens inside the modal so
-      // a failure can be shown there rather than behind a tab switch.
-      return post({ op: "preview_agent_run", goal_id: goalId })
-        .then(function (preview) {
-          if (!preview || preview.ok !== true) throw new Error("no preview");
-          return confirmRun(preview, function () {
-            // post() resolves the error body rather than rejecting, and an
-            // error body is still truthy — so a failed launch would have
-            // closed the modal and switched tabs as if it had worked.
-            return post({ op: "launch_agent_run", goal_id: goalId,
-                          confirmed: true }).then(function (result) {
-              if (!result || result.ok !== true) {
-                throw new Error((result && result.error) || "launch failed");
-              }
-              return result;
-            });
-          });
-        });
+      // Pressing run agent is the confirmation. post() resolves the error
+      // body rather than rejecting, and an error body is truthy, so the
+      // check has to be explicit or a failure reads as a launch.
+      return post({ op: "launch_agent_run", goal_id: goalId,
+                    confirmed: true }).then(function (result) {
+        if (!result || result.ok !== true) {
+          throw new Error((result && result.error) || "launch failed");
+        }
+        return result;
+      });
     }
   };
+
 
 
 
@@ -1258,7 +1158,6 @@
     ask: ask,
     renderBanner: renderBanner,
     bannerCss: function () { return BANNER_CSS; },
-    dialogCss: function () { return DIALOG_CSS; },
     watchAnalysis: watchAnalysis,
     loadThread: loadThread,
     loadPlan: loadPlan,

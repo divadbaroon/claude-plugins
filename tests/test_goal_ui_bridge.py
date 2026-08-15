@@ -562,29 +562,6 @@ class NoSimulatedAgentTests(BridgeTestCase):
         self.assertIn("window.__hcAgent.launch(id)", out)
         self.assertIn("this.runAgent();", out)      # generate todos defers to it
 
-    def test_launching_previews_first_then_launches_on_confirmation(self):
-        posted = self.run_js(
-            "window.__hcAgent.launch('g1');"
-            "var wait = Promise.resolve();"
-            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
-            "wait = wait.then(function () {"
-            "  var ok = made.filter(function (e) {"
-            "    return e.className === 'hc-run-go'; })[0];"
-            "  if (ok && ok.onclick) ok.onclick();"
-            "});"
-            "for (var j = 0; j < 30; j += 1) wait = wait.then(function(){});"
-            "wait.then(function () { return calls.filter(function (c) {"
-            "  return c[0] === '/api/op'; }).map(function (c) { return c[1]; }); });")
-        self.assertEqual(["preview_agent_run", "launch_agent_run"],
-                         [p["op"] for p in posted])
-        self.assertEqual({"op": "launch_agent_run", "goal_id": "g1",
-                          "confirmed": True}, posted[1])
-
-
-@unittest.skipUnless(NODE, "node is required for bridge.js tests")
-class LaunchedRunTests(BridgeTestCase):
-    """Pressing run should land the reader where the work will show up."""
-
     def agent_for(self, state):
         return self.run_js(
             "var roots = window.__hcPromptUI.rootsFromState(%s);"
@@ -622,61 +599,6 @@ class LaunchedRunTests(BridgeTestCase):
         self.assertEqual(["Read the code", "Make the change"],
                          [t["t"] for t in got["todos"]])
 
-    def modal_text(self):
-        return json.loads(self.run_js(
-            "window.__hcAgent.launch('g1');"
-            "var wait = Promise.resolve();"
-            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
-            "wait.then(function () { return JSON.stringify(made.filter("
-            "  function (e) { return e.className && "
-            "  e.className.indexOf('hc-run') === 0 || e.className === "
-            "  'hc-ask-title' || e.className === 'hc-ask-btn hc-ask-ok' || "
-            "  e.className === 'hc-ask-btn'; }).map(function (e) { "
-            "  return [e.className, e.textContent]; })); });"))
-
-    def test_the_modal_leads_with_the_goal_not_the_command(self):
-        rows = dict((c, t) for c, t in self.modal_text())
-        self.assertEqual("Run Agent", rows["hc-ask-title"])
-        self.assertEqual("Restyle UI to match Pentimento", rows["hc-run-goal"])
-
-    def test_it_says_what_claude_gets_in_one_line(self):
-        rows = dict((c, t) for c, t in self.modal_text())
-        self.assertEqual("Claude will use context assembled from this goal "
-                         "and its related conversations.", rows["hc-run-note"])
-        self.assertNotIn("hc-run-bullet", [c for c, _ in self.modal_text()])
-
-    def test_the_visible_instruction_drops_the_goal_handle(self):
-        rows = dict((c, t) for c, t in self.modal_text())
-        self.assertEqual("Restyle the Vault UI. Plan first.",
-                         rows["hc-run-instruction"])
-        self.assertNotIn("Vault goal g1", rows["hc-run-instruction"])
-
-    def test_context_included_holds_the_real_assembled_context(self):
-        rows = dict((c, t) for c, t in self.modal_text())
-        self.assertIn("Context included", [t for _, t in self.modal_text()])
-        self.assertIn("WHERE THIS SITS", rows["hc-run-prompt"])
-        self.assertNotEqual(rows["hc-run-instruction"], rows["hc-run-prompt"])
-
-    def test_the_command_and_paths_are_demoted_to_details(self):
-        rows = [t for c, t in self.modal_text() if c == "hc-run-fact"]
-        self.assertIn("command: hc work g1", rows)
-        self.assertIn("working directory: /repo", rows)
-
-    def test_the_primary_button_says_run_claude(self):
-        rows = dict((c, t) for c, t in self.modal_text())
-        self.assertEqual("Run Claude", rows["hc-run-go"])
-        self.assertEqual("Cancel", rows["hc-run-cancel"])
-
-    def test_the_primary_is_filled_tan_and_cancel_is_plain(self):
-        css = self.run_js("window.__hcPromptUI.dialogCss();")
-        self.assertIn(".hc-run-go{border:1px solid var(--acc,#a5492a);"
-                      "background:var(--accbg,#f5e2d9);color:var(--ink,#111)", css)
-        self.assertIn(".hc-run-cancel{border:none;background:none", css)
-
-    def test_the_modal_is_not_full_screen(self):
-        self.assertIn(".hc-run-box{width:min(600px,100%)",
-                      self.run_js("window.__hcPromptUI.dialogCss();"))
-
     def test_opening_the_modal_does_not_switch_tabs(self):
         out = self.patched_bundle("out;")
         self.assertIn("if (started) this.set(() => ({ paneTab: 'artifact' }));",
@@ -684,45 +606,28 @@ class LaunchedRunTests(BridgeTestCase):
         self.assertNotIn("this.set(() => ({ paneTab: 'artifact' }));\n"
                          "    if (window.__hcAgent)", out)
 
-    def test_a_failed_launch_stays_on_the_modal_and_says_why(self):
-        # The dialog must not close, and the tab must not change, on failure.
-        got = json.loads(self.run_js(
-""
-            "window.__hcAgent.launch('g1');"
-            "var wait = Promise.resolve();"
-            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
-            "wait = wait.then(function () {"
-            "  var ok = made.filter(function (e) {"
-            "    return e.className === 'hc-run-go'; })[0];"
-            "  if (ok && ok.onclick) ok.onclick();"
-            "});"
-            "for (var j = 0; j < 30; j += 1) wait = wait.then(function(){});"
-            "wait.then(function () {"
-            "  var err = made.filter(function (e) {"
-            "    return e.className === 'hc-run-error'; })[0];"
-            "  var btn = made.filter(function (e) {"
-            "    return e.className === 'hc-run-go'; })[0];"
-            "  return JSON.stringify([err ? err.textContent : null,"
-            "    btn ? btn.textContent : null]); });",
-            extra_env={"HC_FAIL_LAUNCH": "1"}))
-        self.assertEqual("no project directory is recorded", got[0])
-        self.assertEqual("Run Claude", got[1])   # returned to its resting label
-
-    def test_cancelling_the_preview_launches_nothing(self):
+    def test_pressing_run_launches_without_a_dialog(self):
         posted = self.run_js(
             "window.__hcAgent.launch('g1');"
             "var wait = Promise.resolve();"
             "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
-            "wait = wait.then(function () {"
-            "  var no = made.filter(function (e) {"
-            "    return e.className === 'hc-run-cancel'; })[0];"
-            "  if (no && no.onclick) no.onclick();"
-            "});"
-            "for (var j = 0; j < 30; j += 1) wait = wait.then(function(){});"
             "wait.then(function () { return calls.filter(function (c) {"
             "  return c[0] === '/api/op'; }).map(function (c) "
-            "{ return c[1].op; }); });")
-        self.assertEqual(["preview_agent_run"], posted)
+            "{ return c[1]; }); });")
+        self.assertEqual([{"op": "launch_agent_run", "goal_id": "g1",
+                           "confirmed": True}], posted)
+
+    def test_a_failed_launch_does_not_report_success(self):
+        # post() resolves the error body, and an error body is truthy.
+        failed = self.run_js(
+            "var seen = null;"
+            "window.__hcAgent.launch('g1').then(function (r) { seen = 'ok'; })"
+            "  .catch(function (e) { seen = e.message; });"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return seen; });",
+            extra_env={"HC_FAIL_LAUNCH": "1"})
+        self.assertEqual("no project directory is recorded", failed)
 
     def test_running_it_switches_to_the_review_pane(self):
         out = self.patched_bundle("out;")
