@@ -1203,7 +1203,7 @@ class LiveFeedTests(BridgeTestCase):
         # screen entirely — histRows was still being computed with nothing
         # rendering it.
         out = self.patched_bundle("out;")
-        self.assertIn("WHAT YOU ASKED FOR", out)
+        self.assertIn("RELATED PROMPTS", out)
         self.assertIn('<sc-for list="{{ histRows }}" as="hr"', out)
         self.assertIn("{{ hr.text }}", out)
         self.assertIn("{{ hr.when }}", out)
@@ -1215,9 +1215,9 @@ class LiveFeedTests(BridgeTestCase):
         # settled, and neither belongs between the goal and its blockers.
         out = self.patched_bundle("out;")
         order = [">OBJECTIVE</span>", "WHERE THIS SITS", ">CODE CONTEXT</span>",
-                 ">DOCUMENT CONTEXT</span>", "BLOCKERS &amp; OPEN QUESTIONS",
-                 ">ALREADY BUILT</span>", ">DECISIONS</span>",
-                 "WHAT YOU ASKED FOR"]
+                 ">DOCUMENT CONTEXT</span>", "RELATED PROMPTS",
+                 "BLOCKERS &amp; OPEN QUESTIONS", ">ALREADY BUILT</span>",
+                 ">DECISIONS</span>"]
         at = [out.index(name) for name in order]
         self.assertEqual(sorted(at), at, order)
         for name in order:
@@ -1229,26 +1229,36 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("{{ tr.title }}", out)
         self.assertIn("ctxTrail: (trail || []).map((n, i) => ({", out)
         # the focused goal is marked, and depth is real indentation
-        self.assertIn("here: n === sel ? '  \\u2190 this one' : ''", out)
         self.assertIn("pad: (i * 14) + 'px'", out)
+        self.assertIn("c: n === sel ? 'var(--ink)' : 'var(--fnt)'", out)
 
-    def test_the_marker_is_a_screen_cue_not_something_the_agent_reads(self):
-        # On the pane an arrow says which row you are on. In a sentence handed
-        # to Claude it is noise about the reader's cursor.
+    def test_nothing_points_at_the_row_you_are_already_on(self):
+        # The focused goal is the one the inspector is open on; an arrow
+        # saying so is a label for something the reader can already see. It
+        # carries its weight in colour instead.
         out = self.patched_bundle("out;")
+        self.assertNotIn("this one", out)
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
-        self.assertNotIn("this one", draft)
         self.assertIn("Where this sits:", draft)
-        self.assertIn("this one", out)          # still on the pane
 
     def test_the_recommended_prompt_follows_the_pane_it_is_built_from(self):
         out = self.patched_bundle("out;")
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
         at = [draft.index(name) for name in
               ("'Objective:", "'Where this sits:", "'Code context:",
-               "'Document context:", "'Blockers & open questions:",
-               "'Already built:", "'Established decisions:")]
+               "'Document context:", "'Related prompts, in my own words:",
+               "'Blockers & open questions:", "'Already built:",
+               "'Established decisions:")]
         self.assertEqual(sorted(at), at)
+
+    def test_the_prompt_quotes_the_words_the_pane_lists(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertIn("const said = (sel.prompts || []).slice().reverse();",
+                      draft)
+        # newest first, quoted, and flattened so a pasted block stays one line
+        self.assertIn("String(q.text || '').replace(/\\s+/g, ' ').trim()",
+                      draft)
 
     def test_the_recommended_prompt_ends_by_asking_for_the_work(self):
         out = self.patched_bundle("out;")
@@ -1284,15 +1294,15 @@ class LiveFeedTests(BridgeTestCase):
         state["prompts"][0].pop("session_id", None)
         self.assertEqual("", self.roots(state)[0]["prompts"][0]["conv"])
 
-    def test_the_words_close_the_pane_rather_than_open_it(self):
-        # The panels above are the reading; this is the record they were read
-        # from, so it sits last and does not push them down the page.
+    def test_the_words_come_before_what_stands_in_their_way(self):
+        # They are context to read with the sources, not a footnote: what was
+        # asked for lands before the blockers and the settled sections.
         out = self.patched_bundle("out;")
-        self.assertLess(out.index(">ALREADY BUILT</span>"),
-                        out.index("WHAT YOU ASKED FOR"))
-        self.assertLess(out.index("WHAT YOU ASKED FOR"),
-                        out.index("ADDITIONAL NOTES"))
-        self.assertEqual(1, out.count("WHAT YOU ASKED FOR"))
+        self.assertLess(out.index(">DOCUMENT CONTEXT</span>"),
+                        out.index("RELATED PROMPTS"))
+        self.assertLess(out.index("RELATED PROMPTS"),
+                        out.index("BLOCKERS &amp; OPEN QUESTIONS"))
+        self.assertEqual(1, out.count("RELATED PROMPTS"))
 
     def test_a_long_history_scrolls_rather_than_pushing_the_pane_down(self):
         out = self.patched_bundle("out;")
@@ -1344,21 +1354,21 @@ class LiveFeedTests(BridgeTestCase):
             "var row = document.createElement('div');"
             "document.body.appendChild(row);"
             "var head = document.createElement('span');"
-            "head.textContent = 'WHAT YOU ASKED FOR';"
+            "head.textContent = 'RELATED PROMPTS';"
             "row.appendChild(head);"
             "var found = window.__hcPromptUI.promptAddSlot() === row;"
             "var drew = window.__hcPromptUI.renderPromptAdd();"
             "JSON.stringify([found, drew, row.children.map(function (c) "
             "{ return c.className || c.textContent; })]);"))
         self.assertEqual([True, True,
-                          ["WHAT YOU ASKED FOR", "hc-prompt-addbtn"]], got)
+                          ["RELATED PROMPTS", "hc-prompt-addbtn"]], got)
 
     def test_the_anchor_still_wins_when_it_survives(self):
         got = self.run_js(
             "var row = document.createElement('div');"
             "document.body.appendChild(row);"
             "var head = document.createElement('span');"
-            "head.textContent = 'WHAT YOU ASKED FOR';"
+            "head.textContent = 'RELATED PROMPTS';"
             "row.appendChild(head);"
             "var slot = document.createElement('span');"
             "slot.className = 'hc-prompt-add';"
@@ -1381,7 +1391,7 @@ class LiveFeedTests(BridgeTestCase):
             "  var row = document.createElement('div');"
             "  host.appendChild(row);"
             "  var head = document.createElement('span');"
-            "  head.textContent = 'WHAT YOU ASKED FOR';"
+            "  head.textContent = 'RELATED PROMPTS';"
             "  row.appendChild(head);"
             "  window.__hcPromptUI.renderPromptAdd();"
             "  return row;"
