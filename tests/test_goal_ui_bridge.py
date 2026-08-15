@@ -528,6 +528,55 @@ class NoSimulatedAgentTests(BridgeTestCase):
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class LaunchedRunTests(BridgeTestCase):
+    """Pressing run should land the reader where the work will show up."""
+
+    def agent_for(self, state):
+        return self.run_js(
+            "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(state) +
+            "roots[0].agent;")
+
+    def test_a_launched_goal_says_it_is_waiting_on_a_keypress(self):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [], "agent_runs": {},
+              "agent_claim": {"goal_id": "g1", "prompt": "Work on g1"}}
+        got = self.agent_for(st)
+        self.assertEqual("waiting", got["status"])
+        self.assertEqual([], got["todos"])
+
+    def test_a_claim_for_another_goal_does_not_leak_in(self):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [], "agent_runs": {},
+              "agent_claim": {"goal_id": "g2", "prompt": "other"}}
+        self.assertIsNone(self.agent_for(st))
+
+    def test_real_tasks_replace_the_waiting_state(self):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [],
+              "agent_runs": {"g1": [{"status": "running", "tasks": [
+                  {"subject": "Read the code", "status": "completed"},
+                  {"subject": "Make the change", "status": "in_progress"}]}]},
+              "agent_claim": {"goal_id": "g1", "prompt": "Work on g1"}}
+        got = self.agent_for(st)
+        self.assertEqual("running", got["status"])
+        self.assertEqual(["Read the code", "Make the change"],
+                         [t["t"] for t in got["todos"]])
+
+    def test_running_it_switches_to_the_pane_that_shows_the_work(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("this.set(() => ({ paneTab: 'agent' }));", out)
+
+    def test_the_pane_distinguishes_typed_from_started(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("press Enter there to start", out)
+        self.assertIn("waiting for its first step", out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class EmptyVaultTests(BridgeTestCase):
     """An empty vault is a real state; the artifact must not invent goals."""
 

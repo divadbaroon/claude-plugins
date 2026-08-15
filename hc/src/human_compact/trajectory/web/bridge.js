@@ -9,7 +9,8 @@
 
   var KEY = "hc-vault-ui-v1";
   var SYNC_KEY = "hc-vault-ui-sync-v1";
-  var serverState = { goals: [], prompts: [], runs: {}, scope: "global" };
+  var serverState = { goals: [], prompts: [], runs: {}, claim: null,
+                      scope: "global" };
   var stateFingerprint = null;
   var lastObservedGoals = null;
   var refreshPending = false;
@@ -260,9 +261,17 @@
 
   var TASK_STATE = { pending: "todo", in_progress: "doing", completed: "done" };
 
-  function agentOf(goal, runs) {
+  function agentOf(goal, runs, claim) {
     var rows = array(runs && runs[goal.id]);
-    if (!rows.length) return null;
+    if (!rows.length) {
+      // Launched but not yet started. Say that, rather than showing nothing
+      // (which reads as "the button did nothing") or inventing steps.
+      if (claim && claim.goal_id === goal.id) {
+        return { status: "waiting", branch: "", prompt: str(claim.prompt),
+                 lastFile: "", todos: [], log: [] };
+      }
+      return null;
+    }
     var run = rows[0];
     return {
       status: run.status === "finished" ? "done" : "running",
@@ -298,7 +307,7 @@
     };
   }
 
-  function toNode(goal, byParent, byId, runs) {
+  function toNode(goal, byParent, byId, runs, claim) {
     return {
       id: goal.id,
       title: str(goal.title),
@@ -311,10 +320,10 @@
       labels: [],
       prompts: promptRows(goal, byId),
       ctx: contextOf(goal, details[goal.id]),
-      agent: agentOf(goal, runs),
+      agent: agentOf(goal, runs, claim),
       artifact: artifactOf(goal, runs, details[goal.id]),
       children: array(byParent[goal.id]).map(function (child) {
-        return toNode(child, byParent, byId, runs);
+        return toNode(child, byParent, byId, runs, claim);
       })
     };
   }
@@ -328,8 +337,12 @@
       var parent = goal.parent_goal_id || null;
       (byParent[parent] = byParent[parent] || []).push(goal);
     });
+    // Read the claim from the state being rendered, not from module state:
+    // the mapping is a pure function of one payload.
+    var claim = (st && st.agent_claim && typeof st.agent_claim === "object")
+      ? st.agent_claim : null;
     return array(byParent[null]).map(function (goal) {
-      return toNode(goal, byParent, byId, (st && st.agent_runs) || {});
+      return toNode(goal, byParent, byId, (st && st.agent_runs) || {}, claim);
     });
   }
 
@@ -369,6 +382,10 @@
           typeof p.text === "string";
       }),
       runs: (st.agent_runs && typeof st.agent_runs === "object") ? st.agent_runs : {},
+      // A launch that has not been started yet is real state: the terminal is
+      // open with the prompt typed, waiting on a keypress the UI cannot make.
+      claim: (st.agent_claim && typeof st.agent_claim === "object")
+        ? st.agent_claim : null,
       scope: st.scope === "chat" ? "chat" : "global"
     };
     var fingerprint = JSON.stringify([
@@ -716,6 +733,12 @@
       // say "working" without inventing a percentage.
       ["<sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"display:inline-block;width:72px;height:3px;border-radius:2px;background:var(--accbg);overflow:hidden\"><span style=\"display:block;height:100%;width:{{ cv.barW }};background:var(--acc)\"></span></span></sc-if>",
        "<sc-if value=\"{{ cv.barShow }}\" hint-placeholder-val=\"{{ false }}\"><span class=\"hc-rowdots\"><span></span><span></span><span></span></span></sc-if>"],
+      // Launching should land the reader where the work will appear, and
+      // the pane must distinguish 'typed, not started' from 'running'.
+      ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
+       "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'agent' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
+      ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
+       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
