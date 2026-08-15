@@ -1017,6 +1017,66 @@ class LiveFeedTests(BridgeTestCase):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
 
+    def test_the_pane_stops_waiting_for_a_reload_to_notice_a_run(self):
+        # The revision covers the goal tree; a run starting changes what a
+        # node says about itself without changing the tree, so the stored copy
+        # stayed right about the goals and stale about the work.
+        shapes = json.loads(self.run_js(
+            "function roots(runs, claim) {"
+            "  return window.__hcPromptUI.rootsFromState({ scope: 'global',"
+            "    revision: 'r1', goals: [{ id: 'g1', title: 'x' }],"
+            "    prompts: [], agent_runs: runs || {},"
+            "    agent_claim: claim || null }); }"
+            "var shape = window.__hcPromptUI.paneShape;"
+            "JSON.stringify({"
+            "  idle: shape(roots()),"
+            "  armed: shape(roots({}, { goal_id: 'g1' })),"
+            "  running: shape(roots({ g1: [{ status: 'running', tasks: [] }] })),"
+            "  ticked: shape(roots({ g1: [{ status: 'running', tasks: ["
+            "    { task_id: '1', subject: 'a', status: 'completed' }] }] })),"
+            "  done: shape(roots({ g1: [{ status: 'finished', tasks: [],"
+            "    files: [{ path: 'a.js' }] }] })) });"))
+        self.assertNotEqual(shapes["idle"], shapes["armed"])
+        self.assertNotEqual(shapes["idle"], shapes["running"])
+        self.assertNotEqual(shapes["running"], shapes["done"])
+
+    def test_progress_within_a_run_is_not_worth_a_reload(self):
+        # The feed draws task-by-task progress straight into the DOM.
+        # Reloading the page for it would make the pane unusable.
+        shapes = json.loads(self.run_js(
+            "function roots(tasks) {"
+            "  return window.__hcPromptUI.rootsFromState({ scope: 'global',"
+            "    revision: 'r1', goals: [{ id: 'g1', title: 'x' }],"
+            "    prompts: [], agent_runs: { g1: [{ status: 'running',"
+            "      tasks: tasks }] } }); }"
+            "var shape = window.__hcPromptUI.paneShape;"
+            "JSON.stringify([shape(roots([])), shape(roots(["
+            "  { task_id: '1', subject: 'a', status: 'completed' }]))]);"))
+        self.assertEqual(shapes[0], shapes[1])
+
+    def test_the_accent_box_waits_for_something_to_put_in_it(self):
+        out = self.patched_bundle("out;")
+        at = out.index("{{ artSummary }}")
+        self.assertIn("{{ artHasSummary }}", out[at - 400:at])
+        self.assertIn("artHasSummary: !!(art && String(art.summary || '')"
+                      ".trim())", out)
+
+    def test_the_decision_is_greyed_until_there_is_one_to_take(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("{{ artDecideC }}", out)
+        self.assertIn("{{ artApproveBg }}", out)
+        self.assertIn("{{ artDecideCur }}", out)
+        # and greyed is not merely cosmetic: the handlers refuse early
+        self.assertIn("artApprove: () => { if (!(art && String(art.summary "
+                      "|| '').trim())) return;", out)
+        self.assertIn("revOpenFn: () => { if (art && String(art.summary || '')"
+                      ".trim()) this.setState({ revOpen: true }); },", out)
+
+    def test_the_section_is_named_for_what_it_holds(self):
+        out = self.patched_bundle("out;")
+        self.assertIn(">FINAL ARTIFACT</span>", out)
+        self.assertNotIn(">ARTIFACT</span>", out)
+
     def test_review_opens_on_a_launch_before_any_artifact_exists(self):
         # Pressing run switches to REVIEW. If the tab only existed once an
         # artifact did, that switch landed on a pane that said to press run.
@@ -1141,7 +1201,7 @@ class LiveFeedTests(BridgeTestCase):
         # PENDING REVIEW said what "Completed \u00b7 1h" already says.
         out = self.patched_bundle("out;")
         self.assertNotIn("{{ artStatusLab }}", out)
-        header = out.index(">ARTIFACT</span>")
+        header = out.index(">FINAL ARTIFACT</span>")
         slot = out.index('<div class="hc-live-open-slot"></div>')
         self.assertLess(header, slot)
         self.assertLess(slot, out.index("{{ artSummary }}"))

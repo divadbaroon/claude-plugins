@@ -167,6 +167,20 @@
     window.location.reload();
   }
 
+  // What the inspector's shape depends on, per goal: whether a run is live,
+  // and whether there is an artifact to review. Task-by-task progress is not
+  // in here on purpose -- the feed draws that straight into the DOM, and
+  // reloading the page for it would make the pane unusable.
+  function paneShape(roots) {
+    var flat = flattenTree(roots);
+    return flat.order.map(function (id) {
+      var value = (flat.map[id] || {}).value || {};
+      var status = (value.agent || {}).status;
+      var live = status === "running" || status === "waiting";
+      return id + ":" + (live ? "1" : "0") + (value.artifact ? "1" : "0");
+    }).join(",");
+  }
+
   function reconcileState(st) {
     if (!st || typeof st.revision !== "string") return;
     var remote = rootsFromState(st);
@@ -175,7 +189,20 @@
       writeSync(st.revision, remote);
       return;
     }
-    if (synced.revision === st.revision) return;
+    if (synced.revision === st.revision) {
+      // The revision covers the goal tree. A run starting changes what a node
+      // says about itself without changing the tree, so the stored copy stays
+      // right about the goals and stale about the work -- which is why REVIEW
+      // only appeared after a reload. Only the shape of the pane is worth a
+      // reload, not every task update: whether a goal has a live run, and
+      // whether it has an artifact.
+      var stale = readLocalGoals();
+      if (stale && paneShape(stale) !== paneShape(remote)) {
+        installGoalsAndReload(mergeTrees(synced.goals, stale, remote),
+                              st.revision);
+      }
+      return;
+    }
     var local = readLocalGoals();
     var merged = mergeTrees(synced.goals, local, remote);
     if (same(merged, remote)) {
@@ -1379,7 +1406,7 @@
       // is a section like CHANGES, and BRANCH said little the changed
       // files do not.
       ["<div style=\"margin-top:8px;display:grid;grid-template-columns:72px 1fr;gap:3px 10px;align-items:baseline\">\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">BRANCH</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ artBranch }}</span>\n<span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span>\n</div>\n</div>\n",
-       "<div style=\"margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap\">\n<div style=\"display:flex;gap:10px;align-items:baseline\"><span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span></div>\n<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;gap:16px;align-items:center\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if>\n</div>\n</div>\n<div class=\"hc-live-rest\"></div>"],
+       "<div style=\"margin-top:14px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap\">\n<div style=\"display:flex;gap:10px;align-items:baseline\"><span style=\"font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">CREATED</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artWhen }}</span></div>\n<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;gap:16px;align-items:center\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:{{ artDecideC }};cursor:{{ artDecideCur }};user-select:none\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:{{ artApproveBg }};color:{{ artApproveC }};font:600 11px 'Source Code Pro',monospace;cursor:{{ artDecideCur }};user-select:none\">approve</span></div>\n</sc-if>\n</div>\n</div>\n<div class=\"hc-live-rest\"></div>"],
       // Running the agent is what produces a plan; a separate button that
       // only starts the same session was a second door to one room.
       ["<span sc-camel-on-click=\"{{ genTodos }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">generate todos</span>",
@@ -1463,10 +1490,21 @@
       ["<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if>",
        "<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px\"><div class=\"hc-live\"></div><div class=\"hc-live-rest\"></div></div><sc-if value=\"{{ artIdle }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if></sc-if>"],
       ["artEmpty: !art, hasArtifact: !!art,",
-       "artEmpty: !art, hasArtifact: !!art,\n      artIdle: !art && !(sel && sel.agent && (sel.agent.status === 'running' || sel.agent.status === 'waiting')),"],
+       "artEmpty: !art, hasArtifact: !!art,\n      artHasSummary: !!(art && String(art.summary || '').trim()),\n      artDecideC: (art && String(art.summary || '').trim()) ? 'var(--acc)' : 'var(--fnt)',\n      artApproveBg: (art && String(art.summary || '').trim()) ? 'var(--acc)' : 'var(--bd)',\n      artApproveC: (art && String(art.summary || '').trim()) ? 'var(--onacc)' : 'var(--fnt)',\n      artDecideCur: (art && String(art.summary || '').trim()) ? 'pointer' : 'default',\n      artIdle: !art && !(sel && sel.agent && (sel.agent.status === 'running' || sel.agent.status === 'waiting')),"],
+      // It is the thing being reviewed, not a section of the pane.
+      ["letter-spacing:1px;color:var(--mut)\">ARTIFACT</span>",
+       "letter-spacing:1px;color:var(--mut)\">FINAL ARTIFACT</span>"],
+      // Nothing to approve and nothing to send back until the run has
+      // written something. The buttons stay in place, greyed, rather
+      // than appearing when the work lands: a control that moves is
+      // harder to find than one that waits.
+      ["revOpenFn: () => this.setState({ revOpen: true }),",
+       "revOpenFn: () => { if (art && String(art.summary || '').trim()) this.setState({ revOpen: true }); },"],
+      ["artApprove: () => { if (sel)",
+       "artApprove: () => { if (!(art && String(art.summary || '').trim())) return; if (sel)"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
-       "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
+       "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<sc-if value=\"{{ artHasSummary }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div></sc-if>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1786,6 +1824,7 @@
 
   window.__hcPromptUI = {
     rootsFromState: rootsFromState,
+    paneShape: paneShape,
     patchBundleSource: patchBundleSource,
     seedPayload: seedPayload,
     mergeTrees: mergeTrees,
