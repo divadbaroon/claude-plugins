@@ -680,7 +680,11 @@
   function liveRows(run) {
     var rows = [];
     var head = ({ running: "Running", waiting: "Waiting on you",
-                  finished: "Completed", failed: "Failed"
+                  finished: "Completed", failed: "Failed",
+                  // Launched, but the session has not spoken yet. Saying
+                  // nothing here reads as the run button having done nothing.
+                  starting: "Starting \u2014 the terminal is open with your "
+                            + "prompt; press Enter there"
                 })[str(run.state)] || str(run.state);
     if (run.elapsed) head += " \u00b7 " + str(run.elapsed);
     rows.push(["head", head]);
@@ -1030,7 +1034,16 @@
                    { cache: "no-store" })
         .then(function (r) { return r.json(); })
         .then(function (body) {
-          return !!(body && body.ok && renderLive(id, body.runs));
+          if (!(body && body.ok)) return false;
+          var rows = array(body.runs);
+          // The run record only exists once a hook fires. Between pressing
+          // run and that first hook there is a real state -- a terminal open
+          // with the prompt typed -- and no row to carry it.
+          if (!rows.length && serverState.claim
+              && serverState.claim.goal_id === id) {
+            rows = [{ state: "starting", did: [], checked: [] }];
+          }
+          return !!renderLive(id, rows);
         })
         .catch(function () { return false; });
     }
@@ -1335,7 +1348,7 @@
       ["<span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span>",
        "<sc-if value=\"{{ showReviewTab }}\" hint-placeholder-val=\"{{ false }}\"><span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span></sc-if>"],
       ["artFiles: (art ? (art.files || []) : []).map(",
-       "showReviewTab: !!art,\n      artFiles: (art ? (art.files || []) : []).map("],
+       "showReviewTab: !!(art || (sel && sel.agent && (sel.agent.status === 'running' || sel.agent.status === 'waiting'))),\n      artFiles: (art ? (art.files || []) : []).map("],
       // The decision belongs with the artifact it is about, at the top of
       // the pane, not at the far end of the changed-file list.
       ["<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if>",
@@ -1443,6 +1456,14 @@
        "      anGoals: !!(window.__hcAnalysisNow && window.__hcAnalysisNow().running),\n      anTitle: (window.__hcAnalysisNow && window.__hcAnalysisNow().phase === 'synthesizing')\n        ? 'Building Goals' : 'Reading your conversations',\n      treeListDisp: (window.__hcAnalysisNow && window.__hcAnalysisNow().running) ? 'none' : 'block',\n"],
       ["<sc-if value=\"{{ anGoals }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px\">{{ anSpin }}<span style=\"font:600 13.5px 'Source Code Pro',monospace;color:var(--ink)\">Building Goals</span><span style=\"font:10.5px 'Source Code Pro',monospace;color:var(--fnt)\">{{ anCount }}</span></div>\n</sc-if>",
        "<sc-if value=\"{{ anGoals }}\" hint-placeholder-val=\"{{ false }}\">\n<div class=\"hc-anpanel\" style=\"flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px\">{{ anSpin }}<span style=\"font:600 13.5px 'Source Code Pro',monospace;color:var(--ink)\">{{ anTitle }}</span><span style=\"font:10.5px 'Source Code Pro',monospace;color:var(--fnt)\">{{ anCount }}</span></div>\n</sc-if>"],
+      // A run has a state before it has an artifact. The feed used to
+      // live only inside the artifact card, so pressing run opened a
+      // pane that said to press run. The anchors now exist either way,
+      // and the invitation only shows when nothing is happening.
+      ["<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if>",
+       "<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px\"><div class=\"hc-live\"></div><div class=\"hc-live-rest\"></div></div><sc-if value=\"{{ artIdle }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if></sc-if>"],
+      ["artEmpty: !art, hasArtifact: !!art,",
+       "artEmpty: !art, hasArtifact: !!art,\n      artIdle: !art && !(sel && sel.agent && (sel.agent.status === 'running' || sel.agent.status === 'waiting')),"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],

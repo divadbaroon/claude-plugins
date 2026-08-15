@@ -1017,6 +1017,55 @@ class LiveFeedTests(BridgeTestCase):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
 
+    def test_review_opens_on_a_launch_before_any_artifact_exists(self):
+        # Pressing run switches to REVIEW. If the tab only existed once an
+        # artifact did, that switch landed on a pane that said to press run.
+        out = self.patched_bundle("out;")
+        self.assertIn("showReviewTab: !!(art || (sel && sel.agent"
+                      " && (sel.agent.status === 'running'"
+                      " || sel.agent.status === 'waiting')))", out)
+
+    def test_the_feed_has_somewhere_to_draw_without_an_artifact(self):
+        # Both anchors used to live inside the artifact card, so a run with
+        # no artifact yet had nowhere to report itself.
+        out = self.patched_bundle("out;")
+        empty = out[out.index("{{ artEmpty }}"):out.index("{{ hasArtifact }}")]
+        self.assertIn('<div class="hc-live"></div>', empty)
+        self.assertIn('<div class="hc-live-rest"></div>', empty)
+
+    def test_the_invitation_to_run_goes_quiet_once_a_run_starts(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("artIdle: !art && !(sel && sel.agent"
+                      " && (sel.agent.status === 'running'"
+                      " || sel.agent.status === 'waiting')),", out)
+        empty = out[out.index("{{ artEmpty }}"):out.index("{{ hasArtifact }}")]
+        self.assertIn("{{ artIdle }}", empty)
+        self.assertIn("No artifact yet", empty)
+
+    def test_a_launched_run_reports_itself_before_the_first_hook(self):
+        # The run record only exists once a hook fires. Until then there is a
+        # real state — a terminal open with the prompt typed — and no row to
+        # carry it, which read as the button having done nothing.
+        rows = json.loads(self.run_js(
+            "var top = document.createElement('div');"
+            "top.className = 'hc-live';"
+            "document.body.appendChild(top);"
+            "window.__hcPromptUI.renderLive('g1', "
+            "  [{ state: 'starting', did: [], checked: [] }]);"
+            "JSON.stringify(top.children[0].children.map(function (c) "
+            "{ return [c.className, c.textContent]; }));"))
+        self.assertEqual([["hc-live-head",
+                           "Starting \u2014 the terminal is open with your "
+                           "prompt; press Enter there"]], rows)
+
+    def test_the_feed_invents_that_row_only_for_a_real_claim(self):
+        src = BRIDGE.read_text()
+        feed = src[src.index("function watchRunFeed"):]
+        self.assertIn("if (!rows.length && serverState.claim", feed)
+        self.assertIn("&& serverState.claim.goal_id === id) {", feed)
+        self.assertIn('rows = [{ state: "starting", did: [], checked: [] }];',
+                      feed)
+
     def test_the_state_sits_in_the_card_and_the_log_outside_it(self):
         split = json.loads(self.run_js(
             "var top = document.createElement('div');"
@@ -1064,11 +1113,14 @@ class LiveFeedTests(BridgeTestCase):
 
     def test_the_feed_is_drawn_on_the_review_pane(self):
         # Placement within the pane is pinned by the ordering test; here just
-        # that the target exists inside REVIEW and nowhere else.
+        # that the target exists inside REVIEW and nowhere else. There are two
+        # anchors — one for a run with an artifact, one for a run without —
+        # and artEmpty/hasArtifact are exclusive, so only ever one is drawn.
         out = self.patched_bundle("out;")
         pane = out.index('value="{{ showArt }}"')
         self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
-        self.assertEqual(1, out.count('class="hc-live"'))
+        self.assertEqual(2, out.count('class="hc-live"'))
+        self.assertIn("artEmpty: !art, hasArtifact: !!art,", out)
 
     def test_the_message_is_the_accented_box_it_used_to_have(self):
         # It is Claude's own words in a pane otherwise made of metadata, and
@@ -1096,11 +1148,12 @@ class LiveFeedTests(BridgeTestCase):
 
     def test_created_sits_opposite_the_decision_on_the_cards_last_line(self):
         out = self.patched_bundle("out;")
+        card = out.index("background:var(--panel2);padding:9px 12px")
         row = out.index("justify-content:space-between;align-items:center;"
-                        "gap:16px;flex-wrap:wrap")
+                        "gap:16px;flex-wrap:wrap", card)
         created = out.index("{{ artWhen }}")
         decide = out.index("request revisions")
-        end = out.index('<div class="hc-live-rest">')
+        end = out.index('<div class="hc-live-rest">', card)
         self.assertLess(row, created)
         self.assertLess(created, decide)
         self.assertLess(decide, end)
@@ -1111,11 +1164,11 @@ class LiveFeedTests(BridgeTestCase):
     def test_the_card_holds_the_run_and_activity_stands_apart(self):
         out = self.patched_bundle("out;")
         card = out.index("background:var(--panel2);padding:9px 12px")
-        state = out.index('<div class="hc-live"></div>')
+        state = out.index('<div class="hc-live"></div>', card)
         summary = out.index("{{ artSummary }}")
         created = out.index("{{ artWhen }}")
         decide = out.index("request revisions")
-        log = out.index('<div class="hc-live-rest"></div>')
+        log = out.index('<div class="hc-live-rest"></div>', card)
         changes = out.index(">CHANGES</div>")
         # state, message, created and the decision are all one card
         self.assertLess(card, state)
@@ -1126,7 +1179,8 @@ class LiveFeedTests(BridgeTestCase):
         self.assertLess(decide, log)
         self.assertLess(log, changes)
         self.assertEqual(1, out.count("request revisions"))
-        self.assertEqual(1, out.count('class="hc-live"'))
+        # one anchor per branch: with an artifact, and without
+        self.assertEqual(2, out.count('class="hc-live"'))
 
     def test_the_message_is_not_printed_twice_in_one_card(self):
         # The card's summary is the same text the question box carried.
@@ -1181,7 +1235,7 @@ class LiveFeedTests(BridgeTestCase):
         # the run while it is the thing worth watching.
         out = self.patched_bundle("out;")
         self.assertIn('<sc-if value="{{ showReviewTab }}"', out)
-        self.assertIn("showReviewTab: !!art,", out)
+        self.assertIn("showReviewTab: !!(art ||", out)
 
     def test_the_prompt_is_a_dropdown_on_the_agent_pane(self):
         out = self.patched_bundle("out;")
