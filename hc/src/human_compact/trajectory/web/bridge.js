@@ -264,6 +264,14 @@
   function agentOf(goal, runs, claim) {
     var rows = array(runs && runs[goal.id]);
     if (!rows.length) {
+      var proposed = array(plans[goal.id]);
+      if (proposed.length && !(claim && claim.goal_id === goal.id)) {
+        // A proposal, plainly marked. The session's own tasks replace it.
+        return { status: "proposed", branch: "", prompt: "", lastFile: "",
+                 todos: proposed.map(function (step) {
+                   return { t: str(step), s: "todo", active: "" };
+                 }), log: [] };
+      }
       // Launched but not yet started. Say that, rather than showing nothing
       // (which reads as "the button did nothing") or inventing steps.
       if (claim && claim.goal_id === goal.id) {
@@ -518,6 +526,46 @@
     }
   }
 
+  var plans = Object.create(null);
+  var planPending = Object.create(null);
+
+  function selectedPane() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+      return typeof saved.paneTab === "string" ? saved.paneTab : "context";
+    } catch (e) {
+      return "context";
+    }
+  }
+
+  function loadPlan(goalId) {
+    // One model call per goal, cached by the server. Asked for only when the
+    // reader opens the pane that shows it, not on every render.
+    if (!goalId || plans[goalId] || planPending[goalId]) return;
+    if (serverState.scope === "chat") return;
+    planPending[goalId] = true;
+    fetch("/api/plan?goal=" + encodeURIComponent(goalId), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        plans[goalId] = (body && body.ok) ? array(body.steps) : [];
+        lastObservedGoals = null;
+        refreshState();
+      })
+      .catch(function () { delete planPending[goalId]; });
+  }
+
+  function watchPane() {
+    setInterval(function () {
+      if (selectedPane() !== "agent") return;
+      var id = selectedGoalId();
+      // A goal that has really run shows its own tasks; never spend a call
+      // proposing steps for work that already happened.
+      if (id && !array(serverState.runs && serverState.runs[id]).length) {
+        loadPlan(id);
+      }
+    }, 600);
+  }
+
   var threads = Object.create(null);
 
   function loadThread(id) {
@@ -738,7 +786,7 @@
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
        "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'agent' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
-       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
+       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1017,6 +1065,7 @@
     bannerCss: function () { return BANNER_CSS; },
     watchAnalysis: watchAnalysis,
     loadThread: loadThread,
+    loadPlan: loadPlan,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; }
@@ -1031,6 +1080,7 @@
     watchGoals();
     watchAnalysis();
     watchSelection();
+    watchPane();
     setInterval(refreshState, 1500);
     setTimeout(refreshState, 0);
   }

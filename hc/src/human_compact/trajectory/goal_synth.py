@@ -194,6 +194,40 @@ def backfill_descriptions(provider, trajdir, goals):
     return written
 
 
+PLAN_PROMPT = """Propose the steps a coding agent would take to finish the
+goal below. This is a plan to show the user before any work starts, not a
+report of work done.
+
+Rules:
+- Between 3 and 7 steps, in the order they would be done.
+- Each step is one concrete action, phrased as an imperative ("Add a retry
+  wrapper around provider calls"), not a category ("testing").
+- Ground them in the briefing. Do not invent files, tools, or requirements it
+  does not mention.
+- If the briefing does not say enough to plan honestly, return fewer steps
+  rather than filling the list.
+
+Return ONLY minified JSON: {"steps":["",""]}
+
+THE GOAL, AND WHAT IS KNOWN ABOUT IT:
+<<BRIEFING>>"""
+
+
+def plan(provider, briefing, max_steps=7):
+    """Propose steps for a goal. This is a preview, never a record of work."""
+    data = provider.generate_json(
+        PLAN_PROMPT.replace("<<BRIEFING>>", str(briefing or "")[:12000]))
+    steps = data.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError("plan response is missing the steps array")
+    out = []
+    for step in steps[:max_steps]:
+        text = " ".join(str(step).split())[:200]
+        if text:
+            out.append(text)
+    return out
+
+
 def classify(provider, goals, extraction):
     prompt = (CLASSIFY_PROMPT.replace("<<TREE>>", tree_digest(goals))
               .replace("<<EXTRACTION>>", json.dumps(compact_extraction(extraction))))

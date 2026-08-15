@@ -407,13 +407,44 @@ def write_launch_script(trajdir: Path, goal_id: str, cwd: str,
     return path
 
 
-def open_terminal(script: Path, app: Optional[str] = None) -> str:
-    """Open *script* in a terminal window. Returns the app it used."""
+# AppleScript for Terminal.app: create exactly one window and raise that one.
+# `open -a` asks the app to open a document, which activates it — and macOS
+# activation brings every window of that app forward, so a launch buried the
+# screen in whatever terminals were already open.
+_TERMINAL_SCPT = """
+on run argv
+  set p to item 1 of argv
+  tell application "Terminal"
+    set w to do script ("exec " & quoted form of p)
+    set winId to id of (first window whose tabs contains w)
+    set index of window id winId to 1
+  end tell
+end run
+"""
+
+
+def open_terminal(script: Path, app: Optional[str] = None,
+                  foreground: bool = True) -> str:
+    """Open *script* in one terminal window. Returns the app it used."""
     import subprocess
     import sys
     app = app or terminal_app()
     if sys.platform != "darwin":
         raise RuntimeError("one-click launch currently supports macOS only")
+    if app == "Terminal":
+        # One window, made frontmost within Terminal, without asking macOS to
+        # raise the app's other windows unless the caller wants focus.
+        result = subprocess.run(
+            ["osascript", "-", str(script)], input=_TERMINAL_SCPT,
+            capture_output=True, text=True, timeout=15)
+        if result.returncode == 0:
+            if foreground:
+                subprocess.run(
+                    ["osascript", "-e",
+                     'tell application "Terminal" to activate'],
+                    capture_output=True, text=True, timeout=10)
+            return app
+        # Fall through: a scripting-disabled Terminal is still openable.
     result = subprocess.run(["open", "-a", app, str(script)],
                             capture_output=True, text=True, timeout=15)
     if result.returncode != 0:

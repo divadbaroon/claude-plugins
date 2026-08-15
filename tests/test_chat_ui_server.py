@@ -972,3 +972,72 @@ class ConversationThreadTests(unittest.TestCase):
             rows = ui.conversation_thread(Path("/nowhere"), "abc")
         self.assertEqual(3, len(rows))
         self.assertEqual("YOU", rows[0][0])
+
+
+class PlanPreviewTests(unittest.TestCase):
+    """A plan shown before anything runs is a proposal, and costs one call."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name)
+        (self.trajdir / "goals.json").write_text(json.dumps(
+            {"goals": [{"id": "g1", "title": "Ship it", "status": "active",
+                        "evidence_ids": []}]}))
+        (self.trajdir / "config.json").write_text(
+            json.dumps({"extract_provider": "claude"}))
+
+    def _provider(self, payload, seen):
+        class Stub:
+            def generate_json(_, prompt):
+                seen.append(prompt)
+                return payload
+        return Stub()
+
+    def test_it_proposes_steps_for_a_known_goal(self):
+        seen = []
+        with mock.patch("human_compact.trajectory.providers.make",
+                        return_value=self._provider(
+                            {"steps": ["Read the code", "Make the change"]}, seen)):
+            got = ui.plan_preview(self.trajdir, "g1")
+        self.assertTrue(got["ok"])
+        self.assertEqual(["Read the code", "Make the change"], got["steps"])
+        self.assertIn("Ship it", seen[0])
+
+    def test_the_second_look_costs_nothing(self):
+        seen = []
+        with mock.patch("human_compact.trajectory.providers.make",
+                        return_value=self._provider({"steps": ["One"]}, seen)):
+            ui.plan_preview(self.trajdir, "g1")
+
+        class Boom:
+            def generate_json(self, prompt):
+                raise AssertionError("should have been cached")
+
+        with mock.patch("human_compact.trajectory.providers.make",
+                        return_value=Boom()):
+            again = ui.plan_preview(self.trajdir, "g1")
+        self.assertEqual(["One"], again["steps"])
+
+    def test_an_unknown_goal_asks_nothing(self):
+        class Boom:
+            def generate_json(self, prompt):
+                raise AssertionError("should not reach a provider")
+
+        with mock.patch("human_compact.trajectory.providers.make",
+                        return_value=Boom()):
+            self.assertFalse(ui.plan_preview(self.trajdir, "nope")["ok"])
+
+    def test_a_path_shaped_goal_id_is_refused(self):
+        self.assertFalse(ui.plan_preview(self.trajdir, "../../etc/passwd")["ok"])
+
+    def test_a_provider_failure_is_reported_not_faked(self):
+        class Broken:
+            def generate_json(self, prompt):
+                raise RuntimeError("no provider configured")
+
+        with mock.patch("human_compact.trajectory.providers.make",
+                        return_value=Broken()):
+            got = ui.plan_preview(self.trajdir, "g1")
+        self.assertFalse(got["ok"])
+        self.assertNotIn("steps", got)

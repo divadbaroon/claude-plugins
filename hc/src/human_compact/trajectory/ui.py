@@ -4,17 +4,20 @@ injection). Stdlib only; localhost only; Ctrl-C to stop."""
 import hashlib
 import json
 import os
+import re
 import socketserver
 import threading
 import time
 import webbrowser
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer as _ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
+from . import secure_io as SIO
 
 
 DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
@@ -270,6 +273,47 @@ def conversation_thread(trajdir, session_id, limit=400, chars=6000):
         if session.get("session_id") == session_id:
             return thread_rows(session.get("turns"), limit, chars)
     return None
+
+
+def plan_preview(trajdir, goal_id, generate=True):
+    """The steps an agent would take, proposed before anything runs.
+
+    Cached per goal: this costs a model call, and the answer does not change
+    between two clicks on a tab. It is a proposal — the session's own tasks
+    replace it the moment one starts.
+    """
+    trajdir = Path(trajdir)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", str(goal_id or "")):
+        return {"ok": False, "error": "unknown goal"}
+    cache = trajdir / "plans" / f"{goal_id}.json"
+    if cache.is_file():
+        try:
+            return {"ok": True, **json.loads(cache.read_text())}
+        except (OSError, ValueError):
+            pass
+    if not generate:
+        return {"ok": True, "goal_id": goal_id, "steps": []}
+    goals, _ = GM.load(trajdir)
+    GM.sanitize(goals)
+    briefing = AE.goal_context(trajdir, goals, goal_id)
+    if not briefing:
+        return {"ok": False, "error": "unknown goal"}
+    try:
+        config = json.loads((trajdir / "config.json").read_text())
+        from . import goal_synth as GS, providers as PR
+        provider = PR.make(config.get("synth_provider")
+                           or config["extract_provider"], "synthesize")
+        steps = GS.plan(provider, briefing)
+    except Exception as error:                       # noqa: BLE001
+        return {"ok": False, "error": str(error)[:200]}
+    record = {"goal_id": goal_id, "steps": steps,
+              "generated_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        SIO.secure_dir(cache.parent, trajdir)
+        SIO.atomic_write_json(cache, record, root=trajdir)
+    except OSError:
+        pass                     # a plan is a convenience, not state to lose
+    return {"ok": True, **record}
 
 
 def conversation_rows(trajdir, limit=200):
@@ -676,6 +720,13 @@ class H(BaseHTTPRequestHandler):
                         "add_dirs": dirs,
                         "references": refs,
                     })
+            elif self.path.startswith("/api/plan"):
+                from urllib.parse import urlparse, parse_qs
+                goal_id = parse_qs(urlparse(self.path).query).get("goal", [""])[0]
+                if self.server.chat_scoped:
+                    self._send(200, {"ok": False, "error": "Vault goals only"})
+                else:
+                    self._send(200, plan_preview(self.server.trajdir, goal_id))
             elif self.path.startswith("/api/conversation"):
                 from urllib.parse import urlparse, parse_qs
                 sid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
