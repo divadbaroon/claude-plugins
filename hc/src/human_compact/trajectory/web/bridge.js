@@ -774,7 +774,7 @@
   // Full width of the panel it sits above: it shares that panel's container,
   // so 100% of the container is 100% of the panel.
   var BANNER_CSS = [
-      ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:14px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:6px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
       ".hc-rowdots{display:inline-block;position:relative;width:72px;height:6px;overflow:hidden;vertical-align:middle}",
       ".hc-rowdots>span{position:absolute;top:1px;left:0;width:4px;height:4px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-travel 1.5s linear infinite}",
       ".hc-rowdots>span:nth-child(2){animation-delay:.16s}",
