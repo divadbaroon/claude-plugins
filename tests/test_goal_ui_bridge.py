@@ -1181,6 +1181,46 @@ class LiveFeedTests(BridgeTestCase):
             self.assertIn(said, out, state)
         self.assertIn("if (a.awaiting) return 'waiting for your reply", out)
 
+    def test_the_users_own_words_are_on_the_context_pane(self):
+        # Every other panel is derived from them. They were only reachable
+        # through the PROMPT tab, so removing that tab took them off the
+        # screen entirely — histRows was still being computed with nothing
+        # rendering it.
+        out = self.patched_bundle("out;")
+        self.assertIn("WHAT YOU ASKED FOR", out)
+        self.assertIn('<sc-for list="{{ histRows }}" as="hr"', out)
+        self.assertIn("{{ hr.text }}", out)
+        self.assertIn("{{ hr.when }}", out)
+        self.assertIn("{{ histEmpty }}", out)
+
+    def test_the_words_sit_between_the_objective_and_its_sources(self):
+        out = self.patched_bundle("out;")
+        self.assertLess(out.index(">OBJECTIVE</span>"),
+                        out.index("WHAT YOU ASKED FOR"))
+        self.assertLess(out.index("WHAT YOU ASKED FOR"),
+                        out.index(">CODE CONTEXT</span>"))
+        # exactly one of each header: the patch inserts, it does not duplicate
+        self.assertEqual(1, out.count(">CODE CONTEXT</span>"))
+        self.assertEqual(1, out.count("WHAT YOU ASKED FOR"))
+
+    def test_a_long_history_scrolls_rather_than_pushing_the_pane_down(self):
+        out = self.patched_bundle("out;")
+        at = out.index('<sc-for list="{{ histRows }}"')
+        box = out[out.rindex("<div", 0, at):at]
+        self.assertIn("max-height:260px;overflow-y:auto", box)
+
+    def test_the_prompts_shown_are_the_ones_the_server_recorded(self):
+        state = json.loads(json.dumps(STATE))
+        rows = self.roots(state)[0]["prompts"]
+        self.assertEqual([p["text"] for p in state["prompts"]
+                          if p["id"] in state["goals"][0]["prompt_ids"]],
+                         [r["text"] for r in rows])
+
+    def test_a_goal_nobody_asked_for_carries_no_prompts(self):
+        state = json.loads(json.dumps(STATE))
+        state["goals"][0]["prompt_ids"] = []
+        self.assertEqual([], self.roots(state)[0]["prompts"])
+
     def test_the_pane_follows_the_selection_back_to_context(self):
         # Every pane is about the selected goal. Carrying AGENT or REVIEW over
         # to the next goal lands on a tab that may not be offered for it.
