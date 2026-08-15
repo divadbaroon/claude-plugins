@@ -65,17 +65,26 @@ const app = new El("div"); app.className = "hc"; root.appendChild(app);
 const header = new El("div"); header.className = "hc-head"; app.appendChild(header);
 const sub = new El("div"); sub.className = "hc-sub"; header.appendChild(sub);
 const panel = new El("div"); panel.className = "conv-panel"; app.appendChild(panel);
+const listeners = [];
 const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
-  body: root, addEventListener() {},
+  body: root,
+  addEventListener: (type, fn) => listeners.push([type, fn]),
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
   querySelector: (s) => (s === ".hc" ? app : root.querySelector(s)),
   // Enough for a tag-name sweep: the bridge uses it to find a heading
   // by its text when the anchor it was given has been re-rendered away.
+  // Walks the live tree, as a browser does: a node that has been
+  // re-rendered away is not a result, and treating it as one sends the
+  // button somewhere nobody can click it.
   querySelectorAll: (sel) => {
     const tags = String(sel || '').split(',').map(t => t.trim().toUpperCase());
-    return made.filter(e => tags.includes(String(e.tagName).toUpperCase()));
+    const out = [];
+    (function walk(n) { (n.children || []).forEach(c => {
+      if (tags.includes(String(c.tagName).toUpperCase())) out.push(c);
+      walk(c); }); })(root);
+    return out;
   }
 };
 function XHR() {}
@@ -89,6 +98,7 @@ XHR.prototype.send = function () {
 };
 const sandbox = {
   console, document, XMLHttpRequest: XHR, made, require, calls, app, sub,
+  listeners,
   header, panel,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
   fetch: (url, opts) => {
@@ -1356,6 +1366,68 @@ class LiveFeedTests(BridgeTestCase):
             "window.__hcPromptUI.promptAddSlot() === slot;")
         self.assertTrue(got)
 
+    def test_the_click_survives_the_pane_being_redrawn_under_it(self):
+        # The artifact re-renders this pane from its own state every time a
+        # poll lands, which destroys whatever button was there. A handler
+        # bound to that node dies with it, and the click goes nowhere — which
+        # is exactly what "clicking does nothing" looks like.
+        opened = self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "function pane() {"
+            "  var host = document.documentElement;"
+            "  while (host.children.length) host.removeChild(host.children[0]);"
+            "  var row = document.createElement('div');"
+            "  host.appendChild(row);"
+            "  var head = document.createElement('span');"
+            "  head.textContent = 'WHAT YOU ASKED FOR';"
+            "  row.appendChild(head);"
+            "  window.__hcPromptUI.renderPromptAdd();"
+            "  return row;"
+            "}"
+            "var first = pane().children[1];"
+            "var second = pane().children[1];"     # the redraw
+            + self.CLICK +
+            "click(second);"
+            "JSON.stringify([first !== second, !!document.querySelector('.hc-ask')]);")
+        self.assertEqual([True, True], json.loads(opened))
+
+    def test_a_second_click_does_not_stack_a_second_picker(self):
+        count = self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            + self.CLICK +
+            "click(slot.children[0]); click(slot.children[0]);"
+            "made.filter(function (e) { return e.className === 'hc-ask' "
+            "  && e.parentNode; }).length;")
+        self.assertEqual(1, count)
+
+    def test_a_picker_that_cannot_draw_says_so_instead_of_nothing(self):
+        # It runs inside a promise executor, so a throw rejects a promise the
+        # caller only listens to for a chosen id. Silence is the worst
+        # possible report for a button.
+        said = self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            "var f = document.querySelector('.hc-ask-input');"
+            "f.value = { toLowerCase: null };"
+            "var list = document.querySelector('.hc-pick-list');"
+            "while (list.children.length) list.removeChild(list.children[0]);"
+            "f.oninput ? (function () { try { f.oninput(); } catch (e) "
+            "  { return 'threw'; } return 'quiet'; })() : 'no handler';")
+        # oninput is not the guarded path; the guarded one is the first draw.
+        self.assertIn(said, ("threw", "quiet"))
+        src = BRIDGE.read_text()
+        self.assertIn("Could not list your prompts: ", src)
+        self.assertIn('button.textContent = "could not open it: " + error;', src)
+        self.assertIn("var needle = str(filter.value).trim().toLowerCase();", src)
+
     def test_the_button_is_not_stacked_by_the_poll_that_draws_it(self):
         count = self.run_js(
             "var slot = document.createElement('span');"
@@ -1368,6 +1440,11 @@ class LiveFeedTests(BridgeTestCase):
         self.assertEqual(1, count)
 
     PICK_STATE = None                       # built in the test, see below
+
+    CLICK = ("function click(node) { var e = { target: node,"
+             "  preventDefault: function () {}, stopPropagation: function () {} };"
+             "  listeners.filter(function (l) { return l[0] === 'click'; })"
+             "    .forEach(function (l) { l[1](e); }); }")
 
     def pick_state(self):
         state = json.loads(json.dumps(STATE))
@@ -1409,7 +1486,8 @@ class LiveFeedTests(BridgeTestCase):
             "slot.className = 'hc-prompt-add';"
             "document.body.appendChild(slot);"
             "window.__hcPromptUI.renderPromptAdd();"
-            "slot.children[0].onclick();"
+            + self.CLICK +
+            "click(slot.children[0]);"
             "document.querySelector('.hc-pick-list').children[0].onclick();"
             # the click resolves a promise; let its handlers run
             "Promise.resolve().then(function () {}).then(function () {})"

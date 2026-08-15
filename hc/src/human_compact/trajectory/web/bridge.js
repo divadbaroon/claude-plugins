@@ -802,7 +802,10 @@
       }
 
       function draw() {
-        var needle = filter.value.trim().toLowerCase();
+        // str(): a value that is not a string throws inside a promise
+        // executor, which rejects it with nobody listening -- the modal
+        // then sits there empty and says nothing at all.
+        var needle = str(filter.value).trim().toLowerCase();
         var matched = pool.filter(function (prompt) {
           return !needle || str(prompt.text).toLowerCase().indexOf(needle) >= 0;
         });
@@ -864,7 +867,17 @@
       box.appendChild(row);
       overlay.appendChild(box);
       (document.body || document.documentElement).appendChild(overlay);
-      draw();
+      // Anything thrown from here rejects a promise the caller only
+      // listens to for a chosen id, so a failure reads as "the button
+      // does nothing". Say what went wrong, in the box being looked at.
+      try {
+        draw();
+      } catch (error) {
+        var broke = document.createElement("div");
+        broke.className = "hc-pick-none";
+        broke.textContent = "Could not list your prompts: " + error;
+        list.appendChild(broke);
+      }
       if (filter.focus) filter.focus();
     });
   }
@@ -886,38 +899,75 @@
     return null;
   }
 
+  function openPromptPicker(button) {
+    // One at a time: a second overlay would sit on top of the first with no
+    // way back to it.
+    if (document.querySelector(".hc-ask")) return;
+    var goalId = selectedGoalId();
+    if (!goalId) {
+      button.textContent = "select a goal first";
+      return;
+    }
+    pickPrompt(goalId).catch(function (error) {
+      // Never fail quietly: a click that does nothing is the one bug
+      // the reader cannot report usefully.
+      button.textContent = "could not open it: " + error;
+      return null;
+    }).then(function (promptId) {
+      if (!promptId) return;
+      button.disabled = true;
+      button.textContent = "adding\u2026";
+      post({ op: "attach_prompt", goal_id: goalId,
+             prompt_id: promptId }).then(function (result) {
+        button.disabled = false;
+        button.textContent = (result && result.ok === true)
+          ? "+ add a prompt"
+          : ((result && result.error) || "could not add it");
+        // The list is drawn from state, so the new link only shows once the
+        // next state lands.
+        refreshState();
+      });
+    });
+  }
+
+  var promptAddBound = false;
+
+  function bindPromptAdd() {
+    // Delegated, not bound to the node. The artifact re-renders this pane
+    // from its own state every time a poll lands, which destroys whatever
+    // button was there -- and a click that begins on a node replaced before
+    // it completes is a click that goes nowhere. Listening on the document
+    // and matching by class survives every redraw.
+    if (promptAddBound || !document.addEventListener) return;
+    promptAddBound = true;
+    document.addEventListener("click", function (event) {
+      var node = event && event.target;
+      while (node && node !== document) {
+        var name = node.className ? String(node.className) : "";
+        if (name.indexOf("hc-prompt-addbtn") >= 0) {
+          if (event.preventDefault) event.preventDefault();
+          if (event.stopPropagation) event.stopPropagation();
+          openPromptPicker(node);
+          return;
+        }
+        node = node.parentNode;
+      }
+    }, true);
+  }
+
   function renderPromptAdd() {
     if (serverState.scope === "chat") return false;
     var slot = promptAddSlot();
     if (!slot) return false;
+    bindPromptAdd();
     if (slot.querySelector && slot.querySelector(".hc-prompt-addbtn")) {
       return true;
     }
     ensurePaneStyles();
     var button = document.createElement("button");
     button.className = "hc-prompt-addbtn";
+    button.type = "button";
     button.textContent = "+ add a prompt";
-    button.onclick = function (event) {
-      // The row may be inside something with its own click handling.
-      if (event && event.stopPropagation) event.stopPropagation();
-      var goalId = selectedGoalId();
-      if (!goalId) return;
-      pickPrompt(goalId).then(function (promptId) {
-        if (!promptId) return;
-        button.disabled = true;
-        button.textContent = "adding\u2026";
-        post({ op: "attach_prompt", goal_id: goalId,
-               prompt_id: promptId }).then(function (result) {
-          button.disabled = false;
-          button.textContent = (result && result.ok === true)
-            ? "+ add a prompt"
-            : ((result && result.error) || "could not add it");
-          // The list is drawn from state, so the new link only shows once
-          // the next state lands.
-          refreshState();
-        });
-      });
-    };
     slot.appendChild(button);
     return true;
   }
@@ -1682,6 +1732,7 @@
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
     promptAddSlot: promptAddSlot,
+    openPromptPicker: openPromptPicker,
     pickPrompt: pickPrompt,
     dialogCss: function () { return DIALOG_CSS; },
     briefingSections: briefingSections,
