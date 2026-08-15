@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "human-compact"
-version = "0.17.64"
+version = "0.17.65"
 description = "Session-scoped goal workspaces and persistent context for Claude Code."
 readme = "README.md"
 requires-python = ">=3.9"

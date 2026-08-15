@@ -894,7 +894,7 @@ class LiveFeedTests(BridgeTestCase):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
 
-    def test_the_question_sits_above_the_decision_and_the_log_below(self):
+    def test_the_state_sits_in_the_card_and_the_log_outside_it(self):
         split = json.loads(self.run_js(
             "var top = document.createElement('div');"
             "top.className = 'hc-live';"
@@ -907,7 +907,7 @@ class LiveFeedTests(BridgeTestCase):
             "JSON.stringify([top.children.map(function (c) "
             "{ return c.className; }), rest.children.map(function (c) "
             "{ return c.className; })]);"))
-        self.assertIn("hc-live-ask", split[0])
+        self.assertIn("hc-live-top", split[0])
         self.assertIn("hc-live-log", split[1])
         self.assertNotIn("hc-live-log", split[0])
 
@@ -932,10 +932,12 @@ class LiveFeedTests(BridgeTestCase):
         self.assertEqual(counts[0], counts[1])
         self.assertGreater(counts[0], 0)
 
-    def test_a_question_is_marked_out(self):
-        rows = dict((c, t) for c, t in
-                    self.drawn(dict(self.RUN, attention="Migrate or not?")))
-        self.assertEqual("Migrate or not?", rows["hc-live-ask"])
+    def test_a_waiting_run_is_still_marked_in_the_log(self):
+        waiting = dict(self.RUN, state="waiting", attention="Migrate or not?",
+                       did=[{"at": "03:12", "kind": "turn",
+                             "text": "Migrate or not?"}])
+        rows = dict((c, t) for c, t in self.drawn(waiting))
+        self.assertIn("waiting for your decision", rows["hc-live-wait"])
 
     def test_the_feed_is_drawn_on_the_review_pane(self):
         # Placement within the pane is pinned by the ordering test; here just
@@ -945,21 +947,31 @@ class LiveFeedTests(BridgeTestCase):
         self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
         self.assertEqual(1, out.count('class="hc-live"'))
 
-    def test_the_run_sits_outside_the_artifact_box(self):
-        # ACTIVITY is a sibling of CHANGES, not something nested in ARTIFACT.
+    def test_the_card_holds_the_run_and_activity_stands_apart(self):
         out = self.patched_bundle("out;")
+        card = out.index("background:var(--panel2);padding:9px 12px")
+        state = out.index('<div class="hc-live"></div>')
         summary = out.index("{{ artSummary }}")
-        box_end = out.index("</div>\n</div>\n", summary)
-        question = out.index('<div class="hc-live"></div>')
+        created = out.index("{{ artWhen }}")
         decide = out.index("request revisions")
         log = out.index('<div class="hc-live-rest"></div>')
         changes = out.index(">CHANGES</div>")
-        self.assertLess(box_end, question)
-        self.assertLess(question, decide)
+        # state, message, created and the decision are all one card
+        self.assertLess(card, state)
+        self.assertLess(state, summary)
+        self.assertLess(summary, created)
+        self.assertLess(created, decide)
+        # ACTIVITY is its own section, like CHANGES
         self.assertLess(decide, log)
         self.assertLess(log, changes)
         self.assertEqual(1, out.count("request revisions"))
         self.assertEqual(1, out.count('class="hc-live"'))
+
+    def test_the_message_is_not_printed_twice_in_one_card(self):
+        # The card's summary is the same text the question box carried.
+        classes = [c for c, _ in
+                   self.drawn(dict(self.RUN, attention="Migrate or not?"))]
+        self.assertNotIn("hc-live-ask", classes)
 
     def test_the_artifact_box_keeps_created_and_drops_branch(self):
         out = self.patched_bundle("out;")
