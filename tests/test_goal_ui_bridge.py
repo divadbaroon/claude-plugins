@@ -932,17 +932,28 @@ class LiveFeedTests(BridgeTestCase):
         self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
         self.assertEqual(1, out.count('class="hc-live"'))
 
-    def test_review_reads_artifact_question_decision_log(self):
+    def test_the_run_sits_outside_the_artifact_box(self):
+        # ACTIVITY is a sibling of CHANGES, not something nested in ARTIFACT.
         out = self.patched_bundle("out;")
         summary = out.index("{{ artSummary }}")
+        box_end = out.index("</div>\n</div>\n", summary)
         question = out.index('<div class="hc-live"></div>')
         decide = out.index("request revisions")
         log = out.index('<div class="hc-live-rest"></div>')
-        self.assertLess(summary, question)
+        changes = out.index(">CHANGES</div>")
+        self.assertLess(box_end, question)
         self.assertLess(question, decide)
         self.assertLess(decide, log)
+        self.assertLess(log, changes)
         self.assertEqual(1, out.count("request revisions"))
         self.assertEqual(1, out.count('class="hc-live"'))
+
+    def test_the_artifact_box_keeps_created_and_drops_branch(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("{{ artWhen }}", out)
+        self.assertNotIn("{{ artBranch }}", out)
+        # the AGENT pane has its own branch line; only the artifact's went
+        self.assertIn("{{ agentBranch }}", out)
 
     def test_agent_reads_name_then_prompt_then_notes_then_run(self):
         out = self.patched_bundle("out;")
