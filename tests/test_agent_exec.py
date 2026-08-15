@@ -1192,3 +1192,43 @@ class StartArgumentOrderTests(unittest.TestCase):
 
     def test_the_prompt_is_still_passed_without_sources(self):
         self.assertIn("Work on my Vault goal g1", self._argv([]))
+
+
+class TaskEventShapeTests(unittest.TestCase):
+    """A task event may arrive flat or nested; both are the same task."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name) / "vault" / "trajectory"
+        (self.trajdir / "agent-runs").mkdir(parents=True)
+        (self.trajdir / "agent-runs" / "s1.json").write_text(json.dumps({
+            "claude_session_id": "s1", "vault_goal_id": "g1",
+            "status": "running", "started_at": "2026-08-15T03:00:00+00:00",
+            "tasks": [], "files": [], "activity": [], "schema_version": 1}))
+
+    def _tasks(self, payload):
+        payload = dict(payload, session_id="s1")
+        AE.observe_hook(payload, self.trajdir, None)
+        saved = json.loads(
+            (self.trajdir / "agent-runs" / "s1.json").read_text())
+        return saved["tasks"]
+
+    def test_a_flat_event_is_recorded(self):
+        tasks = self._tasks({"hook_event_name": "TaskCreated",
+                             "task_subject": "Scan the repo"})
+        self.assertEqual("Scan the repo", tasks[0]["subject"])
+
+    def test_a_nested_event_is_recorded_with_its_real_id(self):
+        tasks = self._tasks({"hook_event_name": "TaskCreated",
+                             "task": {"id": "t9", "subject": "Wire it up"}})
+        self.assertEqual("t9", tasks[0]["task_id"])
+        self.assertEqual("Wire it up", tasks[0]["subject"])
+
+    def test_completion_finds_the_task_it_names(self):
+        self._tasks({"hook_event_name": "TaskCreated",
+                     "task": {"id": "t9", "subject": "Wire it up"}})
+        tasks = self._tasks({"hook_event_name": "TaskCompleted",
+                             "task": {"id": "t9"}})
+        self.assertEqual(1, len(tasks))
+        self.assertEqual("completed", tasks[0]["status"])

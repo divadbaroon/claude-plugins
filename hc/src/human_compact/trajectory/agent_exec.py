@@ -904,8 +904,15 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
         if batch and note_activity(run, "did", "; ".join(batch[:3])):
             dirty = True
     elif event in ("TaskCreated", "TaskCompleted"):
-        subject = str(payload.get("task_subject") or "").strip()
-        task_id = str(payload.get("task_id") or payload.get("taskId") or "").strip()
+        # The event may carry the task flat or nested; reading only the flat
+        # spelling silently records nothing, which is what 15 runs with zero
+        # tasks looked like. Try both rather than assume one.
+        nested = payload.get("task")
+        nested = nested if isinstance(nested, dict) else {}
+        subject = str(_field(payload, "task_subject", "subject")
+                      or nested.get("subject") or "").strip()
+        task_id = str(_field(payload, "task_id", "taskId", "id")
+                      or nested.get("id") or "").strip()
         if task_id or subject:
             if not task_id:
                 existing = next((t for t in run["tasks"]
@@ -913,7 +920,9 @@ def observe_hook(payload: Dict[str, Any], trajdir: Optional[Path] = None,
                 task_id = existing["task_id"] if existing else f"evt-{len(run['tasks']) + 1}"
             before = json.dumps(run["tasks"], sort_keys=True)
             _upsert(run, task_id, subject=subject[:200],
-                    description=str(payload.get("task_description") or "")[:1000],
+                    description=str(_field(payload, "task_description",
+                                           "description")
+                                    or nested.get("description") or "")[:1000],
                     status="completed" if event == "TaskCompleted" else "pending")
             dirty = dirty or json.dumps(run["tasks"], sort_keys=True) != before
             if subject:
