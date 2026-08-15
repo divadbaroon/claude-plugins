@@ -1030,6 +1030,15 @@
        "<!--approve moved up-->"],
       ["{{ artSummary }}</div>\n",
        "{{ artSummary }}</div>\n<sc-if value=\"{{ revClosed }}\" hint-placeholder-val=\"{{ false }}\">\n<div style=\"display:flex;justify-content:flex-end;gap:16px;align-items:center;margin-top:14px\"><span sc-camel-on-click=\"{{ revOpenFn }}\" style=\"font:600 11px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none\" style-hover=\"text-decoration:underline\">request revisions</span><span sc-camel-on-click=\"{{ artApprove }}\" style=\"padding:4px 11px;border-radius:2px;background:var(--acc);color:var(--onacc);font:600 11px 'Source Code Pro',monospace;cursor:pointer;user-select:none\" style-hover=\"filter:brightness(1.08)\">approve</span></div>\n</sc-if>"],
+      // The prompt is what the run sends, so it belongs with the run —
+      // behind a disclosure, because it is long and rarely the thing the
+      // reader came for.
+      ["showPrompt: !!sel && paneTab === 'prompt'",
+       "showPrompt: !!sel && paneTab === 'agent'"],
+      ["<span sc-camel-on-click=\"{{ tabPrompt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tpC }};border-bottom:2px solid {{ tpBd }};margin-bottom:-1px\">PROMPT</span>\n",
+       "<!--prompt folded into agent-->\n"],
+      ["<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\">\n<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</sc-if>",
+       "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><details class=\"hc-promptbox\"><summary class=\"hc-promptsum\">Prompt</summary>\n<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</details></sc-if>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1089,6 +1098,12 @@
   // so 100% of the container is 100% of the panel.
   var BANNER_CSS = [
       ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:2px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-promptbox{margin-top:14px}",
+      ".hc-promptsum{cursor:pointer;list-style:none;font:600 9.5px 'Source Code Pro',ui-monospace,monospace;letter-spacing:1px;color:var(--mut,#575757);text-transform:uppercase;padding:2px 0}",
+      ".hc-promptsum::-webkit-details-marker{display:none}",
+      ".hc-promptsum::before{content:'\\25b8 ';display:inline-block;transition:transform .15s ease}",
+      ".hc-promptbox[open]>.hc-promptsum::before{transform:rotate(90deg)}",
+      ".hc-promptsum:hover{color:var(--acc,#a5492a)}",
       ".hc-rowdots{display:inline-block;position:relative;width:72px;height:6px;overflow:hidden;vertical-align:middle}",
       ".hc-rowdots>span{position:absolute;top:1px;left:0;width:4px;height:4px;border-radius:50%;background:var(--acc,#a5492a);animation:hc-travel 1.5s linear infinite}",
       ".hc-rowdots>span:nth-child(2){animation-delay:.16s}",

@@ -880,6 +880,20 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn('<sc-if value="{{ showReviewTab }}"', out)
         self.assertIn("showReviewTab: !!art,", out)
 
+    def test_the_prompt_is_a_dropdown_on_the_agent_pane(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("showPrompt: !!sel && paneTab === 'agent'", out)
+        self.assertIn('<details class="hc-promptbox">'
+                      '<summary class="hc-promptsum">Prompt</summary>', out)
+        # collapsed by default, and it is the same editable prompt as before
+        self.assertNotIn('<details class="hc-promptbox" open>', out)
+        self.assertIn("{{ draft }}", out)
+
+    def test_prompt_is_no_longer_its_own_tab(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("prompt folded into agent", out)
+        self.assertNotIn('sc-camel-on-click="{{ tabPrompt }}"', out)
+
     def test_a_started_session_with_no_steps_reads_plainly(self):
         out = self.patched_bundle("out;")
         self.assertIn("return 'session running'", out)
