@@ -761,7 +761,9 @@
       { month: "short", day: "numeric", year: "numeric" });
   }
 
-  var PICK_LIMIT = 200;
+  // High enough that no real vault is truncated, low enough that a
+  // pathological one cannot lock the tab building rows.
+  var PICK_LIMIT = 2000;
 
   function pickPrompt(goalId) {
     var goal = array(serverState.goals).filter(function (g) {
@@ -786,6 +788,8 @@
       filter.type = "text";
       filter.className = "hc-ask-input";
       filter.placeholder = "Filter your prompts\u2026";
+      var count = document.createElement("div");
+      count.className = "hc-pick-count";
       var list = document.createElement("div");
       list.className = "hc-pick-list";
 
@@ -800,6 +804,9 @@
           return !needle || str(prompt.text).toLowerCase().indexOf(needle) >= 0;
         });
         var shown = matched.slice(0, PICK_LIMIT);
+        count.textContent = matched.length === pool.length
+          ? pool.length + " prompts of yours are not on this goal yet"
+          : matched.length + " of " + pool.length + " match";
         while (list.firstChild) list.removeChild(list.firstChild);
         if (!shown.length) {
           var none = document.createElement("div");
@@ -849,6 +856,7 @@
       overlay.onclick = function (e) { if (e.target === overlay) close(null); };
       box.appendChild(title);
       box.appendChild(filter);
+      box.appendChild(count);
       box.appendChild(list);
       box.appendChild(row);
       overlay.appendChild(box);
@@ -1064,8 +1072,9 @@
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
-      ".hc-pick-box{width:min(680px,100%)}",
-      ".hc-pick-list{margin-top:10px;max-height:min(52vh,420px);overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa)}",
+      ".hc-pick-box{width:min(760px,100%);display:flex;flex-direction:column;max-height:min(84vh,760px)}",
+      ".hc-pick-list{flex:1;min-height:0;margin-top:10px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa)}",
+      ".hc-pick-count{margin-top:8px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
       ".hc-pick-row{width:100%;box-sizing:border-box;display:block;text-align:left;border:none;border-bottom:1px solid var(--bd,#e6e6e6);background:transparent;color:var(--dtxt,#333);padding:8px 11px;cursor:pointer;font:11.5px/1.6 'Source Code Pro',monospace}",
       ".hc-pick-row:last-child{border-bottom:none}",
       ".hc-pick-row:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
@@ -1288,7 +1297,7 @@
       // than open it -- the panels above are the reading, this is the
       // record they were read from.
       ["color:var(--dtxt);overflow:hidden\"></textarea></div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\"",
-       "color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT YOU ASKED FOR</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:300px;overflow-y:auto;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span sc-camel-on-click=\"{{ hr.copy }}\" style=\"flex:none;font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc)\">copy</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\""],
+       "color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT YOU ASKED FOR</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span sc-camel-on-click=\"{{ hr.copy }}\" style=\"flex:none;font:600 9.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc)\">copy</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if>\n<sc-if value=\"{{ showNotes }}\""],
       // The stamp read 5:00 PM on every prompt ever recorded: created_at is
       // a date, and the clock time was the formatter's invention.
       ["when: (() => { const d2 = new Date(p.ts); return d2.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ', ' + d2.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); })(),",

@@ -1207,7 +1207,7 @@ class LiveFeedTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         at = out.index('<sc-for list="{{ histRows }}"')
         box = out[out.rindex("<div", 0, at):at]
-        self.assertIn("max-height:300px;overflow-y:auto", box)
+        self.assertIn("max-height:420px;overflow-y:auto", box)
 
     def test_the_stamp_is_the_date_that_was_recorded_not_a_clock(self):
         # created_at is a date. Every prompt ever captured showed 5:00 PM,
@@ -1272,8 +1272,8 @@ class LiveFeedTests(BridgeTestCase):
         rows = json.loads(self.run_js(
             "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
             "window.__hcPromptUI.pickPrompt('g1');"
-            "var box = document.querySelector('.hc-ask').children[0];"
-            "JSON.stringify(box.children[2].children.map(function (r) "
+            "var list = document.querySelector('.hc-pick-list');"
+            "JSON.stringify(list.children.map(function (r) "
             "{ return r.children[1] ? r.children[1].textContent : "
             "r.textContent; }));"))
         # a#1 is already on g1 and a#3 is Claude, not the reader
@@ -1283,8 +1283,8 @@ class LiveFeedTests(BridgeTestCase):
         rows = json.loads(self.run_js(
             "window.__hcPromptUI.acceptState(%s);" % json.dumps(STATE) +
             "window.__hcPromptUI.pickPrompt('g1');"
-            "var box = document.querySelector('.hc-ask').children[0];"
-            "JSON.stringify(box.children[2].children.map(function (r) "
+            "var list = document.querySelector('.hc-pick-list');"
+            "JSON.stringify(list.children.map(function (r) "
             "{ return r.textContent; }));"))
         self.assertEqual(["Every prompt on record is already on this goal."],
                          rows)
@@ -1299,8 +1299,7 @@ class LiveFeedTests(BridgeTestCase):
             "document.body.appendChild(slot);"
             "window.__hcPromptUI.renderPromptAdd();"
             "slot.children[0].onclick();"
-            "var box = document.querySelector('.hc-ask').children[0];"
-            "box.children[2].children[0].onclick();"
+            "document.querySelector('.hc-pick-list').children[0].onclick();"
             # the click resolves a promise; let its handlers run
             "Promise.resolve().then(function () {}).then(function () {})"
             "  .then(function () { return JSON.stringify("
@@ -1319,10 +1318,44 @@ class LiveFeedTests(BridgeTestCase):
         self.assertEqual([], posted)
 
     def test_a_capped_list_says_what_it_left_out(self):
-        # A silently truncated list reads as the whole record.
+        # A silently truncated list reads as the whole record. The cap is set
+        # high enough that no real vault meets it, and low enough that a
+        # pathological one cannot lock the tab building rows.
         src = BRIDGE.read_text()
-        self.assertIn("var PICK_LIMIT = 200;", src)
+        self.assertIn("var PICK_LIMIT = 2000;", src)
         self.assertIn("Showing the newest ", src)
+
+    def test_the_picker_counts_what_it_is_offering(self):
+        # "All of them" is only a claim unless the reader can check it.
+        said = self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            "document.querySelector('.hc-pick-count').textContent;")
+        self.assertEqual("1 prompts of yours are not on this goal yet", said)
+
+    def test_filtering_says_how_much_of_the_whole_is_left(self):
+        said = self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            "var f = document.querySelector('.hc-ask-input');"
+            "f.value = 'zzzz'; f.oninput();"
+            "document.querySelector('.hc-pick-count').textContent;")
+        self.assertEqual("0 of 1 match", said)
+
+    def test_the_modal_grows_and_the_list_inside_it_scrolls(self):
+        css = self.run_js("window.__hcPromptUI.dialogCss();")
+        # The box is capped against the viewport and the list takes the slack,
+        # so the filter and the cancel button stay reachable at any length.
+        self.assertIn("max-height:min(84vh,760px)", css)
+        self.assertIn(".hc-pick-list{flex:1;min-height:0", css)
+        self.assertIn("overflow-y:auto;overscroll-behavior:contain", css)
+
+    def test_the_pane_list_scrolls_without_taking_the_page_with_it(self):
+        out = self.patched_bundle("out;")
+        at = out.index('<sc-for list="{{ histRows }}"')
+        box = out[out.rindex("<div", 0, at):at]
+        self.assertIn("max-height:420px;overflow-y:auto;"
+                      "overscroll-behavior:contain", box)
 
     def test_the_prompts_shown_are_the_ones_the_server_recorded(self):
         state = json.loads(json.dumps(STATE))
