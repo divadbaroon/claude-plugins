@@ -736,36 +736,42 @@
            placeholder: "~/notes/design.md  or  https://…" }
   };
 
-  function ensureDialogStyles() {
-    if (document.getElementById("hc-ask-style")) return;
-    var style = document.createElement("style");
-    style.id = "hc-ask-style";
-    style.textContent = [
+  var DIALOG_CSS = [
       ".hc-ask{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;padding:20px}",
       ".hc-ask-box{width:min(460px,100%);background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--bd2,#d5d5d5);border-radius:3px;box-shadow:0 18px 60px rgba(0,0,0,.2);padding:16px;font-family:'Source Code Pro',monospace}",
       ".hc-ask-title{font:600 12px 'Source Code Pro',monospace;margin-bottom:10px;color:var(--ink)}",
       ".hc-ask-input{width:100%;box-sizing:border-box;border:1px solid var(--bd2);border-radius:2px;background:var(--panel2);color:var(--ink);outline:none;padding:8px 10px;font:12px 'Source Code Pro',monospace}",
       ".hc-ask-input:focus{border-color:var(--acc)}",
-      ".hc-ask-row{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}",
+      ".hc-ask-row{display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-top:14px}",
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
-      ".hc-run-box{width:min(680px,100%)}",
-      ".hc-run-goal{margin:2px 0 14px;font:600 15px/1.35 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
-      ".hc-run-list{margin:6px 0 0;padding-left:18px}",
-      ".hc-run-bullet{font:11.5px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
-      ".hc-run-instruction{margin-top:6px;border-left:2px solid var(--acc,#a5492a);padding:4px 0 4px 10px;font:12px/1.6 'Source Code Pro',monospace;color:var(--ink,#111);white-space:pre-wrap}",
-      ".hc-run-more{margin-top:12px}",
-      ".hc-run-sum{cursor:pointer;list-style:none;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757);text-transform:uppercase}",
+      ".hc-run-box{width:min(600px,100%);padding:18px 18px 14px}",
+      ".hc-run-goal{margin:1px 0 8px;font:600 13px/1.4 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-run-note{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      ".hc-run-instruction{margin-top:5px;border-left:2px solid var(--acc,#a5492a);padding:3px 0 3px 10px;font:12px/1.6 'Source Code Pro',monospace;color:var(--ink,#111);white-space:pre-wrap}",
+      ".hc-run-more{margin-top:9px}",
+      ".hc-run-sum{cursor:pointer;list-style:none;font:600 10px 'Source Code Pro',monospace;color:var(--mut,#575757);padding:1px 0}",
       ".hc-run-sum::-webkit-details-marker{display:none}",
       ".hc-run-sum::before{content:'\\25b8 ';display:inline-block;transition:transform .15s ease}",
       ".hc-run-more[open]>.hc-run-sum::before{transform:rotate(90deg)}",
       ".hc-run-sum:hover{color:var(--acc,#a5492a)}",
-      ".hc-run-error{margin-top:10px;font:11px/1.6 'Source Code Pro',monospace;color:var(--del,#8f2b2b)}",
-      ".hc-run-fact{font:11px/1.7 'Source Code Pro',monospace;color:var(--mut,#575757);word-break:break-word}",
-      ".hc-run-label{margin-top:14px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
-      ".hc-run-prompt{margin:6px 0 0;max-height:42vh;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:9px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333)}"
-    ].join("");
+      ".hc-run-error{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--del,#8f2b2b)}",
+      ".hc-run-fact{margin-top:3px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757);word-break:break-word}",
+      ".hc-run-label{margin-top:12px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
+      ".hc-run-cancel{border:none;background:none;color:var(--mut,#575757);padding:6px 10px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
+      ".hc-run-cancel:hover{color:var(--ink,#111)}",
+      ".hc-run-go{border:1px solid var(--acc,#a5492a);background:var(--accbg,#f5e2d9);color:var(--ink,#111);border-radius:2px;padding:6px 15px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
+      ".hc-run-go:hover{background:var(--acchov,#faf1ec)}",
+      ".hc-run-go:disabled{opacity:.6;cursor:default}",
+      ".hc-run-prompt{margin:6px 0 0;max-height:34vh;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:8px 10px;font:10.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
+  ].join("");
+
+  function ensureDialogStyles() {
+    if (document.getElementById("hc-ask-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-ask-style";
+    style.textContent = DIALOG_CSS;
     document.head.appendChild(style);
   }
 
@@ -785,33 +791,18 @@
         return node;
       }
 
-      add(box, "hc-ask-title", "div", "Run Claude Code on this goal");
+      add(box, "hc-ask-title", "div", "Run Agent");
       add(box, "hc-run-goal", "div", str(preview.title) || str(preview.goal_id));
-
-      add(box, "hc-run-label", "div", "Claude will start with:");
-      var list = add(box, "hc-run-list", "ul");
-      // Each line is claimed only if that section is really in the briefing.
-      var titles = array(preview.sections).map(str);
-      function present(prefix) {
-        return titles.some(function (t) { return t.indexOf(prefix) === 0; });
-      }
-      var bullets = ["this goal and where it sits in the goal tree"];
-      if (present("WHAT THE USER ASKED FOR")) {
-        bullets.push("relevant context from previous conversations");
-      }
-      if (present("ALREADY DECIDED") || present("ALREADY BUILT")) {
-        bullets.push("established decisions and constraints");
-      }
-      if (present("PROBLEMS HIT") || present("STILL OPEN")) {
-        bullets.push("previous attempts, blockers, and open questions");
-      }
-      bullets.forEach(function (text) { add(list, "hc-run-bullet", "li", text); });
+      add(box, "hc-run-note", "div",
+          "Claude will use context assembled from this goal and its related "
+          + "conversations.");
 
       add(box, "hc-run-label", "div", "Instruction");
-      add(box, "hc-run-instruction", "div", str(preview.prompt));
+      add(box, "hc-run-instruction", "div",
+          str(preview.instruction) || str(preview.prompt));
 
       var full = add(box, "hc-run-more", "details");
-      add(full, "hc-run-sum", "summary", "View full context");
+      add(full, "hc-run-sum", "summary", "Context included");
       add(full, "hc-run-prompt", "pre", str(preview.context) || str(preview.prompt));
 
       var details = add(box, "hc-run-more", "details");
@@ -828,8 +819,8 @@
       problem.style.display = "none";
 
       var row = add(box, "hc-ask-row", "div");
-      var cancel = add(row, "hc-ask-btn", "button", "Cancel");
-      var go = add(row, "hc-ask-btn hc-ask-ok", "button", "Run Claude");
+      var cancel = add(row, "hc-run-cancel", "button", "Cancel");
+      var go = add(row, "hc-run-go", "button", "Run Claude");
 
       function close(value) {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
@@ -1267,6 +1258,7 @@
     ask: ask,
     renderBanner: renderBanner,
     bannerCss: function () { return BANNER_CSS; },
+    dialogCss: function () { return DIALOG_CSS; },
     watchAnalysis: watchAnalysis,
     loadThread: loadThread,
     loadPlan: loadPlan,

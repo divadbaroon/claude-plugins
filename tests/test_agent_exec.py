@@ -1112,3 +1112,25 @@ class RunReportTests(unittest.TestCase):
         row = self._write(status="finished",
                           finished_at="2026-08-14T10:08:00+00:00")
         self.assertEqual("8 min", row["elapsed"])
+
+
+class InstructionTextTests(unittest.TestCase):
+    """The handle is addressing, not instruction."""
+
+    def test_the_goal_handle_is_stripped_for_display(self):
+        self.assertEqual(
+            "Restyle the UI. Plan first.",
+            AE.instruction_text("Work on my Vault goal g17 — Restyle the "
+                                "UI. Plan first."))
+
+    def test_a_hyphen_separator_works_too(self):
+        self.assertEqual("Ship it.",
+                         AE.instruction_text("Work on my Vault goal g1 - Ship it."))
+
+    def test_a_user_written_opening_is_left_alone(self):
+        text = "Restyle the UI to match Pentimento. Plan first."
+        self.assertEqual(text, AE.instruction_text(text))
+
+    def test_a_goal_named_in_the_middle_is_not_mistaken_for_a_prefix(self):
+        text = "Check that Work on my Vault goal g1 renders correctly."
+        self.assertEqual(text, AE.instruction_text(text))

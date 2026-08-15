@@ -254,6 +254,17 @@ def goal_sources(goals: Dict[str, Any], goal_id: str):
     return directories, references
 
 
+def instruction_text(prompt: str) -> str:
+    """The instruction with its addressing stripped, for showing a human.
+
+    The sent prompt names the goal id so the session can bind to it. That is
+    plumbing: the reader confirming a run wants the sentence, not the handle.
+    """
+    text = " ".join(str(prompt or "").split())
+    match = re.match(r"^Work on my Vault goal \S+\s*[\u2014-]\s*", text)
+    return text[match.end():] if match else text
+
+
 def launch_prompt(goals: Dict[str, Any], goal_id: str) -> str:
     """The opening message for a session launched on a goal.
 

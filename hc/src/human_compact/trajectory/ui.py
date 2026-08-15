@@ -548,6 +548,9 @@ def _apply(op, trajdir=None, chat_scoped=None):
                         "command": "hc work " + g["id"],
                         "add_dirs": dirs, "references": refs,
                         "prompt": AE.launch_prompt(goals, g["id"]),
+                        # What Claude is sent, and what a human is shown.
+                        "instruction": AE.instruction_text(
+                            AE.launch_prompt(goals, g["id"])),
                         "context": AE.goal_context(trajdir, goals, g["id"]),
                         "sections": titles}
             if kind == "start_agent_run":
