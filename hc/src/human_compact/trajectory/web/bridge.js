@@ -630,6 +630,12 @@
     if (run.elapsed) head += " \u00b7 " + str(run.elapsed);
     rows.push(["head", head]);
     if (run.attention) rows.push(["ask", str(run.attention)]);
+    // Inferred from silence, not observed: Claude Code does not tell us it
+    // asked something, so say "may be" and show what the guess rests on.
+    if (run.quiet_for && str(run.state) === "running") {
+      rows.push(["idle", "nothing for " + str(run.quiet_for)
+                 + " \u2014 it may be waiting for you in the terminal"]);
+    }
     var waiting = str(run.state) === "waiting";
     array(run.did).slice().reverse().forEach(function (entry, index) {
       var mark = entry.kind === "task" ? "\u2713"
@@ -671,11 +677,20 @@
     var head = document.createElement("div");
     head.className = "hc-live-top";
     host.appendChild(head);
+    // The log scrolls in place: a run of any length otherwise pushes
+    // everything below it off the page.
+    var log = document.createElement("div");
+    log.className = "hc-live-log";
+    var LOGGED = { did: true, wait: true, idle: true };
     rows.forEach(function (row) {
       var node = document.createElement("div");
       node.className = "hc-live-" + row[0];
       node.textContent = row[1];
-      (row[0] === "head" ? head : host).appendChild(node);
+      if (row[0] === "head") head.appendChild(node);
+      else if (LOGGED[row[0]]) {
+        if (!log.parentNode) host.appendChild(log);
+        log.appendChild(node);
+      } else host.appendChild(node);
     });
     var session = run && str(run.session_id);
     if (session) {
@@ -1079,23 +1094,27 @@
       ".hc-banner-bar{position:absolute;left:0;bottom:0;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
   ].join("");
 
-  function ensureLiveStyles() {
-    if (document.getElementById("hc-live-style")) return;
-    var style = document.createElement("style");
-    style.id = "hc-live-style";
-    style.textContent = [
+  var LIVE_CSS = [
       ".hc-live{margin-top:14px}",
       ".hc-live-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}",
       ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
       ".hc-live-wait{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-ask{margin:0 0 8px;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
+      ".hc-live-log{max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
+      ".hc-live-idle{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);padding-bottom:3px}",
       ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
       ".hc-live-foot{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
       ".hc-live-open{flex:none;border:1px solid var(--acc,#a5492a);background:var(--accbg,#f5e2d9);color:var(--ink,#111);border-radius:2px;padding:5px 12px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
       ".hc-live-open:hover{background:var(--acchov,#faf1ec)}",
       ".hc-live-open:disabled{opacity:.6;cursor:default}"
-    ].join("");
+  ].join("");
+
+  function ensureLiveStyles() {
+    if (document.getElementById("hc-live-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-live-style";
+    style.textContent = LIVE_CSS;
     document.head.appendChild(style);
   }
 
@@ -1309,6 +1328,7 @@
     loadThread: loadThread,
     loadPlan: loadPlan,
     renderLive: renderLive,
+    liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },

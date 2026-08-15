@@ -1291,6 +1291,14 @@ _CHECKS = (
 )
 
 
+def _ago(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
 def _elapsed(run: Dict[str, Any]) -> str:
     start, end = run.get("started_at"), run.get("finished_at")
     try:
@@ -1305,6 +1313,24 @@ def _elapsed(run: Dict[str, Any]) -> str:
     if seconds < 3600:
         return f"{seconds // 60} min"
     return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+# A session that has gone quiet is either thinking, running something slow, or
+# waiting on the user. Nothing observable tells the three apart, so the wait
+# has to be long enough that "still working" is unlikely, and the wording has
+# to stay hedged.
+IDLE_HINT_SECONDS = 90
+
+
+def idle_seconds(run: Dict[str, Any]) -> int:
+    """How long since this run last did anything observable."""
+    stamps = [str(e.get("at") or "") for e in (run.get("activity") or [])]
+    latest = max(stamps) if stamps else str(run.get("updated_at") or "")
+    try:
+        seen = datetime.fromisoformat(latest)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int((datetime.now(timezone.utc) - seen).total_seconds()))
 
 
 def run_state(run: Dict[str, Any]) -> str:
@@ -1391,6 +1417,12 @@ def review(trajdir: Path, goals: Dict[str, Any], goal_id: str) -> Dict[str, Any]
             # What the reader is actually asking: where is this, what did it
             # do, and does it need me?
             "state": run_state(run),
+            # Inferred, not observed: say "may be" and show the evidence.
+            "idle_seconds": (idle_seconds(run)
+                             if run.get("status") != "finished" else 0),
+            "quiet_for": (_ago(idle_seconds(run))
+                          if run.get("status") != "finished"
+                          and idle_seconds(run) >= IDLE_HINT_SECONDS else ""),
             "session_id": run.get("claude_session_id"),
             "live_window": bool(run.get("terminal_window")),
             "elapsed": _elapsed(run),

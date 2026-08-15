@@ -1339,3 +1339,48 @@ class RaiseWindowTests(unittest.TestCase):
         with mock.patch("subprocess.run") as run:
             self.assertFalse(AE.raise_window(""))
         run.assert_not_called()
+
+
+class IdleInferenceTests(unittest.TestCase):
+    """Silence is evidence, not proof — report it as such or not at all."""
+
+    def _run(self, seconds_ago, status="running"):
+        from datetime import datetime, timedelta, timezone
+        when = (datetime.now(timezone.utc)
+                - timedelta(seconds=seconds_ago)).isoformat()
+        return {"claude_session_id": "s1", "vault_goal_id": "g1",
+                "status": status, "started_at": when, "updated_at": when,
+                "tasks": [], "files": [],
+                "activity": [{"at": when, "kind": "did", "text": "read a.py"}]}
+
+    def test_a_busy_run_is_not_called_quiet(self):
+        self.assertEqual("", AE.review.__globals__["_ago"](0) and "" or "")
+        run = self._run(5)
+        self.assertLess(AE.idle_seconds(run), AE.IDLE_HINT_SECONDS)
+
+    def test_a_long_silence_is_measured(self):
+        self.assertGreaterEqual(AE.idle_seconds(self._run(300)), 300)
+
+    def test_a_finished_run_is_never_reported_as_quiet(self):
+        goals = {"version": 1, "goals": [goal("g1", "Ship it")]}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        trajdir = Path(tmp.name) / "vault" / "trajectory"
+        (trajdir / "agent-runs").mkdir(parents=True)
+        run = self._run(600, status="finished")
+        run["finished_at"] = run["updated_at"]
+        (trajdir / "agent-runs" / "s1.json").write_text(json.dumps(run))
+        row = AE.review(trajdir, goals, "g1")["runs"][0]
+        self.assertEqual("", row["quiet_for"])
+        self.assertEqual(0, row["idle_seconds"])
+
+    def test_a_stalled_run_reports_how_long(self):
+        goals = {"version": 1, "goals": [goal("g1", "Ship it")]}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        trajdir = Path(tmp.name) / "vault" / "trajectory"
+        (trajdir / "agent-runs").mkdir(parents=True)
+        (trajdir / "agent-runs" / "s1.json").write_text(
+            json.dumps(self._run(600)))
+        row = AE.review(trajdir, goals, "g1")["runs"][0]
+        self.assertEqual("10 min", row["quiet_for"])

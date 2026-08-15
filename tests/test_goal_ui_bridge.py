@@ -815,6 +815,30 @@ class LiveFeedTests(BridgeTestCase):
             "  return String(c[0]).indexOf('/api/review') === 0; }).length; });")
         self.assertEqual(0, asked)
 
+    def test_a_quiet_run_says_it_may_be_waiting(self):
+        rows = dict((c, t) for c, t in
+                    self.drawn(dict(self.RUN, quiet_for="4 min")))
+        self.assertEqual("nothing for 4 min — it may be waiting for you in "
+                         "the terminal", rows["hc-live-idle"])
+
+    def test_the_guess_is_dropped_once_it_is_known(self):
+        # A real Stop tells us; then there is nothing left to infer.
+        classes = [c for c, _ in self.drawn(
+            dict(self.RUN, state="waiting", quiet_for="4 min"))]
+        self.assertNotIn("hc-live-idle", classes)
+
+    def test_the_log_scrolls_instead_of_growing(self):
+        where = self.run_js(
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.renderLive('g1', %s);" % json.dumps([self.RUN]) +
+            "JSON.stringify(pane.children.map(function (c) "
+            "{ return c.className; }));")
+        self.assertIn("hc-live-log", json.loads(where))
+        css = self.run_js("window.__hcPromptUI.liveCss();")
+        self.assertIn(".hc-live-log{max-height:320px;overflow-y:auto", css)
+
     def test_a_run_with_no_session_offers_no_button(self):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
