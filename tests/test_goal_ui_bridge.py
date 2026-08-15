@@ -1687,28 +1687,29 @@ class AnalysisBannerTests(BridgeTestCase):
              "done": True, "running": True, "phase": "synthesizing",
              "conversations": {"total": 3, "analyzed": 3, "pending": 0}}
 
-    def banner_on(self, page, setup):
+    def banner_with(self, setup, spinner):
         return self.run_js(
-            "localStorage.setItem('hc-vault-ui-v1',"
-            "  JSON.stringify({ page: %s }));" % json.dumps(page) +
+            ("var host = document.documentElement;"
+             "var s = document.createElement('span');"
+             "s.textContent = 'Building Goals';"
+             "host.appendChild(s);" if spinner else "") +
             "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(setup) +
             "window.__hcPromptUI.renderBanner();"
             "!!made.filter(function (e) { return e.className === 'hc-banner'"
             "  && e.parentNode; })[0];")
 
-    def test_the_goals_page_reports_the_tree_build_itself(self):
-        # The panel draws a spinner in the middle of the tree while it is
-        # being built. A banner saying the same thing directly above it is
+    def test_the_banner_stands_down_only_while_the_panel_reports(self):
+        # The panel draws a spinner in the middle of the tree while the tree
+        # is being built. A banner saying the same thing directly above it is
         # not twice the information.
-        self.assertFalse(self.banner_on("goals", self.SYNTH))
-        self.assertTrue(self.banner_on("convos", self.SYNTH))
+        self.assertFalse(self.banner_with(self.SYNTH, spinner=True))
 
-    def test_the_goals_page_still_says_when_conversations_are_being_read(self):
-        # Only the tree build is reported by the panel. Reading conversations
-        # happens elsewhere, so the goals page would otherwise be silent.
-        reading = dict(self.SYNTH, phase="extracting",
-                       conversations={"total": 3, "analyzed": 1, "pending": 2})
-        self.assertTrue(self.banner_on("goals", reading))
+    def test_the_page_is_never_silent_about_an_analysis(self):
+        # The spinner lives in state the artifact keeps in memory, so a reload
+        # takes it away while the tree is still being built. Inferring the
+        # phase from counts instead would silence the banner too, and then
+        # nothing on screen would say anything was happening.
+        self.assertTrue(self.banner_with(self.SYNTH, spinner=False))
 
     def test_the_analysis_moves_to_the_goals_page_when_the_reading_ends(self):
         # It used to wait for the whole analysis, synthesis included, so the

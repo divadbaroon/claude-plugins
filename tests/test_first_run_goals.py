@@ -228,3 +228,38 @@ class MachineSessionTests(unittest.TestCase):
                        "Write the missing one-sentence description"):
             self.assertIn(prefix, synth_src)
             self.assertIn(prefix, D.MACHINE_SESSION_PREFIXES)
+
+
+class ModuleEntryPointTests(unittest.TestCase):
+    """The CLI is run as a module, so definition order is not cosmetic.
+
+    `if __name__ == "__main__": hc_main()` executes at the point it appears.
+    Anything defined below it does not exist yet while the run is happening —
+    and every analysis the UI starts is spawned as
+    `python -m human_compact.cli analyze`. A helper that slipped below the
+    guard took down a real first run after it had extracted 58 conversations,
+    with the goal tree never built and the UI still showing a spinner.
+    """
+
+    def _top_level(self):
+        import ast
+        source = (ROOT / "hc" / "src" / "human_compact" / "cli.py").read_text()
+        return ast.parse(source).body, ast
+
+    def test_nothing_is_defined_after_the_main_guard(self):
+        body, ast = self._top_level()
+        guards = [i for i, node in enumerate(body)
+                  if isinstance(node, ast.If)
+                  and ast.unparse(node.test) == "__name__ == '__main__'"]
+        self.assertEqual(1, len(guards), "expected exactly one __main__ guard")
+        late = [node.name for node in body[guards[0] + 1:]
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                     ast.ClassDef))]
+        self.assertEqual([], late,
+                         "defined after the __main__ guard, so invisible to "
+                         "`python -m human_compact.cli`: " + ", ".join(late))
+
+    def test_the_guard_is_the_last_thing_in_the_file(self):
+        body, ast = self._top_level()
+        self.assertIsInstance(body[-1], ast.If)
+        self.assertEqual("__name__ == '__main__'", ast.unparse(body[-1].test))

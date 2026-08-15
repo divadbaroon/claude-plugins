@@ -611,21 +611,20 @@
   var plans = Object.create(null);
   var planPending = Object.create(null);
 
-  function selectedPage() {
-    try {
-      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
-      return typeof saved.page === "string" ? saved.page : "goals";
-    } catch (e) {
-      return "goals";
+  // Whether the goals panel is currently drawing its own "Building Goals"
+  // spinner. Asking the screen rather than inferring it from counts matters:
+  // that spinner lives in state the artifact keeps in memory, so a reload
+  // takes it away while the tree is still being built. Inferring would then
+  // silence the banner too, and the page would report nothing at all.
+  function treeSpinnerShown() {
+    if (!document.querySelectorAll) return false;
+    var nodes = document.querySelectorAll("span, div");
+    for (var i = 0; i < nodes.length; i++) {
+      var node = nodes[i];
+      if (node.children && node.children.length) continue;
+      if (str(node.textContent).trim() === "Building Goals") return true;
     }
-  }
-
-  // Every conversation has been read and something is still running: what is
-  // left is the goal tree being built out of all of them at once.
-  function buildingTree() {
-    var counts = (setupState && setupState.conversations) || {};
-    var total = counts.total || 0;
-    return !!(total && (counts.analyzed || 0) >= total);
+    return false;
   }
 
   function selectedPane() {
@@ -1577,10 +1576,10 @@
 
   function renderBanner() {
     var pending = window.__hcAnalysisPending();
-    // The goals page draws its own spinner in the middle of the tree panel
-    // while the tree is being built. Two reports of one thing, one above the
-    // other, is not twice the information.
-    if (pending && buildingTree() && selectedPage() === "goals") pending = false;
+    // The goals panel draws its own spinner while the tree is being built.
+    // Two reports of one thing, one above the other, is not twice the
+    // information -- but only stand down while that spinner is really there.
+    if (pending && treeSpinnerShown()) pending = false;
     if (!pending) {
       if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
       banner = null;
@@ -1747,7 +1746,7 @@
     bannerCss: function () { return BANNER_CSS; },
     paneCss: function () { return PANE_CSS; },
     watchAnalysis: watchAnalysis,
-    buildingTree: function () { return buildingTree(); },
+    treeSpinnerShown: function () { return treeSpinnerShown(); },
     loadThread: loadThread,
     loadPlan: loadPlan,
     renderLive: renderLive,

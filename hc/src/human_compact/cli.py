@@ -1429,9 +1429,6 @@ def main():   # keep hc-backup entry point working
     backup_main()
 
 
-if __name__ == "__main__":
-    hc_main()
-
 
 def _lens_loop(trajdir, provider, args):
     from .trajectory import lens as L
@@ -1472,3 +1469,6 @@ def _lens_loop(trajdir, provider, args):
             itemmap, obj = L.render(analysis, corrections, trajdir, show_global=show_global)
         else:
             print("  T = test lens · E = evidence · C = correct · Q = quit")
+
+if __name__ == "__main__":
+    hc_main()
