@@ -923,9 +923,34 @@ class LiveFeedTests(BridgeTestCase):
         self.assertNotIn("hc-live-title", classes)
 
     def test_the_prompt_is_separated_like_the_other_sections(self):
-        self.assertIn(".hc-promptbox{margin-top:20px;padding-top:14px;"
-                      "border-top:1px solid var(--bd,#e6e6e6)}",
-                      self.run_js("window.__hcPromptUI.bannerCss();"))
+        css = self.run_js("window.__hcPromptUI.paneCss();")
+        self.assertIn(".hc-promptbox{margin-top:14px;padding-top:14px;"
+                      "border-top:1px solid var(--bd,#e6e6e6)}", css)
+        # The same heading treatment ADDITIONAL NOTES and AGENT STATUS use,
+        # so it reads as their peer rather than a control inside AGENT.
+        self.assertIn("font:600 9.5px 'Source Code Pro',monospace;"
+                      "letter-spacing:1px;color:var(--mut,#575757)", css)
+
+    def test_the_pane_styles_do_not_depend_on_an_analysis_running(self):
+        # They lived in the banner's stylesheet, which is only injected while
+        # something is being analyzed. On a settled vault — every vault, most
+        # of the time — the prompt section rendered as a bare <details>: a
+        # browser triangle, no divider, no heading. Adjusting the rules could
+        # never fix that, because the sheet was not on the page.
+        for rule in (".hc-promptbox", ".hc-promptsum", ".hc-rowdots"):
+            self.assertNotIn(rule, self.run_js(
+                "window.__hcPromptUI.bannerCss();"))
+            self.assertIn(rule, self.run_js("window.__hcPromptUI.paneCss();"))
+
+    def test_boot_puts_the_pane_styles_on_the_page(self):
+        # A settled vault: nothing pending, so no banner is ever rendered.
+        sheet = self.run_js(
+            "var s = document.getElementById('hc-pane-style');"
+            "s ? String(s.textContent).slice(0, 13) : '';",
+            setup={"ok": True, "sv": 9, "storage": True, "analysis": "claude",
+                   "done": True, "running": False,
+                   "conversations": {"total": 3, "analyzed": 3, "pending": 0}})
+        self.assertEqual(".hc-promptbox", sheet)
 
     def test_the_log_scrolls_instead_of_growing(self):
         where = self.run_js(
@@ -1015,7 +1040,9 @@ class LiveFeedTests(BridgeTestCase):
         box = out[out.rindex("<div", 0, at):at]
         self.assertIn("border:1px solid var(--acc)", box)
         self.assertIn("background:var(--accbg)", box)
-        self.assertIn("color:var(--acc)", box)
+        # Accent frames it; the words stay body text, since the whole point
+        # is that it is long enough to read.
+        self.assertIn("color:var(--dtxt)", box)
         # A long write-up must not push the decision off the card.
         self.assertIn("max-height:230px;overflow-y:auto", box)
         self.assertIn("white-space:pre-wrap", box)
@@ -1198,7 +1225,9 @@ class AnalysisBannerTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         self.assertIn("hc-rowdots", out)
         self.assertNotIn("width:{{ cv.barW }}", out)
-        css = self.run_js("window.__hcPromptUI.bannerCss();")
+        # The dots mark a row being worked on, which outlives any banner, so
+        # they ride on the sheet that is always injected.
+        css = self.run_js("window.__hcPromptUI.paneCss();")
         self.assertIn("hc-travel", css)
         self.assertIn("infinite", css)
 

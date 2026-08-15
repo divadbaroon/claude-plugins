@@ -1089,7 +1089,7 @@
        "<div class=\"hc-live-open-slot\"></div>"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
-       "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--acc);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
+       "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1149,7 +1149,19 @@
   // so 100% of the container is 100% of the panel.
   var BANNER_CSS = [
       ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:2px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
-      ".hc-promptbox{margin-top:20px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6)}",
+      ".hc-banner-what{flex:none;font-weight:600}",
+      ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
+      ".hc-banner-bar{position:absolute;left:0;bottom:0;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
+  ].join("");
+
+  // Styles for parts of the pane that are always on screen. These lived in
+  // BANNER_CSS, which is only injected when an analysis is running — so on
+  // any settled vault the prompt section rendered as a bare <details>:
+  // browser triangle, no divider, no section heading. It was never a
+  // styling problem, it was a stylesheet that was never on the page.
+  var PANE_CSS = [
+      ".hc-promptbox{margin-top:14px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6)}",
       ".hc-promptsum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
       ".hc-promptsum::-webkit-details-marker{display:none}",
       ".hc-promptsum::before{content:'\\25b8';display:inline-block;font-size:9px;transition:transform .15s ease}",
@@ -1160,11 +1172,15 @@
       ".hc-rowdots>span:nth-child(2){animation-delay:.16s}",
       ".hc-rowdots>span:nth-child(3){animation-delay:.32s}",
       "@keyframes hc-travel{0%{transform:translateX(-6px);opacity:0}12%{opacity:1}88%{opacity:1}100%{transform:translateX(72px);opacity:0}}",
-      ".hc-banner-what{flex:none;font-weight:600}",
-      ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
-      ".hc-banner-bar{position:absolute;left:0;bottom:0;height:2px;background:var(--acc,#a5492a);transition:width .4s ease}"
   ].join("");
+
+  function ensurePaneStyles() {
+    if (document.getElementById("hc-pane-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-pane-style";
+    style.textContent = PANE_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
 
   var LIVE_CSS = [
       ".hc-live{margin-top:0}",
@@ -1397,6 +1413,7 @@
     ask: ask,
     renderBanner: renderBanner,
     bannerCss: function () { return BANNER_CSS; },
+    paneCss: function () { return PANE_CSS; },
     watchAnalysis: watchAnalysis,
     loadThread: loadThread,
     loadPlan: loadPlan,
@@ -1417,6 +1434,7 @@
   // the template yet, so patching here is safe.
   patchBundleTemplate();
   function boot() {
+    ensurePaneStyles();
     watchGoals();
     watchAnalysis();
     watchSelection();
