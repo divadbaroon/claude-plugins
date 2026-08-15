@@ -150,6 +150,15 @@
     }).then(responseJson);
   }
 
+  function clearKeepPane() {
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+      if (!saved.hcKeepPane) return;
+      delete saved.hcKeepPane;
+      localStorage.setItem(KEY, JSON.stringify(saved));
+    } catch (e) { /* nothing to clear */ }
+  }
+
   function installGoalsAndReload(goals, revision) {
     var saved;
     try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
@@ -160,6 +169,10 @@
       saved.selId = goals.length ? goals[0].id : null;
     }
     saved.updatedAt = Date.now();
+    // This reload is ours, not the reader's. A page they loaded themselves
+    // should open on CONTEXT; one we forced on them because a run finished
+    // should put them back where they were watching it.
+    saved.hcKeepPane = true;
     localStorage.setItem(KEY, JSON.stringify(saved));
     writeSync(revision, goals);
     lastObservedGoals = JSON.stringify(goals);
@@ -1307,7 +1320,7 @@
       // The inspector always opens on Context. Restoring the last pane meant
       // landing on Agent or Artifact for a goal that has neither.
       ["paneTab: (saved && saved.v >= 6 && ['prompt', 'agent', 'artifact'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',",
-       "paneTab: 'context',"],
+       "paneTab: (saved && saved.hcKeepPane && ['prompt', 'agent', 'artifact', 'context'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',"],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -1825,6 +1838,8 @@
   window.__hcPromptUI = {
     rootsFromState: rootsFromState,
     paneShape: paneShape,
+    reconcileState: reconcileState,
+    clearKeepPane: clearKeepPane,
     patchBundleSource: patchBundleSource,
     seedPayload: seedPayload,
     mergeTrees: mergeTrees,
@@ -1867,6 +1882,9 @@
   patchBundleTemplate();
   function boot() {
     ensurePaneStyles();
+    // Read once. Leaving it set would make every later reload land on
+    // whatever pane happened to be open when a run last finished.
+    clearKeepPane();
     watchPromptAdd();
     watchGoals();
     watchAnalysis();

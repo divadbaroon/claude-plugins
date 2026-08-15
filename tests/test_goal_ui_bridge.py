@@ -542,10 +542,13 @@ class NoInventedDataTests(BridgeTestCase):
             "  return window.__hcConvos[0].thread; });")
         self.assertEqual([["YOU", "hi"], ["CLAUDE", "hello"]], got)
 
-    def test_the_inspector_always_opens_on_context(self):
+    def test_the_inspector_opens_on_context_when_the_reader_loads_it(self):
+        # Restoring the last pane meant landing on AGENT or REVIEW for a goal
+        # that had neither. The one exception is a reload we forced ourselves,
+        # which has to put the reader back where it interrupted them.
         out = self.patched_bundle("out;")
-        self.assertIn("paneTab: 'context',", out)
-        self.assertNotIn("indexOf(saved.paneTab)", out)
+        self.assertIn("? saved.paneTab : 'context',", out)
+        self.assertIn("saved && saved.hcKeepPane", out)
 
     def test_the_patch_is_idempotent(self):
         self.assertTrue(self.patched_bundle(
@@ -1016,6 +1019,50 @@ class LiveFeedTests(BridgeTestCase):
     def test_a_run_with_no_session_offers_no_button(self):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)
+
+    def test_a_finished_run_brings_the_page_with_it(self):
+        # Same goals, same revision — only the work changed. Without this the
+        # artifact sat in the payload while the page showed the run still going.
+        got = json.loads(self.run_js(
+            "var reloads = 0;"
+            "window.location = { reload: function () { reloads++; } };"
+            "function state(runs) { return { scope: 'global', revision: 'r1',"
+            "  goals: [{ id: 'g1', title: 'Ship it', parent_goal_id: null,"
+            "    status: 'active' }], prompts: [], agent_runs: runs }; }"
+            "var RUNNING = { g1: [{ status: 'running', tasks: [], files: [] }] };"
+            "var DONE = { g1: [{ status: 'finished', tasks: [],"
+            "  summary: 'what I did', files: [{ path: 'a.js', edits: 3 }] }] };"
+            "store['hc-vault-ui-v1'] = JSON.stringify({ v: 7, selId: 'g1',"
+            "  paneTab: 'artifact',"
+            "  goals: window.__hcPromptUI.rootsFromState(state(RUNNING)) });"
+            "window.__hcPromptUI.acceptState(state(RUNNING));"
+            "window.__hcPromptUI.reconcileState(state(RUNNING));"
+            "var before = reloads;"
+            "window.__hcPromptUI.acceptState(state(DONE));"
+            "window.__hcPromptUI.reconcileState(state(DONE));"
+            "var saved = JSON.parse(store['hc-vault-ui-v1']);"
+            "JSON.stringify([before, reloads, saved.paneTab,"
+            "  saved.hcKeepPane === true]);"))
+        self.assertEqual([0, 1, "artifact", True], got)
+
+    def test_the_reader_stays_where_they_were_watching(self):
+        # A page the reader loaded should open on CONTEXT. One forced on them
+        # because a run finished should put them back on REVIEW.
+        out = self.patched_bundle("out;")
+        self.assertIn("paneTab: (saved && saved.hcKeepPane"
+                      " && ['prompt', 'agent', 'artifact', 'context']"
+                      ".indexOf(saved.paneTab) >= 0) ? saved.paneTab"
+                      " : 'context',", out)
+
+    def test_the_marker_is_spent_once_it_has_been_read(self):
+        # Left set, every later reload would land on whichever pane happened
+        # to be open when a run last finished.
+        left = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({ v: 7, selId: 'g1',"
+            "  paneTab: 'artifact', hcKeepPane: true, goals: [] });"
+            "window.__hcPromptUI.clearKeepPane();"
+            "JSON.parse(store['hc-vault-ui-v1']).hcKeepPane === undefined;")
+        self.assertTrue(left)
 
     def test_the_pane_stops_waiting_for_a_reload_to_notice_a_run(self):
         # The revision covers the goal tree; a run starting changes what a
