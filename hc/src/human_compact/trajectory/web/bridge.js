@@ -751,62 +751,107 @@
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
       ".hc-run-box{width:min(680px,100%)}",
+      ".hc-run-goal{margin:2px 0 14px;font:600 15px/1.35 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-run-list{margin:6px 0 0;padding-left:18px}",
+      ".hc-run-bullet{font:11.5px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
+      ".hc-run-instruction{margin-top:6px;border-left:2px solid var(--acc,#a5492a);padding:4px 0 4px 10px;font:12px/1.6 'Source Code Pro',monospace;color:var(--ink,#111);white-space:pre-wrap}",
+      ".hc-run-more{margin-top:12px}",
+      ".hc-run-sum{cursor:pointer;list-style:none;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757);text-transform:uppercase}",
+      ".hc-run-sum::-webkit-details-marker{display:none}",
+      ".hc-run-sum::before{content:'\\25b8 ';display:inline-block;transition:transform .15s ease}",
+      ".hc-run-more[open]>.hc-run-sum::before{transform:rotate(90deg)}",
+      ".hc-run-sum:hover{color:var(--acc,#a5492a)}",
+      ".hc-run-error{margin-top:10px;font:11px/1.6 'Source Code Pro',monospace;color:var(--del,#8f2b2b)}",
       ".hc-run-fact{font:11px/1.7 'Source Code Pro',monospace;color:var(--mut,#575757);word-break:break-word}",
-      ".hc-run-label{margin-top:10px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
+      ".hc-run-label{margin-top:14px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
       ".hc-run-prompt{margin:6px 0 0;max-height:42vh;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:9px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333)}"
     ].join("");
     document.head.appendChild(style);
   }
 
-  function confirmRun(preview) {
+  function confirmRun(preview, onRun) {
     return new Promise(function (resolve) {
       ensureDialogStyles();
       var overlay = document.createElement("div");
       overlay.className = "hc-ask";
       var box = document.createElement("div");
       box.className = "hc-ask-box hc-run-box";
-      var title = document.createElement("div");
-      title.className = "hc-ask-title";
-      title.textContent = "Run Claude Code on this goal";
-      box.appendChild(title);
 
-      [["runs", str(preview.command) + "  in  " + (str(preview.cwd) || "?")],
-       ["can read", array(preview.add_dirs).join(", ") || "the project only"]
+      function add(parent, cls, tag, text) {
+        var node = document.createElement(tag || "div");
+        node.className = cls;
+        if (text !== undefined) node.textContent = text;
+        parent.appendChild(node);
+        return node;
+      }
+
+      add(box, "hc-ask-title", "div", "Run Claude Code on this goal");
+      add(box, "hc-run-goal", "div", str(preview.title) || str(preview.goal_id));
+
+      add(box, "hc-run-label", "div", "Claude will start with:");
+      var list = add(box, "hc-run-list", "ul");
+      // Each line is claimed only if that section is really in the briefing.
+      var titles = array(preview.sections).map(str);
+      function present(prefix) {
+        return titles.some(function (t) { return t.indexOf(prefix) === 0; });
+      }
+      var bullets = ["this goal and where it sits in the goal tree"];
+      if (present("WHAT THE USER ASKED FOR")) {
+        bullets.push("relevant context from previous conversations");
+      }
+      if (present("ALREADY DECIDED") || present("ALREADY BUILT")) {
+        bullets.push("established decisions and constraints");
+      }
+      if (present("PROBLEMS HIT") || present("STILL OPEN")) {
+        bullets.push("previous attempts, blockers, and open questions");
+      }
+      bullets.forEach(function (text) { add(list, "hc-run-bullet", "li", text); });
+
+      add(box, "hc-run-label", "div", "Instruction");
+      add(box, "hc-run-instruction", "div", str(preview.prompt));
+
+      var full = add(box, "hc-run-more", "details");
+      add(full, "hc-run-sum", "summary", "View full context");
+      add(full, "hc-run-prompt", "pre", str(preview.context) || str(preview.prompt));
+
+      var details = add(box, "hc-run-more", "details");
+      add(details, "hc-run-sum", "summary", "Details");
+      var readable = array(preview.add_dirs).map(str);
+      [["command", str(preview.command)],
+       ["working directory", str(preview.cwd) || "not inferred"],
+       ["readable", readable.join(", ") || "the working directory only"]
       ].forEach(function (pair) {
-        var line = document.createElement("div");
-        line.className = "hc-run-fact";
-        line.textContent = pair[0] + ": " + pair[1];
-        box.appendChild(line);
+        add(details, "hc-run-fact", "div", pair[0] + ": " + pair[1]);
       });
 
-      var label = document.createElement("div");
-      label.className = "hc-run-label";
-      label.textContent = "it will send this:";
-      box.appendChild(label);
-      var body = document.createElement("pre");
-      body.className = "hc-run-prompt";
-      body.textContent = str(preview.prompt);
-      box.appendChild(body);
+      var problem = add(box, "hc-run-error", "div", "");
+      problem.style.display = "none";
 
-      var row = document.createElement("div");
-      row.className = "hc-ask-row";
-      var cancel = document.createElement("button");
-      cancel.className = "hc-ask-btn";
-      cancel.textContent = "Cancel";
-      var go = document.createElement("button");
-      go.className = "hc-ask-btn hc-ask-ok";
-      go.textContent = "Send it";
+      var row = add(box, "hc-ask-row", "div");
+      var cancel = add(row, "hc-ask-btn", "button", "Cancel");
+      var go = add(row, "hc-ask-btn hc-ask-ok", "button", "Run Claude");
 
       function close(value) {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
         resolve(value);
       }
-      cancel.onclick = function () { close(false); };
-      go.onclick = function () { close(true); };
-      overlay.onclick = function (e) { if (e.target === overlay) close(false); };
-      row.appendChild(cancel);
-      row.appendChild(go);
-      box.appendChild(row);
+      cancel.onclick = function () { close(null); };
+      go.onclick = function () {
+        // Stay put until the launch actually succeeds: a failure belongs on
+        // this screen, not behind a tab switch the user did not ask for.
+        go.textContent = "Launching…";
+        go.disabled = true;
+        problem.style.display = "none";
+        Promise.resolve(onRun()).then(function (result) {
+          close(result);
+        }).catch(function (error) {
+          go.textContent = "Run Claude";
+          go.disabled = false;
+          problem.textContent = str(error && error.message) || "launch failed";
+          problem.style.display = "";
+        });
+      };
+      overlay.onclick = function (e) { if (e.target === overlay) close(null); };
       overlay.appendChild(box);
       (document.body || document.documentElement).appendChild(overlay);
       go.focus();
@@ -929,7 +974,7 @@
       // Launching should land the reader where the work will appear, and
       // the pane must distinguish 'typed, not started' from 'running'.
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
-       "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'artifact' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
+       "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Opening the modal is not launching: the tab only changes once a\n    // run actually exists to review.\n    if (window.__hcAgent) {\n      window.__hcAgent.launch(id).then((started) => {\n        if (started) this.set(() => ({ paneTab: 'artifact' }));\n      }).catch(() => {});\n    }\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
        "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
       // Review answers one question: what has the agent done toward this
@@ -1117,21 +1162,27 @@
 
   window.__hcAgent = {
     launch: function (goalId) {
-      // Show exactly what is about to be sent and run, then act on the
-      // answer. The confirmation is here, in the window the user is already
-      // looking at, rather than a keypress in a terminal they did not choose.
+      // Preview, confirm, launch — and the launch happens inside the modal so
+      // a failure can be shown there rather than behind a tab switch.
       return post({ op: "preview_agent_run", goal_id: goalId })
         .then(function (preview) {
           if (!preview || preview.ok !== true) throw new Error("no preview");
-          return confirmRun(preview);
-        })
-        .then(function (go) {
-          if (!go) return null;
-          return post({ op: "launch_agent_run", goal_id: goalId,
-                        confirmed: true });
+          return confirmRun(preview, function () {
+            // post() resolves the error body rather than rejecting, and an
+            // error body is still truthy — so a failed launch would have
+            // closed the modal and switched tabs as if it had worked.
+            return post({ op: "launch_agent_run", goal_id: goalId,
+                          confirmed: true }).then(function (result) {
+              if (!result || result.ok !== true) {
+                throw new Error((result && result.error) || "launch failed");
+              }
+              return result;
+            });
+          });
         });
     }
   };
+
 
 
   function notify(message) {

@@ -93,6 +93,16 @@ const sandbox = {
       ? { ok: true, id: "c1", thread: [["YOU", "hi"], ["CLAUDE", "hello"]] }
       : url2.indexOf("/api/setup") >= 0
       ? JSON.parse(process.env.HC_SETUP || '{"ok":true}')
+      : (opts && opts.body && JSON.parse(opts.body).op === "launch_agent_run"
+         && process.env.HC_FAIL_LAUNCH === "1")
+      ? { ok: false, error: "no project directory is recorded" }
+      : (opts && opts.body && JSON.parse(opts.body).op === "preview_agent_run")
+      ? { ok: true, goal_id: "g1", title: "Restyle UI to match Pentimento",
+          cwd: "/repo", command: "hc work g1", add_dirs: ["/repo"],
+          references: [], prompt: "Restyle the Vault UI. Plan first.",
+          context: "# Your assignment\n## 1. WHERE THIS SITS\n…",
+          sections: ["WHERE THIS SITS", "WHAT THE USER ASKED FOR, IN THEIR WORDS",
+                     "ALREADY DECIDED — settled", "STILL OPEN"] }
       : { ok: true, terminal: "Terminal", cwd: "/repo" };
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   },
@@ -136,7 +146,8 @@ STATE = {
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class BridgeTestCase(unittest.TestCase):
-    def run_js(self, expression, state=None, setup=None, briefs=None):
+    def run_js(self, expression, state=None, setup=None, briefs=None,
+               extra_env=None):
         import os
         env = dict(os.environ, HC_STATE=json.dumps(state or STATE),
                    HC_BRIEFS=json.dumps(briefs if briefs is not None
@@ -144,6 +155,7 @@ class BridgeTestCase(unittest.TestCase):
                    HC_SETUP=json.dumps(setup if setup is not None else
                                        {"ok": True, "sv": 9, "storage": True,
                                         "analysis": "claude", "done": True}))
+        env.update(extra_env or {})
         result = subprocess.run([NODE, "-e", HARNESS, str(BRIDGE), expression],
                                 capture_output=True, text=True, check=False, env=env)
         self.assertEqual(0, result.returncode, result.stderr)
@@ -608,6 +620,78 @@ class LaunchedRunTests(BridgeTestCase):
         self.assertEqual("running", got["status"])
         self.assertEqual(["Read the code", "Make the change"],
                          [t["t"] for t in got["todos"]])
+
+    def modal_text(self):
+        return json.loads(self.run_js(
+            "window.__hcAgent.launch('g1');"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return JSON.stringify(made.filter("
+            "  function (e) { return e.className && "
+            "  e.className.indexOf('hc-run') === 0 || e.className === "
+            "  'hc-ask-title' || e.className === 'hc-ask-btn hc-ask-ok' || "
+            "  e.className === 'hc-ask-btn'; }).map(function (e) { "
+            "  return [e.className, e.textContent]; })); });"))
+
+    def test_the_modal_leads_with_the_goal_not_the_command(self):
+        rows = dict((c, t) for c, t in self.modal_text())
+        self.assertEqual("Run Claude Code on this goal", rows["hc-ask-title"])
+        self.assertEqual("Restyle UI to match Pentimento", rows["hc-run-goal"])
+
+    def test_it_lists_only_the_context_it_really_has(self):
+        said = [t for c, t in self.modal_text() if c == "hc-run-bullet"]
+        self.assertIn("this goal and where it sits in the goal tree", said)
+        self.assertIn("relevant context from previous conversations", said)
+        self.assertIn("established decisions and constraints", said)
+        self.assertIn("previous attempts, blockers, and open questions", said)
+
+    def test_the_instruction_and_the_full_context_are_both_shown(self):
+        rows = dict((c, t) for c, t in self.modal_text())
+        self.assertEqual("Restyle the Vault UI. Plan first.",
+                         rows["hc-run-instruction"])
+        self.assertIn("WHERE THIS SITS", rows["hc-run-prompt"])
+        self.assertNotEqual(rows["hc-run-instruction"], rows["hc-run-prompt"])
+
+    def test_the_command_and_paths_are_demoted_to_details(self):
+        rows = [t for c, t in self.modal_text() if c == "hc-run-fact"]
+        self.assertIn("command: hc work g1", rows)
+        self.assertIn("working directory: /repo", rows)
+
+    def test_the_primary_button_says_run_claude(self):
+        rows = dict((c, t) for c, t in self.modal_text())
+        self.assertEqual("Run Claude", rows["hc-ask-btn hc-ask-ok"])
+        self.assertEqual("Cancel", rows["hc-ask-btn"])
+
+    def test_opening_the_modal_does_not_switch_tabs(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("if (started) this.set(() => ({ paneTab: 'artifact' }));",
+                      out)
+        self.assertNotIn("this.set(() => ({ paneTab: 'artifact' }));\n"
+                         "    if (window.__hcAgent)", out)
+
+    def test_a_failed_launch_stays_on_the_modal_and_says_why(self):
+        # The dialog must not close, and the tab must not change, on failure.
+        got = json.loads(self.run_js(
+""
+            "window.__hcAgent.launch('g1');"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
+            "wait = wait.then(function () {"
+            "  var ok = made.filter(function (e) {"
+            "    return e.className === 'hc-ask-btn hc-ask-ok'; })[0];"
+            "  if (ok && ok.onclick) ok.onclick();"
+            "});"
+            "for (var j = 0; j < 30; j += 1) wait = wait.then(function(){});"
+            "wait.then(function () {"
+            "  var err = made.filter(function (e) {"
+            "    return e.className === 'hc-run-error'; })[0];"
+            "  var btn = made.filter(function (e) {"
+            "    return e.className === 'hc-ask-btn hc-ask-ok'; })[0];"
+            "  return JSON.stringify([err ? err.textContent : null,"
+            "    btn ? btn.textContent : null]); });",
+            extra_env={"HC_FAIL_LAUNCH": "1"}))
+        self.assertEqual("no project directory is recorded", got[0])
+        self.assertEqual("Run Claude", got[1])   # returned to its resting label
 
     def test_cancelling_the_preview_launches_nothing(self):
         posted = self.run_js(

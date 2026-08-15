@@ -535,12 +535,21 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 # way the launch computes it — never a description of it.
                 cwd = AE.goal_cwd(trajdir, goals, g["id"])
                 dirs, refs = AE.goal_sources(goals, g["id"])
+                # Two different things, and the modal was only showing the
+                # first: the instruction typed into the composer, and the
+                # briefing the SessionStart hook delivers. Both come from the
+                # same builders the launch uses.
+                parts = AE.prompt_sections(trajdir, goals, g["id"]) or {}
+                titles = [str(sec.get("title") or "")
+                          for sec in parts.get("sections", [])]
                 return {"ok": True, "goal_id": g["id"],
                         "title": g.get("title", ""),
                         "cwd": cwd or "",
                         "command": "hc work " + g["id"],
                         "add_dirs": dirs, "references": refs,
-                        "prompt": AE.launch_prompt(goals, g["id"])}
+                        "prompt": AE.launch_prompt(goals, g["id"]),
+                        "context": AE.goal_context(trajdir, goals, g["id"]),
+                        "sections": titles}
             if kind == "start_agent_run":
                 return {"ok": True, "command": f"hc work {g['id']}",
                         "claim": AE.arm(trajdir, g["id"], g.get("title", ""))}
