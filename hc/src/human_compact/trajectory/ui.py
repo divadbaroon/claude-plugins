@@ -708,7 +708,8 @@ class H(BaseHTTPRequestHandler):
             elif self.path == "/api/state":
                 self._send(200, _payload(
                     self.server.trajdir, self.server.chat_scoped))
-            elif self.path.startswith("/api/briefing"):
+            elif (self.path == "/api/briefing"
+                  or self.path.startswith("/api/briefing?")):
                 # Exactly what a session launched on this goal would receive,
                 # so the context is inspectable before it is spent.
                 from urllib.parse import urlparse, parse_qs
