@@ -1032,6 +1032,15 @@ class ConfirmedLaunchTests(unittest.TestCase):
         self.assertIn("send -- \\r", self._script(True))
 
     @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
+    def test_the_return_waits_for_the_paste_to_land(self):
+        # Sending both in the same breath can submit before the composer has
+        # taken a long prompt.
+        body = self._script(True)
+        typed = body.index("send -- $body")
+        settle = body.index("after " + AE.SUBMIT_SETTLE_SECONDS, typed)
+        self.assertLess(settle, body.index("send -- \\r", typed))
+
+    @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
     def test_an_unconfirmed_launch_types_and_waits(self):
         body = self._script(False)
         self.assertIn("send -- $body", body)

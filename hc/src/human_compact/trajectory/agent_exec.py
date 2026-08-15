@@ -291,6 +291,7 @@ def terminal_app() -> str:
 
 EXPECT_BIN = "/usr/bin/expect"
 LAUNCH_SETTLE_SECONDS = "2500"      # let the TUI finish drawing before typing
+SUBMIT_SETTLE_SECONDS = "600"       # and let a long paste land before Return
 
 
 def single_line(prompt: str) -> str:
@@ -340,7 +341,10 @@ def _write_expect_launch(directory: Path, goal_id: str, command: List[str],
         "expect -timeout 30 -re {.} {} timeout {}\n"
         f"after {LAUNCH_SETTLE_SECONDS}\n"
         "send -- $body\n"
-        + ("send -- \\r\n" if send else "")
+        # The composer needs a moment to take a long paste before it will
+        # accept a Return; sending both in the same breath can submit an
+        # empty or half-typed line.
+        + (f"after {SUBMIT_SETTLE_SECONDS}\nsend -- \\r\n" if send else "")
         + "interact\n",
         encoding="utf-8")
     path.chmod(0o700)
