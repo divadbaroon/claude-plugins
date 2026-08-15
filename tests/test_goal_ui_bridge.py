@@ -827,6 +827,31 @@ class LiveFeedTests(BridgeTestCase):
             dict(self.RUN, state="waiting", quiet_for="4 min"))]
         self.assertNotIn("hc-live-idle", classes)
 
+    def test_the_log_is_its_own_titled_section(self):
+        rows = self.drawn(self.RUN)
+        titles = [t for c, t in rows if c == "hc-live-title"]
+        self.assertEqual(["ACTIVITY"], titles)
+        css = self.run_js("window.__hcPromptUI.liveCss();")
+        self.assertIn(".hc-live-title{margin-top:20px;padding-top:14px;"
+                      "border-top:1px solid var(--bd,#e6e6e6)", css)
+
+    def test_a_run_with_no_actions_gets_no_activity_heading(self):
+        classes = [c for c, _ in self.drawn(dict(self.RUN, did=[]))]
+        self.assertNotIn("hc-live-title", classes)
+
+    def test_the_artifact_heading_has_no_leading_gap(self):
+        out = self.patched_bundle("out;")
+        self.assertIn('<div style="display:flex;align-items:center;'
+                      'justify-content:space-between;gap:12px"><span '
+                      "style=\"font:600 9.5px 'Source Code Pro',monospace;"
+                      'letter-spacing:1px;color:var(--mut)">ARTIFACT</span>',
+                      out)
+
+    def test_the_prompt_is_separated_like_the_other_sections(self):
+        self.assertIn(".hc-promptbox{margin-top:20px;padding-top:14px;"
+                      "border-top:1px solid var(--bd,#e6e6e6)}",
+                      self.run_js("window.__hcPromptUI.bannerCss();"))
+
     def test_the_log_scrolls_instead_of_growing(self):
         where = self.run_js(
             "var pane = document.createElement('div');"
@@ -837,7 +862,7 @@ class LiveFeedTests(BridgeTestCase):
             "{ return c.className; }));")
         self.assertIn("hc-live-log", json.loads(where))
         css = self.run_js("window.__hcPromptUI.liveCss();")
-        self.assertIn(".hc-live-log{max-height:320px;overflow-y:auto", css)
+        self.assertIn("max-height:320px;overflow-y:auto", css)
 
     def test_the_open_button_is_secondary_not_accent(self):
         # Opening a terminal is not the decision on this pane; approve is.

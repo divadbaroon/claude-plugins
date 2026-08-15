@@ -687,6 +687,9 @@
     }
     var log = document.createElement("div");
     log.className = "hc-live-log";
+    var logTitle = document.createElement("div");
+    logTitle.className = "hc-live-title";
+    logTitle.textContent = "ACTIVITY";
     var LOGGED = { did: true, wait: true, idle: true };
     rows.forEach(function (row) {
       var node = document.createElement("div");
@@ -695,7 +698,10 @@
       if (row[0] === "head") head.appendChild(node);
       else if (row[0] === "ask") host.appendChild(node);
       else if (LOGGED[row[0]]) {
-        if (!log.parentNode) below.appendChild(log);
+        if (!log.parentNode) {
+          below.appendChild(logTitle);
+          below.appendChild(log);
+        }
         log.appendChild(node);
       } else below.appendChild(node);
     });
@@ -1049,6 +1055,9 @@
        "void 0;\n"],
       ["placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"",
        "placeholder=\"Add any other thoughts you would like the agent to know...\""],
+      // ARTIFACT opens the pane, so the leading gap only pushed it down.
+      ["<div style=\"margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ARTIFACT</span>",
+       "<div style=\"display:flex;align-items:center;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ARTIFACT</span>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1108,7 +1117,7 @@
   // so 100% of the container is 100% of the panel.
   var BANNER_CSS = [
       ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:2px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
-      ".hc-promptbox{margin-top:16px}",
+      ".hc-promptbox{margin-top:20px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6)}",
       ".hc-promptsum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
       ".hc-promptsum::-webkit-details-marker{display:none}",
       ".hc-promptsum::before{content:'\\25b8';display:inline-block;font-size:9px;transition:transform .15s ease}",
@@ -1131,7 +1140,8 @@
       ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
       ".hc-live-wait{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-ask{margin:0 0 8px;max-height:220px;overflow-y:auto;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
-      ".hc-live-log{max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
+      ".hc-live-title{margin-top:20px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
+      ".hc-live-log{margin-top:7px;max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
       ".hc-live-idle{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);padding-bottom:3px}",
       ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
       ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
