@@ -1683,6 +1683,54 @@ class AnalysisBannerTests(BridgeTestCase):
             "  return e.className === 'hc-banner'; })[0];"
             "b ? b.children.map(function (c) { return c.textContent; }) : null;")
 
+    SYNTH = {"ok": True, "sv": 9, "storage": True, "analysis": "claude",
+             "done": True, "running": True, "phase": "synthesizing",
+             "conversations": {"total": 3, "analyzed": 3, "pending": 0}}
+
+    def banner_on(self, page, setup):
+        return self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ page: %s }));" % json.dumps(page) +
+            "window.__hcPromptUI.setSetupForTest(%s);" % json.dumps(setup) +
+            "window.__hcPromptUI.renderBanner();"
+            "!!made.filter(function (e) { return e.className === 'hc-banner'"
+            "  && e.parentNode; })[0];")
+
+    def test_the_goals_page_reports_the_tree_build_itself(self):
+        # The panel draws a spinner in the middle of the tree while it is
+        # being built. A banner saying the same thing directly above it is
+        # not twice the information.
+        self.assertFalse(self.banner_on("goals", self.SYNTH))
+        self.assertTrue(self.banner_on("convos", self.SYNTH))
+
+    def test_the_goals_page_still_says_when_conversations_are_being_read(self):
+        # Only the tree build is reported by the panel. Reading conversations
+        # happens elsewhere, so the goals page would otherwise be silent.
+        reading = dict(self.SYNTH, phase="extracting",
+                       conversations={"total": 3, "analyzed": 1, "pending": 2})
+        self.assertTrue(self.banner_on("goals", reading))
+
+    def test_the_analysis_moves_to_the_goals_page_when_the_reading_ends(self):
+        # It used to wait for the whole analysis, synthesis included, so the
+        # tree build happened on the conversations page with nothing to see.
+        out = self.patched_bundle("out;")
+        run = out[out.index("  startAnalysis()"):out.index("this._anT = setInterval(tick, 2000)")]
+        self.assertIn("if (!total || done < total) {", run)
+        self.assertIn("this.set(() => ({ page: 'goals', convSel: null,", run)
+        # and only once: switching every poll would pin the reader there
+        self.assertIn("if (!this._anSwitched) {", run)
+        # the marker clears only when nothing is running any more
+        self.assertIn("if (!s.running) {", run)
+
+    def test_the_goals_phase_is_what_the_spinner_is_gated_on(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("anGoals: !!(anx && anx.phase === 'goals')", out)
+        self.assertIn("{{ anSpin }}", out)
+        self.assertIn("Building Goals", out)
+        # and the tree list steps aside for it
+        self.assertIn("treeListDisp: (anx && anx.phase === 'goals') "
+                      "? 'none' : 'block'", out)
+
     def test_there_is_no_blinking_dot(self):
         css = self.run_js("window.__hcPromptUI.bannerCss();")
         self.assertNotIn("hc-banner-dot", css)
