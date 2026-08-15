@@ -763,6 +763,31 @@ class LiveFeedTests(BridgeTestCase):
             % json.dumps(st) + "roots[0].artifact.finished;")
         self.assertFalse(got)
 
+    def test_it_polls_whenever_the_anchor_is_on_screen(self):
+        # The feed moved panes once already; binding the poll to a pane name
+        # is what left it fetching for a pane it no longer draws into.
+        asked = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({ selId: 'g1' });"
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.watchRunFeed();"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 20; i += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return calls.filter(function (c) {"
+            "  return String(c[0]).indexOf('/api/review') === 0; }).length; });")
+        self.assertEqual(1, asked)
+
+    def test_it_does_not_poll_with_no_anchor(self):
+        asked = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({ selId: 'g1' });"
+            "window.__hcPromptUI.watchRunFeed();"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 20; i += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return calls.filter(function (c) {"
+            "  return String(c[0]).indexOf('/api/review') === 0; }).length; });")
+        self.assertEqual(0, asked)
+
     def test_a_run_with_no_session_offers_no_button(self):
         classes = [c for c, _ in self.drawn(self.RUN)]
         self.assertNotIn("hc-live-open", classes)

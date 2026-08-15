@@ -690,17 +690,24 @@
   function watchRunFeed() {
     // The artifact reads its state at boot, so a live feed cannot travel
     // through it. Poll and draw straight into the pane instead.
-    setInterval(function () {
-      if (selectedPane() !== "artifact") return;
+    function tick() {
+      // Tied to the target, not to a pane name: the feed moved from REVIEW to
+      // AGENT and a hardcoded pane left it fetching for a pane it no longer
+      // draws into. If the anchor is on screen, it should be fed.
+      if (!document.querySelector(".hc-live")) return Promise.resolve(false);
       var id = selectedGoalId();
-      if (!id || serverState.scope === "chat") return;
-      fetch("/api/review?goal=" + encodeURIComponent(id), { cache: "no-store" })
+      if (!id || serverState.scope === "chat") return Promise.resolve(false);
+      return fetch("/api/review?goal=" + encodeURIComponent(id),
+                   { cache: "no-store" })
         .then(function (r) { return r.json(); })
         .then(function (body) {
-          if (body && body.ok) renderLive(id, body.runs);
+          return !!(body && body.ok && renderLive(id, body.runs));
         })
-        .catch(function () {});
-    }, 2000);
+        .catch(function () { return false; });
+    }
+    var first = tick();          // opening the pane should not wait a tick
+    setInterval(tick, 2000);
+    return first;
   }
 
   function watchPane() {
@@ -1289,6 +1296,7 @@
     loadThread: loadThread,
     loadPlan: loadPlan,
     renderLive: renderLive,
+    watchRunFeed: watchRunFeed,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
     setSetupForTest: function (value) { setupState = value; },
