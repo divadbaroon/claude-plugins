@@ -204,9 +204,11 @@ class NodeMappingTests(BridgeTestCase):
                           ("Wire the bridge", "doing")],
                          [(t["t"], t["s"]) for t in agent["todos"]])
 
-    def test_a_goal_with_no_run_has_no_agent_or_artifact(self):
+    def test_a_goal_with_no_run_describes_the_run_and_has_no_artifact(self):
+        # No history, but the pane still says what running it would do.
         child = self.roots()[0]["children"][0]
-        self.assertIsNone(child["agent"])
+        self.assertEqual("idle", child["agent"]["status"])
+        self.assertEqual([], child["agent"]["todos"])
         self.assertIsNone(child["artifact"])
 
 
@@ -551,7 +553,9 @@ class LaunchedRunTests(BridgeTestCase):
               "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
               "prompts": [], "agent_runs": {},
               "agent_claim": {"goal_id": "g2", "prompt": "other"}}
-        self.assertIsNone(self.agent_for(st))
+        got = self.agent_for(st)
+        self.assertEqual("idle", got["status"])       # not "waiting"
+        self.assertEqual("", got["prompt"])
 
     def test_real_tasks_replace_the_waiting_state(self):
         st = {"scope": "global", "revision": "r1", "generated_at": "",
@@ -565,6 +569,47 @@ class LaunchedRunTests(BridgeTestCase):
         self.assertEqual("running", got["status"])
         self.assertEqual(["Read the code", "Make the change"],
                          [t["t"] for t in got["todos"]])
+
+    def preview_for(self, goal_id="g1", detail=None):
+        st = {"scope": "global", "revision": "r1", "generated_at": "",
+              "goals": [{"id": "g1", "title": "Ship it", "status": "active"}],
+              "prompts": [], "agent_runs": {}}
+        js = ""
+        if detail is not None:
+            js = ("window.__hcPromptUI.setDetailForTest(%s, %s);"
+                  % (json.dumps(goal_id), json.dumps(detail)))
+        return self.run_js(
+            js + "var roots = window.__hcPromptUI.rootsFromState(%s);"
+            % json.dumps(st) + "roots[0].agent.brief;")
+
+    def test_a_goal_that_never_ran_still_says_what_running_would_do(self):
+        rows = self.preview_for()
+        self.assertEqual(["runs in", "can read", "is told", "opens"],
+                         [r["k"] for r in rows])
+
+    def test_it_names_the_command_and_that_nothing_is_sent(self):
+        rows = {r["k"]: r["v"] for r in self.preview_for()}
+        self.assertIn("hc work g1", rows["opens"])
+        self.assertIn("not sent", rows["opens"])
+
+    def test_it_reports_the_real_directory_and_briefing_shape(self):
+        detail = {"brief": {"cwd": "/repo", "dirs": ["/repo"], "refs": [],
+                            "told": ["5 of your own messages", "3 decisions"]}}
+        rows = {r["k"]: r["v"] for r in self.preview_for(detail=detail)}
+        self.assertEqual("/repo", rows["runs in"])
+        self.assertEqual("/repo", rows["can read"])
+        self.assertIn("5 of your own messages", rows["is told"])
+        self.assertIn("3 decisions", rows["is told"])
+
+    def test_an_uninferred_directory_says_so_rather_than_guessing(self):
+        rows = {r["k"]: r["v"] for r in self.preview_for()}
+        self.assertIn("no project directory inferred", rows["runs in"])
+
+    def test_the_pane_renders_those_rows(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("WHAT RUNNING THIS DOES", out)
+        self.assertIn("{{ bf.k }}", out)
+        self.assertIn("agentBrief: (sel && sel.agent && sel.agent.brief)", out)
 
     def test_running_it_switches_to_the_pane_that_shows_the_work(self):
         out = self.patched_bundle("out;")

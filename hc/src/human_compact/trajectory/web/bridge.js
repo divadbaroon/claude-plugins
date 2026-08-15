@@ -261,13 +261,37 @@
 
   var TASK_STATE = { pending: "todo", in_progress: "doing", completed: "done" };
 
+  function runPreview(goal, facts) {
+    // Four plain facts, each one true of the launch that is about to happen.
+    var rows = [];
+    rows.push(["runs in", facts && facts.cwd
+      ? facts.cwd
+      : "no project directory inferred yet — it will open where you are"]);
+    var readable = (facts && facts.dirs.length) ? facts.dirs.join(", ")
+      : (facts && facts.cwd ? facts.cwd : "");
+    rows.push(["can read", readable || "nothing attached yet"]);
+    rows.push(["is told", (facts && facts.told.length)
+      ? facts.told.join(" · ")
+      : "this goal and its place in the tree"]);
+    rows.push(["opens", "a terminal running `hc work " + goal.id
+      + "` — the prompt typed, not sent"]);
+    if (facts && facts.refs.length) {
+      rows.push(["cites", facts.refs.join(", ")]);
+    }
+    return rows.map(function (pair) {
+      return { k: pair[0], v: pair[1] };
+    });
+  }
+
   function agentOf(goal, runs, claim) {
     var rows = array(runs && runs[goal.id]);
     if (!rows.length) {
+      var facts = (details[goal.id] || {}).brief || null;
       var proposed = array(plans[goal.id]);
       if (proposed.length && !(claim && claim.goal_id === goal.id)) {
         // A proposal, plainly marked. The session's own tasks replace it.
         return { status: "proposed", branch: "", prompt: "", lastFile: "",
+                 brief: runPreview(goal, facts),
                  todos: proposed.map(function (step) {
                    return { t: str(step), s: "todo", active: "" };
                  }), log: [] };
@@ -276,9 +300,12 @@
       // (which reads as "the button did nothing") or inventing steps.
       if (claim && claim.goal_id === goal.id) {
         return { status: "waiting", branch: "", prompt: str(claim.prompt),
-                 lastFile: "", todos: [], log: [] };
+                 lastFile: "", brief: runPreview(goal, facts),
+                 todos: [], log: [] };
       }
-      return null;
+      // Nothing has run and nothing is proposed: still say what would happen.
+      return { status: "idle", branch: "", prompt: "", lastFile: "",
+               brief: runPreview(goal, facts), todos: [], log: [] };
     }
     var run = rows[0];
     return {
@@ -590,6 +617,41 @@
       .catch(function () { threads[id] = false; return false; });
   }
 
+  function briefFacts(brief) {
+    // What a run is about to do, from the same payload the prompt is built
+    // from. Counts rather than prose: the prompt itself is a click away, and
+    // a reader deciding whether to press run wants the shape, not the text.
+    var counts = [];
+    array((brief || {}).sections).forEach(function (section) {
+      var n = array(section.lines).filter(function (line) {
+        return str(line).trim();
+      }).length;
+      var title = str(section.title);
+      if (!n) return;
+      if (title.indexOf("IN THEIR WORDS") >= 0) {
+        counts.push(n + " of your own messages");
+      } else if (title.indexOf("ALREADY DECIDED") === 0) {
+        counts.push(n + " decision" + (n === 1 ? "" : "s"));
+      } else if (title.indexOf("ALREADY BUILT") === 0) {
+        counts.push(n + " thing" + (n === 1 ? "" : "s") + " already built");
+      } else if (title.indexOf("PROBLEMS HIT") === 0) {
+        counts.push(n + " problem" + (n === 1 ? "" : "s") + " hit before");
+      } else if (title.indexOf("STILL OPEN") === 0) {
+        counts.push(n + " still open");
+      } else if (title.indexOf("EARLIER CLAUDE SESSIONS") === 0) {
+        counts.push(n + " earlier session" + (n === 1 ? "" : "s"));
+      }
+    });
+    var dirs = array((brief || {}).add_dirs);
+    var refs = array((brief || {}).references);
+    return {
+      cwd: str((brief || {}).cwd),
+      dirs: dirs.map(str),
+      refs: refs.map(str),
+      told: counts
+    };
+  }
+
   function briefingSections(brief) {
     // The briefing is written to be read as a prompt; the inspector shows the
     // same material as panels. One section can feed one panel, and one panel
@@ -627,7 +689,8 @@
       var brief = both[0] || {}, review = both[1] || {};
       var sections = briefingSections(brief);
       details[goalId] = { sections: sections, opening: str(brief.opening),
-                          cwd: str(brief.cwd), review: array(review.runs) };
+                          cwd: str(brief.cwd), review: array(review.runs),
+                          brief: briefFacts(brief) };
       delete detailPending[goalId];
       lastObservedGoals = null;
       refreshState();
@@ -786,7 +849,14 @@
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
        "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'agent' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
-       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
+       "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
+      // Before it runs, say what running it does: where, with what, told
+      // what, and by which command. All of it read from the same
+      // briefing the prompt is built from.
+      ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
+       "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">WHAT RUNNING THIS DOES</div><div style=\"margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:8px 11px\"><sc-for list=\"{{ agentBrief }}\" as=\"bf\" hint-placeholder-count=\"4\"><div style=\"display:flex;gap:10px;align-items:baseline;padding:2px 0\"><span style=\"flex:none;width:64px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ bf.k }}</span><span style=\"font:11px/1.55 'Source Code Pro',monospace;color:var(--dtxt);word-break:break-word\">{{ bf.v }}</span></div></sc-for></div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
+      ["agentLabel: (() => {",
+       "agentBrief: (sel && sel.agent && sel.agent.brief) || [],\n      agentLabel: (() => {"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -1068,7 +1138,8 @@
     loadPlan: loadPlan,
     briefingSections: briefingSections,
     analysisPending: function () { return window.__hcAnalysisPending(); },
-    setSetupForTest: function (value) { setupState = value; }
+    setSetupForTest: function (value) { setupState = value; },
+    setDetailForTest: function (id, value) { details[id] = value; }
   };
 
   seed();
