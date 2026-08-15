@@ -596,22 +596,27 @@ class LaunchedRunTests(BridgeTestCase):
                             "told": ["5 of your own messages", "3 decisions"]}}
         text = self.preview_for(detail=detail)
         self.assertIn("Opens Claude in /repo", text)
-        self.assertIn("5 of your own messages", text)
-        self.assertIn("3 decisions", text)
+        self.assertIn("what you have said, decided and hit", text)
 
     def test_an_uninferred_directory_says_so_rather_than_guessing(self):
-        self.assertIn("no project directory has been inferred",
+        self.assertIn("no project directory inferred yet",
                       self.preview_for())
 
-    def test_the_pane_renders_it_as_a_paragraph(self):
+    def test_the_pane_renders_it_as_an_italic_paragraph(self):
         out = self.patched_bundle("out;")
         self.assertIn("{{ agentBriefText }}", out)
+        self.assertIn("font:italic 11.5px/1.65", out)
         self.assertIn("agentBriefText: (sel && sel.agent && sel.agent.briefText)",
                       out)
 
-    def test_running_it_switches_to_the_pane_that_shows_the_work(self):
+    def test_running_it_switches_to_the_review_pane(self):
         out = self.patched_bundle("out;")
-        self.assertIn("this.set(() => ({ paneTab: 'agent' }));", out)
+        self.assertIn("this.set(() => ({ paneTab: 'artifact' }));", out)
+
+    def test_review_stays_its_own_tab(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("showArt: !!sel && paneTab === 'artifact'", out)
+        self.assertNotIn("review folded into agent", out)
 
     def test_the_pane_distinguishes_typed_from_started(self):
         out = self.patched_bundle("out;")

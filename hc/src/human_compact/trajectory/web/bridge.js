@@ -262,23 +262,15 @@
   var TASK_STATE = { pending: "todo", in_progress: "doing", completed: "done" };
 
   function runPreview(goal, facts) {
-    // Prose, not a table: this is describing an action about to be taken on
-    // the reader's machine, in the order they need it — where it opens, what
-    // it already knows, and what it will not do without them.
+    // One short line, italicised in the pane: this describes an action about
+    // to happen on the reader's machine, and the last clause is the one that
+    // matters — it does not act without them.
     var where = (facts && facts.cwd)
       ? "Opens Claude in " + facts.cwd
-      : "Opens Claude where you are — no project directory has been inferred "
-        + "for this goal yet";
-    var knows = (facts && facts.told.length)
-      ? ", already holding this goal, where it sits under the goals above it, "
-        + "and " + facts.told.join(", ")
-      : ", already holding this goal and where it sits under the goals above it";
-    var cites = (facts && facts.refs.length)
-      ? " It is also pointed at " + facts.refs.join(", ") + "."
-      : "";
-    return where + knows + ", so none of it has to be explained again. "
-      + "The prompt is typed into that terminal and left there — nothing is "
-      + "sent until you press Enter." + cites;
+      : "Opens Claude where you are (no project directory inferred yet)";
+    return where + ", already holding this goal, where it sits in your tree, "
+      + "and what you have said, decided and hit along the way. The prompt is "
+      + "typed in for you — nothing is sent until you press Enter.";
   }
 
   function agentOf(goal, runs, claim) {
@@ -851,22 +843,16 @@
       // Launching should land the reader where the work will appear, and
       // the pane must distinguish 'typed, not started' from 'running'.
       ["  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n",
-       "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'agent' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
+       "  runAgent() {\n    const id = this.state.selId;\n    if (!id) return;\n    this.recordPrompt(this._draftEl ? this._draftEl.value : '');\n    // Opens a terminal in this goal's project with the prompt typed and\n    // unsent. Its tasks then arrive here as it creates them, for real.\n    // Move to the pane that shows them, so the run is watchable from\n    // the moment it is asked for.\n    this.set(() => ({ paneTab: 'artifact' }));\n    if (window.__hcAgent) window.__hcAgent.launch(id);\n  }\n"],
       ["agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),",
        "agentLabel: (() => {\n        if (!sel || !sel.agent) return '';\n        const td = sel.agent.todos || [], dn = td.filter(o => o.s === 'done').length;\n        if (sel.agent.status === 'idle') return 'nothing has run on this goal yet';\n        if (sel.agent.status === 'proposed') return 'proposed plan \u2014 nothing has run yet; press run to start';\n        if (sel.agent.status === 'waiting') return 'terminal opened with the prompt typed \u2014 press Enter there to start';\n        if (sel.agent.status === 'running' && !td.length) return 'session started \u2014 waiting for its first step';\n        if (sel.agent.status === 'running') return 'working on this goal \u2014 ' + dn + '/' + td.length + ' steps';\n        return 'finished ' + (td.length ? dn + '/' + td.length + ' steps' : '') + ' \u2014 output ready to review';\n      })(),"],
       // Before it runs, say what running it does: where, with what, told
       // what, and by which command. All of it read from the same
       // briefing the prompt is built from.
       ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
-       "<div style=\"margin-top:12px;font:11.5px/1.7 'Source Code Pro',monospace;color:var(--mut);max-width:62ch;text-wrap:pretty\">{{ agentBriefText }}</div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
+       "<div style=\"margin-top:12px;font:italic 11.5px/1.65 'Source Code Pro',monospace;color:var(--mut);max-width:62ch;text-wrap:pretty\">{{ agentBriefText }}</div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
       ["agentLabel: (() => {",
        "agentBriefText: (sel && sel.agent && sel.agent.briefText) || '',\n      agentLabel: (() => {"],
-      // Review is the second half of a run, not a separate destination.
-      // It renders under the agent pane, where the run it reviews is.
-      ["showArt: !!sel && paneTab === 'artifact'",
-       "showArt: !!sel && paneTab === 'agent'"],
-      ["<span sc-camel-on-click=\"{{ tabArt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tarC }};border-bottom:2px solid {{ tarBd }};margin-bottom:-1px\">REVIEW</span>\n",
-       "<!--review folded into agent-->\n"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
