@@ -1209,6 +1209,59 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("{{ hr.when }}", out)
         self.assertIn("{{ histEmpty }}", out)
 
+    def test_a_goal_with_a_session_on_it_is_marked_in_the_tree(self):
+        # The tree is the only place every goal is visible at once, so it is
+        # the only place that answers "is anything running" without opening
+        # each goal in turn. STATE's g1 has a running run.
+        top = self.roots()[0]
+        self.assertEqual({"on": True, "label": "RUNNING", "solid": False,
+                          "title": "A Claude session is working on this goal"},
+                         top["live"])
+
+    def test_a_run_blocked_on_the_reader_says_so_instead(self):
+        state = json.loads(json.dumps(STATE))
+        state["agent_runs"]["g1"][0]["awaiting_user"] = True
+        live = self.roots(state)[0]["live"]
+        self.assertEqual("NEEDS YOU", live["label"])
+        self.assertTrue(live["solid"])
+
+    def test_a_finished_run_is_something_to_review_not_something_live(self):
+        for status in ("finished", "failed"):
+            state = json.loads(json.dumps(STATE))
+            state["agent_runs"]["g1"][0]["status"] = status
+            self.assertIsNone(self.roots(state)[0]["live"], status)
+
+    def test_a_new_run_over_an_old_artifact_still_reads_as_live(self):
+        state = json.loads(json.dumps(STATE))
+        state["agent_runs"]["g1"].append(dict(state["agent_runs"]["g1"][0],
+                                              status="finished"))
+        self.assertEqual("RUNNING", self.roots(state)[0]["live"]["label"])
+
+    def test_a_launched_session_is_marked_before_its_first_step(self):
+        # The terminal is open with the prompt typed. Saying nothing here
+        # reads as the run button having done nothing at all.
+        state = json.loads(json.dumps(STATE))
+        state["agent_runs"] = {}
+        state["agent_claim"] = {"goal_id": "g1", "prompt": "work on it"}
+        self.assertEqual("STARTING", self.roots(state)[0]["live"]["label"])
+        self.assertIsNone(self.roots(state)[0]["children"][0]["live"])
+
+    def test_a_goal_nobody_is_working_on_is_left_alone(self):
+        state = json.loads(json.dumps(STATE))
+        state["agent_runs"] = {}
+        self.assertIsNone(self.roots(state)[0]["live"])
+
+    def test_the_row_carries_the_marker_beside_its_title(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("liveShow: !!(n.live && n.live.on)", out)
+        self.assertIn("{{ row.liveLab }}", out)
+        self.assertIn("{{ row.liveTitle }}", out)
+        # beside the title, not past the delete control on the far right
+        self.assertLess(out.index("{{ row.title }}"),
+                        out.index("{{ row.liveLab }}"))
+        self.assertLess(out.index("{{ row.liveLab }}"),
+                        out.index("Delete goal"))
+
     def test_the_pane_reads_in_the_order_the_work_is_approached(self):
         # What finishing means, where it sits, what it can read, what is in
         # the way, what is done. Decisions follow what was built: both are

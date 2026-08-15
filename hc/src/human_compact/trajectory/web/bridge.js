@@ -378,6 +378,32 @@
     };
   }
 
+  // A goal with a session on it and nothing to review yet. The tree is the
+  // only place the reader sees every goal at once, so it is the only place
+  // that can answer "is anything happening right now" without clicking
+  // through them one at a time.
+  function liveOf(goal, runs, claim) {
+    var open = array(runs && runs[goal.id]).filter(function (row) {
+      var state = str(row && row.status);
+      return state !== "finished" && state !== "failed";
+    })[0];
+    if (open) {
+      // Blocked on the reader is the state worth interrupting them for.
+      return open.awaiting_user
+        ? { on: true, label: "NEEDS YOU", solid: true,
+            title: "Claude is waiting on your reply in this goal's terminal" }
+        : { on: true, label: "RUNNING", solid: false,
+            title: "A Claude session is working on this goal" };
+    }
+    // Launched but not yet started: the terminal is open with the prompt
+    // typed. Saying nothing here reads as the run button having done nothing.
+    if (claim && claim.goal_id === goal.id) {
+      return { on: true, label: "STARTING", solid: false,
+               title: "A terminal is open for this goal, waiting on Enter" };
+    }
+    return null;
+  }
+
   function toNode(goal, byParent, byId, runs, claim) {
     return {
       id: goal.id,
@@ -393,6 +419,7 @@
       ctx: contextOf(goal, details[goal.id]),
       agent: agentOf(goal, runs, claim),
       artifact: artifactOf(goal, runs, details[goal.id]),
+      live: liveOf(goal, runs, claim),
       children: array(byParent[goal.id]).map(function (child) {
         return toNode(child, byParent, byId, runs, claim);
       })
@@ -1389,6 +1416,13 @@
        "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"],
       ["<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span>",
        "<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ hr.when }}<span style=\"color:var(--bd2);padding:0 6px\">\u00b7</span>{{ hr.conv }}</span>"],
+      // A session in flight, marked on the row. Until now the only way
+      // to know whether anything was running was to open each goal and
+      // look, which is the question a tree should answer at a glance.
+      ["        isSel, isEdit, showTitle: !isEdit,\n",
+       "        isSel, isEdit, showTitle: !isEdit,\n        liveShow: !!(n.live && n.live.on),\n        liveLab: (n.live && n.live.label) || '',\n        liveTitle: (n.live && n.live.title) || '',\n        liveBg: (n.live && n.live.solid) ? 'var(--acc)' : 'transparent',\n        liveFg: (n.live && n.live.solid) ? 'var(--onacc)' : 'var(--acc)',\n"],
+      ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
+       "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if><sc-if value=\"{{ row.liveShow }}\" hint-placeholder-val=\"{{ false }}\"><span title=\"{{ row.liveTitle }}\" style=\"flex:none;padding:0.5px 5px;border:1px solid var(--acc);border-radius:2px;background:{{ row.liveBg }};font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:{{ row.liveFg }};white-space:nowrap\">{{ row.liveLab }}</span></sc-if>"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
@@ -1711,6 +1745,7 @@
     contextOf: contextOf,
     agentOf: agentOf,
     artifactOf: artifactOf,
+    liveOf: liveOf,
     promptRows: promptRows,
     ask: ask,
     renderBanner: renderBanner,
