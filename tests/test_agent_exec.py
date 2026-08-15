@@ -1008,3 +1008,31 @@ class ActivityLogTests(unittest.TestCase):
     def test_an_empty_line_is_not_recorded(self):
         self.assertFalse(AE.note_activity(self.run, "did", "   "))
         self.assertEqual([], self.run.get("activity", []))
+
+
+class ConfirmedLaunchTests(unittest.TestCase):
+    """Confirmation moved into the UI, so the launcher may send the prompt."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.trajdir = Path(self.tmp.name) / "vault" / "trajectory"
+        self.trajdir.mkdir(parents=True)
+        self.project = Path(self.tmp.name) / "project"
+        self.project.mkdir()
+
+    def _script(self, send):
+        AE.write_launch_script(self.trajdir, "g1", str(self.project),
+                               ["hc", "work", "g1"], "Work on my Vault goal g1",
+                               send=send)
+        return (AE.runs_dir(self.trajdir) / "launch" / "g1.exp").read_text()
+
+    @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
+    def test_a_confirmed_launch_sends_the_return(self):
+        self.assertIn("send -- \\r", self._script(True))
+
+    @unittest.skipUnless(Path(AE.EXPECT_BIN).exists(), "expect is required")
+    def test_an_unconfirmed_launch_types_and_waits(self):
+        body = self._script(False)
+        self.assertIn("send -- $body", body)
+        self.assertNotIn("send -- \\r", body)

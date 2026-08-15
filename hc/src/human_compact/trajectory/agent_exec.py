@@ -299,8 +299,12 @@ def single_line(prompt: str) -> str:
 
 
 def _write_expect_launch(directory: Path, goal_id: str, command: List[str],
-                         prompt: str) -> Optional[Path]:
+                         prompt: str, send: bool = False) -> Optional[Path]:
     """Start Claude, type the goal into its composer, hand over the terminal.
+
+    With ``send`` the Return is sent too: the user has already confirmed the
+    exact text in the Goals UI, so asking for a second keypress in a window
+    they did not choose to look at is a worse guarantee, not a better one.
 
     Claude Code has no flag for "open with this text pre-filled but unsent":
     a prompt argument is submitted immediately. So the session is started
@@ -336,14 +340,16 @@ def _write_expect_launch(directory: Path, goal_id: str, command: List[str],
         "expect -timeout 30 -re {.} {} timeout {}\n"
         f"after {LAUNCH_SETTLE_SECONDS}\n"
         "send -- $body\n"
-        "interact\n",
+        + ("send -- \\r\n" if send else "")
+        + "interact\n",
         encoding="utf-8")
     path.chmod(0o700)
     return path
 
 
 def write_launch_script(trajdir: Path, goal_id: str, cwd: str,
-                        command: List[str], prompt: str = "") -> Path:
+                        command: List[str], prompt: str = "",
+                        send: bool = False) -> Path:
     """Stage the launch as a private script rather than a shell string.
 
     The terminal lands in the goal's project with the command *typed and
@@ -362,7 +368,7 @@ def write_launch_script(trajdir: Path, goal_id: str, cwd: str,
     secure_dir(directory, Path(trajdir).parent)
     line = " ".join(shlex.quote(part) for part in command)
 
-    driver = _write_expect_launch(directory, goal_id, command, prompt)
+    driver = _write_expect_launch(directory, goal_id, command, prompt, send=send)
     if driver is not None:
         path = directory / f"{goal_id}.sh"
         path.write_text(

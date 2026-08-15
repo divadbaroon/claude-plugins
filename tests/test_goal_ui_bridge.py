@@ -518,15 +518,23 @@ class NoSimulatedAgentTests(BridgeTestCase):
         self.assertIn("window.__hcAgent.launch(id)", out)
         self.assertIn("this.runAgent();", out)      # generate todos defers to it
 
-    def test_launching_posts_the_op_and_reports_where_it_opened(self):
+    def test_launching_previews_first_then_launches_on_confirmation(self):
         posted = self.run_js(
             "window.__hcAgent.launch('g1');"
             "var wait = Promise.resolve();"
-            "for (var i = 0; i < 20; i += 1) wait = wait.then(function(){});"
+            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
+            "wait = wait.then(function () {"
+            "  var ok = made.filter(function (e) {"
+            "    return e.className === 'hc-ask-btn hc-ask-ok'; })[0];"
+            "  if (ok && ok.onclick) ok.onclick();"
+            "});"
+            "for (var j = 0; j < 30; j += 1) wait = wait.then(function(){});"
             "wait.then(function () { return calls.filter(function (c) {"
-            "  return c[0] === '/api/op'; }); });")
-        self.assertEqual(1, len(posted), "exactly one launch")
-        self.assertEqual({"op": "launch_agent_run", "goal_id": "g1"}, posted[0][1])
+            "  return c[0] === '/api/op'; }).map(function (c) { return c[1]; }); });")
+        self.assertEqual(["preview_agent_run", "launch_agent_run"],
+                         [p["op"] for p in posted])
+        self.assertEqual({"op": "launch_agent_run", "goal_id": "g1",
+                          "confirmed": True}, posted[1])
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -582,32 +590,28 @@ class LaunchedRunTests(BridgeTestCase):
             js + "var roots = window.__hcPromptUI.rootsFromState(%s);"
             % json.dumps(st) + "roots[0].agent.briefText;")
 
-    def test_a_goal_that_never_ran_still_says_what_running_would_do(self):
-        text = self.preview_for()
-        self.assertIn("Opens Claude", text)
-        self.assertIn("press Enter", text)
-
-    def test_it_says_nothing_is_sent_without_the_user(self):
-        text = self.preview_for()
-        self.assertIn("nothing is sent until you press Enter", text)
-
-    def test_it_reports_the_real_directory_and_briefing_shape(self):
-        detail = {"brief": {"cwd": "/repo", "dirs": ["/repo"], "refs": [],
-                            "told": ["5 of your own messages", "3 decisions"]}}
-        text = self.preview_for(detail=detail)
-        self.assertIn("Opens Claude in /repo", text)
-        self.assertIn("what you have said, decided and hit", text)
-
-    def test_an_uninferred_directory_says_so_rather_than_guessing(self):
-        self.assertIn("no project directory inferred yet",
-                      self.preview_for())
-
-    def test_the_pane_renders_it_as_an_italic_paragraph(self):
+    def test_the_pane_says_what_the_tab_is_for(self):
         out = self.patched_bundle("out;")
-        self.assertIn("{{ agentBriefText }}", out)
+        self.assertIn("Run Claude Code with the context needed for this goal "
+                      "and an understanding of how it fits into your broader "
+                      "goal tree. Track agent progress in the Review tab.", out)
         self.assertIn("font:italic 11.5px/1.65", out)
-        self.assertIn("agentBriefText: (sel && sel.agent && sel.agent.briefText)",
-                      out)
+
+    def test_cancelling_the_preview_launches_nothing(self):
+        posted = self.run_js(
+            "window.__hcAgent.launch('g1');"
+            "var wait = Promise.resolve();"
+            "for (var i = 0; i < 30; i += 1) wait = wait.then(function(){});"
+            "wait = wait.then(function () {"
+            "  var no = made.filter(function (e) {"
+            "    return e.className === 'hc-ask-btn'; })[0];"
+            "  if (no && no.onclick) no.onclick();"
+            "});"
+            "for (var j = 0; j < 30; j += 1) wait = wait.then(function(){});"
+            "wait.then(function () { return calls.filter(function (c) {"
+            "  return c[0] === '/api/op'; }).map(function (c) "
+            "{ return c[1].op; }); });")
+        self.assertEqual(["preview_agent_run"], posted)
 
     def test_running_it_switches_to_the_review_pane(self):
         out = self.patched_bundle("out;")

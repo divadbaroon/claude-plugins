@@ -722,9 +722,68 @@
       ".hc-ask-row{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}",
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
-      ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}"
+      ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
+      ".hc-run-box{width:min(680px,100%)}",
+      ".hc-run-fact{font:11px/1.7 'Source Code Pro',monospace;color:var(--mut,#575757);word-break:break-word}",
+      ".hc-run-label{margin-top:10px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
+      ".hc-run-prompt{margin:6px 0 0;max-height:42vh;overflow:auto;white-space:pre-wrap;word-break:break-word;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:9px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333)}"
     ].join("");
     document.head.appendChild(style);
+  }
+
+  function confirmRun(preview) {
+    return new Promise(function (resolve) {
+      ensureDialogStyles();
+      var overlay = document.createElement("div");
+      overlay.className = "hc-ask";
+      var box = document.createElement("div");
+      box.className = "hc-ask-box hc-run-box";
+      var title = document.createElement("div");
+      title.className = "hc-ask-title";
+      title.textContent = "Run Claude Code on this goal";
+      box.appendChild(title);
+
+      [["runs", str(preview.command) + "  in  " + (str(preview.cwd) || "?")],
+       ["can read", array(preview.add_dirs).join(", ") || "the project only"]
+      ].forEach(function (pair) {
+        var line = document.createElement("div");
+        line.className = "hc-run-fact";
+        line.textContent = pair[0] + ": " + pair[1];
+        box.appendChild(line);
+      });
+
+      var label = document.createElement("div");
+      label.className = "hc-run-label";
+      label.textContent = "it will send this:";
+      box.appendChild(label);
+      var body = document.createElement("pre");
+      body.className = "hc-run-prompt";
+      body.textContent = str(preview.prompt);
+      box.appendChild(body);
+
+      var row = document.createElement("div");
+      row.className = "hc-ask-row";
+      var cancel = document.createElement("button");
+      cancel.className = "hc-ask-btn";
+      cancel.textContent = "Cancel";
+      var go = document.createElement("button");
+      go.className = "hc-ask-btn hc-ask-ok";
+      go.textContent = "Send it";
+
+      function close(value) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(value);
+      }
+      cancel.onclick = function () { close(false); };
+      go.onclick = function () { close(true); };
+      overlay.onclick = function (e) { if (e.target === overlay) close(false); };
+      row.appendChild(cancel);
+      row.appendChild(go);
+      box.appendChild(row);
+      overlay.appendChild(box);
+      (document.body || document.documentElement).appendChild(overlay);
+      go.focus();
+    });
   }
 
   function ask(kind) {
@@ -850,7 +909,7 @@
       // what, and by which command. All of it read from the same
       // briefing the prompt is built from.
       ["<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>",
-       "<div style=\"margin-top:12px;font:italic 11.5px/1.65 'Source Code Pro',monospace;color:var(--mut);max-width:62ch;text-wrap:pretty\">{{ agentBriefText }}</div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
+       "<div style=\"margin-top:12px;font:italic 11.5px/1.65 'Source Code Pro',monospace;color:var(--mut);max-width:62ch;text-wrap:pretty\">Run Claude Code with the context needed for this goal and an understanding of how it fits into your broader goal tree. Track agent progress in the Review tab.</div><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT TODOS</div>"],
       ["agentLabel: (() => {",
        "agentBriefText: (sel && sel.agent && sel.agent.briefText) || '',\n      agentLabel: (() => {"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
@@ -1031,21 +1090,22 @@
 
   window.__hcAgent = {
     launch: function (goalId) {
-      return post({ op: "launch_agent_run", goal_id: goalId })
-        .then(function (body) {
-          if (!body || body.ok !== true) {
-            notify("Could not start a session: " +
-              ((body && body.error) || "the launcher refused") +
-              (body && body.command ? "\n\nRun it yourself:\n" + body.command : ""));
-            return body;
-          }
-          notify("Opened " + body.terminal + " in " + body.cwd +
-            "\n\nThe goal is typed into the composer there — press Enter to " +
-            "start. Its tasks will appear here as it creates them.");
-          return body;
+      // Show exactly what is about to be sent and run, then act on the
+      // answer. The confirmation is here, in the window the user is already
+      // looking at, rather than a keypress in a terminal they did not choose.
+      return post({ op: "preview_agent_run", goal_id: goalId })
+        .then(function (preview) {
+          if (!preview || preview.ok !== true) throw new Error("no preview");
+          return confirmRun(preview);
+        })
+        .then(function (go) {
+          if (!go) return null;
+          return post({ op: "launch_agent_run", goal_id: goalId,
+                        confirmed: true });
         });
     }
   };
+
 
   function notify(message) {
     ensureDialogStyles();

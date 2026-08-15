@@ -521,7 +521,8 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error": "enable capture first"}
             _spawn_analysis("ollama" if choice == "local" else "claude", trajdir)
             return {"ok": True, **setup_state(trajdir)}
-        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run"):
+        if kind in ("start_agent_run", "cancel_agent_run", "launch_agent_run",
+                    "preview_agent_run"):
             if chat_scoped:
                 return {"ok": False, "error": "agent runs attach to Vault goals"}
             if kind == "cancel_agent_run":
@@ -529,6 +530,17 @@ def _apply(op, trajdir=None, chat_scoped=None):
                 return {"ok": True}
             if not g:
                 return {"ok": False, "error": "goal not found"}
+            if kind == "preview_agent_run":
+                # Exactly what a confirmed launch would do, computed the same
+                # way the launch computes it — never a description of it.
+                cwd = AE.goal_cwd(trajdir, goals, g["id"])
+                dirs, refs = AE.goal_sources(goals, g["id"])
+                return {"ok": True, "goal_id": g["id"],
+                        "title": g.get("title", ""),
+                        "cwd": cwd or "",
+                        "command": "hc work " + g["id"],
+                        "add_dirs": dirs, "references": refs,
+                        "prompt": AE.launch_prompt(goals, g["id"])}
             if kind == "start_agent_run":
                 return {"ok": True, "command": f"hc work {g['id']}",
                         "claim": AE.arm(trajdir, g["id"], g.get("title", ""))}
@@ -538,13 +550,15 @@ def _apply(op, trajdir=None, chat_scoped=None):
             if not cwd:
                 return {"ok": False, "error":
                         "no project directory is recorded for this goal yet"}
-            # No --start: the session opens with an empty composer and the
-            # launcher types the goal into it, leaving the Enter to the user.
             command = ["hc", "work", g["id"]]
             prompt = AE.launch_prompt(goals, g["id"])
+            # The user confirmed this exact text in the UI, so the launcher
+            # sends it. Without that confirmation it is typed and left for
+            # them, which is the only other honest option.
+            confirmed = op.get("confirmed") is True
             try:
                 script = AE.write_launch_script(
-                    trajdir, g["id"], cwd, command, prompt)
+                    trajdir, g["id"], cwd, command, prompt, send=confirmed)
                 app = AE.open_terminal(script)
             except (OSError, RuntimeError, ValueError) as exc:
                 return {"ok": False, "error": str(exc)[:200],
@@ -552,6 +566,7 @@ def _apply(op, trajdir=None, chat_scoped=None):
 
             AE.clear_claim(trajdir)
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
+                    "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
         if kind == "rename_goal" and g and op.get("title", "").strip():
             g["title"] = op["title"].strip()[:120]
