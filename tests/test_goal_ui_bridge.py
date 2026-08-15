@@ -892,6 +892,17 @@ class LiveFeedTests(BridgeTestCase):
                       "context Vault has assembled. Progress appears in "
                       "REVIEW.", self.patched_bundle("out;"))
 
+    def test_the_draft_does_not_restate_the_goal_title(self):
+        out = self.patched_bundle("out;")
+        self.assertNotIn("I am working on the goal:", out)
+        self.assertNotIn("Within the main goal", out)
+
+    def test_the_notes_box_invites_the_users_own_thoughts(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("Add any other thoughts you would like the agent to "
+                      "know...", out)
+        self.assertNotIn("Plan in markdown", out)
+
     def test_the_prompt_heading_is_the_disclosure_itself(self):
         # The disclosure replaced the section heading; keeping both printed
         # RECOMMENDED PROMPT twice, once inside the thing it labels.

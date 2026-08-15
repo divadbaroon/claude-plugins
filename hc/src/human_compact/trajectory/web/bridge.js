@@ -1036,6 +1036,12 @@
       // the notes the user adds to it, then the button that runs it.
       ["showNotes: !!sel && paneTab === 'prompt'",
        "showNotes: !!sel && paneTab === 'agent'"],
+      // The goal is already named at the top of the inspector; the draft
+      // restating it just pushed the actual content down.
+      ["blocks.push(isSub ? 'Within the main goal \"' + (trail[0].title || 'Untitled') + '\", I am working on: ' + (sel.title || 'Untitled') + '.' : 'I am working on the goal: ' + (sel.title || 'Untitled') + '.');\n",
+       "void 0;\n"],
+      ["placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"",
+       "placeholder=\"Add any other thoughts you would like the agent to know...\""],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
