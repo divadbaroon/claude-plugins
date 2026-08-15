@@ -739,16 +739,51 @@ class LiveFeedTests(BridgeTestCase):
                     self.drawn(dict(self.RUN, session_id="abc-123")))
         self.assertEqual("open the conversation", rows["hc-live-open"])
 
-    def test_the_button_sits_with_the_heading_not_at_the_bottom(self):
-        where = self.run_js(
+    def test_the_button_takes_the_corner_the_status_badge_had(self):
+        run = json.dumps([dict(self.RUN, session_id="abc-123")])
+        where = json.loads(self.run_js(
+            "var slot = document.createElement('div');"
+            "slot.className = 'hc-live-open-slot';"
+            "document.body.appendChild(slot);"
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.renderLive('g1', " + run + ");"
+            "JSON.stringify([slot.children.map(function (c) "
+            "{ return c.className; }), pane.children[0].children.map("
+            "function (c) { return c.className; })]);"))
+        self.assertEqual(["hc-live-open"], where[0])
+        self.assertEqual(["hc-live-head"], where[1])
+
+    def test_redrawing_does_not_stack_buttons_in_the_corner(self):
+        # The corner is outside .hc-live, so clearing the anchor never clears
+        # it: every two-second poll would leave another button behind.
+        run = dict(self.RUN, session_id="abc-123")
+        count = self.run_js(
+            "var slot = document.createElement('div');"
+            "slot.className = 'hc-live-open-slot';"
+            "document.body.appendChild(slot);"
+            "var pane = document.createElement('div');"
+            "pane.className = 'hc-live';"
+            "document.body.appendChild(pane);"
+            "window.__hcPromptUI.renderLive('g1', %s);"
+            % json.dumps([run]) +
+            "window.__hcPromptUI.renderLive('g1', %s);"
+            % json.dumps([dict(run, elapsed="2m")]) +
+            "slot.children.length;")
+        self.assertEqual(1, count)
+
+    def test_the_button_still_lands_somewhere_without_the_corner(self):
+        # A goal with no artifact yet has no section header to hang it on.
+        where = json.loads(self.run_js(
             "var pane = document.createElement('div');"
             "pane.className = 'hc-live';"
             "document.body.appendChild(pane);"
             "window.__hcPromptUI.renderLive('g1', %s);"
             % json.dumps([dict(self.RUN, session_id="abc-123")]) +
             "JSON.stringify(pane.children[0].children.map(function (c) "
-            "{ return c.className; }));")
-        self.assertEqual(["hc-live-head", "hc-live-open"], json.loads(where))
+            "{ return c.className; }));"))
+        self.assertEqual(["hc-live-head", "hc-live-open"], where)
 
     def test_a_waiting_run_says_so_on_the_line_itself(self):
         waiting = dict(self.RUN, state="waiting", did=[
@@ -971,6 +1006,28 @@ class LiveFeedTests(BridgeTestCase):
         pane = out.index('value="{{ showArt }}"')
         self.assertGreater(out.index('<div class="hc-live"></div>'), pane)
         self.assertEqual(1, out.count('class="hc-live"'))
+
+    def test_the_message_is_the_accented_box_it_used_to_have(self):
+        # It is Claude's own words in a pane otherwise made of metadata, and
+        # when the run is waiting it is the thing being asked.
+        out = self.patched_bundle("out;")
+        at = out.index("{{ artSummary }}")
+        box = out[out.rindex("<div", 0, at):at]
+        self.assertIn("border:1px solid var(--acc)", box)
+        self.assertIn("background:var(--accbg)", box)
+        self.assertIn("color:var(--acc)", box)
+        # A long write-up must not push the decision off the card.
+        self.assertIn("max-height:230px;overflow-y:auto", box)
+        self.assertIn("white-space:pre-wrap", box)
+
+    def test_the_corner_holds_the_way_in_not_a_restated_status(self):
+        # PENDING REVIEW said what "Completed \u00b7 1h" already says.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("{{ artStatusLab }}", out)
+        header = out.index(">ARTIFACT</span>")
+        slot = out.index('<div class="hc-live-open-slot"></div>')
+        self.assertLess(header, slot)
+        self.assertLess(slot, out.index("{{ artSummary }}"))
 
     def test_created_sits_opposite_the_decision_on_the_cards_last_line(self):
         out = self.patched_bundle("out;")

@@ -732,7 +732,12 @@
             : ((result && result.error) || "could not open it");
         });
       };
-      head.appendChild(open);
+      // The section corner, where the status badge used to sit. It is outside
+      // .hc-live, so clearing the anchor does not clear it — empty it here or
+      // every redraw stacks another button in it.
+      var slot = document.querySelector(".hc-live-open-slot");
+      while (slot && slot.firstChild) slot.removeChild(slot.firstChild);
+      (slot || head).appendChild(open);
     }
     return true;
   }
@@ -1078,9 +1083,13 @@
       // already shows where the goal sits.
       ["<sc-if value=\"{{ hasCrumb }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:4px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ crumb }}</div></sc-if>",
        "<!--crumb removed-->"],
+      // The badge restated the card. The reader standing here wants to be
+      // in that conversation, so the corner holds the way in instead.
+      ["<span style=\"padding:2px 8px;border:1px solid {{ artBd }};border-radius:2px;background:{{ artBg }};font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:{{ artC }}\">{{ artStatusLab }}</span>",
+       "<div class=\"hc-live-open-slot\"></div>"],
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
-       "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>"],
+       "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--acc);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div>"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
