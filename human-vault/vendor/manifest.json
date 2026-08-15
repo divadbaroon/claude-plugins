@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "package": "human-vault",
-  "version": "0.17.52",
-  "wheel": "human_compact-0.17.52-py3-none-any.whl",
-  "sha256": "f64a6b14d1e5663760a55cee8fd28f32536c2c725d2a014e81b38c2f80b7b0af",
-  "sourceRevision": "d35fd045ccb0e161c407a099105cb668929d9883"
+  "version": "0.17.53",
+  "wheel": "human_compact-0.17.53-py3-none-any.whl",
+  "sha256": "448e571a6fd5b491e8dbbaa9f68c6213d7ddb015c64ff66c54909051f0b44152",
+  "sourceRevision": "be453014b9aeb5054f58d95a6337df3eeb5b91c7"
 }
