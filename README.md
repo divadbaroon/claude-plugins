@@ -1,6 +1,7 @@
 
+
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/b77059b3-b9eb-4339-aece-1e1f9d53f43e" width="100%" alt="Engelbart Demo">
+  <img src="https://github.com/user-attachments/assets/46b8eb80-ca27-43e9-a180-6515fc4ec2c4" width="100%" alt="Engelbart Demo">
 </p>
 
 <h1 align="center">Engelbart</h1>
