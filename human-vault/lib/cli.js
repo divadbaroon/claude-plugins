@@ -17,7 +17,7 @@ function usage() {
   return `Usage: npx human-vault [options]
 
 Options:
-  --non-interactive     require every applicable choice as a flag
+  --non-interactive     accepted for compatibility; the installer never prompts
   --dry-run             verify the bundled release and show the plan only
   -h, --help            show this help
 
@@ -147,7 +147,13 @@ async function run(deps = {}) {
     } else if (reach) {
       output.write(`  hc           needs one more step (below)\n`);
     }
-    output.write('\nInstalled. Nothing is captured or analyzed yet.\n');
+    // Two different truths. Without the flag the install wires chat hooks only,
+    // and they stay inert until /goals-ui runs in a chat. With it, the global
+    // Vault hooks are on disk, so promising silence would be a lie.
+    output.write(experimentalEnabled()
+      ? '\nInstalled. Global Vault hooks are wired (HC_EXPERIMENTAL=1); '
+        + 'capture follows your global Vault setting.\n'
+      : '\nInstalled. Nothing is captured or analyzed yet.\n');
     if (reach && !reach.onPath) {
       output.write(reach.added
         ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`

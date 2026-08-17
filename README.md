@@ -4,9 +4,10 @@ This repository is a Claude Code and Codex plugin marketplace. Its published pac
 [Compact Focus](./compact-focus): an inline, human-reviewed replacement for
 blind context compaction.
 
-It also contains [`hc`](./hc), the local goal-state service for Claude Code.
-The `human-compact` npm package installs its Python runtime and Claude Code
-integration together, so setup does not require Homebrew, pipx, or jq.
+It also contains [`hc`](./hc), the local goal-state runtime for Claude Code.
+The [`human-vault`](./human-vault) npm package installs that runtime and the
+Claude Code integration together, so setup does not require Homebrew, pipx, or
+jq.
 
 ## Install chat-scoped goals
 
@@ -16,20 +17,41 @@ Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
 npx human-vault
 ```
 
-The installer adds the Claude Code integration automatically, then asks two
-numeric questions:
+The installer takes no options and asks no questions. It installs the `hc`
+runtime, the Claude Code hooks, and the `/goals-ui` command. It captures
+nothing and analyzes nothing on its own.
 
-1. Enable the global Vault? Choose `2` to keep only chat-scoped goals.
-2. If Vault is enabled, infer global goals now? Choose `1` to analyze the
-   imported history and rebuild the global goal tree.
+Start a new Claude Code session (or run `/reload-plugins`), then type:
 
-Start a new Claude Code session (or run `/reload-plugins`) and type `/goals-ui`.
-That command opens the goal workspace for the current chat. The global Vault
-and its cross-chat inference remain separate, opt-in layers.
+```text
+/goals-ui
+```
+
+That opens the goal workspace for the current chat in your browser. From then
+on, that chat's goals are inferred with your own authenticated Claude CLI and
+injected back into the chat as context: the whole goals document the first
+time, then only what changed since the last message. Subagents and tool
+batches receive it too. `/goals-ui disable` turns the injection off for that
+chat; running `/goals-ui` again turns it back on and re-sends the whole
+document.
+
+Chats where `/goals-ui` has never run are left alone.
 
 See the [hc documentation](./hc/README.md) for persistence, event ingestion,
 the inference data boundary, and the separation between chat-scoped and global
 state.
+
+## Experimental (HC_EXPERIMENTAL=1)
+
+The global layer — cross-chat conversation capture, its history analysis, the
+cross-chat goal tree at `hc ui`, goal-bound agent runs, and the older `hc`
+subcommands — is still in the tree but disconnected from this release.
+`HC_EXPERIMENTAL=1` re-enables those commands and the HTTP routes behind them;
+installing with `HC_EXPERIMENTAL=1 npx human-vault` additionally wires the
+global capture hooks. A vault that was already enabled stops capturing after a
+plain reinstall until it is reinstalled with the flag.
+[`STASHED.md`](./STASHED.md) is the full inventory of what was disconnected,
+where its code lives, and how to switch each piece back on.
 
 ## Install once, use in every local chat
 
@@ -80,14 +102,14 @@ development workflow.
 
 - `compact-focus/` is the supported marketplace plugin.
 - `hc/` is the Python goal-state backend bundled by the npm installer.
-- `human-compact/` is the one-command npm installer published as
-  `human-compact`.
+- `human-vault/` is the one-command npm installer published as
+  `human-vault`.
 
 ## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
-(cd human-compact && npm test)
+(cd human-vault && npm test)
 claude plugin validate . --strict
 uv run --with pyyaml python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py ./compact-focus
 claude --plugin-dir ./compact-focus

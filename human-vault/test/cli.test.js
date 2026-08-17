@@ -29,6 +29,20 @@ function withExperimental(value, body) {
   }
 }
 
+// `run` reads the flag after its awaits, so an async body needs the variable
+// held for the whole call, not just until the promise is returned.
+async function withExperimentalAsync(value, body) {
+  const previous = process.env.HC_EXPERIMENTAL;
+  if (value === undefined) delete process.env.HC_EXPERIMENTAL;
+  else process.env.HC_EXPERIMENTAL = value;
+  try {
+    return await body();
+  } finally {
+    if (previous === undefined) delete process.env.HC_EXPERIMENTAL;
+    else process.env.HC_EXPERIMENTAL = previous;
+  }
+}
+
 function capture() {
   let value = '';
   return {
@@ -174,6 +188,26 @@ async function installOutput({ onPath, added, present, linked }) {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
+
+test('help does not document a prompt the installer never shows', () => {
+  // resolveChoices never reads stdin, so "require every applicable choice as a
+  // flag" describes an interaction that no longer exists.
+  const text = usage();
+  assert.doesNotMatch(text, /require every applicable choice as a flag/);
+  assert.match(text,
+    /^ {2}--non-interactive {5}accepted for compatibility; the installer never prompts$/m);
+});
+
+test('the closing line does not claim silence once the Vault hooks are wired', async () => {
+  const quiet = await withExperimentalAsync(undefined,
+    () => installOutput({ onPath: true, added: false }));
+  assert.match(quiet, /Installed\. Nothing is captured or analyzed yet\./);
+  const wired = await withExperimentalAsync('1',
+    () => installOutput({ onPath: true, added: false }));
+  assert.doesNotMatch(wired, /Nothing is captured or analyzed yet/);
+  assert.match(wired,
+    /Installed\. Global Vault hooks are wired \(HC_EXPERIMENTAL=1\); capture follows your global Vault setting\./);
+});
 
 test('a reachable launcher gets no PATH advice', async () => {
   const text = await installOutput({ onPath: true, added: false });
