@@ -2495,8 +2495,9 @@ class DocumentPaneTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
         self.assertIn("const secOf = (t) =>", draft)
-        # between "# <title>" and the next H1, and ## is not an H1
-        self.assertIn("lines[i].indexOf('# ') === 0", draft)
+        # between "# <title>" and the next H1; ## is not an H1, and neither
+        # is a "# " line the user wrote inside a fenced code block
+        self.assertIn("fence === null && line.indexOf('# ') === 0", draft)
         for title in ("In my words", "Decisions", "Built", "Blockers",
                       "Open questions"):
             self.assertIn("section('%s');" % title, draft)
@@ -2515,6 +2516,61 @@ class DocumentPaneTests(BridgeTestCase):
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
         self.assertIn("secOf('Objective') || String(ctxGet('objective') "
                       "|| '').trim()", draft)
+
+    DOC_WITH_FENCE = ("# Objective\nShip it.\n\n# Built\n```py\n"
+                      "# Decisions\nx = 1\n```\n\n# Blockers\n\n")
+
+    def sec_of(self, document, titles):
+        """Run the patched composeDraft's own secOf over a document."""
+        return json.loads(self.patched_bundle(
+            "var at = out.indexOf('const secOf = (t) =>');"
+            "var fnsrc = out.slice(at, out.indexOf('const section = (t) =>', at));"
+            "var secOf = eval('(function (sel) { ' + fnsrc + ' return secOf; })')"
+            "  (%s);"
+            "JSON.stringify(%s.map(function (t) { return secOf(t); }));"
+            % (json.dumps({"notes": document}), json.dumps(titles))))
+
+    def test_a_heading_inside_a_fenced_block_is_body_not_a_section(self):
+        # The server's split_doc is fence-aware. A client that is not tears
+        # the user's code block in half in the prompt it hands the agent --
+        # Built ends at the fence line and an invented Decisions section
+        # carries the rest, unterminated.
+        import sys
+        sys.path.insert(0, str(ROOT / "hc" / "src"))
+        from human_compact.trajectory import goals as GM
+        got = self.sec_of(self.DOC_WITH_FENCE,
+                          ["Objective", "Built", "Decisions", "Blockers"])
+        self.assertIn("x = 1", got[1])
+        self.assertEqual("```py\n# Decisions\nx = 1\n```", got[1])
+        self.assertEqual("", got[2])       # nothing is extracted from inside
+        self.assertEqual(["Ship it.", "", ""], [got[0], got[2], got[3]])
+        # and it agrees with the parser that owns the grammar
+        self.assertEqual(GM.section_body(self.DOC_WITH_FENCE, "Built"), got[1])
+        self.assertIsNone(GM.section_body(self.DOC_WITH_FENCE, "Decisions"))
+
+    def test_a_tilde_fence_hides_a_heading_the_same_way(self):
+        document = "# Built\n~~~\n# Decisions\ny = 2\n~~~\n\n# Blockers\n"
+        got = self.sec_of(document, ["Built", "Decisions"])
+        self.assertEqual("~~~\n# Decisions\ny = 2\n~~~", got[0])
+        self.assertEqual("", got[1])
+
+    def test_a_fence_only_closes_on_its_own_marker(self):
+        # A ``` inside a ~~~~ block does not close it, and a shorter run of
+        # the same character does not either.
+        document = ("# Built\n~~~~\n```\n# Decisions\nz = 3\n~~~\n~~~~\n"
+                    "\n# Blockers\nreal\n")
+        got = self.sec_of(document, ["Built", "Decisions", "Blockers"])
+        self.assertIn("# Decisions", got[0])
+        self.assertEqual("", got[1])
+        self.assertEqual("real", got[2])
+
+    def test_an_info_string_with_a_backtick_opens_nothing(self):
+        # CommonMark: a backtick fence may not carry a backtick in its info
+        # string, so this line is text and the heading after it is real.
+        document = "# Built\n```a`b\n\n# Decisions\nkept\n"
+        got = self.sec_of(document, ["Built", "Decisions"])
+        self.assertEqual("```a`b", got[0])
+        self.assertEqual("kept", got[1])
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -2572,6 +2628,9 @@ class ChatPromptTabTests(BridgeTestCase):
         handler = out[at:out.index("copyPromptLabel:", at)]
         self.assertIn("navigator.clipboard.writeText(t).then(done,", handler)
         self.assertIn("document.execCommand('copy')", handler)
+        # execCommand answers whether it copied; "copied ✓" waits on that
+        self.assertIn("if (fb()) done();", handler)
+        self.assertNotIn("{ fb(); done(); }", handler)
         # the draft as it stands, not the draft plus a metadata footer, and
         # nothing is recorded as a prompt the user never sent
         self.assertNotIn("_copyMeta", handler)
@@ -2579,6 +2638,31 @@ class ChatPromptTabTests(BridgeTestCase):
         self.assertIn("copyPromptLabel: copied ? 'copied ✓' : "
                       "'Copy prompt',", out)
 
+
+    def test_the_fallback_only_claims_a_copy_the_browser_made(self):
+        # execCommand returns false when the browser refuses. Saying
+        # "copied" anyway is the copy rule's exact failure mode: the label
+        # reports an act nothing performed.
+        got = json.loads(self.patched_bundle(
+            "var at = out.indexOf('copyPrompt: () =>');"
+            "var fnsrc = out.slice(at + 'copyPrompt: '.length,"
+            "  out.indexOf('copyPromptLabel:', at)).replace(/,\\s*$/, '');"
+            "var mk = document.createElement;"
+            "document.createElement = function (t) { var el = mk(t);"
+            "  el.select = function () {};"
+            "  el.remove = function () { if (el.parentNode)"
+            "    el.parentNode.removeChild(el); }; return el; };"
+            "navigator.clipboard = undefined;"
+            "var said = [];"
+            "var fn = eval('(function () { return (' + fnsrc + '); })')"
+            "  .call({ _draftEl: { value: 'the draft' },"
+            "          setState: function (s) { said.push(s); } });"
+            "document.execCommand = function () { return false; };"
+            "fn(); var refused = said.slice(); said.length = 0;"
+            "document.execCommand = function () { return true; };"
+            "fn();"
+            "JSON.stringify([refused, said]);", scope="chat"))
+        self.assertEqual([[], [{"copied": True}, {"copied": False}]], got)
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class ChatPromptLinkTests(BridgeTestCase):
