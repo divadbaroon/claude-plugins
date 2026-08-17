@@ -249,6 +249,8 @@
       })
       .then(function (st) {
         acceptState(st);
+        injectionState = (st && st.injection && typeof st.injection === "object")
+          ? st.injection : null;
         showNotices(st && st.notices);
         reconcileState(st);
       })
@@ -490,7 +492,7 @@
     var paneTab = tabs[saved.paneTab] ? saved.paneTab : "context";
     // The panes those two tabs open are driven by ops this scope refuses,
     // so a saved value pointing at one would restore an empty inspector.
-    if (chat && (paneTab === "agent" || paneTab === "artifact")) {
+    if (chat && paneTab !== "context") {
       paneTab = "context";
     }
     return {
@@ -502,8 +504,10 @@
       updatedAt: st.generated_at ? Date.parse(st.generated_at) : Date.now(),
       labels: array(saved.labels),
       paneTab: paneTab,
+      // A chat workspace opens dark; the toggle in its header still
+      // decides, and what it decides is what comes back on the next load.
       themeMode: saved.themeMode === "light" || saved.themeMode === "dark" ?
-        saved.themeMode : null,
+        saved.themeMode : (chat ? "dark" : null),
       view: saved.view === "tree" || saved.view === "inspect" ? saved.view : "split",
       // A chat workspace has one conversation -- its own -- and no page to
       // list them on, so there is nowhere for 'convos' to land.
@@ -1166,7 +1170,10 @@
 
   // --- controls a chat workspace has no backend for ------------------------
   // The artifact was drawn for the global vault. Three of its controls lead
-  // somewhere this scope cannot go. The Conversations page lists a vault's
+  // somewhere this scope cannot go, and a fourth -- the PROMPT tab -- leads
+  // somewhere this workspace now keeps permanently on screen: the assembled
+  // prompt has its own rail, so a tab that swaps the document out for it is
+  // a second route to something already visible. The Conversations page lists a vault's
   // whole history, which arrives on /api/setup and /api/conversation -- both
   // refuse here, and the artifact answers a refusal by falling back to its
   // own sample list, so the page would read as a history nobody has. The
@@ -1239,7 +1246,7 @@
     // something that keeps running. applyPageTitle is idempotent and lives
     // with the banner that prefixes it.
     return (hideLabelsIn(headerNav(), ["Conversations"])
-            + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW"])
+            + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
             + (applyPageTitle() ? 1 : 0)) > 0;
   }
 
@@ -1634,6 +1641,272 @@
   }
 
 
+
+  // --- the launch skin: one chat workspace, three columns ------------------
+  // Everything below is gated on chat scope and on a single root attribute,
+  // so a global vault renders exactly as it did. The artifact keeps owning
+  // state and rendering; this only names its containers (through the same
+  // template patch the rest of the bridge uses) and dresses them.
+
+  var LAUNCH_CSS = [
+      // A darker, flatter palette than the artifact's own dark theme. Only
+      // the greys move: the accent stays the artifact's, so every control
+      // that was accented still is, in both themes.
+      "[data-hc-launch] .hc[data-dark=\"true\"]{--bg:#0d1117;--panel:#0d1117;--panel2:#161b22;--ink:#e6edf3;--mut:#8b949e;--fnt:#6e7681;--bd:#21262d;--bd2:#30363d;--line:#21262d;--hov:#161b22;--dtxt:#c9d1d9}",
+      "[data-hc-launch] .hc{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922}",
+      "[data-hc-launch] .hc:not([data-dark=\"true\"]){--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-ok:#1a7f37}",
+      // The page is the workspace: it fills the window and does not scroll
+      // as a whole -- each column scrolls in its own right, the way the
+      // screenshots read.
+      "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0 14px 12px!important}",
+      // Header bar: brand, chips, session.
+      "[data-hc-launch] .hc>div:first-child{padding:9px 16px!important;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-brand{font:700 13px 'Source Code Pro',ui-monospace,monospace!important;letter-spacing:.2px}",
+      "[data-hc-launch] .hc-brand::before{content:'\\25ae';color:var(--acc);margin-right:7px}",
+      "[data-hc-launch] .hc-session{font:11px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-session:not(:empty)::before{content:'\\25cf';color:var(--hc-ok);margin-right:6px;font-size:9px;vertical-align:1px}",
+      "[data-hc-launch] .hc-updated{color:var(--fnt)}",
+      // The title row keeps the chips and loses the page heading: a chat
+      // workspace has one page, and it is already named in the header.
+      "[data-hc-launch] .hc-titlerow{margin-top:0;padding:9px 4px 8px!important;align-items:center!important}",
+      "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
+      "[data-hc-launch] .hc-chiprow{gap:6px!important}",
+      "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
+      "[data-hc-launch] .hc-chip:hover{border-color:var(--bd2);text-decoration:none!important}",
+      // The selected chip is the one the artifact draws bold; reading its
+      // own inline style is what keeps this in step with its state.
+      "[data-hc-launch] .hc-chip[style*=\"700 11px\"]{background:var(--panel2);border-color:var(--bd2);color:var(--ink)!important}",
+      // Three columns. The artifact's own flex row becomes the shell; the
+      // prompt rail is emitted before the inspector and ordered after it,
+      // so nothing has to be re-parented after a render.
+      "[data-hc-launch] .hc-shell{gap:12px!important;align-items:stretch!important;margin-top:0!important}",
+      "[data-hc-launch] .hc-rail-left{flex:0 0 300px!important;height:calc(100vh - 116px)!important;padding:0 0 6px!important;border-radius:6px}",
+      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - 116px)!important;top:0!important;border-radius:6px;padding:14px 20px 18px!important}",
+      "[data-hc-launch] .hc-rail-right{order:3;flex:0 0 330px;display:flex;flex-direction:column;min-width:0;height:calc(100vh - 116px);box-sizing:border-box;border:1px solid var(--bd);border-radius:6px;background:transparent;padding:0 0 12px}",
+      // Rail headings, shared by both rails.
+      "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
+      "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-left>div:nth-child(2){padding:6px 6px 0}",
+      "[data-hc-launch] .hc-rail-left>div:last-child{padding:8px 12px 6px!important;border-top:1px solid var(--bd);font-size:9.5px!important;line-height:1.6}",
+      // A tree row is one line high, so its title has to be one line: a
+      // wrapped one overlapped the row under it at this width.
+      "[data-hc-launch] .hc-row{white-space:nowrap}",
+      "[data-hc-launch] .hc-rowtitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}",
+      // The prompt itself: a code block, not a box to type in.
+      "[data-hc-launch] .hc-rail-code{flex:0 1 auto;min-height:0;overflow:auto;margin:11px 12px 0;padding:10px 12px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-actions{flex:none;padding:10px 12px 0}",
+      "[data-hc-launch] .hc-rail-copy{display:block;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#08130c;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
+      // What the chat is actually being told, from /api/state.injection.
+      "[data-hc-launch] .hc-inject{flex:none;margin:auto 12px 0;padding:9px 11px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:10.5px/1.75 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-inject-head{color:var(--fnt);letter-spacing:.6px}",
+      "[data-hc-launch] .hc-inject-on{color:var(--hc-ok)}",
+      "[data-hc-launch] .hc-inject-off{color:var(--fnt)}",
+      // Sources, as a chip rail above the document.
+      "[data-hc-launch] .hc-sources{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:12px}",
+      "[data-hc-launch] .hc-sources-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut);margin-right:2px}",
+      "[data-hc-launch] .hc-src{display:inline-flex;align-items:center;gap:6px;max-width:280px;padding:3px 8px;border:1px solid var(--bd);border-radius:99px;background:var(--panel2);font:10.5px 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-src-tag{font:600 8px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt)}",
+      "[data-hc-launch] .hc-src-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-src-rm{color:var(--fnt);cursor:pointer;font-size:11px}",
+      "[data-hc-launch] .hc-src-rm:hover{color:var(--del)}",
+      "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-src-add:hover{color:var(--acc);border-color:var(--acc)}",
+      "[data-hc-launch] .hc-tabs{margin-top:14px!important}",
+      // The session banner. Same nodes, same timers, same close button as
+      // the toast it replaces -- a bar under the header rather than a card
+      // in the corner, because it reports on the whole workspace.
+      "[data-hc-launch] .hc-notice-stack{position:fixed;top:41px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
+      "[data-hc-launch] .hc-notice{width:auto;max-width:none;border:none;border-bottom:1px solid var(--hc-okbd);border-left:none;border-radius:0;background:var(--hc-okbg);box-shadow:none;display:flex;align-items:baseline;gap:10px;padding:7px 34px 7px 16px}",
+      "[data-hc-launch] .hc-notice-title{color:var(--hc-ok);flex:none}",
+      "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
+      "[data-hc-launch] .hc-notice-detail{margin-top:0;color:var(--mut);flex:1;min-width:0}",
+      "[data-hc-launch] .hc-notice-close{top:6px;right:12px}",
+  ].join("");
+
+  var launchApplied = false;
+
+  function applyLaunchSkin() {
+    // Chat scope only, and only once the artifact has unpacked its template
+    // over documentElement -- which is why this is re-asserted by the same
+    // standing sweep that keeps the tab named.
+    if (serverState.scope !== "chat") return false;
+    var root = document.documentElement;
+    var changed = false;
+    if (root && root.setAttribute
+        && root.getAttribute("data-hc-launch") !== "chat") {
+      root.setAttribute("data-hc-launch", "chat");
+      changed = true;
+    }
+    if (!document.getElementById("hc-launch-style")) {
+      var style = document.createElement("style");
+      style.id = "hc-launch-style";
+      style.textContent = LAUNCH_CSS;
+      (document.head || document.documentElement).appendChild(style);
+      changed = true;
+      launchApplied = true;
+    }
+    return changed;
+  }
+
+  function renderSessionChip() {
+    var slot = document.querySelector(".hc-session");
+    if (!slot) return false;
+    var sid = str(serverState.sessionId).slice(0, 8);
+    var want = sid ? "session " + sid : "";
+    if (slot.textContent === want) return false;
+    slot.textContent = want;
+    return true;
+  }
+
+  // What Claude has been told, and whether it is still being told it. Every
+  // line here is a fact /api/state.injection reports; none of it is a
+  // control, because none of it has one -- turning it off is a slash command
+  // in the terminal, which is what the last line says.
+  var injectionShown = "";
+
+  function injectionLines(state) {
+    var rows = [];
+    if (!state || typeof state !== "object") return rows;
+    rows.push(["head", "context injection"]);
+    rows.push([state.cached ? "on" : "off",
+               state.cached ? "goal document sent ✓"
+                            : "not sent to Claude yet"]);
+    if (typeof state.last_delta_chars === "number") {
+      rows.push(["", state.last_delta_chars
+        ? "~" + Math.ceil(state.last_delta_chars / 4)
+          + " tok changed since Claude read it"
+        : "unchanged since Claude read it"]);
+    }
+    var at = str(state.last_at);
+    if (at) {
+      var when = new Date(Date.parse(at));
+      if (!isNaN(when.getTime())) {
+        rows.push(["", "last read " + when.toLocaleTimeString("en-US",
+          { hour: "2-digit", minute: "2-digit", hour12: false })]);
+      }
+    }
+    var reads = array(state.reads).map(str).filter(Boolean);
+    if (reads.length) rows.push(["", "reads: " + reads.join(" · ")]);
+    rows.push([state.active ? "on" : "off",
+               state.active ? "on · /goals-ui disable turns it off"
+                            : "off · /goals-ui turns it back on"]);
+    return rows;
+  }
+
+  function renderInjection(state) {
+    var host = document.querySelector(".hc-inject");
+    if (!host) return false;
+    var rows = injectionLines(state);
+    var stamp = JSON.stringify(rows);
+    if (stamp === injectionShown && host.children && host.children.length) {
+      return true;
+    }
+    injectionShown = stamp;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    rows.forEach(function (row) {
+      var line = document.createElement("div");
+      if (row[0]) line.className = "hc-inject-" + row[0];
+      line.textContent = row[1];
+      host.appendChild(line);
+    });
+    return true;
+  }
+
+  var injectionState = null;
+
+  function watchLaunchSurface() {
+    function sweep() {
+      if (serverState.scope !== "chat") return;
+      applyLaunchSkin();
+      renderSessionChip();
+      renderInjection(injectionState);
+    }
+    sweep();
+    setInterval(sweep, 700);
+  }
+
+  // Asking which kind of source, and then for the value. The three kinds are
+  // the three the store keeps (github, local, doc); the value goes back
+  // through the artifact's own ctx lists, so it lands on set_sources by the
+  // path every other source edit already takes.
+  function askSource() {
+    return new Promise(function (resolve) {
+      ensureDialogStyles();
+      var overlay = document.createElement("div");
+      overlay.className = "hc-ask";
+      var box = document.createElement("div");
+      box.className = "hc-ask-box";
+      var title = document.createElement("div");
+      title.className = "hc-ask-title";
+      title.textContent = "Attach a source to this goal";
+      var kinds = document.createElement("div");
+      kinds.className = "hc-ask-kinds";
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "hc-ask-input";
+      var chosen = "github";
+      var buttons = [];
+
+      function pick(kind) {
+        chosen = kind;
+        input.placeholder = ASK[kind].placeholder;
+        buttons.forEach(function (b) {
+          b.className = "hc-ask-btn"
+            + (b.getAttribute("data-kind") === kind ? " hc-ask-ok" : "");
+        });
+      }
+
+      [["github", "GitHub repo"], ["local", "Local folder"],
+       ["doc", "Document"]].forEach(function (row) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute("data-kind", row[0]);
+        button.textContent = row[1];
+        button.onclick = function () { pick(row[0]); input.focus(); };
+        buttons.push(button);
+        kinds.appendChild(button);
+      });
+
+      var row = document.createElement("div");
+      row.className = "hc-ask-row";
+      var cancel = document.createElement("button");
+      cancel.className = "hc-ask-btn";
+      cancel.textContent = "Cancel";
+      var confirm = document.createElement("button");
+      confirm.className = "hc-ask-btn hc-ask-ok";
+      confirm.textContent = "Attach";
+
+      function close(value) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(value || null);
+      }
+      function take() {
+        var label = str(input.value).trim();
+        close(label ? { type: chosen, label: label } : null);
+      }
+      cancel.onclick = function () { close(null); };
+      confirm.onclick = take;
+      input.onkeydown = function (e) {
+        if (e.key === "Enter") { e.preventDefault(); take(); }
+        if (e.key === "Escape") { e.preventDefault(); close(null); }
+      };
+      overlay.onclick = function (e) { if (e.target === overlay) close(null); };
+      row.appendChild(cancel);
+      row.appendChild(confirm);
+      box.appendChild(title);
+      box.appendChild(kinds);
+      box.appendChild(input);
+      box.appendChild(row);
+      overlay.appendChild(box);
+      (document.querySelector(".hc") || document.body).appendChild(overlay);
+      pick("github");
+      setTimeout(function () { input.focus(); }, 0);
+    });
+  }
+
   // --- asking for a value the artifact would otherwise invent --------------
 
   var ASK = {
@@ -1652,6 +1925,7 @@
       ".hc-ask-input{width:100%;box-sizing:border-box;border:1px solid var(--bd2);border-radius:2px;background:var(--panel2);color:var(--ink);outline:none;padding:8px 10px;font:12px 'Source Code Pro',monospace}",
       ".hc-ask-input:focus{border-color:var(--acc)}",
       ".hc-ask-row{display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-top:14px}",
+      ".hc-ask-kinds{display:flex;gap:6px;margin-bottom:10px}",
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
@@ -1733,6 +2007,71 @@
     // bridge never reaches this function at all.
     var chat = (typeof window !== "undefined" && window.__hcScope === "chat");
     var parts = [
+      // One line per goal. At rail width a wrapped title overlapped
+      // the row under it, so the row says which span is the title.
+      ["<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">",
+       chat ? "<div class=\"hc-row\" sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"
+            : "<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"],
+      ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
+       chat ? "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span class=\"hc-rowtitle\" style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"
+            : "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"],
+      // --- the launch layout, chat scope only ---------------------------
+      // Names for the containers the skin dresses, and the one column the
+      // artifact does not have: a rail for the prompt it assembles. The
+      // rail is emitted before the inspector and ordered after it in CSS,
+      // so no node is re-parented and a re-render cannot un-place it.
+      ["<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">",
+       chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
+            : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
+      ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div>"
+            : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
+      ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-name\">PROMPT</span><span class=\"hc-rail-count\">{{ draftTok }}</span></div><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-code\">{{ draft }}</div><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt it assembles from that goal\u2019s document.</div></sc-if><div class=\"hc-inject\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+            : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
+      // The sources this goal was written against, as a rail over the
+      // document. Both lists and both remove handlers are the artifact's
+      // own, so every edit lands on set_sources through the path that was
+      // already there -- this is the source control the textbox pane had.
+      ["<div style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">",
+       chat ? "<div class=\"hc-sources\"><span class=\"hc-sources-label\">SOURCES</span><sc-for list=\"{{ codeRows }}\" as=\"cr\" hint-placeholder-count=\"1\"><span class=\"hc-src\"><span class=\"hc-src-tag\">{{ cr.tag }}</span><span class=\"hc-src-label\">{{ cr.label }}</span><span sc-camel-on-click=\"{{ cr.rm }}\" title=\"Remove this source\" class=\"hc-src-rm\">\u00d7</span></span></sc-for><sc-for list=\"{{ docRows }}\" as=\"dr\" hint-placeholder-count=\"1\"><span class=\"hc-src\"><span class=\"hc-src-tag\">DOC</span><span class=\"hc-src-label\">{{ dr.label }}</span><span sc-camel-on-click=\"{{ dr.rm }}\" title=\"Remove this source\" class=\"hc-src-rm\">\u00d7</span></span></sc-for><span sc-camel-on-click=\"{{ srcAdd }}\" class=\"hc-src-add\">+ Add source</span></div>\n<div class=\"hc-tabs\" style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"
+            : "<div style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"],
+      // + Add source asks which of the three kinds the store keeps and
+      // then for the value, rather than appending a placeholder row.
+      ["      codeEmpty: codeList.length === 0,",
+       chat ? "      srcAdd: () => window.__hcAskSource().then(function (v) { if (!v) return; if (v.type === 'doc') { setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v.label }])); } else { setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: v.type, label: v.label }])); } }),\n      codeEmpty: codeList.length === 0,"
+            : "      codeEmpty: codeList.length === 0,"],
+      // Two numbers the rails print: how many goals this chat has, and
+      // how big the assembled prompt is. Characters over four, labelled
+      // "~", because a token count is not something a browser can know.
+      ["      hasCrumb: !!(trail && trail.length > 1),",
+       chat ? "      goalCount: total,\n      draftTok: '~' + Math.ceil(String(draft || '').length / 4) + ' tok',\n      hasCrumb: !!(trail && trail.length > 1),"
+            : "      hasCrumb: !!(trail && trail.length > 1),"],
+      // All first, because a chat opens on All and its tree is small.
+      // The count moves to the end so a chip reads as a name with a
+      // number rather than a parenthetical aside.
+      ["const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',",
+       chat ? "const filters = [['all', 'All', total], ['active', 'Active', activeN], ['inprog', 'In progress', ipN], ['done', 'Done', doneN]].map(([k, lab, n], i) => ({\n      lab: lab + ' ' + n,"
+            : "const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',"],
+      ["<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>",
+       chat ? "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span class=\"hc-chip\" sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"
+            : "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"],
+      ["<div style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">",
+       chat ? "<div class=\"hc-titlerow\" style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">"
+            : "<div style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">"],
+      ["<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">",
+       chat ? "<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-chiprow\" style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">"
+            : "<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">"],
+      // The window is named for what it is: one chat's goals. "Vault"
+      // is the global product this scope is not.
+      ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
+       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">goals</span>"
+            : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
+      // Room for the session this window is a second view of. The bridge
+      // fills it in: only the server knows which conversation this is.
+      ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
+       chat ? "</span><span class=\"hc-session\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+            : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
       // Both subtitles were sized for the shorter copy they replaced, so the
@@ -1765,7 +2104,7 @@
       // keypress rather than at patch time, which keeps this one string
       // true for whichever server the artifact is served from.
       ["const tabs = ['context', 'prompt', 'agent', 'artifact'];",
-       "const tabs = (typeof window !== 'undefined' && window.__hcScope === 'chat') ? ['context', 'prompt'] : ['context', 'prompt', 'agent', 'artifact'];"],
+       "const tabs = (typeof window !== 'undefined' && window.__hcScope === 'chat') ? ['context'] : ['context', 'prompt', 'agent', 'artifact'];"],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -2023,7 +2362,10 @@
       ["      copy: () => this.doCopy(),\n",
        !chat ? "      copy: () => this.doCopy(),\n" :
        "      copy: () => this.doCopy(),\n"
-       + "      copyPrompt: () => { const t = this._draftEl ? this._draftEl.value : ''; "
+       // The rail is where the prompt is read in a chat, and the pane that
+       // owned the textarea is not drawn there -- so this falls back to the
+       // assembled draft the rail is printing, which is the same string.
+       + "      copyPrompt: () => { const t = this._draftEl ? this._draftEl.value : String(draft || ''); "
        + "const done = () => { this.setState({ copied: true }); clearTimeout(this._ct); "
        + "this._ct = setTimeout(() => this.setState({ copied: false }), 1600); }; "
        + "const fb = () => { const ta = document.createElement('textarea'); ta.value = t; "
@@ -2061,6 +2403,7 @@
   }
 
   window.__hcAsk = ask;
+  window.__hcAskSource = askSource;
 
   // --- a banner for work happening outside the page ------------------------
   // Analysis runs in a detached worker over the user's whole history. Without
@@ -2425,6 +2768,7 @@
     clearKeepPane();
     watchPromptAdd();
     watchChatSurface();
+    watchLaunchSurface();
     watchGoals();
     watchAnalysis();
     watchSelection();
