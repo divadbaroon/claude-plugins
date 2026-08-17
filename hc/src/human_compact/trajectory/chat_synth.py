@@ -378,8 +378,14 @@ def _merge_initial_with_manual(inferred: Dict[str, Any], current: Dict[str, Any]
     for goal in inferred.get("goals", []):
         old = previous.get(goal.get("id"))
         if old:
-            for field in ("prompt_ids", "important_item_ids", "notes",
-                          "priority", "sources"):
+            # Everything on this list is authored or decided in the browser,
+            # never by the model — including the two bookkeeping lists that
+            # record *which* prompt links were machine-made and which the user
+            # tore off. Drop those and the next pass re-links a prompt the
+            # person deliberately detached.
+            for field in ("prompt_ids", "auto_prompt_ids",
+                          "detached_prompt_ids", "important_item_ids",
+                          "notes", "priority", "sources"):
                 if field in old:
                     goal[field] = deepcopy(old[field])
             if old.get("origin") == "user":

@@ -546,6 +546,44 @@ class ChatSynthesisTests(unittest.TestCase):
         self.assertEqual([{"id": "s1", "type": "github", "label": "octo/repo"}],
                          goal["sources"])
 
+    def test_a_detached_prompt_stays_detached_across_an_initial_race(self):
+        merged = S._merge_initial_with_manual(
+            {"version": 1, "goals": [{"id": "g1", "title": "Inferred",
+                                      "status": "active",
+                                      "parent_goal_id": None}]},
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Inferred", "status": "active",
+                "parent_goal_id": None, "prompt_ids": ["p2"],
+                "auto_prompt_ids": ["p2"], "detached_prompt_ids": ["p1"]}]})
+
+        goal = merged["goals"][0]
+        self.assertEqual(["p2"], goal["prompt_ids"])
+        self.assertEqual(["p2"], goal["auto_prompt_ids"])
+        self.assertEqual(["p1"], goal["detached_prompt_ids"])
+
+    def test_a_manual_source_survives_an_incremental_refresh(self):
+        first = self.hook("UserPromptSubmit", prompt="Attach my repo")
+        CS.save_goals(SID, {"version": 1, "goals": [{
+            "id": "g1", "title": "Attach my repo", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "prompt_ids": [], "important_item_ids": [],
+            "sources": [{"id": "s1", "type": "local", "label": "~/proj"}],
+        }]}, {"items": []}, root=self.root)
+        CS.set_analyzer_state(SID, last_analyzed_ordinal=first.last_ordinal,
+                              status="idle", root=self.root)
+        self.hook("UserPromptSubmit", prompt="Second turn")
+        provider = Provider([{"operations": [
+            {"op": "set_status", "goal_id": "g1", "status": "in_progress"},
+            {"op": "append_section", "goal_id": "g1", "section": "built",
+             "text": "- the source list"},
+        ]}])
+
+        S.refresh(SID, root=self.root, provider=provider)
+
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertEqual("in_progress", goal["status"])
+        self.assertEqual([{"id": "s1", "type": "local", "label": "~/proj"}],
+                         goal["sources"])
 
     def test_sections_with_nothing_new_leave_the_document_untouched(self):
         written = "# Decisions\n- keep sqlite\n"

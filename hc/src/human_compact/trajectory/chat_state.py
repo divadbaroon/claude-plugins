@@ -24,6 +24,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 from .goals import (  # noqa: F401
     join_doc,
     link_evidence_prompts,
+    normalize_sources,
     promote_todos,
     split_doc,
 )
@@ -1210,6 +1211,15 @@ def _goal_context_text(
                              for line in join_doc(written).splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
+            # What the user attached as background for this goal, named by
+            # kind so the reader knows whether a label is a checkout, a repo
+            # or a URL before deciding to go read it. Normalized on the way
+            # out because nothing between the browser and here guarantees the
+            # stored rows are typed. Six is a list, not a manifest -- the
+            # whole context is capped, and sources must not crowd out notes.
+            for source in normalize_sources(goal.get("sources"))[:6]:
+                lines.append(f"{indent}  - SOURCE ({source['type']}): "
+                             f"{source['label']}")
         for todo in goal.get("todos", []):
             if details and isinstance(todo, dict) and not todo.get("done"):
                 lines.append(f"{indent}  - TODO: {todo.get('text', '')}")

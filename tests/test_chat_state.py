@@ -659,6 +659,56 @@ class ChatStateTests(unittest.TestCase):
         self.assertNotIn("# Objective", context)
         self.assertNotIn("# Blockers", context)
 
+    def test_goal_context_names_every_attached_source_by_kind(self):
+        self.transcript.touch()
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [
+                {"id": "g1", "title": "With sources", "status": "active",
+                 "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                 "prompt_ids": [], "priority": "high",
+                 "sources": [
+                     {"id": "s1", "type": "local", "label": "~/proj"},
+                     {"id": "s2", "type": "github", "label": "octo/repo"},
+                     {"id": "s3", "type": "doc",
+                      "label": "https://example.com/spec"},
+                 ]},
+                {"id": "g2", "title": "Without sources", "status": "active",
+                 "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                 "prompt_ids": []},
+            ]},
+            {"items": []},
+            root=self.base,
+        )
+
+        context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertIn("  - SOURCE (local): ~/proj", context)
+        self.assertIn("  - SOURCE (github): octo/repo", context)
+        self.assertIn("  - SOURCE (doc): https://example.com/spec", context)
+        self.assertLess(context.index("PRIORITY: high"),
+                        context.index("SOURCE (local)"))
+        # The goal that has none contributes no SOURCE line at all.
+        self.assertEqual(3, context.count("- SOURCE ("))
+
+    def test_goal_context_caps_a_long_source_list_at_six(self):
+        self.transcript.touch()
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Many sources", "status": "active",
+                "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                "prompt_ids": [],
+                "sources": [{"id": f"s{n}", "type": "local",
+                             "label": f"~/p{n}"} for n in range(10)],
+            }]},
+            {"items": []},
+            root=self.base,
+        )
+
+        context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertEqual(6, context.count("- SOURCE ("))
+        self.assertIn("- SOURCE (local): ~/p5", context)
+        self.assertNotIn("~/p6", context)
 
 
 if __name__ == "__main__":
