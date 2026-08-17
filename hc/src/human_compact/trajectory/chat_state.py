@@ -242,6 +242,26 @@ def load_manifest(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
     return value
 
 
+def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
+    """Record that this chat opened its goal workspace, keeping the first time.
+
+    Every session's history is ingested, but analysis and context injection
+    belong only to the chats whose owner asked for them by running /goals-ui.
+    """
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = load_manifest(session_id, root)
+        if manifest.get("goals_ui_invoked_at"):
+            return
+        manifest["goals_ui_invoked_at"] = _now()
+        manifest["updated_at"] = _now()
+        _atomic_json(p.manifest, manifest)
+
+
+def goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> bool:
+    """True once /goals-ui has opened this chat's workspace at least once."""
+    return bool(load_manifest(session_id, root).get("goals_ui_invoked_at"))
+
+
 def load_events(session_id: str, root: Optional[Path] = None) -> List[Dict[str, Any]]:
     p = paths(session_id, root)
     out: List[Dict[str, Any]] = []

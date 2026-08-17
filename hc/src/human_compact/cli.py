@@ -1056,6 +1056,22 @@ def _request_chat_refresh(session_id):
     return chat_synth.spawn_refresh(session_id)
 
 
+def _chat_context_active(session_id):
+    """True when this chat opened its goal workspace and that workspace is live.
+
+    Goal context is this chat's own state, so it is injected only into the
+    chat that asked for it, and only while the window showing it is open.
+    """
+    from .trajectory import chat_state as CS
+    try:
+        if not CS.goals_ui_invoked(session_id):
+            return False
+        record = _read_server_registry(CS.paths(session_id).session_dir)
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(_healthy_chat_server(record, session_id))
+
+
 def chat_hook_main(argv=None, stdin=None, stdout=None):
     """Ingest one Claude Code hook payload and inject cached goal context."""
     import json
@@ -1125,16 +1141,22 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
         return 0
     if event in ("Stop", "TaskCompleted", "PostCompact", "SessionEnd"):
         try:
-            _request_chat_refresh(result.session_id)
+            # Ingestion above is unconditional so history exists whenever the
+            # user opens /goals-ui; paying for inference is not.
+            if CS.goals_ui_invoked(result.session_id):
+                _request_chat_refresh(result.session_id)
         except Exception:  # noqa: BLE001 - a hook may never block Claude
             pass
 
     if event in ("SessionStart", "UserPromptSubmit"):
-        context_path = CS.paths(result.session_id).goal_context
-        try:
-            context = context_path.read_text(encoding="utf-8")[:8000]
-        except OSError:
-            context = ""
+        context = ""
+        if _chat_context_active(result.session_id):
+            try:
+                context = CS.paths(result.session_id).goal_context.read_text(
+                    encoding="utf-8"
+                )[:8000]
+            except OSError:
+                context = ""
         if run is not None and event == "SessionStart":
             try:
                 from .trajectory import goals as GM, state as ST
@@ -1319,6 +1341,9 @@ def chat_ui_main(argv=None):
             # SessionStart merely because the user invoked /goals-ui after `cd`.
             "cwd": CS.load_manifest(args.session).get("cwd") or session_cwd,
         })
+        # Opening the workspace is the opt-in: from here this chat may be
+        # analyzed, and may have its goal context injected while it is open.
+        CS.mark_goals_ui_invoked(args.session)
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
         raise SystemExit(f"could not initialize chat state: {exc}") from exc
 

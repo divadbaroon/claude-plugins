@@ -63,6 +63,15 @@ class ChatCliTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
 
+    def _register_server(self, url="http://127.0.0.1:9012/"):
+        self.cli._write_server_registry(CS.paths(SID).session_dir, {
+            "schema_version": 1,
+            "session_id": SID,
+            "pid": os.getpid(),
+            "url": url,
+            "started_at": 0,
+        })
+
     def test_prompt_hook_ingests_and_injects_cached_goal_context(self):
         goals = {
             "version": 1,
@@ -76,6 +85,8 @@ class ChatCliTests(unittest.TestCase):
             }],
         }
         CS.save_goals(SID, goals, {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._register_server()
         payload = {
             "session_id": SID,
             "hook_event_name": "UserPromptSubmit",
@@ -84,9 +95,10 @@ class ChatCliTests(unittest.TestCase):
         }
         output = io.StringIO()
 
-        code = self.cli.chat_hook_main(
-            [], stdin=io.StringIO(json.dumps(payload)), stdout=output
-        )
+        with mock.patch.object(self.cli, "_healthy_chat_server", return_value=True):
+            code = self.cli.chat_hook_main(
+                [], stdin=io.StringIO(json.dumps(payload)), stdout=output
+            )
 
         self.assertEqual(0, code)
         response = json.loads(output.getvalue())
@@ -104,6 +116,7 @@ class ChatCliTests(unittest.TestCase):
         )
 
     def test_stop_hook_requests_background_refresh_but_never_emits_context(self):
+        CS.mark_goals_ui_invoked(SID)
         payload = {
             "session_id": SID,
             "hook_event_name": "Stop",
@@ -121,6 +134,90 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(
             "The rebuild fix is tested.", CS.load_events(SID)[0]["text"]
         )
+
+    def test_stop_hook_ingests_but_never_analyzes_before_goals_ui(self):
+        from human_compact.trajectory import chat_synth
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "Stop",
+            "last_assistant_message": "The rebuild fix is tested.",
+            "cwd": "/repo",
+        }
+        output = io.StringIO()
+        with mock.patch.object(chat_synth, "spawn_refresh") as spawn:
+            code = self.cli.chat_hook_main(
+                [], stdin=io.StringIO(json.dumps(payload)), stdout=output
+            )
+        self.assertEqual(0, code)
+        self.assertEqual("", output.getvalue())
+        spawn.assert_not_called()
+        # History must still accumulate, or /goals-ui would open onto nothing.
+        self.assertEqual(
+            "The rebuild fix is tested.", CS.load_events(SID)[0]["text"]
+        )
+
+    def test_stop_hook_analyzes_the_chat_once_goals_ui_is_invoked(self):
+        from human_compact.trajectory import chat_synth
+        CS.mark_goals_ui_invoked(SID)
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "Stop",
+            "last_assistant_message": "The rebuild fix is tested.",
+            "cwd": "/repo",
+        }
+        with mock.patch.object(chat_synth, "spawn_refresh") as spawn:
+            code = self.cli.chat_hook_main(
+                [], stdin=io.StringIO(json.dumps(payload)), stdout=io.StringIO()
+            )
+        self.assertEqual(0, code)
+        spawn.assert_called_once_with(SID)
+
+    def test_prompt_hook_withholds_goal_context_without_a_live_workspace(self):
+        CS.save_goals(SID, {
+            "version": 1,
+            "goals": [{
+                "id": "g1",
+                "title": "Connect this chat to goals",
+                "status": "in_progress",
+                "parent_goal_id": None,
+                "todos": [],
+                "prompt_ids": [],
+            }],
+        }, {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self.assertTrue(CS.paths(SID).goal_context.exists())
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Continue from the plan",
+            "cwd": "/repo",
+        }
+        output = io.StringIO()
+
+        code = self.cli.chat_hook_main(
+            [], stdin=io.StringIO(json.dumps(payload)), stdout=output
+        )
+
+        self.assertEqual(0, code)
+        self.assertEqual("", output.getvalue())
+
+    def test_chat_ui_marks_the_session_as_goals_ui_invoked(self):
+        self._register_server()
+        with (mock.patch.object(self.cli, "_healthy_chat_server", return_value=True),
+              mock.patch.object(self.cli, "_request_chat_refresh"),
+              contextlib.redirect_stdout(io.StringIO())):
+            self.assertEqual(
+                0,
+                self.cli.chat_ui_main(
+                    ["--session", SID, "--cwd", "/repo", "--no-open"]
+                ),
+            )
+        first = CS.load_manifest(SID).get("goals_ui_invoked_at")
+        self.assertTrue(first)
+        self.assertTrue(CS.goals_ui_invoked(SID))
+
+        CS.mark_goals_ui_invoked(SID)
+        self.assertEqual(first, CS.load_manifest(SID).get("goals_ui_invoked_at"))
 
     def test_ui_expansion_hook_launches_without_skill_shell_execution(self):
         payload = {
