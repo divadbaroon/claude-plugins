@@ -1322,6 +1322,52 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_linked_row_ends_at_its_date_when_there_is_no_conversation(self):
+        """A separator with nothing after it is not punctuation.
+
+        `chat_state` writes a prompt record's id, ordinal, role, text and
+        created_at and no session_id, so in the configuration /goals-ui
+        actually launches every linked row read `Aug 17, 2026·`.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        goals_path = self.a / "goals.json"
+        stored = json.loads(goals_path.read_text())
+        stored["goals"][0]["prompt_ids"] = ["p-new"]
+        goals_path.write_text(json.dumps(stored))
+        self.assertNotIn(
+            "session_id",
+            [p for p in self.prompts_a if p["id"] == "p-new"][0],
+        )
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.get_by_text("new human prompt", exact=True)
+                       ).to_be_visible(timeout=10_000)
+
+                dated = page.evaluate(
+                    """() => [...document.querySelectorAll('span')]
+                         .map(e => e.textContent)
+                         .filter(t => /^[A-Z][a-z]{2} \\d+, \\d{4}/.test(t))""")
+                self.assertTrue(dated, "the row must still carry its date")
+                self.assertEqual(
+                    [], [t for t in dated if t.rstrip().endswith("\u00b7")])
+            finally:
+                browser.close()
+
     def test_a_link_inference_made_is_labelled_as_the_machines(self):
         try:
             from playwright.sync_api import expect, sync_playwright

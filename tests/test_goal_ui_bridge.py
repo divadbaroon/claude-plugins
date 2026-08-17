@@ -1551,7 +1551,10 @@ class LiveFeedTests(BridgeTestCase):
         # A quote without a source cannot be checked.
         out = self.patched_bundle("out;")
         self.assertIn("{{ hr.conv }}", out)
-        self.assertIn("conv: p.conv ? 'conversation ' + p.conv : ''", out)
+        # The separator travels with the source, so a prompt that has no
+        # conversation leaves no punctuation behind.
+        self.assertIn(
+            "conv: p.conv ? ' \u00b7 conversation ' + p.conv : ''", out)
         rows = self.roots()[0]["prompts"]
         self.assertTrue(all(r["conv"] for r in rows), rows)
 
@@ -2801,6 +2804,25 @@ class ChatPromptLinkTests(BridgeTestCase):
     def test_the_close_button_is_styled_by_the_dialog_sheet(self):
         self.assertIn(".hc-pick-close{",
                       self.run_js("window.__hcPromptUI.dialogCss();"))
+
+    def test_a_prompt_row_with_no_conversation_shows_no_separator(self):
+        # Chat prompt records carry no session_id (chat_state writes the
+        # id, ordinal, role, text and created_at, and nothing else), so a
+        # separator emitted beside the value renders with nothing after it
+        # on every row of every goal in the configuration /goals-ui opens.
+        got = json.loads(self.patched_bundle(
+            "var at = out.indexOf('conv: p.conv ?');"
+            "var expr = out.slice(at + 'conv: '.length,"
+            "  out.indexOf(',\\n', at));"
+            "var f = eval('(function (p) { return (' + expr + '); })');"
+            "JSON.stringify([f({ conv: '' }), f({ conv: '11112222' })]);",
+            scope="chat"))
+        self.assertEqual(["", " \u00b7 conversation 11112222"], got)
+
+    def test_the_row_no_longer_draws_a_separator_of_its_own(self):
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertIn("{{ hr.when }}{{ hr.conv }}", out)
+        self.assertNotIn("{{ hr.when }}<span", out)
 
     def test_attaching_from_a_chat_reaches_the_server(self):
         posted = json.loads(self.run_js(
