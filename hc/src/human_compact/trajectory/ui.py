@@ -508,6 +508,11 @@ def _payload(trajdir=None, chat_scoped=None):
         GM.sanitize(goals)
         ana = {}
         analyzer = None
+        # What the Claude session behind this workspace has done lately. A
+        # global vault stands behind no one session, so there is nothing it
+        # could report -- the field is still present, so the browser reads
+        # one shape in both scopes.
+        notices = []
         try:
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
@@ -515,6 +520,7 @@ def _payload(trajdir=None, chat_scoped=None):
         if chat_scoped:
             session_id, root = _chat_identity(trajdir)
             analyzer = CS.get_analyzer_state(session_id, root)
+            notices = CS.load_notices(session_id, root)
         # Agent execution state is scoped to the goal tree it was launched
         # against; chat-scoped goal ids live in a different namespace.
         runs, claim = ({}, None) if chat_scoped else (
@@ -524,6 +530,7 @@ def _payload(trajdir=None, chat_scoped=None):
                 "generated_at": goals.get("generated_at", ""),
                 "sessions": ana.get("sessions_analyzed"),
                 "analyzer": analyzer,
+                "notices": notices,
                 "agent_runs": runs,
                 "agent_claim": claim,
                 "scope": "chat" if chat_scoped else "global",

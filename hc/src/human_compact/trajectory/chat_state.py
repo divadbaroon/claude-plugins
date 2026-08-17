@@ -34,6 +34,15 @@ from .secure_io import secure_dir
 
 SCHEMA_VERSION = 1
 _TAIL_BYTES = 4096
+# The three sentences the goals workspace is allowed to say about the chat it
+# is attached to.  Each one is exactly what a single hook payload proves, and
+# nothing further: a Stop means Claude finished a turn, not that anything was
+# decided, updated or completed.
+NOTICE_KINDS = ("session_stopped", "subagent_returned", "session_ended")
+# Enough to catch up on what was missed, few enough that the store stays a
+# file the browser can be handed on every poll.
+NOTICE_LIMIT = 20
+_NOTICE_DETAIL = 160
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 _COMMAND_TAG_RE = re.compile(
     r"<command-(name|message|args)>[\s\S]*?</command-\1>", re.IGNORECASE
@@ -56,6 +65,7 @@ class ChatPaths:
     important: Path
     goal_context: Path
     context_snapshot: Path
+    notices: Path
     lock_dir: Path
 
 
@@ -71,6 +81,17 @@ class IngestResult:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _now_ms() -> str:
+    """A timestamp a browser can compare against its own page-load moment.
+
+    ``_now()`` rounds down to the second, which places a notice written a
+    fraction of a second *after* a page opened a fraction of a second
+    *before* it.  The banner filters on "newer than this page", so that
+    rounding does not make it late -- it makes it never appear.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _absolute(path: Path) -> Path:
@@ -112,6 +133,7 @@ def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
         important=session_dir / "important.json",
         goal_context=session_dir / "goal_context.md",
         context_snapshot=session_dir / "context_snapshot.json",
+        notices=session_dir / "notices.json",
         lock_dir=session_dir / ".lock",
     )
 
@@ -303,6 +325,58 @@ def goals_ui_active(session_id: str, root: Optional[Path] = None) -> bool:
     return bool(manifest.get("goals_ui_invoked_at")) and not manifest.get(
         "goals_ui_disabled_at"
     )
+
+
+def _notice_detail(text: Any) -> str:
+    """One scannable line, from whatever the hook happened to carry."""
+    return " ".join(str(text or "").split())[:_NOTICE_DETAIL]
+
+
+def load_notices(session_id: str, root: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """What this chat's session has done lately, oldest first.
+
+    Read without the session lock, like ``load_manifest`` and
+    ``load_context_snapshot``: the file is only ever replaced whole
+    (``os.replace``), so a reader sees one version or the other and never a
+    torn one -- and this is on the path of an HTTP handler that already holds
+    the lock, where a second timed acquisition could only add a way to fail.
+    """
+    value = _read_json(paths(session_id, root).notices, [])
+    if not isinstance(value, list):
+        return []
+    return [row for row in value
+            if isinstance(row, dict) and row.get("id")
+            and row.get("kind") in NOTICE_KINDS]
+
+
+def add_notice(
+    session_id: str,
+    kind: str,
+    detail: str = "",
+    root: Optional[Path] = None,
+    wait_s: float = 5.0,
+) -> Optional[Dict[str, Any]]:
+    """Record something the open workspace should tell the reader about.
+
+    An unknown *kind* is dropped rather than stored: the browser draws one of
+    three fixed sentences, and a kind nobody wrote a sentence for would reach
+    the reader as a blank banner.  ``wait_s`` is short on the hook path -- a
+    banner may never be the reason Claude waits.
+    """
+    if kind not in NOTICE_KINDS:
+        return None
+    row = {
+        "id": os.urandom(8).hex(),
+        "kind": kind,
+        "at": _now_ms(),
+        "detail": _notice_detail(detail),
+    }
+    with session_lock(session_id, root, wait_s=wait_s) as p:
+        rows = load_notices(session_id, root)
+        rows.append(row)
+        # A workspace opened now wants the last few minutes, not the session.
+        _atomic_json(p.notices, rows[-NOTICE_LIMIT:])
+    return row
 
 
 def load_events(session_id: str, root: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -985,6 +1059,33 @@ def _post_tool_batch_events(
     return out
 
 
+def _hook_notice(
+    payload: Dict[str, Any], hook_event: str
+) -> Optional[Tuple[str, str]]:
+    """What this hook proves, in the reader's terms, or nothing.
+
+    Deliberately narrow.  A hook fires with a payload and no wider knowledge:
+    a ``Stop`` means the turn ended, and says nothing about whether goals
+    moved, tasks closed or work succeeded.  The banner may only repeat what
+    is in the payload.
+    """
+    if hook_event == "Stop":
+        return "session_stopped", _notice_detail(
+            payload.get("last_assistant_message"))
+    if hook_event == "SubagentStop":
+        # agent_type is what the matcher filters on and what the reader would
+        # recognize; agent_id is the fallback when a payload omits the name.
+        who = _notice_detail(
+            payload.get("agent_type") or payload.get("agent_id"))
+        said = _notice_detail(payload.get("last_assistant_message"))
+        if who and said:
+            return "subagent_returned", _notice_detail(f"{who}: {said}")
+        return "subagent_returned", who or said
+    if hook_event == "SessionEnd":
+        return "session_ended", _notice_detail(payload.get("reason"))
+    return None
+
+
 def ingest_hook(payload: Dict[str, Any], root: Optional[Path] = None) -> IngestResult:
     """Ingest a Claude hook payload and any transcript bytes already flushed.
 
@@ -1066,6 +1167,16 @@ def _ingest_hook_locked(
         boundaries = _post_tool_batch_events(
             session_id, payload, result.last_ordinal
         )
+
+    notice = _hook_notice(payload, hook_event)
+    if notice is not None:
+        try:
+            # Already inside this session's lock, so the wait is nominal --
+            # and a banner may never be what costs a hook its ingest.
+            add_notice(session_id, notice[0], notice[1], root, wait_s=0.5)
+        except (OSError, ValueError, TypeError):
+            pass
+
     if boundary is not None:
         boundaries.append(boundary)
     if not boundaries:

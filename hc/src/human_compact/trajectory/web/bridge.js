@@ -249,6 +249,7 @@
       })
       .then(function (st) {
         acceptState(st);
+        showNotices(st && st.notices);
         reconcileState(st);
       })
       .catch(function () {})
@@ -1224,6 +1225,214 @@
     setInterval(renderChatSurface, 700);
   }
 
+  // --- what the session behind this workspace just did ---------------------
+  // This page is a second window on a conversation happening in a terminal,
+  // usually on another screen. The one thing it can say that the terminal
+  // cannot is that the terminal is finished. Hooks record a notice when the
+  // session stops, when a subagent returns and when the session ends; this
+  // draws it and then gets out of the way. Chat scope only: a global vault
+  // stands behind no one session, so it has nothing to report.
+
+  var NOTICE_MS = 8000;
+  // Three is what fits above the fold without covering the page it reports on.
+  var NOTICE_MAX = 3;
+  var NOTICE_MARK = "● ";
+  // Exactly what one hook payload proves, and no further. A Stop means the
+  // turn ended -- not that goals moved, that tasks closed, or that anything
+  // succeeded. A map with no prototype so a kind named "constructor" reads
+  // as unknown rather than as a function.
+  var NOTICE_SAYS = Object.create(null);
+  NOTICE_SAYS.session_stopped = "Claude finished responding";
+  NOTICE_SAYS.subagent_returned = "A subagent returned";
+  NOTICE_SAYS.session_ended = "Session ended";
+
+  var NOTICE_CSS = [
+      ".hc-notice-stack{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
+      ".hc-notice{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-notice-title{font-weight:600;color:var(--ink,#111)}",
+      ".hc-notice-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-notice-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
+      ".hc-notice-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}"
+  ].join("");
+
+  // Everything this page has already had its chance to show. The store keeps
+  // its last twenty rows and state is polled every 1.5s, so without this the
+  // same notice arrives again on every poll for the rest of the session.
+  var noticeSeen = Object.create(null);
+  // Anything older than this window belongs to the part of the conversation
+  // it was not open for. Replaying that would report old news as new.
+  var noticeSince = Date.now();
+  var noticeTimers = Object.create(null);
+  var noticeBox = null;
+  var noticeTitle = null;
+  var noticeBound = false;
+
+  function ensureNoticeStyles() {
+    if (document.getElementById("hc-notice-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-notice-style";
+    style.textContent = NOTICE_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function noticeStack() {
+    return (noticeBox && noticeBox.parentNode) ? noticeBox : null;
+  }
+
+  function noticeHost() {
+    if (noticeStack()) return noticeBox;
+    ensureNoticeStyles();
+    noticeBox = document.createElement("div");
+    noticeBox.className = "hc-notice-stack";
+    // Parented on the body, outside the artifact's own subtree: the artifact
+    // rebuilds that subtree whenever its state changes, and anything living
+    // inside it is silently dropped.
+    (document.body || document.documentElement).appendChild(noticeBox);
+    return noticeBox;
+  }
+
+  function markNoticeTitle() {
+    if (typeof document.title !== "string") return;
+    if (noticeTitle === null) noticeTitle = document.title;
+    if (document.title.indexOf(NOTICE_MARK) !== 0) {
+      document.title = NOTICE_MARK + noticeTitle;
+    }
+  }
+
+  function unmarkNoticeTitle() {
+    if (noticeTitle === null) return;
+    document.title = noticeTitle;
+    noticeTitle = null;
+  }
+
+  function noticeIdOf(box) {
+    return (box && box.getAttribute) ? str(box.getAttribute("data-hc-notice")) : "";
+  }
+
+  function holdNotice(box) {
+    var id = noticeIdOf(box);
+    if (!id || !noticeTimers[id]) return;
+    clearTimeout(noticeTimers[id]);
+    delete noticeTimers[id];
+  }
+
+  function armNotice(box) {
+    var id = noticeIdOf(box);
+    if (!id) return;
+    holdNotice(box);
+    noticeTimers[id] = setTimeout(function () { dropNotice(box); }, NOTICE_MS);
+  }
+
+  function dropNotice(box) {
+    if (!box) return;
+    holdNotice(box);
+    if (box.parentNode) box.parentNode.removeChild(box);
+    var host = noticeStack();
+    if (!host || !host.children || !host.children.length) unmarkNoticeTitle();
+  }
+
+  function closestNotice(node) {
+    while (node && node !== document) {
+      var name = node.className ? String(node.className) : "";
+      if (name.split(" ").indexOf("hc-notice") >= 0) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function bindNotices() {
+    // Delegated, like the other controls here. These nodes come and go on
+    // their own timers, so a listener bound to one of them is a listener
+    // that outlives the thing it was for.
+    if (noticeBound || !document.addEventListener) return;
+    noticeBound = true;
+    document.addEventListener("click", function (event) {
+      var target = event && event.target;
+      var name = (target && target.className) ? String(target.className) : "";
+      if (name.indexOf("hc-notice-close") < 0) return;
+      var box = closestNotice(target);
+      if (!box) return;
+      if (event.preventDefault) event.preventDefault();
+      if (event.stopPropagation) event.stopPropagation();
+      dropNotice(box);
+    }, true);
+    // Eight seconds is not long enough to read a line and think about it, so
+    // the clock stops while the pointer is on it.
+    document.addEventListener("mouseover", function (event) {
+      var box = closestNotice(event && event.target);
+      if (box) holdNotice(box);
+    }, true);
+    document.addEventListener("mouseout", function (event) {
+      var box = closestNotice(event && event.target);
+      if (!box) return;
+      // mouseout also fires crossing from the headline to the detail line.
+      // Leaving one of its own children is not leaving it.
+      var to = event.relatedTarget;
+      if (to && box.contains && box.contains(to)) return;
+      armNotice(box);
+    }, true);
+  }
+
+  function noticesToShow(rows, since, seen) {
+    var fresh = [];
+    array(rows).forEach(function (row) {
+      if (!row || typeof row !== "object") return;
+      var id = str(row.id);
+      var says = NOTICE_SAYS[str(row.kind)];
+      var at = Date.parse(str(row.at));
+      if (!id || typeof says !== "string" || seen[id]) return;
+      if (!isFinite(at) || at <= since) return;
+      // Marked here rather than at draw time: one this page decided not to
+      // draw is not one it should draw 1.5s later, when it is older still.
+      seen[id] = true;
+      fresh.push({ id: id, says: says, detail: str(row.detail) });
+    });
+    return fresh.slice(-NOTICE_MAX);
+  }
+
+  function noticeNode(row) {
+    var box = document.createElement("div");
+    box.className = "hc-notice";
+    box.setAttribute("data-hc-notice", row.id);
+    var close = document.createElement("span");
+    close.className = "hc-notice-close";
+    close.textContent = "×";
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Dismiss");
+    box.appendChild(close);
+    var title = document.createElement("div");
+    title.className = "hc-notice-title";
+    title.textContent = row.says;
+    box.appendChild(title);
+    // A hook that carried nothing to quote gets a headline and no blank line
+    // pretending there was something to say.
+    if (row.detail) {
+      var detail = document.createElement("div");
+      detail.className = "hc-notice-detail";
+      detail.textContent = row.detail;
+      box.appendChild(detail);
+    }
+    return box;
+  }
+
+  function showNotices(rows) {
+    if (serverState.scope !== "chat") return 0;
+    var fresh = noticesToShow(rows, noticeSince, noticeSeen);
+    if (!fresh.length) return 0;
+    var host = noticeHost();
+    bindNotices();
+    var made = fresh.map(function (row) {
+      return host.appendChild(noticeNode(row));
+    });
+    while (host.children.length > NOTICE_MAX) dropNotice(host.children[0]);
+    // Marked before the timers start: on a page whose clock is running fast
+    // enough to dismiss one immediately, marking afterwards leaves the tab
+    // claiming a banner nobody can see.
+    markNoticeTitle();
+    made.forEach(function (box) { armNotice(box); });
+    return fresh.length;
+  }
+
   function watchRunFeed() {
     // The artifact reads its state at boot, so a live feed cannot travel
     // through it. Poll and draw straight into the pane instead.
@@ -2093,6 +2302,10 @@
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
     renderChatSurface: renderChatSurface,
+    showNotices: showNotices,
+    noticesToShow: noticesToShow,
+    noticeStack: noticeStack,
+    noticeCss: function () { return NOTICE_CSS; },
     paneTabBar: paneTabBar,
     headerNav: headerNav,
     promptAddSlot: promptAddSlot,

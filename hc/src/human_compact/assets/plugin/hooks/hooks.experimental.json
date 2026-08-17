@@ -28,6 +28,11 @@
         { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\" --inject-only", "args": [], "timeout": 5 }
       ] }
     ],
+    "SubagentStop": [
+      { "hooks": [
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 }
+      ] }
+    ],
     "Stop": [
       { "hooks": [
         { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 }

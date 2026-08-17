@@ -1357,6 +1357,134 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    # --- notices: the workspace speaks for the terminal --------------------
+
+    def test_state_carries_the_notices_a_chat_workspace_draws(self):
+        chat_state.add_notice("chat-a", "session_stopped", "Done. Tests pass.",
+                              self.root)
+        chat_state.add_notice("chat-a", "subagent_returned", "Explore: found it",
+                              self.root)
+
+        with server_for(self.a) as url_a, server_for(self.b) as url_b:
+            rows = get_json(url_a + "/api/state")["notices"]
+            self.assertEqual([("session_stopped", "Done. Tests pass."),
+                              ("subagent_returned", "Explore: found it")],
+                             [(row["kind"], row["detail"]) for row in rows])
+            for row in rows:
+                self.assertIsInstance(row["id"], str)
+                self.assertIsInstance(row["at"], str)
+            # Notices are per session, like every other thing in this store.
+            self.assertEqual([], get_json(url_b + "/api/state")["notices"])
+
+    def test_a_global_vault_has_no_session_to_report_on(self):
+        # The banner answers "is the chat I am attached to done?". A global
+        # vault is attached to no chat, so the field is present and empty
+        # rather than absent -- the bridge reads one shape in both scopes.
+        self.assertEqual([], ui._payload(self.a, chat_scoped=False)["notices"])
+
+    def test_the_workspace_says_when_a_subagent_comes_back(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        # Everything that happened before this page existed. A workspace
+        # opened mid-conversation must not replay the turns it missed.
+        chat_state.add_notice("chat-a", "session_stopped", "an older turn",
+                              self.root)
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(
+                    page.get_by_text("goal in chat a", exact=True).first
+                ).to_be_visible(timeout=10_000)
+                title = page.title()
+                # Two polls' worth: the state carrying the old notice has
+                # certainly landed by now.
+                page.wait_for_timeout(3_500)
+                expect(page.locator(".hc-notice")).to_have_count(0)
+                self.assertEqual(title, page.title())
+
+                chat_state.add_notice(
+                    "chat-a", "subagent_returned",
+                    "Explore: Analysis complete. Found 3 potential issues",
+                    self.root)
+
+                banner = page.locator(".hc-notice")
+                expect(banner).to_have_count(1, timeout=4_000)
+                expect(banner.locator(".hc-notice-title")
+                       ).to_have_text("A subagent returned")
+                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                    "Explore: Analysis complete. Found 3 potential issues")
+                expect(banner.locator(".hc-notice-close")).to_be_visible()
+                # A workspace on another screen has to be able to say so
+                # from the tab strip alone. The mark leads; what it leads is
+                # whatever title the page had, which the adopted artifact's
+                # runtime currently leaves empty (see the task report).
+                self.assertTrue(page.title().startswith("\u25cf"), page.title())
+                self.assertNotEqual(title, page.title())
+
+                # It takes itself away; nothing here was clicked.
+                expect(banner).to_have_count(0, timeout=12_000)
+                self.assertEqual(title, page.title())
+
+                # And it is not shown twice for the same event.
+                page.wait_for_timeout(3_500)
+                expect(banner).to_have_count(0)
+            finally:
+                browser.close()
+
+    def test_a_notice_waits_while_it_is_read_and_closes_when_asked(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(
+                    page.get_by_text("goal in chat a", exact=True).first
+                ).to_be_visible(timeout=10_000)
+                title = page.title()
+
+                chat_state.add_notice("chat-a", "session_stopped",
+                                      "Done. Tests pass.", self.root)
+                banner = page.locator(".hc-notice")
+                expect(banner).to_have_count(1, timeout=4_000)
+                expect(banner.locator(".hc-notice-title")
+                       ).to_have_text("Claude finished responding")
+
+                # Reading it holds it open past the moment it would have gone.
+                banner.hover()
+                page.wait_for_timeout(9_000)
+                expect(banner).to_have_count(1)
+
+                banner.locator(".hc-notice-close").click()
+                expect(banner).to_have_count(0, timeout=2_000)
+                self.assertEqual(title, page.title())
+            finally:
+                browser.close()
+
 
 if __name__ == "__main__":
     unittest.main()

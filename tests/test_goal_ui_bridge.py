@@ -82,9 +82,10 @@ const header = new El("div"); header.className = "hc-head"; app.appendChild(head
 const sub = new El("div"); sub.className = "hc-sub"; header.appendChild(sub);
 const panel = new El("div"); panel.className = "conv-panel"; app.appendChild(panel);
 const listeners = [];
+const pending = [];
 const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
-  body: root,
+  body: root, title: "Goals",
   addEventListener: (type, fn) => listeners.push([type, fn]),
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
@@ -145,8 +146,21 @@ const sandbox = {
       : { ok: true, terminal: "Terminal", cwd: "/repo" };
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   },
-  setInterval: () => 0, setTimeout: (f) => { if (f) f(); return 0; },
-  clearTimeout() {}, navigator: {}, store
+  setInterval: () => 0,
+  // Timers fire the moment they are set, which is what nearly every test
+  // here wants. A test about something that is supposed to happen *later*
+  // (a banner taking itself away after eight seconds) sets HC_DEFER_TIMEOUT
+  // and drives the callback itself.
+  setTimeout: (f) => {
+    if (!f) return 0;
+    if (process.env.HC_DEFER_TIMEOUT === "1") { pending.push(f); return pending.length; }
+    f();
+    return 0;
+  },
+  clearTimeout(id) { if (id) pending[id - 1] = null; },
+  navigator: {}, store, pending,
+  fireTimers: () => { const due = pending.slice(); pending.length = 0;
+                      due.forEach(f => { if (f) f(); }); }
 };
 sandbox.window = sandbox;
 vm.createContext(sandbox);
@@ -2654,3 +2668,212 @@ class ChatPromptLinkTests(BridgeTestCase):
         self.assertEqual([{"op": "attach_prompt", "goal_id": "g1",
                            "prompt_id": "a#2"}],
                          [c for c in posted if c.get("op") == "attach_prompt"])
+
+
+class ChatNoticeTests(BridgeTestCase):
+    """A goals workspace is a second window on a chat running in a terminal.
+
+    The one thing it can say that the terminal cannot is that the terminal is
+    finished. These tests hold what it is allowed to say, and for how long.
+    """
+
+    PRELUDE = (
+        "window.__hcPromptUI.acceptState("
+        "  { goals: [], prompts: [], scope: %s });"
+        "var iso = function (ms) { return new Date(ms).toISOString(); };"
+        "var now = Date.now();"
+        "var fire = function (type, target, related) {"
+        "  listeners.filter(function (l) { return l[0] === type; })"
+        "    .forEach(function (l) { l[1]({ type: type, target: target,"
+        "      relatedTarget: related || null, preventDefault: function () {},"
+        "      stopPropagation: function () {} }); }); };"
+        "var stack = function () {"
+        "  var node = window.__hcPromptUI.noticeStack();"
+        "  return node ? node.children : []; };"
+        "var drawn = function () { return stack().map(function (n) {"
+        "  var d = n.querySelector('.hc-notice-detail');"
+        "  return [n.className, n.querySelector('.hc-notice-title').textContent,"
+        "          d ? d.textContent : null]; }); };"
+    )
+
+    def notices(self, tail, scope="chat", defer=True):
+        """Timers stay pending unless a test drives them.
+
+        The banner's whole subject is *when* it goes away; a harness that
+        fires every timer the moment it is set would dismiss it before the
+        assertion that it appeared.
+        """
+        return self.run_js(
+            (self.PRELUDE % json.dumps(scope)) + tail,
+            extra_env={"HC_DEFER_TIMEOUT": "1"} if defer else None)
+
+    def test_only_what_happened_after_this_page_opened_is_shown(self):
+        # A chat that has been running for an hour has a store full of turns
+        # that finished before anyone opened this window. Replaying them
+        # would report old news as if it had just happened.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices(["
+            "  {id: 'n1', kind: 'session_stopped', at: iso(now - 60000),"
+            "   detail: 'an older turn'},"
+            "  {id: 'n2', kind: 'subagent_returned', at: iso(now + 5000),"
+            "   detail: 'Explore: found it'}]);"
+            "drawn();")
+        self.assertEqual(
+            [["hc-notice", "A subagent returned", "Explore: found it"]], out)
+
+    def test_the_same_notice_is_never_shown_twice(self):
+        # State is polled every 1.5s and the store keeps twenty rows, so the
+        # same notice arrives again on every poll for the rest of the session.
+        out = self.notices(
+            "var row = [{id: 'n1', kind: 'session_stopped',"
+            "            at: iso(now + 5000), detail: 'done'}];"
+            "window.__hcPromptUI.showNotices(row);"
+            "window.__hcPromptUI.showNotices(row);"
+            "window.__hcPromptUI.showNotices(row);"
+            "stack().length;")
+        self.assertEqual(1, out)
+
+    def test_at_most_three_stand_at_once(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([1,2,3,4,5].map(function (n) {"
+            "  return {id: 'n' + n, kind: 'session_stopped',"
+            "          at: iso(now + n * 1000), detail: 'turn ' + n}; }));"
+            "drawn().map(function (row) { return row[2]; });")
+        # The newest three: a stack that grows without bound covers the page
+        # it is reporting on.
+        self.assertEqual(["turn 3", "turn 4", "turn 5"], out)
+
+    def test_a_kind_the_banner_has_no_words_for_says_nothing(self):
+        # The copy is one of three sentences. An unknown kind would reach the
+        # reader as a blank banner or a raw enum name.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'compacted',"
+            "  at: iso(now + 5000), detail: 'whatever'}]);"
+            "stack().length;")
+        self.assertEqual(0, out)
+
+    def test_every_sentence_it_can_say_is_one_the_hook_proved(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices("
+            "  ['session_stopped', 'subagent_returned', 'session_ended']"
+            "    .map(function (kind, i) { return {id: 'n' + i, kind: kind,"
+            "      at: iso(now + 1000 + i), detail: ''}; }));"
+            "drawn();")
+        self.assertEqual(
+            [["hc-notice", "Claude finished responding", None],
+             ["hc-notice", "A subagent returned", None],
+             ["hc-notice", "Session ended", None]], out)
+
+    def test_a_notice_with_nothing_to_add_carries_no_empty_line(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_ended',"
+            "  at: iso(now + 5000), detail: ''}]);"
+            "[stack().length, !!stack()[0].querySelector('.hc-notice-detail'),"
+            " !!stack()[0].querySelector('.hc-notice-close')];")
+        self.assertEqual([1, False, True], out)
+
+    def test_a_global_vault_draws_no_banner(self):
+        # There is no one session for it to report on.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "[window.__hcPromptUI.noticeStack(), document.title];",
+            scope="global")
+        self.assertEqual([None, "Goals"], out)
+
+    def test_the_tab_carries_the_mark_only_while_a_notice_stands(self):
+        # The workspace is usually on a second screen. The tab strip is the
+        # only part of it a reader looking elsewhere can see.
+        out = self.notices(
+            "var titles = [document.title];"
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "titles.push(document.title);"
+            "window.fireTimers();"
+            "titles.push(document.title);"
+            "titles;",
+            defer=True)
+        self.assertEqual(["Goals", "● Goals", "Goals"], out)
+
+    def test_a_notice_takes_itself_away(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var before = stack().length;"
+            "window.fireTimers();"
+            "[before, stack().length];",
+            defer=True)
+        self.assertEqual([1, 0], out)
+
+    def test_reading_it_keeps_it_on_screen(self):
+        # Eight seconds is not long enough to read a line and think about it,
+        # so the clock stops while the pointer is on it and starts again when
+        # it leaves.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var box = stack()[0];"
+            "fire('mouseover', box);"
+            "window.fireTimers();"
+            "var held = stack().length;"
+            "fire('mouseout', box, null);"
+            "window.fireTimers();"
+            "[held, stack().length];",
+            defer=True)
+        self.assertEqual([1, 0], out)
+
+    def test_moving_across_its_own_text_is_not_leaving_it(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var box = stack()[0];"
+            "fire('mouseover', box);"
+            "fire('mouseout', box.querySelector('.hc-notice-title'),"
+            "     box.querySelector('.hc-notice-detail'));"
+            "window.fireTimers();"
+            "stack().length;",
+            defer=True)
+        self.assertEqual(1, out)
+
+    def test_the_close_control_dismisses_it(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var box = stack()[0];"
+            "fire('click', box.querySelector('.hc-notice-close'));"
+            "[stack().length, document.title];",
+            defer=True)
+        self.assertEqual([0, "Goals"], out)
+
+    def test_a_dismissed_notice_does_not_come_back_on_the_next_poll(self):
+        out = self.notices(
+            "var row = [{id: 'n1', kind: 'session_stopped',"
+            "            at: iso(now + 5000), detail: 'done'}];"
+            "window.__hcPromptUI.showNotices(row);"
+            "fire('click', stack()[0].querySelector('.hc-notice-close'));"
+            "window.__hcPromptUI.showNotices(row);"
+            "stack().length;",
+            defer=True)
+        self.assertEqual(0, out)
+
+    def test_the_banner_is_small_and_drawn_from_the_page_tokens(self):
+        css = self.run_js("window.__hcPromptUI.noticeCss();")
+        self.assertIn("position:fixed", css)
+        self.assertIn("right:", css)
+        self.assertIn("bottom:", css)
+        self.assertIn("320px", css)
+        self.assertIn("11px", css)
+        self.assertIn("monospace", css)
+        for token in ("--panel", "--bd2", "--acc", "--mut", "--ink"):
+            self.assertIn("var(" + token, css)
+
+    def test_junk_in_the_notice_list_is_stepped_over(self):
+        # /api/state is a file on disk away from a process that may have been
+        # killed mid-write. A malformed row may not take the page down.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices(["
+            "  null, 'nope', {}, {id: 'n1'},"
+            "  {id: 'n2', kind: 'session_stopped', at: 'not a date'},"
+            "  {id: 'n3', kind: 'session_stopped', at: iso(now + 5000)}]);"
+            "stack().length;")
+        self.assertEqual(1, out)

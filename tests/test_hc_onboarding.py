@@ -172,6 +172,26 @@ class HcOnboardingTests(unittest.TestCase):
                      for entry in batch])
                 self.assertEqual(5, batch[1]["timeout"])
 
+    def test_a_finished_subagent_reaches_the_workspace(self):
+        # The workspace's one job the terminal cannot do is say "it is done".
+        # Stop covers the conversation; without SubagentStop, a dispatched
+        # agent returning is invisible to it.
+        for name in ("hooks.json", "hooks.experimental.json"):
+            hooks = json.loads((PLUGIN_HOOKS / name).read_text())["hooks"]
+            with self.subTest(name=name):
+                entries = [entry for group in hooks["SubagentStop"]
+                           for entry in group["hooks"]]
+                self.assertEqual(1, len(entries))
+                self.assertEqual(CHAT_HOOK, entries[0]["command"])
+                # Same shape as Stop: nothing is injected here, so it has no
+                # business sitting on the model's critical path.
+                self.assertTrue(entries[0]["async"])
+                self.assertEqual(30, entries[0]["timeout"])
+                self.assertEqual(
+                    [entry for group in hooks["Stop"]
+                     for entry in group["hooks"]],
+                    entries)
+
     def test_hook_commands_quote_the_plugin_path(self):
         # ${CLAUDE_PLUGIN_ROOT} is substituted into a shell command line. An
         # unquoted install path containing a space would reach chat-hook.sh as

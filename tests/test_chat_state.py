@@ -902,6 +902,161 @@ class ChatStateTests(unittest.TestCase):
         self.assertIn("New", text)
         self.assertEqual(before, CS.load_context_snapshot(SID, self.base)["sha256"])
 
+    # --- notices: what the workspace is allowed to tell the reader ---------
+
+    def test_a_notice_store_keeps_only_the_newest_twenty_newest_last(self):
+        # A workspace opened after a long session should not replay every
+        # turn that ever finished, and the ones worth showing are the last.
+        for n in range(25):
+            CS.add_notice(SID, "session_stopped", f"turn {n}", self.base)
+
+        rows = CS.load_notices(SID, self.base)
+
+        self.assertEqual(20, len(rows))
+        self.assertEqual([f"turn {n}" for n in range(5, 25)],
+                         [row["detail"] for row in rows])
+        self.assertEqual(20, len({row["id"] for row in rows}))
+        for row in rows:
+            self.assertEqual("session_stopped", row["kind"])
+            self.assertRegex(row["id"], r"^[0-9a-f]+$")
+            self.assertRegex(row["at"], r"^\d{4}-\d{2}-\d{2}T")
+
+    def test_a_notice_is_timestamped_finely_enough_to_beat_a_page_load(self):
+        # The browser shows a notice only when it is newer than the moment
+        # the page opened. Second-resolution timestamps round a notice
+        # written just after that moment back before it, and the banner then
+        # never appears at all.
+        row = CS.add_notice(SID, "session_stopped", "", self.base)
+        self.assertRegex(row["at"], r"T\d{2}:\d{2}:\d{2}\.\d{3}")
+
+    def test_a_notice_detail_is_one_scannable_line(self):
+        long = "x" * 400
+        row = CS.add_notice(
+            SID, "session_stopped", f"  wrapped\n  over\tlines {long}", self.base)
+
+        self.assertEqual(160, len(row["detail"]))
+        self.assertTrue(row["detail"].startswith("wrapped over lines xxx"))
+        self.assertNotIn("\n", row["detail"])
+        self.assertEqual(row["detail"], CS.load_notices(SID, self.base)[0]["detail"])
+
+    def test_a_kind_with_no_copy_is_not_recorded(self):
+        # The banner says one of three sentences. A kind nobody wrote a
+        # sentence for would reach the reader as a blank or a raw enum.
+        self.assertIsNone(CS.add_notice(SID, "compacted", "whatever", self.base))
+        self.assertEqual([], CS.load_notices(SID, self.base))
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission semantics")
+    def test_notices_are_owner_only_and_survive_corruption(self):
+        CS.add_notice(SID, "session_ended", "clear", self.base)
+        p = CS.paths(SID, self.base)
+        self.assertEqual(0o600, p.notices.stat().st_mode & 0o777)
+
+        p.notices.write_text("{not json", encoding="utf-8")
+        self.assertEqual([], CS.load_notices(SID, self.base))
+        # And the store repairs itself rather than staying unreadable.
+        CS.add_notice(SID, "session_ended", "again", self.base)
+        self.assertEqual(["again"],
+                         [row["detail"] for row in CS.load_notices(SID, self.base)])
+
+    def test_a_missing_store_reads_as_nothing_to_say(self):
+        self.assertEqual([], CS.load_notices(SID, self.base))
+
+    def test_stopping_a_turn_records_what_claude_last_said(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "Stop",
+            "cwd": "/repo",
+            "last_assistant_message": "  Done.\nTests   pass.  ",
+        }, root=self.base)
+
+        rows = CS.load_notices(SID, self.base)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("session_stopped", rows[0]["kind"])
+        self.assertEqual("Done. Tests pass.", rows[0]["detail"])
+
+    def test_a_returning_subagent_names_itself_without_ingesting_its_words(self):
+        # SubagentStop.last_assistant_message is the *subagent's* final
+        # response, not the conversation's. It may name the agent in a
+        # notice; it may not enter this session's event stream as something
+        # Claude said to the user.
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo",
+            "agent_id": "def456",
+            "agent_type": "Explore",
+            "last_assistant_message": "Analysis complete. Found 3 potential issues",
+        }, root=self.base)
+
+        rows = CS.load_notices(SID, self.base)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("subagent_returned", rows[0]["kind"])
+        self.assertEqual("Explore: Analysis complete. Found 3 potential issues",
+                         rows[0]["detail"])
+        self.assertEqual([], [event for event in CS.load_events(SID, self.base)
+                              if "Analysis complete" in event["text"]])
+
+    def test_a_nameless_subagent_still_returns(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo",
+            "last_assistant_message": "done",
+        }, root=self.base)
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo",
+            "agent_id": "agent-77",
+        }, root=self.base)
+
+        self.assertEqual([("subagent_returned", "done"),
+                          ("subagent_returned", "agent-77")],
+                         [(row["kind"], row["detail"])
+                          for row in CS.load_notices(SID, self.base)])
+
+    def test_a_session_ending_records_the_reason_it_gave(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SessionEnd",
+            "cwd": "/repo",
+            "reason": "clear",
+        }, root=self.base)
+
+        self.assertEqual([("session_ended", "clear")],
+                         [(row["kind"], row["detail"])
+                          for row in CS.load_notices(SID, self.base)])
+
+    def test_an_ordinary_hook_says_nothing(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": "/repo",
+            "prompt": "keep going",
+        }, root=self.base)
+
+        self.assertEqual([], CS.load_notices(SID, self.base))
+
+    def test_a_notice_that_cannot_be_written_does_not_cost_the_ingest(self):
+        # A hook may never fail over a banner.
+        CS.paths(SID, self.base).session_dir.mkdir(parents=True, exist_ok=True)
+        CS.paths(SID, self.base).notices.mkdir()
+
+        result = CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "Stop",
+            "cwd": "/repo",
+            "last_assistant_message": "still ingested",
+        }, root=self.base)
+
+        self.assertEqual(1, result.appended)
+        self.assertEqual([], CS.load_notices(SID, self.base))
+        self.assertIn("still ingested",
+                      [event["text"] for event in CS.load_events(SID, self.base)])
+
+
 
 if __name__ == "__main__":
     unittest.main()
