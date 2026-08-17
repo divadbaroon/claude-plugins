@@ -65,8 +65,12 @@ class HcOnboardingTests(unittest.TestCase):
             # /goals-ui is silent: the body is inert prose, not something
             # Claude is told to act on, and no session id is templated in
             # because Claude never reads it.
-            self.assertIn("Opens the goal workspace for this Claude Code chat "
-                          "in your browser. Nothing is sent to Claude.", body)
+            self.assertIn(
+                "Opens the goal workspace for this Claude Code chat in your "
+                "browser. Nothing is sent to Claude by this command; from now "
+                "on the chat's goals document is injected as context on later "
+                "messages, subagents, and tool batches. Run `/goals-ui "
+                "disable` to turn that off for this chat.", body)
             self.assertNotIn('${CLAUDE_SESSION_ID}', body)
             self.assertTrue(hooks.is_file())
             self.assertFalse((home / ".claude-vault" / "bin" / "claude").exists())
@@ -121,6 +125,44 @@ class HcOnboardingTests(unittest.TestCase):
         self.assertEqual(VAULT_HOOK_EVENTS,
                          vault_hook_events(experimental["hooks"]))
         self.assertEqual(set(), vault_hook_events(default["hooks"]))
+        # The global layer backgrounds `hc worker`, which the release gate
+        # refuses unless the flag is set; the vault entries carry it, and
+        # nothing else in either file does.
+        for event, groups in experimental["hooks"].items():
+            for entry in (e for group in groups for e in group["hooks"]):
+                with self.subTest(event=event, command=entry["command"]):
+                    self.assertEqual(
+                        entry["command"].endswith("vault-hook.sh"),
+                        entry["command"].startswith("HC_EXPERIMENTAL=1 "))
+        self.assertNotIn("HC_EXPERIMENTAL", json.dumps(default))
+
+    def test_goal_context_reaches_subagents_and_tool_batches(self):
+        # A subagent starts with an empty context and a tool batch can create
+        # tasks, so both need the goals the main conversation already has.
+        for name in ("hooks.json", "hooks.experimental.json"):
+            hooks = json.loads((PLUGIN_HOOKS / name).read_text())["hooks"]
+            with self.subTest(name=name):
+                subagent = [entry for group in hooks["SubagentStart"]
+                            for entry in group["hooks"]]
+                self.assertEqual(1, len(subagent))
+                self.assertTrue(subagent[0]["command"].endswith("chat-hook.sh"))
+                self.assertFalse(subagent[0].get("async"))
+
+                batch = [entry for group in hooks["PostToolBatch"]
+                         for entry in group["hooks"]]
+                # One entry ingests off the critical path; the other speaks on
+                # it. Collapsing them would either block Claude or say nothing.
+                self.assertEqual(
+                    [(True, False), (False, True)],
+                    [(bool(entry.get("async")),
+                      entry["command"].endswith("--inject-only"))
+                     for entry in batch])
+                self.assertEqual(5, batch[1]["timeout"])
+
+    def test_the_chat_hook_forwards_its_own_arguments(self):
+        script = (HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /
+                  "chat-hook.sh").read_text()
+        self.assertIn('"$HC_CMD" chat-hook "$@"', script)
 
     def test_ui_expansion_reports_missing_cli_instead_of_claiming_success(self):
         script = (

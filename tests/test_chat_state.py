@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -80,6 +81,10 @@ class ChatStateTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name) / "state"
         self.transcript = Path(self.temp.name) / "chat.jsonl"
+        # A stand-in for Claude's own per-project transcript, so mirrored
+        # goal documents never land in the developer's real home.
+        self.chat_jsonl = str(
+            Path(self.temp.name) / "claude-project" / f"{SID}.jsonl")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -709,6 +714,193 @@ class ChatStateTests(unittest.TestCase):
         self.assertEqual(6, context.count("- SOURCE ("))
         self.assertIn("- SOURCE (local): ~/p5", context)
         self.assertNotIn("~/p6", context)
+
+    def test_goal_context_is_never_truncated_by_a_character_budget(self):
+        # Every cap here was ours, not the host's. A goal the user wrote 4,000
+        # characters into is not served by handing the model the first 280.
+        description = "why this matters " * 240
+        notes = "\n".join(f"- decision {n}" for n in range(400))
+        prompt_text = "rebuild the pipeline " * 200
+        goals = {"version": 1, "goals": [{
+            "id": f"g{n}", "title": f"Goal {n}", "status": "active",
+            "parent_goal_id": None, "todos": [],
+            "description": description,
+            "notes": f"# Decisions\n{notes}\n",
+            "prompt_ids": [f"p{i}" for i in range(6)],
+            "important_item_ids": [f"i{i}" for i in range(5)],
+        } for n in range(4)]}
+        important = {"items": [{"id": f"i{i}", "text": f"important {i} " * 60}
+                               for i in range(5)]}
+        prompts = [{"id": f"p{i}", "text": f"{i} {prompt_text}"}
+                   for i in range(6)]
+
+        text = CS._goal_context_text(SID, goals, important, prompts)
+
+        self.assertGreater(len(text), 8_000)
+        self.assertIn(description.strip(), text)
+        self.assertIn("- decision 0", text)
+        self.assertIn("- decision 399", text)
+        for i in range(6):
+            self.assertIn(f"USER PROMPT: {i} {prompt_text}".strip(), text)
+        for i in range(5):
+            self.assertIn(f"IMPORTANT: {important['items'][i]['text']}", text)
+        self.assertIn("Goal 3", text)
+
+    def test_goals_ui_stays_on_until_it_is_disabled_and_can_be_re_enabled(self):
+        self.assertFalse(CS.goals_ui_active(SID, self.base))
+        CS.mark_goals_ui_invoked(SID, self.base)
+        self.assertTrue(CS.goals_ui_active(SID, self.base))
+        opened_at = CS.load_manifest(SID, self.base)["goals_ui_invoked_at"]
+
+        CS.disable_goals_ui(SID, self.base)
+        self.assertFalse(CS.goals_ui_active(SID, self.base))
+        self.assertTrue(CS.goals_ui_invoked(SID, self.base))
+
+        CS.mark_goals_ui_invoked(SID, self.base)
+        self.assertTrue(CS.goals_ui_active(SID, self.base))
+        # Re-opening clears the disable without rewriting the first opt-in.
+        self.assertEqual(opened_at,
+                         CS.load_manifest(SID, self.base)["goals_ui_invoked_at"])
+        self.assertIsNone(
+            CS.load_manifest(SID, self.base).get("goals_ui_disabled_at"))
+
+    def test_disabling_forgets_the_snapshot_so_re_opening_resends_everything(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        CS.mark_goals_ui_invoked(SID, self.base)
+        CS.render_context_injection(SID, "delta", transcript_path=self.chat_jsonl,
+                                    root=self.base)
+        self.assertTrue(CS.load_context_snapshot(SID, self.base))
+
+        CS.disable_goals_ui(SID, self.base)
+
+        # Claude was told nothing while the feature was off, so a diff against
+        # what it "last saw" would be against text it no longer has.
+        self.assertEqual({}, CS.load_context_snapshot(SID, self.base))
+
+    def test_context_snapshot_is_owner_only_and_survives_corruption(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        CS.save_context_snapshot(SID, "hello", self.base)
+        snapshot = CS.paths(SID, self.base).context_snapshot
+
+        self.assertEqual(0o600, snapshot.stat().st_mode & 0o777)
+        self.assertEqual("hello", CS.load_context_snapshot(SID, self.base)["text"])
+        snapshot.write_text("[]", encoding="utf-8")
+        self.assertEqual({}, CS.load_context_snapshot(SID, self.base))
+        CS.clear_context_snapshot(SID, self.base)
+        self.assertFalse(snapshot.exists())
+        CS.clear_context_snapshot(SID, self.base)
+
+    def test_mirror_lands_beside_the_transcript_and_only_rewrites_on_change(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        transcript = Path(self.temp.name) / "claude-project" / f"{SID}.jsonl"
+
+        target = CS.mirror_goal_context(SID, str(transcript), "/repo",
+                                        root=self.base)
+
+        stored = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertEqual(transcript.parent / "goals-ui" / f"{SID}.md", target)
+        self.assertEqual(stored, target.read_text(encoding="utf-8"))
+        self.assertEqual(0o600, target.stat().st_mode & 0o777)
+        self.assertEqual(0o700, target.parent.stat().st_mode & 0o777)
+
+        # Unchanged goals must not rewrite the file on every prompt.
+        before = target.stat().st_mtime_ns
+        self.assertEqual(target, CS.mirror_goal_context(
+            SID, str(transcript), "/repo", root=self.base))
+        self.assertEqual(before, target.stat().st_mtime_ns)
+
+    def test_mirror_falls_back_to_a_project_directory_claude_already_made(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        home = Path(self.temp.name) / "home"
+        cwd = Path(self.temp.name) / "work space"
+        # Claude encodes a project by hyphenating its absolute path.
+        project = (home / ".claude" / "projects"
+                   / re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd)))
+
+        with mock.patch("pathlib.Path.home", return_value=home):
+            # Nothing of Claude's is there yet, so there is nothing to sit
+            # beside: inventing the directory would be litter, not a mirror.
+            self.assertIsNone(
+                CS.mirror_goal_context(SID, None, str(cwd), root=self.base))
+            project.mkdir(parents=True)
+            target = CS.mirror_goal_context(SID, None, str(cwd), root=self.base)
+
+        self.assertEqual(project / "goals-ui" / f"{SID}.md", target)
+        self.assertTrue(target.is_file())
+
+    def test_mirror_never_raises_when_it_cannot_write(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        not_a_directory = Path(self.temp.name) / "occupied"
+        not_a_directory.write_text("in the way", encoding="utf-8")
+
+        self.assertIsNone(CS.mirror_goal_context(
+            SID, str(not_a_directory / "chat.jsonl"), None, root=self.base))
+        # No location to write to at all is a silent no-op, not a crash.
+        self.assertIsNone(CS.mirror_goal_context(SID, None, None, root=self.base))
+
+    def test_delta_falls_back_to_the_whole_file_when_the_diff_is_not_smaller(self):
+        CS.mark_goals_ui_invoked(SID, self.base)
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": f"g{n}", "title": f"Goal {n}", "status": "active",
+                "parent_goal_id": None, "todos": [], "prompt_ids": [],
+            } for n in range(30)]},
+            {"items": []},
+            root=self.base,
+        )
+        first = CS.render_context_injection(
+            SID, "full", transcript_path=self.chat_jsonl, root=self.base)
+        self.assertIn("# Goals for this Claude chat (full file:", first)
+
+        # Every goal renamed: the diff restates the file twice over, so the
+        # file itself is the cheaper thing to send.
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": f"g{n}", "title": f"Renamed goal {n}", "status": "active",
+                "parent_goal_id": None, "todos": [], "prompt_ids": [],
+            } for n in range(30)]},
+            {"items": []},
+            root=self.base,
+        )
+        second = CS.render_context_injection(
+            SID, "delta", transcript_path=self.chat_jsonl, root=self.base)
+
+        self.assertIn("# Goals for this Claude chat (full file:", second)
+        self.assertNotIn("changed since your last message", second)
+        self.assertEqual(
+            CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8"),
+            CS.load_context_snapshot(SID, self.base)["text"],
+        )
+
+    def test_a_remembered_render_is_the_only_one_that_moves_the_snapshot(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        CS.render_context_injection(SID, "full", transcript_path=self.chat_jsonl,
+                                    root=self.base)
+        before = CS.load_context_snapshot(SID, self.base)["sha256"]
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "New", "status": "active",
+                "parent_goal_id": None, "todos": [], "prompt_ids": [],
+            }]},
+            {"items": []},
+            root=self.base,
+        )
+
+        text = CS.render_context_injection(
+            SID, "full", transcript_path=self.chat_jsonl, root=self.base,
+            remember=False)
+
+        self.assertIn("New", text)
+        self.assertEqual(before, CS.load_context_snapshot(SID, self.base)["sha256"])
 
 
 if __name__ == "__main__":

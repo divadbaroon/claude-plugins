@@ -35,7 +35,7 @@ if [ -z "$HC_CMD" ]; then
   exit 0
 fi
 
-OUTPUT=$(printf '%s' "$INPUT" | "$HC_CMD" chat-hook 2>/dev/null)
+OUTPUT=$(printf '%s' "$INPUT" | "$HC_CMD" chat-hook "$@" 2>/dev/null)
 STATUS=$?
 if [ -n "$OUTPUT" ]; then
   printf '%s\n' "$OUTPUT"

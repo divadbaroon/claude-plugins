@@ -39,6 +39,19 @@ def one_goal_tree():
     }
 
 
+def two_goal_tree():
+    tree = one_goal_tree()
+    tree["goals"].append({
+        "id": "g2",
+        "title": "Ship the diff cache",
+        "status": "active",
+        "parent_goal_id": None,
+        "todos": [],
+        "prompt_ids": [],
+    })
+    return tree
+
+
 class ChatCliTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -57,6 +70,11 @@ class ChatCliTests(unittest.TestCase):
             },
         )
         self.env.start()
+        # Claude keeps its own per-project transcript directory; the mirrored
+        # goal document has to land beside it, not inside the plugin's state.
+        self.project = Path(self.temp.name) / "claude-project"
+        self.transcript = self.project / f"{SID}.jsonl"
+        self.mirror = self.project / "goals-ui" / f"{SID}.md"
         import human_compact.cli as cli
         self.cli = cli
         for process in list(self.cli._DETACHED_PROCESSES):
@@ -87,6 +105,36 @@ class ChatCliTests(unittest.TestCase):
             "started_at": 0,
         })
 
+    def _payload(self, event, **extra):
+        payload = {
+            "session_id": SID,
+            "hook_event_name": event,
+            "cwd": "/repo",
+            "transcript_path": str(self.transcript),
+        }
+        payload.update(extra)
+        return payload
+
+    def _hook(self, event, argv=None, **extra):
+        """Run one hook and return its raw stdout."""
+        output = io.StringIO()
+        code = self.cli.chat_hook_main(
+            list(argv or []),
+            stdin=io.StringIO(json.dumps(self._payload(event, **extra))),
+            stdout=output,
+        )
+        self.assertEqual(0, code)
+        return output.getvalue()
+
+    def _injected(self, raw):
+        """The additionalContext of a hook response, or "" when it said nothing."""
+        if not raw.strip():
+            return ""
+        return json.loads(raw)["hookSpecificOutput"]["additionalContext"]
+
+    def _snapshot_sha(self):
+        return CS.load_context_snapshot(SID).get("sha256")
+
     def test_prompt_hook_ingests_and_injects_cached_goal_context(self):
         goals = {
             "version": 1,
@@ -101,7 +149,6 @@ class ChatCliTests(unittest.TestCase):
         }
         CS.save_goals(SID, goals, {"items": []})
         CS.mark_goals_ui_invoked(SID)
-        self._register_server()
         payload = {
             "session_id": SID,
             "hook_event_name": "UserPromptSubmit",
@@ -110,10 +157,9 @@ class ChatCliTests(unittest.TestCase):
         }
         output = io.StringIO()
 
-        with mock.patch.object(self.cli, "_healthy_chat_server", return_value=True):
-            code = self.cli.chat_hook_main(
-                [], stdin=io.StringIO(json.dumps(payload)), stdout=output
-            )
+        code = self.cli.chat_hook_main(
+            [], stdin=io.StringIO(json.dumps(payload)), stdout=output
+        )
 
         self.assertEqual(0, code)
         response = json.loads(output.getvalue())
@@ -187,57 +233,202 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         spawn.assert_called_once_with(SID)
 
-    def test_prompt_hook_withholds_goal_context_without_a_live_workspace(self):
+    def test_prompt_hook_injects_even_though_the_workspace_is_closed(self):
+        # /goals-ui is a one-time opt-in, not a window that has to stay open:
+        # the user who closed the tab still owns the goals they wrote in it.
         CS.save_goals(SID, one_goal_tree(), {"items": []})
         CS.mark_goals_ui_invoked(SID)
         self.assertTrue(CS.paths(SID).goal_context.exists())
-        payload = {
-            "session_id": SID,
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "Continue from the plan",
-            "cwd": "/repo",
-        }
-        output = io.StringIO()
+        self.assertIsNone(
+            self.cli._read_server_registry(CS.paths(SID).session_dir))
 
-        code = self.cli.chat_hook_main(
-            [], stdin=io.StringIO(json.dumps(payload)), stdout=output
-        )
+        context = self._injected(
+            self._hook("UserPromptSubmit", prompt="Continue from the plan"))
 
-        self.assertEqual(0, code)
-        self.assertEqual("", output.getvalue())
+        self.assertIn("Connect this chat to goals", context)
 
-    def test_prompt_hook_survives_a_corrupt_server_registry(self):
+    def test_prompt_hook_survives_a_corrupt_context_snapshot(self):
         CS.save_goals(SID, one_goal_tree(), {"items": []})
         CS.mark_goals_ui_invoked(SID)
-        # A malformed IPv6 url raises out of urlparse, above the health
-        # probe's own guard; the live pid gets the record that far.
-        self._register_server(url="http://[::1")
-        payload = {
-            "session_id": SID,
-            "hook_event_name": "UserPromptSubmit",
-            "prompt": "Continue from the plan",
-            "cwd": "/repo",
-        }
-        output = io.StringIO()
+        CS.paths(SID).context_snapshot.write_text("{not json", encoding="utf-8")
 
-        code = self.cli.chat_hook_main(
-            [], stdin=io.StringIO(json.dumps(payload)), stdout=output
-        )
+        # Unreadable cache state may cost the diff, never the prompt: the
+        # hook falls back to the whole file instead of raising.
+        context = self._injected(
+            self._hook("UserPromptSubmit", prompt="Continue from the plan"))
 
-        self.assertEqual(0, code)
-        self.assertEqual("", output.getvalue())
+        self.assertIn("# Goals for this Claude chat (full file:", context)
+        self.assertIn("Connect this chat to goals", context)
 
-    def test_chat_context_active_requires_opt_in_and_a_live_workspace(self):
+    def test_chat_context_active_follows_the_goals_ui_opt_in_only(self):
         dead = subprocess.Popen([sys.executable, "-c", ""])
         dead.wait()
         self.assertFalse(self.cli._chat_context_active(SID))
         CS.mark_goals_ui_invoked(SID)
-        self.assertFalse(self.cli._chat_context_active(SID))
+        # No registry at all, then a registry whose process is gone: neither
+        # is a reason to stop honouring the opt-in.
+        self.assertTrue(self.cli._chat_context_active(SID))
         self._register_server(pid=dead.pid)
+        self.assertTrue(self.cli._chat_context_active(SID))
+        CS.disable_goals_ui(SID)
         self.assertFalse(self.cli._chat_context_active(SID))
+        CS.mark_goals_ui_invoked(SID)
+        self.assertTrue(self.cli._chat_context_active(SID))
+
+    def test_first_prompt_sends_the_whole_file_and_mirrors_it_for_the_user(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+
+        context = self._injected(self._hook("UserPromptSubmit", prompt="Go"))
+
+        stored = CS.paths(SID).goal_context.read_text(encoding="utf-8")
+        self.assertEqual(
+            f"# Goals for this Claude chat (full file: {self.mirror})",
+            context.splitlines()[0],
+        )
+        self.assertIn(stored, context)
+        # The user gets a real file to open, beside Claude's own transcript.
+        self.assertTrue(self.mirror.is_file())
+        self.assertEqual(stored, self.mirror.read_text(encoding="utf-8"))
+        self.assertEqual(0o600, self.mirror.stat().st_mode & 0o777)
+        self.assertEqual(0o700, self.mirror.parent.stat().st_mode & 0o777)
+        self.assertEqual(
+            CS.load_context_snapshot(SID).get("text"), stored)
+
+    def test_an_unchanged_goal_document_is_never_re_sent(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self.assertTrue(self._hook("UserPromptSubmit", prompt="First").strip())
+
+        # Nothing changed, so nothing is worth a single token of context.
+        self.assertEqual("", self._hook("UserPromptSubmit", prompt="Second"))
+
+    def test_a_changed_goal_document_is_sent_as_a_diff(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+
+        context = self._injected(self._hook("UserPromptSubmit", prompt="Second"))
+
+        self.assertEqual(
+            f"# Goals for this chat changed since your last message "
+            f"(full file: {self.mirror})",
+            context.splitlines()[0],
+        )
+        self.assertIn("--- goals (as you last saw them)", context)
+        self.assertIn("+++ goals (now)", context)
+        self.assertIn("+- Ship the diff cache", context)
+        # The unchanged goal is not restated inside the diff body.
+        self.assertNotIn("+- Connect this chat to goals", context)
+        self.assertEqual(
+            CS.paths(SID).goal_context.read_text(encoding="utf-8"),
+            CS.load_context_snapshot(SID).get("text"),
+        )
+
+    def test_session_start_resends_the_whole_file_after_a_compaction(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+
+        # SessionStart fires on compaction, when the earlier injection is gone
+        # from the model's context and a diff against it would be a lie.
+        context = self._injected(self._hook("SessionStart", source="compact"))
+
+        stored = CS.paths(SID).goal_context.read_text(encoding="utf-8")
+        self.assertIn("# Goals for this Claude chat (full file:", context)
+        self.assertIn(stored, context)
+        self.assertNotIn("changed since your last message", context)
+        self.assertEqual(stored, CS.load_context_snapshot(SID).get("text"))
+
+    def test_a_subagent_gets_the_whole_file_without_eating_the_next_diff(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+        before = self._snapshot_sha()
+
+        raw = self._hook("SubagentStart", agent_type="Explore")
+        response = json.loads(raw)
+
+        self.assertEqual(
+            "SubagentStart", response["hookSpecificOutput"]["hookEventName"])
+        # A subagent starts with an empty context, so it needs everything.
+        self.assertIn("# Goals for this Claude chat (full file:",
+                      self._injected(raw))
+        self.assertIn("Ship the diff cache", self._injected(raw))
+        # ...and its private read must not spend the main conversation's diff.
+        self.assertEqual(before, self._snapshot_sha())
+        self.assertIn("+- Ship the diff cache",
+                      self._injected(self._hook("UserPromptSubmit", prompt="Next")))
+
+    def test_post_tool_batch_injects_the_delta_without_ingesting_again(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+
+        with mock.patch.object(CS, "ingest_hook") as ingest:
+            raw = self._hook("PostToolBatch", argv=["--inject-only"])
+
+        # The async entry already ingested this batch; the synchronous one is
+        # on the 5s prompt budget and may only speak.
+        ingest.assert_not_called()
+        response = json.loads(raw)
+        self.assertEqual(
+            "PostToolBatch", response["hookSpecificOutput"]["hookEventName"])
+        self.assertIn("+- Ship the diff cache", self._injected(raw))
+
+    def test_the_ingesting_post_tool_batch_entry_stays_silent(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+
+        # This entry runs async and its stdout is discarded; consuming the
+        # delta here would silently starve the synchronous entry.
+        self.assertEqual("", self._hook("PostToolBatch"))
+        self.assertIn("+- Ship the diff cache",
+                      self._injected(self._hook("PostToolBatch",
+                                                argv=["--inject-only"])))
+
+    def test_goals_ui_disable_turns_the_chat_off_until_it_is_opened_again(self):
+        from human_compact.trajectory import chat_synth
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+
+        with mock.patch.object(self.cli, "chat_ui_main") as launch:
+            raw = self._hook("UserPromptExpansion", command_args="disable",
+                             command_name="goals-ui")
+
+        launch.assert_not_called()
+        response = json.loads(raw)
+        self.assertEqual("block", response["decision"])
+        self.assertIn("disabled", response["reason"])
+        self.assertNotIn("hookSpecificOutput", response)
+        self.assertFalse(CS.goals_ui_active(SID))
+
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+        self.assertEqual("", self._hook("UserPromptSubmit", prompt="Second"))
+        with mock.patch.object(chat_synth, "spawn_refresh") as spawn:
+            self._hook("Stop", last_assistant_message="done")
+        spawn.assert_not_called()
+
         self._register_server()
-        with mock.patch.object(self.cli, "_healthy_chat_server", return_value=True):
-            self.assertTrue(self.cli._chat_context_active(SID))
+        with (mock.patch.object(self.cli, "_healthy_chat_server",
+                                return_value=True),
+              mock.patch.object(self.cli, "_request_chat_refresh"),
+              mock.patch("webbrowser.open"),
+              contextlib.redirect_stdout(io.StringIO())):
+            self.assertEqual(0, self.cli.chat_ui_main(
+                ["--session", SID, "--cwd", "/repo"]))
+
+        self.assertTrue(CS.goals_ui_active(SID))
+        # Re-opening starts over: the model was told nothing while it was off.
+        self.assertIn("# Goals for this Claude chat (full file:",
+                      self._injected(self._hook("UserPromptSubmit", prompt="Third")))
 
     def test_chat_ui_marks_the_session_as_goals_ui_invoked(self):
         self._register_server()

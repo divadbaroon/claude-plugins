@@ -18,7 +18,13 @@
     ],
     "PostToolBatch": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 },
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh --inject-only", "args": [], "timeout": 5 }
+      ] }
+    ],
+    "SubagentStart": [
+      { "hooks": [
+        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
       ] }
     ],
     "Stop": [

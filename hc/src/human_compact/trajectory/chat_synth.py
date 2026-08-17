@@ -88,12 +88,6 @@ NEW EVIDENCE:
 <<EVENTS>>"""
 
 
-def _project_key(cwd: Path) -> str:
-    # Claude encodes an absolute project path by replacing all non-word path
-    # punctuation (including spaces) with hyphens.
-    return re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd))
-
-
 def _read_bounded(path: Path, remaining: int) -> str:
     if remaining <= 0 or path.is_symlink() or not path.is_file():
         return ""
@@ -191,7 +185,7 @@ def project_context(cwd_value: Optional[str], events: Iterable[Dict[str, Any]]) 
             break
 
     memory_dir = (
-        Path.home() / ".claude" / "projects" / _project_key(cwd) / "memory"
+        Path.home() / ".claude" / "projects" / CS._project_key(cwd) / "memory"
     )
     index = memory_dir / "MEMORY.md"
     index_text = _read_bounded(index, min(5_000, remaining))

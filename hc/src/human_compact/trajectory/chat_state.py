@@ -8,6 +8,7 @@ record ids and event deduplication are the correctness boundary.
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -54,6 +55,7 @@ class ChatPaths:
     goals: Path
     important: Path
     goal_context: Path
+    context_snapshot: Path
     lock_dir: Path
 
 
@@ -109,6 +111,7 @@ def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
         goals=session_dir / "goals.json",
         important=session_dir / "important.json",
         goal_context=session_dir / "goal_context.md",
+        context_snapshot=session_dir / "context_snapshot.json",
         lock_dir=session_dir / ".lock",
     )
 
@@ -253,19 +256,49 @@ def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
 
     Every session's history is ingested, but analysis and context injection
     belong only to the chats whose owner asked for them by running /goals-ui.
+    Opening the workspace again is also how a disabled chat is turned back on.
     """
     with session_lock(session_id, root, wait_s=5) as p:
         manifest = load_manifest(session_id, root)
-        if manifest.get("goals_ui_invoked_at"):
+        opened = bool(manifest.get("goals_ui_invoked_at"))
+        disabled = bool(manifest.get("goals_ui_disabled_at"))
+        if opened and not disabled:
             return
-        manifest["goals_ui_invoked_at"] = _now()
+        if not opened:
+            manifest["goals_ui_invoked_at"] = _now()
+        manifest.pop("goals_ui_disabled_at", None)
         manifest["updated_at"] = _now()
         _atomic_json(p.manifest, manifest)
+
+
+def disable_goals_ui(session_id: str, root: Optional[Path] = None) -> None:
+    """Stop injecting and analyzing this chat until /goals-ui is run again."""
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = load_manifest(session_id, root)
+        manifest["goals_ui_disabled_at"] = _now()
+        manifest["updated_at"] = _now()
+        _atomic_json(p.manifest, manifest)
+        # Claude is told nothing while this is off, so whatever it "last saw"
+        # stops being a base a later diff can honestly be taken against.
+        p.context_snapshot.unlink(missing_ok=True)
 
 
 def goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> bool:
     """True once /goals-ui has opened this chat's workspace at least once."""
     return bool(load_manifest(session_id, root).get("goals_ui_invoked_at"))
+
+
+def goals_ui_active(session_id: str, root: Optional[Path] = None) -> bool:
+    """True while this chat's goals may be analyzed and injected.
+
+    One /goals-ui is the whole opt-in: it does not expire when the browser
+    tab closes or the workspace server exits, because the goals the user
+    wrote there outlive the window that wrote them.
+    """
+    manifest = load_manifest(session_id, root)
+    return bool(manifest.get("goals_ui_invoked_at")) and not manifest.get(
+        "goals_ui_disabled_at"
+    )
 
 
 def load_events(session_id: str, root: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -1195,7 +1228,7 @@ def _goal_context_text(
             f"[{str(goal.get('status', 'active')).replace('_', ' ')}]"
         )
         if details:
-            description = " ".join(str(goal.get("description") or "").split())[:280]
+            description = " ".join(str(goal.get("description") or "").split())
             priority = str(goal.get("priority") or "normal")
             if description:
                 lines.append(f"{indent}  - DESCRIPTION: {description}")
@@ -1215,23 +1248,26 @@ def _goal_context_text(
             # kind so the reader knows whether a label is a checkout, a repo
             # or a URL before deciding to go read it. Normalized on the way
             # out because nothing between the browser and here guarantees the
-            # stored rows are typed. Six is a list, not a manifest -- the
-            # whole context is capped, and sources must not crowd out notes.
+            # stored rows are typed. Six is a list, not a manifest: sources
+            # are pointers away from the goal, so they stay a short index
+            # while everything the user wrote here is rendered whole.
             for source in normalize_sources(goal.get("sources"))[:6]:
                 lines.append(f"{indent}  - SOURCE ({source['type']}): "
                              f"{source['label']}")
         for todo in goal.get("todos", []):
             if details and isinstance(todo, dict) and not todo.get("done"):
                 lines.append(f"{indent}  - TODO: {todo.get('text', '')}")
-        for prompt_id in goal.get("prompt_ids", [])[:4]:
+        # No arbitrary head-of-list here: the evidence a user linked to a
+        # goal, and the lines they marked important, are the goal.
+        for prompt_id in goal.get("prompt_ids", []):
             prompt = prompt_map.get(prompt_id)
             if details and prompt:
-                text = " ".join(str(prompt.get("text") or "").split())[:220]
+                text = " ".join(str(prompt.get("text") or "").split())
                 lines.append(f"{indent}  - USER PROMPT: {text}")
-        for item_id in goal.get("important_item_ids", [])[:3]:
+        for item_id in goal.get("important_item_ids", []):
             item = item_map.get(item_id)
             if details and item:
-                lines.append(f"{indent}  - IMPORTANT: {str(item.get('text') or '')[:220]}")
+                lines.append(f"{indent}  - IMPORTANT: {str(item.get('text') or '')}")
         for child in by_parent.get(goal.get("id"), []):
             emit(child, depth + 1, details=details)
 
@@ -1256,7 +1292,10 @@ def _goal_context_text(
         lines.extend(("", "Recent inactive goals:"))
         for goal in inactive[:8]:
             emit(goal, 0, details=False)
-    return "\n".join(lines)[:8000] + "\n"
+    # Deliberately unbounded. Claude Code caps a single additionalContext at
+    # 10,000 characters and degrades to a file plus a preview past that, so a
+    # second budget here could only silently drop the user's own words.
+    return "\n".join(lines) + "\n"
 
 
 def write_goal_context(
@@ -1299,3 +1338,140 @@ def save_goals(
         text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))
         return True
+
+
+def _project_key(cwd: Path) -> str:
+    # Claude encodes an absolute project path by replacing all non-word path
+    # punctuation (including spaces) with hyphens.
+    return re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd))
+
+
+def load_context_snapshot(
+    session_id: str, root: Optional[Path] = None
+) -> Dict[str, Any]:
+    """What this chat's model was last shown, or ``{}`` if nothing or unusable."""
+    value = _read_json(paths(session_id, root).context_snapshot, {})
+    return value if isinstance(value, dict) else {}
+
+
+def save_context_snapshot(
+    session_id: str, text: str, root: Optional[Path] = None
+) -> Dict[str, Any]:
+    """Remember the exact text just handed to the model."""
+    snapshot = {
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "text": text,
+        "at": _now(),
+    }
+    with session_lock(session_id, root, wait_s=5) as p:
+        _atomic_json(p.context_snapshot, snapshot)
+    return snapshot
+
+
+def clear_context_snapshot(session_id: str, root: Optional[Path] = None) -> None:
+    """Forget it, so the next injection sends the whole document again."""
+    with session_lock(session_id, root, wait_s=5) as p:
+        p.context_snapshot.unlink(missing_ok=True)
+
+
+def mirror_goal_context(
+    session_id: str,
+    transcript_path: Optional[str] = None,
+    cwd: Optional[str] = None,
+    root: Optional[Path] = None,
+) -> Optional[Path]:
+    """Copy this chat's goal document beside Claude's own transcript.
+
+    Context arrives as a system reminder the user never sees.  The mirror is
+    the readable half of that bargain: an ordinary markdown file, in the
+    directory the session already lives in, that can be opened, diffed and
+    deleted.  Best effort by construction -- a hook must not fail over a copy.
+    """
+    try:
+        text = paths(session_id, root).goal_context.read_text(encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        return None
+    try:
+        if transcript_path:
+            project = _absolute(Path(str(transcript_path))).parent
+        elif cwd:
+            project = (Path.home() / ".claude" / "projects"
+                       / _project_key(_absolute(Path(str(cwd)))))
+            # Only ever sit beside a project directory Claude itself made.
+            # Guessing one into existence would scatter files under homes
+            # that never ran this session.
+            if not project.is_dir():
+                return None
+        else:
+            return None
+        target_dir = project / "goals-ui"
+        target = target_dir / f"{session_id}.md"
+        if target_dir.is_symlink():
+            return None
+        try:
+            if target.read_text(encoding="utf-8") == text:
+                return target
+        except (OSError, ValueError):
+            pass
+        target_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(target_dir, 0o700)
+        _atomic_write(target, text.encode("utf-8"))
+        return target
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def render_context_injection(
+    session_id: str,
+    mode: str,
+    transcript_path: Optional[str] = None,
+    cwd: Optional[str] = None,
+    root: Optional[Path] = None,
+    remember: bool = True,
+) -> str:
+    """Render the goal document for one injection point.
+
+    ``full`` states the whole document; ``delta`` states only what changed
+    since the model last saw it, which is the difference between paying for
+    the goal tree once a conversation and paying for it once a message.
+    ``remember=False`` renders for a reader with its own separate context (a
+    subagent) without claiming the main conversation has seen anything.
+    """
+    p = paths(session_id, root)
+    try:
+        current = p.goal_context.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    if not current.strip():
+        return ""
+    location = mirror_goal_context(session_id, transcript_path, cwd, root) \
+        or p.goal_context
+    full = (f"# Goals for this Claude chat (full file: {location})\n\n"
+            f"{current}")
+
+    def keep(text: str) -> str:
+        if remember:
+            save_context_snapshot(session_id, current, root)
+        return text
+
+    if mode != "delta":
+        return keep(full)
+    snapshot = load_context_snapshot(session_id, root)
+    previous = snapshot.get("text")
+    if not isinstance(previous, str) or not snapshot.get("sha256"):
+        return keep(full)
+    if snapshot["sha256"] == hashlib.sha256(current.encode("utf-8")).hexdigest():
+        return ""
+    diff = "\n".join(difflib.unified_diff(
+        previous.splitlines(),
+        current.splitlines(),
+        fromfile="goals (as you last saw them)",
+        tofile="goals (now)",
+        lineterm="",
+        n=1,
+    ))
+    delta = (f"# Goals for this chat changed since your last message "
+             f"(full file: {location})\n\n{diff}\n")
+    # A diff of a document that was rewritten end to end is longer than the
+    # document; there is nothing to be gained by sending it twice over.
+    return keep(delta if len(delta) < len(full) else full)

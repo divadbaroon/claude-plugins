@@ -1126,20 +1126,20 @@ def _request_chat_refresh(session_id):
 
 
 def _chat_context_active(session_id):
-    """True when this chat opened its goal workspace and that workspace is live.
+    """True when this chat opted in to goal context and has not turned it off.
 
     Goal context is this chat's own state, so it is injected only into the
-    chat that asked for it, and only while the window showing it is open.
+    chat that asked for it -- but one /goals-ui is the whole ask.  The
+    workspace server does not have to still be running: goals outlive the
+    browser tab that wrote them, and a chat that silently stopped honouring
+    them the moment a window closed would read as broken.
     """
     from .trajectory import chat_state as CS
     try:
-        if not CS.goals_ui_invoked(session_id):
-            return False
-        record = _read_server_registry(CS.paths(session_id).session_dir)
-        return bool(_healthy_chat_server(record, session_id))
+        return bool(CS.goals_ui_active(session_id))
     except Exception:  # noqa: BLE001 - a hook may never block Claude
         # Corrupt session state must cost the user their goal context, never
-        # their prompt: a malformed registry url alone raises out of urlparse.
+        # their prompt.
         return False
 
 
@@ -1148,20 +1148,31 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
     import json
     ap = argparse.ArgumentParser(prog="hc chat-hook",
         description="Internal Claude Code chat-state hook.")
-    ap.parse_args(argv or [])
+    # PostToolBatch is wired twice: an async entry that ingests the batch off
+    # the critical path, and this one, which runs inside the model's own turn
+    # and may therefore only read cached state and speak.
+    ap.add_argument("--inject-only", action="store_true",
+                    help=argparse.SUPPRESS)
+    args = ap.parse_args(argv or [])
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     if os.environ.get("HC_CHAT_INFERENCE") == "1":
         return 0
     payload = {}
     event = ""
+    session_id = ""
     try:
         payload = json.loads(stdin.read())
         if not isinstance(payload, dict):
             return 0
         event = str(payload.get("hook_event_name") or "")
         from .trajectory import chat_state as CS
-        result = CS.ingest_hook(payload)
+        if args.inject_only:
+            session_id = str(payload.get("session_id")
+                             or payload.get("sessionId") or "")
+            CS.paths(session_id)  # reject a path-like id before touching disk
+        else:
+            session_id = CS.ingest_hook(payload).session_id
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
         if event == "UserPromptExpansion":
             json.dump({
@@ -1174,18 +1185,36 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
     # Claude's live task list for a Vault goal is execution state, not goal
     # state, so it is observed into its own store and never edits goals.json.
     run = None
-    try:
-        from .trajectory import agent_exec as AE
-        run = AE.observe_hook(payload)
-    except Exception:  # noqa: BLE001 - a hook may never block Claude
-        run = None
+    if not args.inject_only:
+        try:
+            from .trajectory import agent_exec as AE
+            run = AE.observe_hook(payload)
+        except Exception:  # noqa: BLE001 - a hook may never block Claude
+            run = None
 
     if event == "UserPromptExpansion":
+        if str(payload.get("command_args") or "").strip().lower() == "disable":
+            try:
+                CS.disable_goals_ui(session_id)
+            except (OSError, ValueError, TypeError, TimeoutError) as exc:
+                json.dump({
+                    "decision": "block",
+                    "reason": f"goals-ui could not be disabled: {exc}",
+                }, stdout)
+                stdout.write("\n")
+                return 0
+            json.dump({
+                "decision": "block",
+                "reason": "goals-ui: disabled for this chat — run /goals-ui "
+                          "to turn it back on",
+            }, stdout)
+            stdout.write("\n")
+            return 0
         # Launch from the hook rather than a skill `!` shell expansion. This
         # keeps /goals-ui functional under disableSkillShellExecution policies.
         import contextlib
         import io
-        launch_args = ["--session", result.session_id,
+        launch_args = ["--session", session_id,
                        "--cwd", str(payload.get("cwd") or os.getcwd())]
         try:
             launched = io.StringIO()
@@ -1218,19 +1247,37 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
         try:
             # Ingestion above is unconditional so history exists whenever the
             # user opens /goals-ui; paying for inference is not.
-            if CS.goals_ui_invoked(result.session_id):
-                _request_chat_refresh(result.session_id)
+            if CS.goals_ui_active(session_id):
+                _request_chat_refresh(session_id)
+                # Keep the user-readable copy current with what inference
+                # last wrote, not only with what was last injected.
+                if event == "Stop":
+                    CS.mirror_goal_context(session_id,
+                                           payload.get("transcript_path"),
+                                           payload.get("cwd"))
         except Exception:  # noqa: BLE001 - a hook may never block Claude
             pass
 
-    if event in ("SessionStart", "UserPromptSubmit"):
+    # A subagent begins with an empty context and a tool batch may have just
+    # created tasks, so both are injection points -- but only the synchronous
+    # PostToolBatch entry speaks, or the async one would consume the delta
+    # into a stdout nobody reads.
+    if (event in ("SessionStart", "UserPromptSubmit", "SubagentStart")
+            or (event == "PostToolBatch" and args.inject_only)):
         context = ""
-        if _chat_context_active(result.session_id):
+        if _chat_context_active(session_id):
             try:
-                context = CS.paths(result.session_id).goal_context.read_text(
-                    encoding="utf-8"
-                )[:8000]
-            except OSError:
+                context = CS.render_context_injection(
+                    session_id,
+                    "full" if event in ("SessionStart", "SubagentStart")
+                    else "delta",
+                    transcript_path=payload.get("transcript_path"),
+                    cwd=payload.get("cwd"),
+                    # A subagent reads on its own account; what it was shown
+                    # says nothing about what this conversation has seen.
+                    remember=event != "SubagentStart",
+                )
+            except Exception:  # noqa: BLE001 - a hook may never block Claude
                 context = ""
         if run is not None and event == "SessionStart":
             try:
@@ -1241,7 +1288,7 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             except Exception:  # noqa: BLE001 - context is best-effort
                 briefing = ""
             if briefing.strip():
-                context = (briefing + "\n" + context)[:12000]
+                context = briefing + "\n" + context
         if context.strip():
             json.dump({
                 "hookSpecificOutput": {
@@ -1421,6 +1468,13 @@ def chat_ui_main(argv=None):
         CS.mark_goals_ui_invoked(args.session)
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
         raise SystemExit(f"could not initialize chat state: {exc}") from exc
+
+    # The workspace is where the user reads their goals; the mirror is where
+    # they read them once it is closed. Only the manifest knows where Claude
+    # keeps this session's transcript. Mirroring itself never raises.
+    CS.mirror_goal_context(args.session,
+                           CS.load_manifest(args.session).get("transcript_path"),
+                           session_cwd)
 
     with CS.session_lock(args.session, wait_s=8):
         record = _read_server_registry(p.session_dir)
