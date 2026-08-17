@@ -57,6 +57,7 @@ function El(tag) {
   this.attrs = {};
   this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
   this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+  this.removeAttribute = (k) => { delete this.attrs[k]; };
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
     if (n.parentNode) n.parentNode.removeChild(n);
@@ -2451,11 +2452,13 @@ class ChatScopeSurfaceTests(BridgeTestCase):
 
     def test_the_keyboard_cycle_stops_at_the_tabs_a_chat_has(self):
         # ⌘↑/⌘↓ stepping onto AGENT or REVIEW would open a pane whose every
-        # control errors here. CONTEXT and PROMPT are the two it can serve.
+        # control errors here, and stepping onto PROMPT would swap the
+        # document out for something the right rail is already showing.
+        # CONTEXT is the only pane this workspace has left to open.
         out = self.patched_bundle("out;")
         self.assertIn(
             "const tabs = (typeof window !== 'undefined' && "
-            "window.__hcScope === 'chat') ? ['context', 'prompt'] : "
+            "window.__hcScope === 'chat') ? ['context'] : "
             "['context', 'prompt', 'agent', 'artifact'];", out)
         self.assertNotIn(
             "    const tabs = ['context', 'prompt', 'agent', 'artifact'];", out)
@@ -3197,3 +3200,93 @@ class ChatNoticeTests(BridgeTestCase):
         dialog = self.run_js("window.__hcPromptUI.dialogCss();")
         self.assertIn("z-index:100001", css)
         self.assertIn("z-index:100000", dialog)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class LaunchSkinTests(BridgeTestCase):
+    """The three-column skin: one root attribute, and only in a chat."""
+
+    def chat(self):
+        return ("window.__hcPromptUI.acceptState("
+                "{ goals: [], prompts: [], scope: 'chat',"
+                "  session_id: '7f3a1b2c-0000' });")
+
+    def test_a_global_vault_is_never_dressed(self):
+        # Every rule in the sheet is behind [data-hc-launch], and the
+        # attribute is only ever written in a chat -- so a global vault does
+        # not so much as load the stylesheet.
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState("
+            "  { goals: [], prompts: [], scope: 'global' });"
+            "var applied = window.__hcPromptUI.applyLaunchSkin();"
+            "[applied, document.documentElement.getAttribute('data-hc-launch'),"
+            " document.getElementById('hc-launch-style') ? 1 : 0];")
+        self.assertEqual([False, None, 0], out)
+
+    def test_a_chat_is_dressed_once_and_stays_dressed(self):
+        out = self.run_js(
+            self.chat()
+            + "var first = window.__hcPromptUI.applyLaunchSkin();"
+            "var again = window.__hcPromptUI.applyLaunchSkin();"
+            "[first, again,"
+            " document.documentElement.getAttribute('data-hc-launch'),"
+            " document.getElementById('hc-launch-style').textContent"
+            "   .indexOf('[data-hc-launch]') === 0];")
+        self.assertEqual([True, False, "chat", True], out)
+
+    def test_every_rule_in_the_sheet_is_gated_on_the_root_attribute(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        rules = [rule for rule in css.split("}") if rule.strip()]
+        self.assertTrue(rules)
+        stray = [rule for rule in rules
+                 if not rule.lstrip().startswith("[data-hc-launch]")]
+        self.assertEqual([], stray)
+
+    def test_the_session_chip_names_the_conversation_the_window_watches(self):
+        out = self.run_js(
+            self.chat()
+            + "var slot = document.createElement('span');"
+            "slot.className = 'hc-session'; app.appendChild(slot);"
+            "var wrote = window.__hcPromptUI.renderSessionChip();"
+            "var again = window.__hcPromptUI.renderSessionChip();"
+            "[wrote, again, slot.textContent];")
+        self.assertEqual([True, False, "session 7f3a1b2c"], out)
+
+    def test_the_injection_card_says_only_what_the_state_proves(self):
+        # A chat nobody has opened the workspace for has been told nothing,
+        # and the card says that rather than leaving the line off.
+        self.assertEqual(
+            [["head", "context injection"],
+             ["off", "not sent to Claude yet"],
+             ["", "reads: prompt · subagent · task"],
+             ["off", "off · /goals-ui turns it back on"]],
+            self.run_js(
+                "window.__hcPromptUI.injectionLines("
+                "  { cached: false, last_delta_chars: null, last_at: null,"
+                "    active: false, reads: ['prompt', 'subagent', 'task'] });"))
+
+    def test_a_pending_change_is_sized_as_an_estimate(self):
+        # Characters over four, and marked "~": the browser cannot count
+        # tokens, so it must not print a number that looks like it did.
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 570, last_at: null,"
+            "    active: true, reads: [] });")
+        self.assertIn(["on", "goal document sent ✓"], rows)
+        self.assertIn(["", "~143 tok changed since Claude read it"], rows)
+        self.assertIn(["on", "on · /goals-ui disable turns it off"], rows)
+
+    def test_a_document_the_model_is_current_on_says_so(self):
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 0, last_at: null,"
+            "    active: true, reads: [] });")
+        self.assertIn(["", "unchanged since Claude read it"], rows)
+        self.assertEqual(
+            [], [row for row in rows if "tok" in row[1]])
+
+    def test_a_state_with_no_injection_draws_no_card(self):
+        # `null` is what the bridge holds before the first poll lands, and an
+        # empty card is a claim about a chat nothing is known about yet.
+        self.assertEqual([], self.run_js(
+            "window.__hcPromptUI.injectionLines(null);"))

@@ -1380,6 +1380,10 @@
     if (box.parentNode) box.parentNode.removeChild(box);
     var host = noticeStack();
     if (!host || !host.children || !host.children.length) unmarkNoticeTitle();
+    // The banner has a line of its own in the launch layout, so its arrival
+    // and its departure both move the page. Waiting for the next sweep to
+    // notice would make the columns jump a beat after it.
+    mirrorRootState();
   }
 
   function closestNotice(node) {
@@ -1480,6 +1484,7 @@
     // enough to dismiss one immediately, marking afterwards leaves the tab
     // claiming a banner nobody can see.
     markNoticeTitle();
+    mirrorRootState();
     made.forEach(function (box) { armNotice(box); });
     return fresh.length;
   }
@@ -1653,8 +1658,15 @@
       // the greys move: the accent stays the artifact's, so every control
       // that was accented still is, in both themes.
       "[data-hc-launch] .hc[data-dark=\"true\"]{--bg:#0d1117;--panel:#0d1117;--panel2:#161b22;--ink:#e6edf3;--mut:#8b949e;--fnt:#6e7681;--bd:#21262d;--bd2:#30363d;--line:#21262d;--hov:#161b22;--dtxt:#c9d1d9}",
-      "[data-hc-launch] .hc{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922}",
-      "[data-hc-launch] .hc:not([data-dark=\"true\"]){--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-ok:#1a7f37}",
+      // On the root, not on .hc: the banner is parented on <body>, outside
+      // the artifact's subtree, so anything declared inside .hc never
+      // reaches it. The theme is mirrored onto the root for the same reason.
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-top:116px}",
+      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922;--hc-noticetxt:#8aa495}",
+      // A banner is not an overlay: it takes its own line, and the columns
+      // give it back when it goes.
+      "[data-hc-launch][data-hc-notice]{--hc-top:150px}",
+      "[data-hc-launch][data-hc-notice] .hc>div:nth-child(2){padding-top:34px!important}",
       // The page is the workspace: it fills the window and does not scroll
       // as a whole -- each column scrolls in its own right, the way the
       // screenshots read.
@@ -1680,9 +1692,9 @@
       // prompt rail is emitted before the inspector and ordered after it,
       // so nothing has to be re-parented after a render.
       "[data-hc-launch] .hc-shell{gap:12px!important;align-items:stretch!important;margin-top:0!important}",
-      "[data-hc-launch] .hc-rail-left{flex:0 0 300px!important;height:calc(100vh - 116px)!important;padding:0 0 6px!important;border-radius:6px}",
-      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - 116px)!important;top:0!important;border-radius:6px;padding:14px 20px 18px!important}",
-      "[data-hc-launch] .hc-rail-right{order:3;flex:0 0 330px;display:flex;flex-direction:column;min-width:0;height:calc(100vh - 116px);box-sizing:border-box;border:1px solid var(--bd);border-radius:6px;background:transparent;padding:0 0 12px}",
+      "[data-hc-launch] .hc-rail-left{flex:0 0 300px!important;height:calc(100vh - var(--hc-top))!important;padding:0 0 6px!important;border-radius:6px}",
+      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border-radius:6px;padding:14px 20px 18px!important}",
+      "[data-hc-launch] .hc-rail-right{order:3;flex:0 0 330px;display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:1px solid var(--bd);border-radius:6px;background:transparent;padding:0 0 12px}",
       // Rail headings, shared by both rails.
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
@@ -1718,12 +1730,12 @@
       // The session banner. Same nodes, same timers, same close button as
       // the toast it replaces -- a bar under the header rather than a card
       // in the corner, because it reports on the whole workspace.
-      "[data-hc-launch] .hc-notice-stack{position:fixed;top:41px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
+      "[data-hc-launch] .hc-notice-stack{position:fixed;top:40px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
       "[data-hc-launch] .hc-notice{width:auto;max-width:none;border:none;border-bottom:1px solid var(--hc-okbd);border-left:none;border-radius:0;background:var(--hc-okbg);box-shadow:none;display:flex;align-items:baseline;gap:10px;padding:7px 34px 7px 16px}",
       "[data-hc-launch] .hc-notice-title{color:var(--hc-ok);flex:none}",
       "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
-      "[data-hc-launch] .hc-notice-detail{margin-top:0;color:var(--mut);flex:1;min-width:0}",
-      "[data-hc-launch] .hc-notice-close{top:6px;right:12px}",
+      "[data-hc-launch] .hc-notice-detail{margin-top:0;color:var(--hc-noticetxt);flex:1;min-width:0}",
+      "[data-hc-launch] .hc-notice-close{top:6px;right:12px;color:var(--hc-noticetxt)}",
   ].join("");
 
   var launchApplied = false;
@@ -1747,6 +1759,30 @@
       (document.head || document.documentElement).appendChild(style);
       changed = true;
       launchApplied = true;
+    }
+    return changed;
+  }
+
+  // The launch stylesheet lives on the root so it can reach the banner,
+  // which is parented on <body>. Two facts it cannot read from there: which
+  // theme the artifact is drawing, and whether a banner is up.
+  function mirrorRootState() {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute) return false;
+    var app = document.querySelector(".hc");
+    var theme = (app && app.getAttribute && app.getAttribute("data-dark") === "true")
+      ? "dark" : "light";
+    var host = noticeStack();
+    var up = !!(host && host.children && host.children.length);
+    var changed = false;
+    if (root.getAttribute("data-hc-theme") !== theme) {
+      root.setAttribute("data-hc-theme", theme);
+      changed = true;
+    }
+    if (up !== (root.getAttribute("data-hc-notice") !== null)) {
+      if (up) root.setAttribute("data-hc-notice", "");
+      else root.removeAttribute("data-hc-notice");
+      changed = true;
     }
     return changed;
   }
@@ -1821,6 +1857,7 @@
     function sweep() {
       if (serverState.scope !== "chat") return;
       applyLaunchSkin();
+      mirrorRootState();
       renderSessionChip();
       renderInjection(injectionState);
     }
@@ -2745,7 +2782,13 @@
     setSetupForTest: function (value) { setupState = value; },
     setDetailForTest: function (id, value) { details[id] = value; },
     seedForTest: seed,
-    loadDetailForTest: loadDetail
+    loadDetailForTest: loadDetail,
+    applyLaunchSkin: applyLaunchSkin,
+    launchCss: function () { return LAUNCH_CSS; },
+    injectionLines: injectionLines,
+    renderInjection: renderInjection,
+    renderSessionChip: renderSessionChip,
+    askSource: askSource
   };
 
   seed();

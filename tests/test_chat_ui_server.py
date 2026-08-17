@@ -584,9 +584,10 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("real goal 2", exact=True).first
                        ).to_be_visible(timeout=10_000)
 
-                page.get_by_text("in progress (1)", exact=True).click()
+                page.get_by_text("In progress 1", exact=True).click()
                 page.get_by_text("real goal 2", exact=True).first.click()
-                page.locator('[title="Switch to dark mode"]').click()
+                # A chat opens dark, so the toggle on offer is the other one.
+                page.locator('[title="Switch to light mode"]').click()
                 # The bridge mirrors localStorage to the server on an 800 ms
                 # poll; two seconds is past whichever poll each of those
                 # three lands on.
@@ -608,9 +609,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("real goal 2", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
-                page.get_by_text("PROMPT", exact=True).click()
-                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
-                       ).to_be_visible()
+                expect(page.locator(".hc-rail-code")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
                 copy.click()
@@ -657,16 +656,11 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("brand new goal", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
-                page.get_by_text("PROMPT", exact=True).click()
-                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
-                       ).to_be_visible()
+                code = page.locator(".hc-rail-code")
+                expect(code).to_be_visible()
+                expect(code).to_contain_text("brand new goal")
 
-                draft = page.evaluate(
-                    """() => {
-                         const gen = document.querySelector(
-                           '[title="Regenerate prompt"]');
-                         return gen && gen.previousElementSibling.value;
-                       }""")
+                draft = code.inner_text()
                 self.assertIn("brand new goal", draft)
                 self.assertNotIn("Get the drawable frame", draft)
                 self.assertNotIn("divadbaroon/claude-plugins", draft)
@@ -732,7 +726,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text(child_title, exact=True).first
                        ).to_be_visible(timeout=10_000)
 
-                page.get_by_text("active (3)", exact=True).click()
+                page.get_by_text("Active 3", exact=True).click()
                 toggles = page.locator('[title="Toggle complete"]')
                 expect(toggles).to_have_count(3)
                 at = page.evaluate(
@@ -749,13 +743,13 @@ class ChatUiServerTests(unittest.TestCase):
                 # it went rather than the row simply disappearing.
                 expect(page.get_by_text(child_title, exact=True)
                        ).to_have_count(0)
-                expect(page.get_by_text("done (1)", exact=True)
+                expect(page.get_by_text("Done 1", exact=True)
                        ).to_be_visible()
-                expect(page.get_by_text("active (2)", exact=True)
+                expect(page.get_by_text("Active 2", exact=True)
                        ).to_be_visible()
 
                 # It is struck through wherever it is drawn.
-                page.get_by_text("all (3)", exact=True).click()
+                page.get_by_text("All 3", exact=True).click()
                 row = page.get_by_text(child_title, exact=True).first
                 expect(row).to_be_visible()
                 expect(row.locator("..")).to_have_css(
@@ -782,7 +776,7 @@ class ChatUiServerTests(unittest.TestCase):
                 )
 
                 # The filter the reader picks is the only thing that hides it.
-                page.get_by_text("active (2)", exact=True).click()
+                page.get_by_text("Active 2", exact=True).click()
                 expect(page.get_by_text(child_title, exact=True)
                        ).to_have_count(0)
                 expect(page.locator('[title="Toggle complete"]')
@@ -1042,12 +1036,16 @@ class ChatUiServerTests(unittest.TestCase):
                 # The Conversations page lists a vault's whole history; this
                 # scope has one conversation and no route that serves the list.
                 expect(page.get_by_text("Conversations", exact=True)).to_be_hidden()
-                expect(page.get_by_text("Goals", exact=True).first).to_be_visible()
+                # The page heading went with it: this window has one page,
+                # and the goal rail is where its name lives now.
+                expect(page.get_by_text("GOALS", exact=True)).to_be_visible()
+                self.assertEqual("goals", page.evaluate(
+                    "JSON.parse(localStorage.getItem('hc-vault-ui-v1')).page"))
 
                 # All, on the page and not only in the store: the chip is
                 # the selected one and the completed goal is in the tree.
-                selected = self.chip_style(page, "all (2)")
-                unselected = self.chip_style(page, "active (1)")
+                selected = self.chip_style(page, "All 2")
+                unselected = self.chip_style(page, "Active 1")
                 self.assertEqual("700", selected["weight"])
                 self.assertEqual("500", unselected["weight"])
                 self.assertNotEqual(unselected["color"], selected["color"])
@@ -1085,25 +1083,25 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
-                expect(page.get_by_text("all (2)", exact=True)).to_be_visible(
+                expect(page.get_by_text("All 2", exact=True)).to_be_visible(
                     timeout=10_000
                 )
-                page.get_by_text("done (1)", exact=True).click()
+                page.get_by_text("Done 1", exact=True).click()
                 self.assertEqual(
-                    "700", self.chip_style(page, "done (1)")["weight"]
+                    "700", self.chip_style(page, "Done 1")["weight"]
                 )
 
                 page.reload(wait_until="domcontentloaded")
-                expect(page.get_by_text("done (1)", exact=True)).to_be_visible(
+                expect(page.get_by_text("Done 1", exact=True)).to_be_visible(
                     timeout=10_000
                 )
                 # The default only applies to a page with no history. A
                 # choice the reader made is theirs to keep.
                 self.assertEqual(
-                    "700", self.chip_style(page, "done (1)")["weight"]
+                    "700", self.chip_style(page, "Done 1")["weight"]
                 )
                 self.assertEqual(
-                    "500", self.chip_style(page, "all (2)")["weight"]
+                    "500", self.chip_style(page, "All 2")["weight"]
                 )
             finally:
                 browser.close()
@@ -1139,16 +1137,20 @@ class ChatUiServerTests(unittest.TestCase):
                 )
                 for tab in ("AGENT", "REVIEW"):
                     expect(page.get_by_text(tab, exact=True)).to_be_hidden()
-                # PROMPT is a pane this scope can serve: the assembled prompt
-                # and a way to take it. Nothing in it runs anything.
-                expect(page.get_by_text("PROMPT", exact=True)).to_be_visible()
+                # CONTEXT is the only tab left. The assembled prompt did not
+                # go away with the tab that used to hold it -- it is on
+                # screen the whole time now, in its own rail.
+                expect(page.locator(".hc-tabs").get_by_text(
+                    "PROMPT", exact=True)).to_be_hidden()
+                expect(page.locator(".hc-rail-right").get_by_text(
+                    "PROMPT", exact=True)).to_be_visible()
 
-                # A pane saved from a build that still offered them must not
-                # restore an inspector this scope cannot draw.
+                # A pane saved from a build that still offered one must not
+                # restore an inspector this scope no longer draws.
                 page.evaluate("""() => {
                     const key = "hc-vault-ui-v1";
                     const saved = JSON.parse(localStorage.getItem(key));
-                    saved.paneTab = "agent";
+                    saved.paneTab = "prompt";
                     localStorage.setItem(key, JSON.stringify(saved));
                 }""")
                 page.reload(wait_until="domcontentloaded")
@@ -1466,7 +1468,14 @@ class ChatUiServerTests(unittest.TestCase):
             time.sleep(0.1)
         return links
 
-    def test_the_prompt_tab_is_the_prompt_and_a_real_copy(self):
+    def test_the_prompt_rail_is_the_prompt_and_a_real_copy(self):
+        """The prompt is a column, not a tab.
+
+        It used to live behind PROMPT, which swapped the goal's document out
+        for it; the two are read together, so the rail shows both at once and
+        the tab is gone. The text is still the artifact's own assembly -- the
+        rail prints the same `draft` the pane did.
+        """
         try:
             from playwright.sync_api import expect, sync_playwright
         except ImportError:
@@ -1499,28 +1508,34 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
-                page.get_by_text("PROMPT", exact=True).click()
-                # One document, one place to edit it: the tab that assembles
-                # the prompt does not offer a second copy of the notes.
-                expect(page.locator(self.EDITOR)).to_have_count(0)
-                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
-                       ).to_be_visible()
+                # Both at once: the document stays editable while the prompt
+                # it assembles is on screen beside it.
+                rail = page.locator(".hc-rail-right")
+                expect(rail).to_be_visible()
+                expect(page.locator(self.EDITOR)).to_have_count(1)
 
-                # The one textarea in this pane, found by the control that
-                # regenerates it -- "first textarea" is the goal description.
-                draft = page.evaluate(
-                    """() => {
-                         const gen = document.querySelector(
-                           '[title="Regenerate prompt"]');
-                         return gen && gen.previousElementSibling.value;
-                       }""")
+                draft = rail.locator(".hc-rail-code").inner_text()
                 self.assertIn("Objective:\nShip the document pane.", draft)
                 self.assertIn("Decisions:\n- we chose sqlite", draft)
+
+                # Assembled, not authored: there is nothing to type into.
+                expect(rail.locator("textarea")).to_have_count(0)
+                expect(rail.locator("input")).to_have_count(0)
+
+                # The size it will cost, marked as the estimate it is.
+                expect(rail.locator(".hc-rail-count")).to_have_text(
+                    "~" + str(-(-len(draft) // 4)) + " tok")
 
                 # Nothing here starts a run; every op behind one refuses.
                 expect(page.get_by_text("run agent", exact=True)
                        ).to_have_count(0)
                 expect(page.get_by_text("AGENT STATUS", exact=True)
+                       ).to_have_count(0)
+                # And nothing offers to rewrite it: no model call stands
+                # behind a regenerate in this scope.
+                expect(page.get_by_text("Regenerate", exact=True)
+                       ).to_have_count(0)
+                expect(page.get_by_text("RECOMMENDED EDITS", exact=True)
                        ).to_have_count(0)
 
                 copy = page.get_by_text("Copy prompt", exact=True)
@@ -1535,14 +1550,13 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_the_assembled_prompt_is_read_only_and_still_copyable(self):
-        """It is assembled, not authored.
+    def test_the_assembled_prompt_survives_a_reload_and_writes_nothing(self):
+        """It is assembled, not authored, and reading it changes nothing.
 
-        The box kept no edit -- not across a reload, not across a CONTEXT ->
-        PROMPT round trip -- while the copy beside it said to edit it here.
-        A control that mutates the page and nothing else is the one thing
-        this pane must not offer, so the box is now read-only and the line
-        says which of the two it is.
+        The old box kept no edit -- not across a reload, not across a
+        CONTEXT -> PROMPT round trip -- while the copy beside it said to edit
+        it here. The rail is a rendering of the goal's document, so there is
+        no edit to lose and nothing it can write back.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1571,31 +1585,26 @@ class ChatUiServerTests(unittest.TestCase):
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
-                page.get_by_text("PROMPT", exact=True).click()
-                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
-                       ).to_be_visible()
-                expect(page.get_by_text(
-                    "assembled from your goal document \u00b7 read-only",
-                    exact=True)).to_be_visible()
 
-                box = page.locator(
-                    '[title="Regenerate prompt"]').locator("xpath=..").locator(
-                        "textarea")
-                expect(box).to_have_count(1)
-                self.assertTrue(box.evaluate("el => el.readOnly"))
-
-                before = box.input_value()
+                code = page.locator(".hc-rail-code")
+                before = code.inner_text()
                 self.assertIn("Objective:\nShip the document pane.", before)
-                box.click()
+
+                # Clicking into it and typing is a no-op: it is not a field.
+                code.click()
                 page.keyboard.type("EDITED BY HAND")
                 page.wait_for_timeout(1_500)
-                self.assertEqual(before, box.input_value())
+                self.assertEqual(before, code.inner_text())
                 unchanged = [g for g in get_json(url + "/api/state")["goals"]
                              if g["id"] == "a1"][0]
                 self.assertEqual("# Objective\nShip the document pane.\n",
                                  unchanged["notes"])
                 self.assertEqual("", unchanged["description"])
                 self.assertNotIn("EDITED BY HAND", goals_path.read_text())
+
+                page.reload(wait_until="domcontentloaded")
+                expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
+                expect(page.locator(".hc-rail-code")).to_have_text(before)
 
                 copy = page.get_by_text("Copy prompt", exact=True)
                 copy.click()
@@ -1604,6 +1613,339 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertEqual(before, page.evaluate(
                     "() => navigator.clipboard.readText()"))
                 context.close()
+            finally:
+                browser.close()
+
+    # --- the launch layout -------------------------------------------------
+
+    def test_the_header_chips_count_the_tree_and_pick_the_filter(self):
+        """Four chips, four counts, and the one in force is the one filled.
+
+        The counts are the reason the chips are a header and not a menu: they
+        are the only place a chat says how much work it is carrying.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        counted = self.root / "counted"
+        goals = [goal("g1", "one"), goal("g2", "two"), goal("g3", "three"),
+                 goal("g4", "four")]
+        goals[1]["status"] = "in_progress"
+        goals[2]["status"] = "completed"
+        write_scope(counted, goals, [])
+
+        with server_for(counted) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                chips = page.locator(".hc-chip")
+                expect(chips).to_have_count(4, timeout=10_000)
+                self.assertEqual(
+                    ["All 4", "Active 3", "In progress 1", "Done 1"],
+                    chips.all_inner_texts(),
+                )
+
+                # A chat opens on All, and All is the filled chip.
+                self.assertEqual("700", self.chip_style(page, "All 4")["weight"])
+                self.assertEqual("500",
+                                 self.chip_style(page, "Done 1")["weight"])
+
+                page.get_by_text("Done 1", exact=True).click()
+                self.assertEqual("700", self.chip_style(page, "Done 1")["weight"])
+                self.assertEqual("500", self.chip_style(page, "All 4")["weight"])
+                # And the tree is the one goal that chip counts.
+                expect(page.locator(".hc-rowtitle")).to_have_count(1)
+                expect(page.locator(".hc-rowtitle")).to_have_text("three")
+
+                # The rail counts the whole tree, whatever the filter shows.
+                expect(page.locator(".hc-rail-left .hc-rail-count")
+                       ).to_have_text("4")
+            finally:
+                browser.close()
+
+    def test_a_finished_turn_arrives_as_a_bar_under_the_header(self):
+        """The banner reports on the workspace, so it takes the top of it.
+
+        Same nodes and the same timers as the corner toast it replaces -- the
+        close button and the hover hold are covered above. What is new is
+        where it sits, and that the columns give it a line rather than having
+        it painted over them.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.locator(".hc-rail-left")).to_be_visible(
+                    timeout=10_000)
+                chips_before = page.locator(".hc-chip").first.bounding_box()
+
+                chat_state.add_notice("chat-a", "session_stopped",
+                                      "Done. Tests pass.", self.root)
+                banner = page.locator(".hc-notice")
+                expect(banner).to_have_count(1, timeout=4_000)
+                # What a Stop hook proves is that the turn ended. It does not
+                # prove a goal moved or a task closed, so it does not say so.
+                expect(banner.locator(".hc-notice-title")).to_have_text(
+                    "Claude finished responding")
+                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                    "Done. Tests pass.")
+
+                box = banner.bounding_box()
+                self.assertLess(box["x"], 20, "a bar starts at the edge")
+                self.assertGreater(box["width"], 1_000, "a bar spans the page")
+                self.assertLess(box["y"], 80, "and sits under the header")
+                # It has its own line: the chips move down for it rather
+                # than being painted over.
+                moved = page.locator(".hc-chip").first.bounding_box()
+                self.assertGreater(moved["y"], chips_before["y"] + 20)
+                self.assertGreater(moved["y"], box["y"] + box["height"] - 2)
+
+                # And the columns give the line back when it goes.
+                banner.locator(".hc-notice-close").click()
+                expect(banner).to_have_count(0, timeout=2_000)
+                back = page.locator(".hc-chip").first.bounding_box()
+                self.assertAlmostEqual(chips_before["y"], back["y"], delta=2)
+            finally:
+                browser.close()
+
+    def test_a_source_added_here_outlives_the_page_and_the_server(self):
+        """SOURCES is a rail of chips, and each chip is a stored record.
+
+        The pane that held these as three textboxes is dormant; the rail is
+        the control that came back. Nothing new is written -- both lists are
+        the artifact's own, so an edit lands on set_sources by the path that
+        was already there.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        def sources(url):
+            return [g["sources"] for g in get_json(url + "/api/state")["goals"]
+                    if g["id"] == "a1"][0]
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                with server_for(self.a) as url:
+                    self.assertEqual([], sources(url))
+                    page = browser.new_page(
+                        viewport={"width": 1400, "height": 900})
+                    page.goto(url, wait_until="domcontentloaded")
+                    expect(page.locator(".hc-sources")).to_be_visible(
+                        timeout=10_000)
+                    expect(page.locator(".hc-src")).to_have_count(0)
+
+                    page.get_by_text("+ Add source", exact=True).click()
+                    dialog = page.locator(".hc-ask-box")
+                    expect(dialog).to_be_visible()
+                    # Which kind, then the value: the store keeps three, and
+                    # a placeholder row is not one of them.
+                    dialog.get_by_text("GitHub repo", exact=True).click()
+                    dialog.locator("input").fill("owner/repo")
+                    page.keyboard.press("Enter")
+
+                    chip = page.locator(".hc-src")
+                    expect(chip).to_have_count(1)
+                    expect(chip.locator(".hc-src-tag")).to_have_text("GITHUB")
+                    expect(chip.locator(".hc-src-label")).to_have_text(
+                        "owner/repo")
+
+                    page.get_by_text("+ Add source", exact=True).click()
+                    page.locator(".hc-ask-box").get_by_text(
+                        "Document", exact=True).click()
+                    page.locator(".hc-ask-box input").fill("design.md")
+                    page.keyboard.press("Enter")
+                    expect(page.locator(".hc-src")).to_have_count(2)
+
+                    deadline = time.monotonic() + 6
+                    stored = []
+                    while time.monotonic() < deadline:
+                        stored = sources(url)
+                        if len(stored) == 2:
+                            break
+                        time.sleep(0.1)
+                    self.assertEqual(
+                        [("github", "owner/repo"), ("doc", "design.md")],
+                        [(row["type"], row["label"]) for row in stored],
+                    )
+
+                    # A reload of the same page reads them back.
+                    page.reload(wait_until="domcontentloaded")
+                    expect(page.locator(".hc-src")).to_have_count(
+                        2, timeout=10_000)
+
+                    # And so does a browser that never saw the page that
+                    # wrote them: the record is the server's, not the tab's.
+                    page.close()
+
+                with server_for(self.a) as second:
+                    self.assertEqual(
+                        [("github", "owner/repo"), ("doc", "design.md")],
+                        [(row["type"], row["label"])
+                         for row in sources(second)],
+                    )
+                    fresh = browser.new_context(
+                        viewport={"width": 1400, "height": 900})
+                    page = fresh.new_page()
+                    page.goto(second, wait_until="domcontentloaded")
+                    expect(page.locator(".hc-src")).to_have_count(
+                        2, timeout=10_000)
+
+                    # Removing one is the same round trip in reverse.
+                    page.locator(".hc-src").first.locator(
+                        ".hc-src-rm").click()
+                    expect(page.locator(".hc-src")).to_have_count(1)
+                    deadline = time.monotonic() + 6
+                    while time.monotonic() < deadline:
+                        stored = sources(second)
+                        if len(stored) == 1:
+                            break
+                        time.sleep(0.1)
+                    self.assertEqual([("doc", "design.md")],
+                                     [(row["type"], row["label"])
+                                      for row in stored])
+                    fresh.close()
+            finally:
+                browser.close()
+
+    def test_the_state_reports_what_this_chat_has_been_told(self):
+        """`injection` is read, never written, from files that already exist."""
+        empty = ui._payload(self.a, chat_scoped=True)["injection"]
+        self.assertEqual(
+            {"cached": False, "last_delta_chars": None, "last_at": None,
+             "active": False, "reads": ["prompt", "subagent", "task"]},
+            empty,
+        )
+
+        chat_state.mark_goals_ui_invoked("chat-a", self.root)
+        (self.a / "goal_context.md").write_text("# goals\n- one\n")
+        chat_state.save_context_snapshot("chat-a", "# goals\n- one\n",
+                                         self.root)
+        told = ui._payload(self.a, chat_scoped=True)["injection"]
+        self.assertTrue(told["cached"])
+        self.assertTrue(told["active"])
+        self.assertEqual(0, told["last_delta_chars"])
+        self.assertIsInstance(told["last_at"], str)
+
+        # A document the model has not seen yet is a pending change, and its
+        # size is what a next message would carry.
+        (self.a / "goal_context.md").write_text("# goals\n- one\n- two\n")
+        pending = ui._payload(self.a, chat_scoped=True)["injection"]
+        self.assertGreater(pending["last_delta_chars"], 0)
+
+        chat_state.disable_goals_ui("chat-a", self.root)
+        off = ui._payload(self.a, chat_scoped=True)["injection"]
+        self.assertFalse(off["active"])
+        # Disabling clears the snapshot, so there is no base left to diff.
+        self.assertFalse(off["cached"])
+        self.assertIsNone(off["last_delta_chars"])
+
+    def test_the_injection_card_prints_what_the_state_reports(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        chat_state.mark_goals_ui_invoked("chat-a", self.root)
+        (self.a / "goal_context.md").write_text("# goals\n- one\n")
+        chat_state.save_context_snapshot("chat-a", "# goals\n- one\n",
+                                         self.root)
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                card = page.locator(".hc-inject")
+                expect(card).to_be_visible(timeout=10_000)
+                expect(card).to_contain_text("context injection")
+                expect(card).to_contain_text("goal document sent")
+                expect(card).to_contain_text("unchanged since Claude read it")
+                expect(card).to_contain_text("reads: prompt · subagent · task")
+                expect(card).to_contain_text("/goals-ui disable turns it off")
+                # No control: turning it off is a slash command in the
+                # terminal, and the card says so rather than offering one.
+                expect(card.locator("button")).to_have_count(0)
+
+                # It follows the state rather than the page's own memory.
+                chat_state.disable_goals_ui("chat-a", self.root)
+                expect(card).to_contain_text("not sent to Claude yet",
+                                             timeout=6_000)
+                expect(card).to_contain_text("/goals-ui turns it back on")
+            finally:
+                browser.close()
+
+    def test_the_launch_layout_is_a_chat_thing_only(self):
+        """A global vault renders as it did: none of this is on its page."""
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        with server_for(self.a, chat_scoped=False) as url, \
+                sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.locator(".hc")).to_be_visible(timeout=10_000)
+                page.wait_for_timeout(2_000)
+                self.assertIsNone(page.evaluate(
+                    "() => document.documentElement"
+                    ".getAttribute('data-hc-launch')"))
+                self.assertIsNone(page.evaluate(
+                    "() => document.getElementById('hc-launch-style')"))
+                for gone in (".hc-rail-right", ".hc-rail-left", ".hc-shell",
+                             ".hc-chip", ".hc-sources", ".hc-inject"):
+                    expect(page.locator(gone)).to_have_count(0)
+                expect(page.get_by_text("Vault", exact=True).first
+                       ).to_be_visible()
             finally:
                 browser.close()
 
