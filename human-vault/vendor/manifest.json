@@ -3,6 +3,6 @@
   "package": "human-vault",
   "version": "0.18.0",
   "wheel": "human_compact-0.18.0-py3-none-any.whl",
-  "sha256": "454c3605d863d9b78de897e9da6356e0ca59fd50e8e883105461eb68daabf62c",
-  "sourceRevision": "4abb8147e5264592a372fb079a3371d5e1468edb"
+  "sha256": "106d89b14da299bb43194459cb48abf04f2954d3150a0063bbc2d87f4e184db6",
+  "sourceRevision": "50471cb88395e38926c182386c1289f059927234"
 }
