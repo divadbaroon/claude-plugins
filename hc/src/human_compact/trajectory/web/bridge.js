@@ -9,6 +9,12 @@
 
   var KEY = "hc-vault-ui-v1";
   var SYNC_KEY = "hc-vault-ui-sync-v1";
+  // The document a goal opens as when nobody has written one yet. Kept
+  // byte-identical to human_compact.trajectory.goals.default_doc(), because
+  // inference appends into these exact headings: a heading only the browser
+  // knows about is a section the analyzer can never add to. A test in
+  // tests/test_goal_ui_bridge.py greps this line and compares the two.
+  var DEFAULT_DOC = "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n# Blockers\n\n# Open questions\n";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
                       scope: "global" };
   var stateFingerprint = null;
@@ -267,6 +273,14 @@
   // --- server records -> the fields this artifact renders ------------------
 
   function promptRows(goal, byId) {
+    // Which links inference made rather than the reader. The server clears
+    // this id the moment they attach or detach it by hand ("an auto link the
+    // user keeps becomes theirs"), so it reports who is standing behind the
+    // link, not who first proposed it.
+    var automatic = Object.create(null);
+    array(goal && goal.auto_prompt_ids).forEach(function (id) {
+      automatic[id] = true;
+    });
     return array(goal && goal.prompt_ids).map(function (id) {
       var prompt = byId[id];
       if (!prompt) return null;
@@ -281,6 +295,7 @@
                // Which conversation this was said in. The short form is the
                // same prefix the evidence ids use, so the two line up.
                conv: str(prompt.session_id).slice(0, 8),
+               auto: !!automatic[id],
                ts: isFinite(when) ? when : Date.now() };
     }).filter(Boolean);
   }
@@ -891,7 +906,7 @@
   // pathological one cannot lock the tab building rows.
   var PICK_LIMIT = 2000;
 
-  function pickPrompt(goalId) {
+  function pickPrompt(goalId, trigger) {
     var goal = array(serverState.goals).filter(function (g) {
       return g && g.id === goalId;
     })[0];
@@ -918,11 +933,37 @@
       count.className = "hc-pick-count";
       var list = document.createElement("div");
       list.className = "hc-pick-list";
+      // A way out in the corner the eye goes to first. Cancel is at the
+      // bottom of a box that can be 84vh tall, which is a long way from
+      // where a reader who opened this by mistake is looking.
+      var shut = document.createElement("button");
+      shut.className = "hc-pick-close";
+      shut.type = "button";
+      shut.setAttribute("aria-label", "Close");
+      shut.textContent = "×";
+
+      function onKey(event) {
+        // Bound on the document, not on the filter input: Escape has to work
+        // wherever focus has landed inside the box -- a picked row, the close
+        // button, the scrolled list.
+        if (!overlay.parentNode) return;
+        if (!event || event.key !== "Escape") return;
+        if (event.preventDefault) event.preventDefault();
+        close(null);
+      }
 
       function close(value) {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (document.removeEventListener) {
+          document.removeEventListener("keydown", onKey, true);
+        }
+        // Back where they were. Closing a modal onto <body> loses a keyboard
+        // reader's place on the page entirely.
+        if (trigger && trigger.focus) trigger.focus();
         resolve(value || null);
       }
+
+      shut.onclick = function () { close(null); };
 
       function draw() {
         // str(): a value that is not a string throws inside a promise
@@ -983,6 +1024,7 @@
         if (e.key === "Escape") { e.preventDefault(); close(null); }
       };
       overlay.onclick = function (e) { if (e.target === overlay) close(null); };
+      box.appendChild(shut);
       box.appendChild(title);
       box.appendChild(filter);
       box.appendChild(count);
@@ -990,6 +1032,9 @@
       box.appendChild(row);
       overlay.appendChild(box);
       (document.body || document.documentElement).appendChild(overlay);
+      if (document.addEventListener) {
+        document.addEventListener("keydown", onKey, true);
+      }
       // Anything thrown from here rejects a promise the caller only
       // listens to for a chosen id, so a failure reads as "the button
       // does nothing". Say what went wrong, in the box being looked at.
@@ -1031,7 +1076,7 @@
       button.textContent = "select a goal first";
       return;
     }
-    pickPrompt(goalId).catch(function (error) {
+    pickPrompt(goalId, button).catch(function (error) {
       // Never fail quietly: a click that does nothing is the one bug
       // the reader cannot report usefully.
       button.textContent = "could not open it: " + error;
@@ -1079,7 +1124,10 @@
   }
 
   function renderPromptAdd() {
-    if (serverState.scope === "chat") return false;
+    // Chat scope used to be turned away here. Both ops behind this button --
+    // attach_prompt and detach_prompt -- answer in this scope, and the
+    // prompts it offers are the ones this chat recorded, so a chat that
+    // could not correct a wrong inference was the only thing missing.
     var slot = promptAddSlot();
     if (!slot) return false;
     bindPromptAdd();
@@ -1363,6 +1411,9 @@
       ".hc-pick-when{display:block;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:3px}",
       ".hc-pick-text{display:block;white-space:pre-wrap;word-break:break-word}",
       ".hc-pick-none{padding:12px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-pick-box{position:relative}",
+      ".hc-pick-close{position:absolute;top:8px;right:8px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:2px;cursor:pointer;font:15px/1 'Source Code Pro',monospace}",
+      ".hc-pick-close:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
   ].join("");
 
   function ensureDialogStyles() {
@@ -1422,6 +1473,12 @@
   // Its three add controls append a placeholder row. Make them ask for the
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
+    // Four of the pairs below differ by workspace, and markup cannot ask at
+    // render time the way stepTab's patched expression can. The scope is
+    // published from the state fetch -- a synchronous XHR -- before this
+    // runs, so it is already settled here; a standalone artifact with no
+    // bridge never reaches this function at all.
+    var chat = (typeof window !== "undefined" && window.__hcScope === "chat");
     var parts = [
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -1455,7 +1512,7 @@
       // keypress rather than at patch time, which keeps this one string
       // true for whichever server the artifact is served from.
       ["const tabs = ['context', 'prompt', 'agent', 'artifact'];",
-       "const tabs = (typeof window !== 'undefined' && window.__hcScope === 'chat') ? ['context'] : ['context', 'prompt', 'agent', 'artifact'];"],
+       "const tabs = (typeof window !== 'undefined' && window.__hcScope === 'chat') ? ['context', 'prompt'] : ['context', 'prompt', 'agent', 'artifact'];"],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -1532,21 +1589,33 @@
       // behind a disclosure, because it is long and rarely the thing the
       // reader came for.
       ["showPrompt: !!sel && paneTab === 'prompt'",
-       "showPrompt: !!sel && paneTab === 'agent'"],
+       chat ? "showPrompt: !!sel && paneTab === 'prompt' /* its own tab here */"
+            : "showPrompt: !!sel && paneTab === 'agent'"],
       ["<span sc-camel-on-click=\"{{ tabPrompt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tpC }};border-bottom:2px solid {{ tpBd }};margin-bottom:-1px\">PROMPT</span>\n",
-       "<!--prompt folded into agent-->\n"],
+       chat ? "<!--prompt tab kept for chat scope--><span sc-camel-on-click=\"{{ tabPrompt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tpC }};border-bottom:2px solid {{ tpBd }};margin-bottom:-1px\">PROMPT</span>\n"
+            : "<!--prompt folded into agent-->\n"],
       ["<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\">\n<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</sc-if>",
-       "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">Run Claude Code on this goal with the self-contained context Vault has assembled. Progress appears in REVIEW.</div><details class=\"hc-promptbox\"><summary class=\"hc-promptsum\">RECOMMENDED PROMPT</summary>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</details></sc-if>"],
-      // AGENT reads top to bottom: what it is, the prompt it will send,
-      // the notes the user adds to it, then the button that runs it.
+       chat ? "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">Assembled from this goal's document and the prompts linked to it. Edit it here, then take it into a Claude Code session.</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n<div style=\"margin-top:10px;display:flex;justify-content:flex-end\"><span sc-camel-on-click=\"{{ copyPrompt }}\" style=\"padding:4px 11px;border:1px solid var(--bd2);border-radius:2px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);border-color:var(--acc)\">{{ copyPromptLabel }}</span></div>\n</sc-if>"
+            : "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">Run Claude Code on this goal with the self-contained context Vault has assembled. Progress appears in REVIEW.</div><details class=\"hc-promptbox\"><summary class=\"hc-promptsum\">RECOMMENDED PROMPT</summary>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</details></sc-if>"],
+      // The notes box is the Context pane now: one markdown document per
+      // goal, rendered as it is typed, with the prompts that fed it below.
+      // The textbox pane it replaces -- objective, code, documents,
+      // decisions, blockers, built -- goes dormant in BOTH scopes. Nothing
+      // is deleted: every field, handler and getter behind it stays, so the
+      // markup can be re-gated in one line if the document does not hold.
       ["showNotes: !!sel && paneTab === 'prompt'",
-       "showNotes: !!sel && paneTab === 'agent'"],
+       "showNotes: !!sel && paneTab === 'context'"],
+      ["showCtx: !!sel && paneTab === 'context',",
+       "showCtx: false,"],
       // The goal is already named at the top of the inspector; the draft
       // restating it just pushed the actual content down.
       ["blocks.push(isSub ? 'Within the main goal \"' + (trail[0].title || 'Untitled') + '\", I am working on: ' + (sel.title || 'Untitled') + '.' : 'I am working on the goal: ' + (sel.title || 'Untitled') + '.');\n",
        "void 0;\n"],
-      ["placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"",
-       "placeholder=\"Add any other thoughts you would like the agent to know...\""],
+      // The pane, top to bottom: the goal's own document, then the prompts
+      // it was written from. The heading rule above it went with the
+      // "additional" framing -- this is not an addendum to anything.
+      ["<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ADDITIONAL NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:96px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>",
+       "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:360px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>"],
       // The section reports the run's state, not only a task list.
       [">AGENT TODOS</div>",
        ">AGENT STATUS</div>"],
@@ -1606,7 +1675,7 @@
       // way, what is done. Decisions follow what was built -- both are
       // settled, and neither belongs between the goal and its blockers.
       ["<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">DECISIONS</span><sc-if value=\"{{ inhDecided }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxDecided }}\" sc-camel-on-change=\"{{ ctxDecidedCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">BLOCKERS &amp; OPEN QUESTIONS</span><sc-if value=\"{{ inhHit }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxHit }}\" sc-camel-on-change=\"{{ ctxHitCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ALREADY BUILT</span><sc-if value=\"{{ inhBuilt }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxBuilt }}\" sc-camel-on-change=\"{{ ctxBuiltCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>",
-       "<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">BLOCKERS &amp; OPEN QUESTIONS</span><sc-if value=\"{{ inhHit }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxHit }}\" sc-camel-on-change=\"{{ ctxHitCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ALREADY BUILT</span><sc-if value=\"{{ inhBuilt }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxBuilt }}\" sc-camel-on-change=\"{{ ctxBuiltCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">DECISIONS</span><sc-if value=\"{{ inhDecided }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxDecided }}\" sc-camel-on-change=\"{{ ctxDecidedCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>"],
+       "<!--related prompts moved under the document-->\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">BLOCKERS &amp; OPEN QUESTIONS</span><sc-if value=\"{{ inhHit }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxHit }}\" sc-camel-on-change=\"{{ ctxHitCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ALREADY BUILT</span><sc-if value=\"{{ inhBuilt }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxBuilt }}\" sc-camel-on-change=\"{{ ctxBuiltCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">DECISIONS</span><sc-if value=\"{{ inhDecided }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxDecided }}\" sc-camel-on-change=\"{{ ctxDecidedCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>"],
       // The tree position, in the pane and in the prompt. The crumb under
       // the title said the same thing in a place that had no room for it.
       ["\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"display:inline-flex;gap:7px;align-items:center\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">CODE CONTEXT</span>",
@@ -1616,10 +1685,11 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n"],
+       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = false; for (let i = 0; i < lines.length; i += 1) { if (lines[i].indexOf('# ') === 0) { on = lines[i].slice(2).trim() === t; continue; } if (on) body.push(lines[i]); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
       // A prompt without its conversation is a quote without a source.
       ["        text: p.text,\n",
-       "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"],
+       "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"
+       + "        origin: p.auto ? 'automatic' : 'yours',\n"],
       ["<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span>",
        "<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ hr.when }}<span style=\"color:var(--bd2);padding:0 6px\">\u00b7</span>{{ hr.conv }}</span>"],
       // The goals panel reports any analysis, not only the tree build:
@@ -1653,6 +1723,30 @@
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<sc-if value=\"{{ artHasSummary }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div></sc-if>"],
+      // A goal nobody has written to yet shows the six headings rather
+      // than an empty box: the shape of the document is the prompt to fill
+      // it in. Nothing is stored until the first keystroke, which persists
+      // the whole document through the existing notesChange -> import path.
+      ["notesVal: sel ? (sel.notes || '') : '',",
+       "notesVal: sel ? (sel.notes || window.__hcDefaultDoc || '') : '',"],
+      ["notesOverlay: sel ? this.md(sel.notes || '') : null,",
+       "notesOverlay: sel ? this.md(sel.notes || window.__hcDefaultDoc || '') : null,"],
+      // Copying the recommended prompt, without doCopy's two side effects:
+      // it appends a metadata footer nobody asked for, and it records the
+      // draft as a prompt the user is then shown as one of their own words.
+      ["      copy: () => this.doCopy(),\n",
+       !chat ? "      copy: () => this.doCopy(),\n" :
+       "      copy: () => this.doCopy(),\n"
+       + "      copyPrompt: () => { const t = this._draftEl ? this._draftEl.value : ''; "
+       + "const done = () => { this.setState({ copied: true }); clearTimeout(this._ct); "
+       + "this._ct = setTimeout(() => this.setState({ copied: false }), 1600); }; "
+       + "const fb = () => { const ta = document.createElement('textarea'); ta.value = t; "
+       + "ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); "
+       + "ta.select(); try { document.execCommand('copy'); } catch (e) {} ta.remove(); }; "
+       + "if (navigator.clipboard && navigator.clipboard.writeText) "
+       + "{ navigator.clipboard.writeText(t).then(done, () => { fb(); done(); }); } "
+       + "else { fb(); done(); } },\n"
+       + "      copyPromptLabel: copied ? 'copied \u2713' : 'Copy prompt',\n"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
@@ -2018,6 +2112,10 @@
   // because both read it: the patched source asks it which tabs exist, and
   // the watcher below asks it which controls to take off the page.
   window.__hcScope = serverState.scope;
+  // The empty document's spine, read by the patched notesVal/notesOverlay
+  // getters. A goal with no notes shows the six headings rather than an
+  // empty box, and the first keystroke persists the whole document.
+  window.__hcDefaultDoc = DEFAULT_DOC;
   // Placed after the template island and before the closing body tag: the
   // artifact's DOMContentLoaded listener is registered but has not unpacked
   // the template yet, so patching here is safe.

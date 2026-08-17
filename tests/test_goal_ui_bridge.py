@@ -202,10 +202,16 @@ class BridgeTestCase(unittest.TestCase):
         return json.loads(result.stdout)
 
 
-    def patched_bundle(self, tail):
-        """Apply patchBundleSource to the checked-in artifact, then evaluate."""
+    def patched_bundle(self, tail, scope=None):
+        """Apply patchBundleSource to the checked-in artifact, then evaluate.
+
+        `scope` overrides what the bridge read from /api/state, because the
+        patch itself is scope-aware: a chat workspace gets a PROMPT tab and a
+        copyable prompt, a global vault keeps the folded AGENT pane.
+        """
         return self.run_js(
-            "var fs = require('fs');"
+            ("window.__hcScope = %s;" % json.dumps(scope) if scope else "")
+            + "var fs = require('fs');"
             "var html = fs.readFileSync(%s, 'utf8');"
             "var src = JSON.parse(html.match("
             "  /<script type=\"__bundler\\/template\">\\s*([\\s\\S]*?)\\s*<\\/script>/)[1]);"
@@ -1304,16 +1310,19 @@ class LiveFeedTests(BridgeTestCase):
         # the AGENT pane has its own branch line; only the artifact's went
         self.assertIn("{{ agentBranch }}", out)
 
-    def test_agent_reads_name_then_prompt_then_notes_then_run(self):
+    def test_agent_reads_name_then_prompt_then_run(self):
+        # The notes box left this pane for CONTEXT, where the document the
+        # user writes now lives; the rest of the AGENT order is unchanged.
         out = self.patched_bundle("out;")
         self.assertLess(out.index(">AGENT</div>"), out.index("hc-promptbox"))
-        self.assertLess(out.index("hc-promptbox"), out.index("ADDITIONAL NOTES"))
-        self.assertLess(out.index("ADDITIONAL NOTES"), out.index("AGENT STATUS"))
+        self.assertLess(out.index("hc-promptbox"), out.index("AGENT STATUS"))
         self.assertLess(out.index("AGENT STATUS"), out.index("{{ runAgent }}"))
 
-    def test_the_notes_box_moved_to_the_agent_pane(self):
+    def test_the_notes_box_is_the_context_pane_itself(self):
         out = self.patched_bundle("out;")
-        self.assertIn("showNotes: !!sel && paneTab === 'agent'", out)
+        self.assertIn("showNotes: !!sel && paneTab === 'context'", out)
+        self.assertNotIn("showNotes: !!sel && paneTab === 'agent'", out)
+        self.assertNotIn("showNotes: !!sel && paneTab === 'prompt'", out)
 
     def test_the_pane_says_what_it_is_for(self):
         self.assertIn("Run Claude Code on this goal with the self-contained "
@@ -1326,9 +1335,13 @@ class LiveFeedTests(BridgeTestCase):
         self.assertNotIn("Within the main goal", out)
 
     def test_the_notes_box_invites_the_users_own_thoughts(self):
+        # It is the goal's whole document now, not an addendum to a prompt,
+        # so the invitation names the markup it renders as you type.
         out = self.patched_bundle("out;")
-        self.assertIn("Add any other thoughts you would like the agent to "
-                      "know...", out)
+        self.assertIn("Write in markdown \u2014 # heading, - list, - [ ] task, "
+                      "**bold**, `code`", out)
+        self.assertNotIn("Add any other thoughts you would like the agent to "
+                         "know...", out)
         self.assertNotIn("Plan in markdown", out)
 
     def test_the_prompt_heading_is_the_disclosure_itself(self):
@@ -1408,7 +1421,7 @@ class LiveFeedTests(BridgeTestCase):
         # settled, and neither belongs between the goal and its blockers.
         out = self.patched_bundle("out;")
         order = [">OBJECTIVE</span>", "WHERE THIS SITS", ">CODE CONTEXT</span>",
-                 ">DOCUMENT CONTEXT</span>", "RELATED PROMPTS",
+                 ">DOCUMENT CONTEXT</span>",
                  "BLOCKERS &amp; OPEN QUESTIONS", ">ALREADY BUILT</span>",
                  ">DECISIONS</span>"]
         at = [out.index(name) for name in order]
@@ -1438,10 +1451,10 @@ class LiveFeedTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
         at = [draft.index(name) for name in
-              ("'Objective:", "'Where this sits:", "'Code context:",
+              ("'Objective'", "'Where this sits:", "'Code context:",
                "'Document context:", "'Related prompts, in my own words:",
-               "'Blockers & open questions:", "'Already built:",
-               "'Established decisions:")]
+               "'In my words'", "'Decisions'", "'Built'", "'Blockers'",
+               "'Open questions'")]
         self.assertEqual(sorted(at), at)
 
     def test_the_prompt_quotes_the_words_the_pane_lists(self):
@@ -1459,14 +1472,17 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("blocks.push(isSub ? 'Implement this subgoal for me.' : "
                       "'Implement this goal for me.');", draft)
         # it is the last thing said, after the context it is asking about
-        self.assertLess(draft.index("'Established decisions:"),
+        self.assertLess(draft.index("'Open questions'"),
                         draft.index("Implement this subgoal for me."))
 
-    def test_the_prompt_rows_carry_no_controls(self):
-        # The list is the record of what was said, not a place to act.
+    def test_a_prompt_row_carries_only_the_control_that_undoes_the_link(self):
+        # The list is the record of what was said, not a place to act on it
+        # -- except for the one act the record itself can be wrong about:
+        # inference tying a prompt to the wrong goal.
         out = self.patched_bundle("out;")
+        self.assertIn('sc-camel-on-click="{{ hr.del }}"', out)
+        self.assertIn('title="Unlink this prompt"', out)
         self.assertNotIn("{{ hr.copy }}", out)
-        self.assertNotIn("{{ hr.del }}", out)
         self.assertNotIn("{{ hr.use }}", out)
 
     def test_each_prompt_names_the_conversation_it_came_from(self):
@@ -1487,14 +1503,16 @@ class LiveFeedTests(BridgeTestCase):
         state["prompts"][0].pop("session_id", None)
         self.assertEqual("", self.roots(state)[0]["prompts"][0]["conv"])
 
-    def test_the_words_come_before_what_stands_in_their_way(self):
-        # They are context to read with the sources, not a footnote: what was
-        # asked for lands before the blockers and the settled sections.
+    def test_the_words_sit_under_the_document_they_are_evidence_for(self):
+        # They used to be filed between the dormant textboxes. The pane is
+        # one document now, and the prompts that fed it read below it.
         out = self.patched_bundle("out;")
-        self.assertLess(out.index(">DOCUMENT CONTEXT</span>"),
+        self.assertLess(out.index("{{ notesOverlay }}"),
                         out.index("RELATED PROMPTS"))
         self.assertLess(out.index("RELATED PROMPTS"),
-                        out.index("BLOCKERS &amp; OPEN QUESTIONS"))
+                        out.index('<sc-if value="{{ showAgent }}"'))
+        self.assertLess(out.index("BLOCKERS &amp; OPEN QUESTIONS"),
+                        out.index("RELATED PROMPTS"))
         self.assertEqual(1, out.count("RELATED PROMPTS"))
 
     def test_a_long_history_scrolls_rather_than_pushing_the_pane_down(self):
@@ -2330,12 +2348,12 @@ class ChatScopeSurfaceTests(BridgeTestCase):
                 " window.__hcPromptUI.headerNav()];"))
 
     def test_the_keyboard_cycle_stops_at_the_tabs_a_chat_has(self):
-        # ⌘↑/⌘↓ stepping onto AGENT would open a pane whose every control
-        # errors here, and onto PROMPT a pane the bridge folded away.
+        # ⌘↑/⌘↓ stepping onto AGENT or REVIEW would open a pane whose every
+        # control errors here. CONTEXT and PROMPT are the two it can serve.
         out = self.patched_bundle("out;")
         self.assertIn(
             "const tabs = (typeof window !== 'undefined' && "
-            "window.__hcScope === 'chat') ? ['context'] : "
+            "window.__hcScope === 'chat') ? ['context', 'prompt'] : "
             "['context', 'prompt', 'agent', 'artifact'];", out)
         self.assertNotIn(
             "    const tabs = ['context', 'prompt', 'agent', 'artifact'];", out)
@@ -2376,3 +2394,263 @@ class ScopeFallbackTests(BridgeTestCase):
     def test_nothing_answering_at_all_leaves_it_where_it_was(self):
         self.assertEqual("global", self.run_js(
             "window.__hcScope;", state={"broken": True}))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class DocumentPaneTests(BridgeTestCase):
+    """The Context pane is one markdown document, rendered as it is typed."""
+
+    def test_the_document_is_what_the_context_tab_opens(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("showNotes: !!sel && paneTab === 'context'", out)
+
+    def test_the_textbox_pane_is_dormant_in_both_scopes(self):
+        # Objective / code / document / decisions / blockers / built are no
+        # longer reachable, in either scope. The markup and every handler
+        # behind it stay: nothing about them is deleted, only unreached.
+        for scope in (None, "chat"):
+            out = self.patched_bundle("out;", scope=scope)
+            self.assertIn("showCtx: false,", out, scope)
+            self.assertNotIn("showCtx: !!sel && paneTab === 'context',", out,
+                             scope)
+            for kept in (">OBJECTIVE</span>", ">CODE CONTEXT</span>",
+                         ">DOCUMENT CONTEXT</span>", ">DECISIONS</span>",
+                         "{{ ctxObjectiveCh }}", "{{ codeRows }}",
+                         "{{ docRows }}"):
+                self.assertIn(kept, out, (scope, kept))
+
+    def test_the_document_is_not_an_addendum_to_something_else(self):
+        out = self.patched_bundle("out;")
+        self.assertIn(">NOTES</div>", out)
+        self.assertNotIn("ADDITIONAL NOTES", out)
+        # A rule above it said "and also…"; it is the pane now, not a footer.
+        self.assertNotIn("margin-top:20px;padding-top:14px;border-top:1px "
+                         "solid var(--bd);font:600 9.5px", out)
+
+    def test_the_editor_is_tall_enough_to_write_a_document_in(self):
+        out = self.patched_bundle("out;")
+        overlay = out[out.rindex("<div", 0, out.index("{{ notesOverlay }}")):
+                      out.index("{{ notesOverlay }}")]
+        self.assertIn("min-height:360px", overlay)
+        self.assertNotIn("min-height:96px", overlay)
+
+    def test_an_empty_goal_opens_on_the_default_headers(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("notesVal: sel ? (sel.notes || window.__hcDefaultDoc "
+                      "|| '') : '',", out)
+        self.assertIn("notesOverlay: sel ? this.md(sel.notes || "
+                      "window.__hcDefaultDoc || '') : null,", out)
+
+    def test_the_default_document_is_the_one_the_backend_writes(self):
+        # A heading the bridge shows but goals.py cannot append into would
+        # send the user's text somewhere inference never looks.
+        import re
+        import sys
+        sys.path.insert(0, str(ROOT / "hc" / "src"))
+        from human_compact.trajectory import goals as GM
+        src = BRIDGE.read_text()
+        found = re.search(r'var DEFAULT_DOC = ("(?:[^"\\]|\\.)*");', src)
+        self.assertIsNotNone(found, "bridge.js must name the default document")
+        self.assertEqual(GM.default_doc(), json.loads(found.group(1)))
+        self.assertIn("window.__hcDefaultDoc = DEFAULT_DOC;", src)
+        self.assertEqual(GM.default_doc(),
+                         self.run_js("window.__hcDefaultDoc;"))
+
+    def test_the_prompts_that_fed_the_document_read_below_it(self):
+        out = self.patched_bundle("out;")
+        self.assertLess(out.index("{{ notesOverlay }}"),
+                        out.index("RELATED PROMPTS"))
+        self.assertIn('<span class="hc-prompt-add"></span>', out)
+        self.assertIn('<sc-for list="{{ histRows }}" as="hr"', out)
+        self.assertEqual(1, out.count('<sc-for list="{{ histRows }}" as="hr"'))
+
+    def test_a_row_says_whether_a_machine_made_the_link(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("origin: p.auto ? 'automatic' : 'yours',", out)
+        self.assertIn("{{ hr.origin }}", out)
+
+    def test_the_bridge_reports_which_links_inference_made(self):
+        state = json.loads(json.dumps(STATE))
+        state["goals"][0]["auto_prompt_ids"] = ["a#1"]
+        self.assertEqual([True], [r["auto"] for r in
+                                  self.roots(state)[0]["prompts"]])
+        self.assertEqual([False], [r["auto"] for r in
+                                   self.roots()[0]["prompts"]])
+
+    def test_the_draft_is_assembled_from_the_document_sections(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertIn("const secOf = (t) =>", draft)
+        # between "# <title>" and the next H1, and ## is not an H1
+        self.assertIn("lines[i].indexOf('# ') === 0", draft)
+        for title in ("In my words", "Decisions", "Built", "Blockers",
+                      "Open questions"):
+            self.assertIn("section('%s');" % title, draft)
+
+    def test_the_draft_no_longer_reads_the_dormant_textboxes(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        for gone in ("ctxGet('decided')", "ctxGet('built')", "ctxGet('hit')"):
+            self.assertNotIn(gone, draft)
+
+    def test_an_objective_the_document_does_not_carry_is_still_said(self):
+        # The description inference recorded is a real answer to "what does
+        # finishing this mean"; dropping it because the document's own
+        # Objective section is empty would lose it from the prompt.
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertIn("secOf('Objective') || String(ctxGet('objective') "
+                      "|| '').trim()", draft)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatPromptTabTests(BridgeTestCase):
+    """A chat workspace gets the PROMPT tab back, with nothing behind it
+    that this scope cannot do."""
+
+    def test_a_chat_page_offers_the_prompt_tab(self):
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertIn('sc-camel-on-click="{{ tabPrompt }}"', out)
+        self.assertIn(">PROMPT</span>", out)
+        self.assertNotIn("prompt folded into agent", out)
+
+    def test_a_global_page_still_folds_it_into_agent(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("prompt folded into agent", out)
+        self.assertNotIn('sc-camel-on-click="{{ tabPrompt }}"', out)
+
+    def test_the_pane_follows_whichever_tab_opens_it(self):
+        self.assertIn("showPrompt: !!sel && paneTab === 'prompt'",
+                      self.patched_bundle("out;", scope="chat"))
+        self.assertIn("showPrompt: !!sel && paneTab === 'agent'",
+                      self.patched_bundle("out;"))
+
+    def prompt_pane(self, scope=None):
+        out = self.patched_bundle("out;", scope=scope)
+        at = out.index('<sc-if value="{{ showPrompt }}"')
+        return out[at:out.index("</sc-if>", at)]
+
+    def test_a_chat_prompt_pane_is_the_prompt_and_a_way_to_take_it(self):
+        pane = self.prompt_pane(scope="chat")
+        self.assertIn("RECOMMENDED PROMPT", pane)
+        self.assertIn("{{ draft }}", pane)
+        self.assertIn('sc-camel-on-click="{{ copyPrompt }}"', pane)
+        self.assertIn("{{ copyPromptLabel }}", pane)
+
+    def test_a_chat_prompt_pane_offers_no_run(self):
+        # Every op behind a run answers "global scope only" here.
+        pane = self.prompt_pane(scope="chat")
+        self.assertNotIn("{{ runAgent }}", pane)
+        self.assertNotIn("Run Claude Code on this goal", pane)
+        self.assertNotIn("{{ genTodos }}", pane)
+
+    def test_a_global_prompt_pane_is_unchanged(self):
+        pane = self.prompt_pane()
+        self.assertIn("Run Claude Code on this goal with the self-contained "
+                      "context Vault has assembled. Progress appears in "
+                      "REVIEW.", pane)
+        self.assertIn('<details class="hc-promptbox">', pane)
+        self.assertNotIn("{{ copyPrompt }}", pane)
+
+    def test_copying_says_it_copied_only_once_the_clipboard_took_it(self):
+        out = self.patched_bundle("out;", scope="chat")
+        at = out.index("copyPrompt: () =>")
+        handler = out[at:out.index("copyPromptLabel:", at)]
+        self.assertIn("navigator.clipboard.writeText(t).then(done,", handler)
+        self.assertIn("document.execCommand('copy')", handler)
+        # the draft as it stands, not the draft plus a metadata footer, and
+        # nothing is recorded as a prompt the user never sent
+        self.assertNotIn("_copyMeta", handler)
+        self.assertNotIn("recordPrompt", handler)
+        self.assertIn("copyPromptLabel: copied ? 'copied ✓' : "
+                      "'Copy prompt',", out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatPromptLinkTests(BridgeTestCase):
+    """Linking a prompt to a goal has to work where the prompts live."""
+
+    CLICK = ("function click(node) { var e = { target: node,"
+             "  preventDefault: function () {}, stopPropagation: function () {} };"
+             "  listeners.filter(function (l) { return l[0] === 'click'; })"
+             "    .forEach(function (l) { l[1](e); }); }")
+
+    KEY = ("function key(name) { var e = { key: name,"
+           "  preventDefault: function () {} };"
+           "  listeners.filter(function (l) { return l[0] === 'keydown'; })"
+           "    .forEach(function (l) { l[1](e); }); }")
+
+    def chat_state(self):
+        state = json.loads(json.dumps(STATE))
+        state["scope"] = "chat"
+        state["prompts"].append(
+            {"id": "a#2", "role": "user", "text": "and record the audio",
+             "created_at": "2026-08-05"})
+        return state
+
+    def test_a_chat_can_add_a_prompt_to_a_goal(self):
+        drawn = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "var drew = window.__hcPromptUI.renderPromptAdd();"
+            "JSON.stringify([drew, slot.children.length,"
+            " slot.children[0] && slot.children[0].textContent]);"))
+        self.assertEqual([True, 1, "+ add a prompt"], drawn)
+
+    def test_the_picker_has_a_way_out_in_its_own_corner(self):
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var btn = document.createElement('button');"
+            "btn.focused = false; btn.focus = function () { btn.focused = true; };"
+            "window.__hcPromptUI.pickPrompt('g1', btn);"
+            "var x = document.querySelector('.hc-pick-close');"
+            "var open1 = !!document.querySelector('.hc-ask');"
+            "x.onclick();"
+            "JSON.stringify([open1, !!x, x.textContent,"
+            " !!document.querySelector('.hc-ask'), btn.focused]);"))
+        self.assertEqual([True, True, "×", False, True], got)
+
+    def test_escape_closes_the_picker_and_puts_the_reader_back(self):
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var btn = document.createElement('button');"
+            "btn.focused = false; btn.focus = function () { btn.focused = true; };"
+            "window.__hcPromptUI.pickPrompt('g1', btn);"
+            + self.KEY +
+            "key('Escape');"
+            "JSON.stringify([!!document.querySelector('.hc-ask'), btn.focused]);"))
+        self.assertEqual([False, True], got)
+
+    def test_a_key_that_is_not_escape_leaves_the_picker_open(self):
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            + self.KEY +
+            "key('a');"
+            "JSON.stringify([!!document.querySelector('.hc-ask')]);"))
+        self.assertEqual([True], got)
+
+    def test_the_close_button_is_styled_by_the_dialog_sheet(self):
+        self.assertIn(".hc-pick-close{",
+                      self.run_js("window.__hcPromptUI.dialogCss();"))
+
+    def test_attaching_from_a_chat_reaches_the_server(self):
+        posted = json.loads(self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            + self.CLICK +
+            "click(slot.children[0]);"
+            "document.querySelector('.hc-pick-list').children[0].onclick();"
+            "Promise.resolve().then(function () {}).then(function () {})"
+            "  .then(function () { return JSON.stringify("
+            "    calls.map(function (c) { return c[1]; }).filter(Boolean)); });"))
+        self.assertEqual([{"op": "attach_prompt", "goal_id": "g1",
+                           "prompt_id": "a#2"}],
+                         [c for c in posted if c.get("op") == "attach_prompt"])
