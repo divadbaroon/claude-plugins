@@ -302,5 +302,35 @@ class HcPluginInstallTests(unittest.TestCase):
                 self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode), path)
 
 
+class InstallBannerTests(unittest.TestCase):
+    """The first line of an install must not name a product that does not exist.
+
+    The npm package is ``human-vault`` and the runtime is ``hc``. Both READMEs
+    say so; the banner used to greet every install with ``human-compact``,
+    which is only ever a path (``~/.human-compact/``) and a distribution name.
+    """
+
+    def _cli(self, home):
+        if str(HC_SRC) not in sys.path:
+            sys.path.insert(0, str(HC_SRC))
+        patcher = mock.patch.dict(os.environ, {"HC_HOME": str(home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        import human_compact.cli as cli
+        return importlib.reload(cli)
+
+    def test_the_install_greets_with_the_runtime_and_the_command(self):
+        with tempfile.TemporaryDirectory() as home:
+            cli = self._cli(Path(home))
+            out = io.StringIO()
+            with mock.patch.object(cli, "install_plugin"), \
+                    contextlib.redirect_stdout(out):
+                cli.install_main([])
+            text = out.getvalue()
+            first = next(line for line in text.splitlines() if line.strip())
+            self.assertEqual("hc \u00b7 /goals-ui", first)
+            self.assertNotIn("human-compact \u00b7", text)
+
+
 if __name__ == "__main__":
     unittest.main()

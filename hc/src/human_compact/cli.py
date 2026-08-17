@@ -348,7 +348,7 @@ def install_main(argv=None):
         prog="hc install",
         description="Install /goals-ui for Claude Code (no global context layer).")
     ap.parse_args(argv or [])
-    print("\nhuman-compact · chat goal UI\n")
+    print("\nhc · /goals-ui\n")
     if not (HOME / ".claude").exists():
         say("WARNING: ~/.claude not found — install Claude Code first")
     install_plugin()
@@ -392,7 +392,7 @@ def backup_main():
                     help="capture mode without prompting")
     args = ap.parse_args()
 
-    print("\nhuman-compact · Vault onboarding\n")
+    print("\nhc · Vault onboarding (experimental)\n")
 
     if shutil.which("jq") is None:
         say("WARNING: jq not found (brew install jq) — Vault hooks need it")
