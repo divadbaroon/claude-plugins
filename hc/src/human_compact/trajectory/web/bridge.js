@@ -1771,6 +1771,15 @@
       // them. The seed marks itself v7 so only a seeded store qualifies.
       ["if (saved && saved.v >= 4 && Array.isArray(saved.goals) && saved.goals.length && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);",
        "if (saved && saved.v >= 4 && Array.isArray(saved.goals) && (saved.goals.length || saved.v >= 7) && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);"],
+      // And the same demo copy reaches a real tree by a second door: the
+      // constructor backfilled any empty desc from a map keyed by the sample
+      // tree's own ids -- g1, g2, g3, g4 among them -- which are exactly the
+      // ids the vault mints. One filter chip was enough to write four
+      // sentences nobody wrote into goals.json, and from there into the
+      // prompt the reader copied. The map stays; nothing applies it.
+      ["    try { ad(g0); } catch (e) {}",
+       "    /* the demo backfill above is not applied: its keys are the ids\n"
+       + "       the vault mints, so it would overwrite real goals */"],
       // Its agent panel simulated a session: templated todos, a hardcoded file
       // list, and diff stats computed from the length of each filename. Both
       // entry points now start a real goal-bound session instead.

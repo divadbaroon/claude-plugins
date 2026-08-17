@@ -545,6 +545,84 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_no_control_carries_the_demo_copy_onto_goals_the_vault_minted(self):
+        """The artifact keys its sample descriptions by g1..g4.
+
+        Those are the ids `goals.next_goal_id` mints, so the collision is the
+        common case in a chat workspace, not an edge one. Every control below
+        persists -- a filter chip and the theme toggle as much as a rename --
+        and each used to carry four sentences nobody wrote into goals.json,
+        and from there into the prompt the reader copies.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        minted = self.root / "minted-ids"
+        goals = [goal("g%d" % n, "real goal %d" % n) for n in (1, 2, 3, 4)]
+        goals[1]["status"] = "in_progress"
+        write_scope(minted, goals, [])
+        goals_path = minted / "goals.json"
+
+        with server_for(minted) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1400, "height": 900},
+                    permissions=["clipboard-read", "clipboard-write"],
+                )
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.get_by_text("real goal 2", exact=True).first
+                       ).to_be_visible(timeout=10_000)
+
+                page.get_by_text("in progress (1)", exact=True).click()
+                page.get_by_text("real goal 2", exact=True).first.click()
+                page.locator('[title="Switch to dark mode"]').click()
+                # The bridge mirrors localStorage to the server on an 800 ms
+                # poll; two seconds is past whichever poll each of those
+                # three lands on.
+                page.wait_for_timeout(2_000)
+
+                self.assertEqual(
+                    ["", "", "", ""],
+                    [g["description"]
+                     for g in get_json(url + "/api/state")["goals"]],
+                )
+                on_disk = json.loads(goals_path.read_text())["goals"]
+                self.assertEqual(["g1", "g2", "g3", "g4"],
+                                 [g["id"] for g in on_disk])
+                self.assertEqual(["", "", "", ""],
+                                 [g["description"] for g in on_disk])
+
+                # And nothing reaches the prompt the reader takes away.
+                page.reload(wait_until="domcontentloaded")
+                expect(page.get_by_text("real goal 2", exact=True).first
+                       ).to_be_visible(timeout=10_000)
+                page.get_by_text("real goal 2", exact=True).first.click()
+                page.get_by_text("PROMPT", exact=True).click()
+                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
+                       ).to_be_visible()
+                copy = page.get_by_text("Copy prompt", exact=True)
+                expect(copy).to_be_visible()
+                copy.click()
+                expect(page.get_by_text("copied \u2713", exact=True)
+                       ).to_be_visible()
+                copied = page.evaluate("() => navigator.clipboard.readText()")
+                self.assertNotIn("Stand up the shared goal model", copied)
+                self.assertNotIn("Objective:", copied)
+                context.close()
+            finally:
+                browser.close()
+
     def test_a_completion_persists_and_the_filter_decides_where_it_shows(self):
         """Completing a goal, and what each filter then shows of it.
 

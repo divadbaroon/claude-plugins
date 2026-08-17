@@ -5,6 +5,7 @@ only maps records onto the fields it reads, mirrors edits back, and makes its
 add-source controls ask for a value. These tests hold that contract.
 """
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -639,6 +640,53 @@ class NoSampleLeakageTests(BridgeTestCase):
         ctx = self.ctx_of("g1a")
         self.assertEqual([], ctx["code"])
         self.assertEqual([], ctx["docs"])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoDemoDescriptionBackfillTests(BridgeTestCase):
+    """The artifact's demo copy must never become a real goal's description.
+
+    Its constructor filled any empty `desc` from a map keyed by the sample
+    tree's own ids -- g1, g2, g3, g4 among them -- and those are exactly the
+    ids the vault mints (`goals.next_goal_id`, `chat_synth`'s schema). So the
+    first control that persisted anything, including a filter chip or the
+    theme toggle, wrote four sentences nobody had written onto the reader's
+    goals, and from there into the prompt they copied.
+    """
+
+    def artifact_source(self):
+        return json.loads(re.search(
+            r'<script type="__bundler/template">\s*([\s\S]*?)\s*</script>',
+            BUNDLE.read_text()).group(1))
+
+    def test_the_backfill_is_never_called_in_either_scope(self):
+        for scope in (None, "chat"):
+            with self.subTest(scope=scope or "global"):
+                self.assertNotIn("ad(g0)",
+                                 self.patched_bundle("out;", scope=scope))
+
+    def test_the_artifact_itself_still_carries_the_collision(self):
+        # A control. If the artifact ever stopped keying its demo copy by the
+        # ids the vault mints, the test above would pass for the wrong reason
+        # and this one would say so.
+        source = self.artifact_source()
+        self.assertIn("ad(g0)", source)
+        self.assertIn("g1: 'Stand up the shared goal model", source)
+
+    def test_a_real_tree_leaves_the_constructor_as_it_arrived(self):
+        # Runs the emitted constructor body over goals shaped like the ones
+        # the vault mints, rather than trusting the absence of a call.
+        got = json.loads(self.patched_bundle(
+            "var at = out.indexOf('const D = {');"
+            "var body = out.slice(at, out.indexOf('this.state = {', at));"
+            "var tree = [{ id: 'g1', desc: '', children: ["
+            "  { id: 'a1', desc: '', children: [] }] },"
+            "  { id: 'g2', desc: '', children: [] }];"
+            "eval('(function (g0) {' + body + '\\nreturn g0; })')(tree);"
+            "JSON.stringify(tree);", scope="chat"))
+        self.assertEqual(
+            ["", "", ""],
+            [got[0]["desc"], got[0]["children"][0]["desc"], got[1]["desc"]])
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
