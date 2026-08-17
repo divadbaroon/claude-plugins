@@ -615,5 +615,52 @@ class ChatSynthesisTests(unittest.TestCase):
         self.assertIn("# Built\n- the parser", goal["notes"])
 
 
+class ChatProviderGateTests(unittest.TestCase):
+    """Ollama is stashed for this release, including as a chat provider.
+
+    It must fail closed: silently answering with the claude provider would send
+    a digest off-device to someone who asked for the on-device one.
+    """
+
+    def _kind(self, env):
+        patcher = mock.patch.dict(os.environ, env, clear=False)
+        for name in ("HC_CHAT_PROVIDER", "HC_EXPERIMENTAL", "HC_CHAT_MODEL"):
+            if name not in env:
+                os.environ.pop(name, None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_ollama_is_refused_without_the_flag(self):
+        from human_compact.trajectory import providers as P
+        self._kind({"HC_CHAT_PROVIDER": "ollama"})
+        with self.assertRaises(P.ProviderError) as caught:
+            S._provider()
+        self.assertIn("ollama is experimental in this release", str(caught.exception))
+        self.assertIn("HC_EXPERIMENTAL=1", str(caught.exception))
+
+    def test_ollama_never_falls_back_to_claude(self):
+        from human_compact.trajectory import providers as P
+        self._kind({"HC_CHAT_PROVIDER": "ollama", "HC_EXPERIMENTAL": "0"})
+        with self.assertRaises(P.ProviderError):
+            S._provider()
+
+    def test_the_flag_restores_the_on_device_provider(self):
+        from human_compact.trajectory import providers as P
+        self._kind({"HC_CHAT_PROVIDER": "ollama", "HC_EXPERIMENTAL": "1"})
+        self.assertIsInstance(S._provider(), P.Ollama)
+
+    def test_the_default_and_the_test_provider_are_untouched(self):
+        from human_compact.trajectory import providers as P
+        self._kind({})
+        self.assertIsInstance(S._provider(), P.ClaudeCLI)
+        self._kind({"HC_CHAT_PROVIDER": "mock"})
+        self.assertIsInstance(S._provider(), P.Mock)
+
+    def test_an_explicit_provider_argument_still_wins(self):
+        self._kind({"HC_CHAT_PROVIDER": "ollama"})
+        sentinel = Provider([{"goals": []}])
+        self.assertIs(sentinel, S._provider(sentinel))
+
+
 if __name__ == "__main__":
     unittest.main()

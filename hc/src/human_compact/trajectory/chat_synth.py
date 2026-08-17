@@ -241,6 +241,12 @@ def _provider(provider=None):
     kind = os.environ.get("HC_CHAT_PROVIDER", "claude")
     if kind not in P.DEFAULTS:
         raise P.ProviderError(f"unknown chat provider: {kind}")
+    # The on-device path is stashed for this release. It fails closed on
+    # purpose: quietly answering with the claude provider would ship a digest
+    # off-device to the one person who explicitly asked it not to.
+    if kind == "ollama" and os.environ.get("HC_EXPERIMENTAL") != "1":
+        raise P.ProviderError(
+            "ollama is experimental in this release; set HC_EXPERIMENTAL=1")
     model = os.environ.get("HC_CHAT_MODEL")
     return P.make(kind, "synthesize", model)
 
