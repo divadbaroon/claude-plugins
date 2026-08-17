@@ -12,7 +12,7 @@ installed:
 npx human-vault
 ```
 
-It installs a managed `hc` runtime plus the Claude Code hooks and `/hc-ui`
+It installs a managed `hc` runtime plus the Claude Code hooks and `/goals-ui`
 skill, and nothing else: no history is captured and nothing is analyzed until
 you say so. Finish setup in the goal UI, which asks the same two questions
 with their consequences visible:
@@ -29,7 +29,7 @@ conversation-derived digests to Anthropic. Declining leaves both off.
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 
 ```text
-/hc-ui
+/goals-ui
 ```
 
 The command opens a localhost page tied to that Claude session. Its state is

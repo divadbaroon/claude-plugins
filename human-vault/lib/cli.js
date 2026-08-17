@@ -17,7 +17,7 @@ function usage() {
   return `Usage: npx human-vault [options]
 
 Options:
-  --global-vault <1|2>  1 enables global Vault; 2 installs /hc-ui only
+  --global-vault <1|2>  1 enables global Vault; 2 installs /goals-ui only
   --goals <1|2>         1 builds global goals now; 2 skips (Vault only)
   --non-interactive     require every applicable choice as a flag
   --dry-run             verify the bundled release and show the plan only

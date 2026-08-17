@@ -14,7 +14,9 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
-HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
+GOALS_UI_SKILL_DIR = HOME / ".claude" / "skills" / "goals-ui"
+# Pre-rename install path. Retired by install_plugin() when it is ours.
+LEGACY_HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
 VAULT_BIN = HOME / ".claude-vault" / "bin"
 ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
@@ -29,14 +31,16 @@ _ASSET_FILES = {
         "scripts/chat-hook.sh", "scripts/vault-backfill.sh",
         "scripts/vault-hook.sh",
     },
-    "hc-ui": {"SKILL.md"},
+    "goals-ui": {"SKILL.md"},
 }
 # Exact unmarked v0.15.0 assets. This permits migration of installs created by
 # this project before ownership markers existed without claiming arbitrary
 # directories that merely happen to use the same names.
 _LEGACY_DIGESTS = {
     "vault": {"4f5319b78efe7f90eccb967bbcd787b7ddcfbfdae8643e82281f01e6551dda02"},
-    "hc-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
+    # This digest is the v0.15.0 /hc-ui SKILL.md, which the rename
+    # superseded; it now only identifies a legacy ~/.claude/skills/hc-ui.
+    "goals-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
 }
 
 
@@ -199,14 +203,33 @@ def _remove_asset(path: Path):
         shutil.rmtree(path)
 
 
+def _retire_legacy_hc_ui():
+    """Remove the pre-rename /hc-ui skill, but only when we installed it."""
+    path = LEGACY_HC_UI_SKILL_DIR
+    if not _path_exists(path):
+        return
+    ours = (not path.is_symlink() and path.is_dir()
+            and (_owned_asset(path, "hc-ui")
+                 or _asset_digest(path, "goals-ui") in _LEGACY_DIGESTS["goals-ui"]))
+    if not ours:
+        say(f"left unmanaged {path} in place")
+        return
+    try:
+        _remove_asset(path)
+    except OSError as exc:
+        say(f"could not remove superseded {path}: {exc}")
+        return
+    say(f"removed superseded {path}")
+
+
 def install_plugin():
     parent = SKILLS_DIR.parent
     parent.mkdir(parents=True, exist_ok=True)
     specs = [
         {"asset": "vault", "source": asset_root() / "plugin",
          "destination": SKILLS_DIR},
-        {"asset": "hc-ui", "source": asset_root() / "hc-ui-skill",
-         "destination": HC_UI_SKILL_DIR},
+        {"asset": "goals-ui", "source": asset_root() / "goals-ui-skill",
+         "destination": GOALS_UI_SKILL_DIR},
     ]
     for spec in specs:
         spec["ownership"] = _preflight_asset(
@@ -257,14 +280,17 @@ def install_plugin():
         if spec["ownership"] == "legacy":
             say(f"migrated legacy {spec['asset']} install")
     say(f"plugin installed -> {SKILLS_DIR}")
-    say(f"/hc-ui installed -> {HC_UI_SKILL_DIR}")
+    say(f"/goals-ui installed -> {GOALS_UI_SKILL_DIR}")
+    # Only after promotion: a stale /hc-ui skill would otherwise still claim a
+    # workspace URL that nothing supplies.
+    _retire_legacy_hc_ui()
 
 
 def install_main(argv=None):
     """Install the chat-scoped UI without enabling the global Vault layer."""
     ap = argparse.ArgumentParser(
         prog="hc install",
-        description="Install /hc-ui for Claude Code (no global context layer).")
+        description="Install /goals-ui for Claude Code (no global context layer).")
     ap.parse_args(argv or [])
     print("\nhuman-compact · chat goal UI\n")
     if not (HOME / ".claude").exists():
@@ -272,7 +298,7 @@ def install_main(argv=None):
     install_plugin()
     print()
     say("Done. Start a new Claude Code session (or run /reload-plugins),")
-    say("then type /hc-ui in any chat.")
+    say("then type /goals-ui in any chat.")
     print()
 
 
@@ -389,7 +415,7 @@ def setup_main(argv=None):
     """One noninteractive orchestration seam for the npm installer."""
     ap = argparse.ArgumentParser(
         prog="hc setup",
-        description="Install /hc-ui and optionally initialize global Vault state.")
+        description="Install /goals-ui and optionally initialize global Vault state.")
     ap.add_argument("--global-vault", required=True,
                     choices=["yes", "no", "keep"])
     ap.add_argument("--goals", required=True, choices=["yes", "no"])
@@ -397,7 +423,7 @@ def setup_main(argv=None):
     if args.goals == "yes" and args.global_vault != "yes":
         ap.error("--goals yes requires --global-vault yes")
 
-    # This is deliberately first: /hc-ui remains installed even when optional
+    # This is deliberately first: /goals-ui remains installed even when optional
     # global-history setup fails later and the user retries the installer.
     install_main([])
     if args.global_vault == "keep":
@@ -1053,7 +1079,7 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
         if event == "UserPromptExpansion":
             json.dump({
                 "decision": "block",
-                "reason": f"hc-ui could not initialize chat state: {exc}",
+                "reason": f"goals-ui could not initialize chat state: {exc}",
             }, stdout)
             stdout.write("\n")
         return 0
@@ -1069,7 +1095,7 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
 
     if event == "UserPromptExpansion":
         # Launch from the hook rather than a skill `!` shell expansion. This
-        # keeps /hc-ui functional under disableSkillShellExecution policies.
+        # keeps /goals-ui functional under disableSkillShellExecution policies.
         import contextlib
         import io
         launch_args = ["--session", result.session_id,
@@ -1087,13 +1113,13 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
                 raise RuntimeError("launcher returned no localhost URL")
             json.dump({"hookSpecificOutput": {
                 "hookEventName": "UserPromptExpansion",
-                "additionalContext": f"hc-ui opened for this chat at {url}",
+                "additionalContext": f"goals-ui opened for this chat at {url}",
             }}, stdout)
             stdout.write("\n")
         except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
             json.dump({
                 "decision": "block",
-                "reason": f"hc-ui could not open: {exc}",
+                "reason": f"goals-ui could not open: {exc}",
             }, stdout)
             stdout.write("\n")
         return 0
@@ -1290,7 +1316,7 @@ def chat_ui_main(argv=None):
             "session_id": args.session,
             "hook_event_name": "SessionStart",
             # Do not overwrite the stable project root already captured by
-            # SessionStart merely because the user invoked /hc-ui after `cd`.
+            # SessionStart merely because the user invoked /goals-ui after `cd`.
             "cwd": CS.load_manifest(args.session).get("cwd") or session_cwd,
         })
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
@@ -1378,7 +1404,7 @@ def hc_main():
               "  lens        the derived compaction lens\n"
               "  status      vault + analysis pipeline status\n"
               "  refresh     process pending conversations, regenerate lens\n"
-              "  install     install /hc-ui without enabling global Vault\n"
+              "  install     install /goals-ui without enabling global Vault\n"
               "  setup       noninteractive npm onboarding\n"
               "  backup      onboard Vault / import history\n"
               "  trajectory  full analyze + lens (alias)\n")

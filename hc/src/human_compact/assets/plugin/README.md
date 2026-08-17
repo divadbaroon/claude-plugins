@@ -6,8 +6,8 @@ state stays on your machine.
 
 ## Chat-scoped goals (always available after install)
 
-Run `/hc-ui` inside Claude Code. The browser UI is keyed to that chat's stable
-session ID and stored at `~/.claude-vault/chat-sessions/<session-id>/`.
+Run `/goals-ui` inside Claude Code. The browser UI is keyed to that chat's
+stable session ID and stored at `~/.claude-vault/chat-sessions/<session-id>/`.
 User prompts can be linked many-to-many with goals. Inference also observes
 assistant plans/progress, tool activity, task events, and completion evidence.
 
@@ -50,7 +50,7 @@ enabled, it separately asks whether to infer global goals now. That second
 choice runs history analysis before rebuilding the goal tree and sends bounded
 conversation-derived digests through your authenticated Claude Code CLI.
 
-Start a new Claude Code session (or run `/reload-plugins`) and use `/hc-ui`.
+Start a new Claude Code session (or run `/reload-plugins`) and use `/goals-ui`.
 Choosing `2` for global Vault installs only that chat-scoped path. No Homebrew,
 pipx, jq, shell-profile edit, or manual `hc` command is required.
 
@@ -98,7 +98,11 @@ action to `~/.claude-vault/debug.log`. `CLAUDE_VAULT_DIR` relocates the vault.
 Remove the managed runtime and Claude integration directories after preserving
 any state you want to keep:
 
-    rm -rf ~/.human-compact ~/.claude/skills/vault ~/.claude/skills/hc-ui
+    rm -rf ~/.human-compact ~/.claude/skills/vault ~/.claude/skills/goals-ui
+
+The command used to be `/hc-ui`. Installing over that release removes its
+`~/.claude/skills/hc-ui` directory when the installer recognizes it as its
+own; anything it does not recognize is left for you to remove by hand.
 
 Global and per-chat state remains in `~/.claude-vault` until removed
 separately.

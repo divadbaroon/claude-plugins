@@ -23,7 +23,7 @@ numeric questions:
 2. If Vault is enabled, infer global goals now? Choose `1` to analyze the
    imported history and rebuild the global goal tree.
 
-Start a new Claude Code session (or run `/reload-plugins`) and type `/hc-ui`.
+Start a new Claude Code session (or run `/reload-plugins`) and type `/goals-ui`.
 That command opens the goal workspace for the current chat. The global Vault
 and its cross-chat inference remain separate, opt-in layers.
 

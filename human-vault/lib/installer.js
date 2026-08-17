@@ -664,7 +664,7 @@ async function install(options) {
       }, null, 2)}\n`);
       throw error;
     }
-    output.write(`  runtime      ${vendor.version}\n  Claude Code  plugin and /hc-ui installed\n`);
+    output.write(`  runtime      ${vendor.version}\n  Claude Code  plugin and /goals-ui installed\n`);
     return { runtime, launcher: switched.launcher };
   } finally {
     if (staging) removeManaged(root, staging);

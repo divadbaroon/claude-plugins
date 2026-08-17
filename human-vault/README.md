@@ -15,7 +15,7 @@ It always installs the Claude Code integration for chat-scoped goals. Start a
 new Claude Code session (or run `/reload-plugins`), then run:
 
 ```text
-/hc-ui
+/goals-ui
 ```
 
 The Python backend is an exact wheel bundled in the npm release. It is
@@ -28,7 +28,7 @@ lifecycle scripts.
 Use numeric flags in automation:
 
 ```bash
-# Chat-scoped /hc-ui only
+# Chat-scoped /goals-ui only
 npx human-vault --non-interactive --global-vault 2
 
 # Global Vault plus global goal inference

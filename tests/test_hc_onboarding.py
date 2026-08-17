@@ -23,7 +23,7 @@ class HcOnboardingTests(unittest.TestCase):
             import human_compact.cli as cli
             return importlib.reload(cli)
 
-    def test_install_adds_bare_hc_ui_without_enabling_global_vault(self):
+    def test_install_adds_bare_goals_ui_without_enabling_global_vault(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
             (home / ".claude").mkdir()
@@ -31,7 +31,7 @@ class HcOnboardingTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 cli.install_main([])
 
-            skill = home / ".claude" / "skills" / "hc-ui" / "SKILL.md"
+            skill = home / ".claude" / "skills" / "goals-ui" / "SKILL.md"
             hooks = home / ".claude" / "skills" / "vault" / "hooks" / "hooks.json"
             self.assertTrue(skill.is_file())
             self.assertIn('${CLAUDE_SESSION_ID}', skill.read_text())

@@ -1,7 +1,7 @@
 """Durable, session-scoped Claude Code event ingestion for chat goals.
 
 The global trajectory pipeline intentionally summarizes many Vault sessions.
-This module is the separate state boundary for ``/hc-ui``: one Claude session,
+This module is the separate state boundary for ``/goals-ui``: one Claude session,
 one append-only logical event stream, one goal tree.  Transcript files are
 treated as replaceable caches (Claude may truncate or rewrite them); stable
 record ids and event deduplication are the correctness boundary.
@@ -268,7 +268,7 @@ def load_prompts(session_id: str, root: Optional[Path] = None) -> List[Dict[str,
     return [
         p for p in prompts
         if (isinstance(p, dict) and p.get("role") == "user"
-            and not _is_hc_ui_launcher(str(p.get("text") or ""))
+            and not _is_goals_ui_launcher(str(p.get("text") or ""))
             and not _is_command_prompt(str(p.get("text") or "")))
     ]
 
@@ -333,16 +333,21 @@ def _human_origin(record: Dict[str, Any]) -> bool:
     )
 
 
-def _is_hc_ui_launcher(text: str) -> bool:
-    """Keep the command that opens the workspace out of its own goal model."""
+def _is_goals_ui_launcher(text: str) -> bool:
+    """Keep the command that opens the workspace out of its own goal model.
+
+    ``hc-ui`` is the pre-rename spelling and still appears in transcripts
+    recorded before the rename, so both names are recognized.
+    """
     lowered = str(text or "").strip().lower()
-    return (
-        lowered in ("/hc-ui", "\\hc-ui", "hc-ui")
-        or lowered.startswith("/hc-ui ")
-        or bool(re.search(
-            r"^\s*<command-name>\s*/?hc-ui\s*</command-name>", lowered
-        ))
-    )
+    for name in ("goals-ui", "hc-ui"):
+        if (lowered in (f"/{name}", f"\\{name}", name)
+                or lowered.startswith(f"/{name} ")
+                or re.search(
+                    rf"^\s*<command-name>\s*/?{re.escape(name)}\s*</command-name>",
+                    lowered)):
+            return True
+    return False
 
 
 def _is_command_prompt(text: str) -> bool:
@@ -432,7 +437,7 @@ def _normalize_record(
             prompt_id = record.get("promptId")
             event_id = f"prompt:{prompt_id}" if prompt_id else _record_id(record, raw, "prompt")
             kind = "human_prompt"
-            usable = not (_is_hc_ui_launcher(text) or _is_command_prompt(text))
+            usable = not (_is_goals_ui_launcher(text) or _is_command_prompt(text))
         elif record.get("isMeta"):
             event_id = _record_id(record, raw, "context")
             kind, usable = "context", False
@@ -516,7 +521,7 @@ def _normalize_record(
                 kind="queued_prompt",
                 role="user",
                 text=text,
-                usable_for_goals=not _is_hc_ui_launcher(text),
+                usable_for_goals=not _is_goals_ui_launcher(text),
             )
             out.append(event)
         return out
@@ -687,7 +692,7 @@ def _assignable_prompts(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
             continue
         text = str(event["text"]).strip()
         if (not event.get("usable_for_goals", True)
-                or _is_hc_ui_launcher(text) or _is_command_prompt(text)):
+                or _is_goals_ui_launcher(text) or _is_command_prompt(text)):
             continue
         prompts.append(
             {
@@ -968,7 +973,7 @@ def _ingest_hook_locked(
                 hook_event,
             )
             boundary["usable_for_goals"] = not (
-                _is_hc_ui_launcher(text) or _is_command_prompt(text)
+                _is_goals_ui_launcher(text) or _is_command_prompt(text)
             )
     elif hook_event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
         text = payload["last_assistant_message"].strip()

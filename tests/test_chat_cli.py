@@ -139,7 +139,7 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         response = json.loads(output.getvalue())
         self.assertEqual(
-            "hc-ui opened for this chat at http://127.0.0.1:9012/",
+            "goals-ui opened for this chat at http://127.0.0.1:9012/",
             response["hookSpecificOutput"]["additionalContext"],
         )
         launch.assert_called_once_with(
