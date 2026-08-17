@@ -76,12 +76,17 @@ class HcOnboardingTests(unittest.TestCase):
             # one that used to be silent for the wrong reason: a session that
             # loaded its hooks before the plugin was installed. So the body
             # is an instruction for exactly that case, and it says what to do.
-            self.assertIn("the `/goals-ui` hook did not run", body)
-            self.assertIn("restart\nClaude Code (or run `/reload-plugins`)", body)
-            self.assertIn("Do nothing\nelse", body)
-            self.assertIn("session start", body)
-            self.assertIn("`/goals-ui disable` turns that off", body)
-            self.assertNotIn('${CLAUDE_SESSION_ID}', body)
+            self.assertIn("this text never reaches Claude", body)
+            # The one case where it does reach Claude is a session holding a
+            # hook configuration older than the plugin -- which is every
+            # resumed session. Asking the reader to restart is not a feature;
+            # the fallback does the work the hook would have done.
+            self.assertIn("open the workspace yourself", body)
+            self.assertIn('"$HOME/.human-compact/bin/hc" chat-ui '
+                          '--session ${CLAUDE_SESSION_ID}', body)
+            self.assertNotIn("Tell the user to restart", body)
+            self.assertIn("injected as context on session\nstart, later messages, subagents and tool batches", body)
+            self.assertIn("`/goals-ui disable` turns\nthat off for this chat", body)
             self.assertTrue(hooks.is_file())
             self.assertFalse((home / ".claude-vault" / "bin" / "claude").exists())
             self.assertFalse((home / ".zshrc").exists())
