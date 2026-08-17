@@ -2169,13 +2169,24 @@ class PreHydrationMaskTests(unittest.TestCase):
         # origin with no saved theme. Following the operating system there
         # paints white in front of a dark workspace -- the flash the mask was
         # added to remove.
-        self.assertIn("#101010", body.split("</head>")[0])
+        self.assertIn(ui.CHAT_GROUND, body.split("</head>")[0])
         self.assertNotIn("prefers-color-scheme", body.split("</head>")[0])
 
     def test_a_global_vault_is_masked_on_its_own_ground(self):
         from human_compact.trajectory import ui
         self.assertIn("#fff", ui.preboot_mask(False))
-        self.assertIn("#101010", ui.preboot_mask(True))
+        self.assertIn(ui.CHAT_GROUND, ui.preboot_mask(True))
+
+    def test_the_mask_is_painted_in_the_workspace_s_own_ground(self):
+        """Not merely dark: the colour the dressed workspace lands on.
+
+        The mask and the workspace meet on the same pixel at reveal. A near
+        miss is a seam the reader reads as a second page arriving, which is
+        the whole complaint the mask exists to answer.
+        """
+        from human_compact.trajectory import ui
+        self.assertEqual("#0d1117", ui.CHAT_GROUND,
+                         "the artifact paints .hc on #0d1117")
 
     def test_the_reader_never_sees_the_onboarding_dialog_or_a_raw_binding(self):
         try:
@@ -2234,6 +2245,55 @@ class PreHydrationMaskTests(unittest.TestCase):
                 page.evaluate("getComputedStyle(document.documentElement).visibility"))
             self.assertEqual(0, page.get_by_text("Keep your Claude Code history").count())
             browser.close()
+
+    def test_the_hold_is_never_broken_by_the_browser_s_own_white(self):
+        """The colour under a hidden document is the one the reader sees.
+
+        `visibility:hidden` hides the element, not the viewport canvas: the
+        canvas keeps painting the background propagated from the root, and
+        where the root has none it falls through to the body's. The artifact
+        replaces documentElement -- taking the served mask with it -- and its
+        own body is white, so the hold that was meant to remove the flash
+        ends up painting it: dark, then white, then the workspace.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page()
+            cdp = page.context.new_cdp_session(page)
+            # The gap this test is about is a handful of frames wide. Make the
+            # machine slow enough that it cannot close by luck.
+            cdp.send("Emulation.setCPUThrottlingRate", {"rate": 6})
+            page.add_init_script(
+                "window.__hcGround = [];"
+                "(function sample() {"
+                "  try {"
+                "    var html = document.documentElement;"
+                "    var vis = getComputedStyle(html).visibility;"
+                "    var ground = getComputedStyle(html).backgroundColor;"
+                "    if (ground === 'rgba(0, 0, 0, 0)' && document.body) {"
+                "      ground = getComputedStyle(document.body).backgroundColor;"
+                "    }"
+                "    window.__hcGround.push(vis + ' ' + ground);"
+                "  } catch (e) {}"
+                "  requestAnimationFrame(sample);"
+                "})();")
+            page.goto(url)
+            page.wait_for_selector("text=real goal one", timeout=15000)
+            frames = page.evaluate("window.__hcGround || []")
+            browser.close()
+        held = [f for f in frames if f.startswith("hidden ")]
+        self.assertTrue(held, "the document was never held: %r" % (frames[:5],))
+        ground = "rgb(13, 17, 23)"
+        wrong = sorted({f for f in held if not f.endswith(ground)})
+        self.assertEqual(
+            [], wrong,
+            "every frame of the hold must be the workspace's own ground, "
+            "not the browser's default: %r" % (wrong,))
 
 
 class DeletedGoalBrowserTests(unittest.TestCase):

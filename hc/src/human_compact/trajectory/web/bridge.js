@@ -1767,6 +1767,42 @@
     return text.length > 0 && text.indexOf("{{") < 0;
   }
 
+  // Kept in step with ui.CHAT_GROUND, which paints the same colour into the
+  // mask the server serves. Two writers, one ground: the server owns the
+  // frames before the unpack, this owns every frame after it.
+  var CHAT_GROUND = "#0d1117";
+
+  function groundColor() {
+    // What the workspace will land on, decided the way the served mask decides
+    // it: the reader's own choice if they have made one, dark otherwise. A
+    // fresh port is a fresh origin, so most opens have nothing saved.
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); }
+    catch (e) { saved = null; }
+    return (saved && saved.themeMode === "light") ? "#fff" : CHAT_GROUND;
+  }
+
+  function holdRoot(root) {
+    // `visibility:hidden` hides the element, not the viewport canvas: the
+    // canvas keeps painting the background propagated from the root, and
+    // where the root has none it falls through to the body's -- which in this
+    // artifact is white. So holding the page is two things, not one. Hiding
+    // it alone is what turned the hold into the flash it was added to remove.
+    if (!root || !root.style) return;
+    if (root.style.visibility !== "hidden") root.style.visibility = "hidden";
+    var ground = groundColor();
+    if (root.style.background !== ground) root.style.background = ground;
+  }
+
+  function releaseRoot(root) {
+    // Both, and in this order: a root that keeps the ground after the reveal
+    // would fight the reader's own theme at the edges the workspace does not
+    // cover.
+    if (!root || !root.style) return;
+    root.style.visibility = "";
+    root.style.background = "";
+  }
+
   function revealWhenDressed() {
     // The server hides the document until the artifact unpacks its template,
     // because what it paints before that is not this product. The unpack
@@ -1783,15 +1819,11 @@
     var started = clock();
     var elapsed = function () { return clock() - started; };
     var frames = 0;
-    var show = function (root) {
-      if (root && root.style) root.style.visibility = "";
-    };
+    var show = releaseRoot;
     var step = function () {
       var root = document.documentElement;
       if (!root) return;
-      if (root.style && root.style.visibility !== "hidden") {
-        root.style.visibility = "hidden";
-      }
+      holdRoot(root);
       var dressed;
       try {
         applyLaunchSkin();
@@ -2839,6 +2871,9 @@
     patchBundleSource: patchBundleSource,
     revealWhenDressed: revealWhenDressed,
     launchDressed: launchDressed,
+    groundColor: groundColor,
+    holdRoot: holdRoot,
+    releaseRoot: releaseRoot,
     patchMisses: function () { return patchMisses.slice(); },
     seedPayload: seedPayload,
     mergeTrees: mergeTrees,

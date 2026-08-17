@@ -271,6 +271,40 @@ class LaunchDressedTests(BridgeTestCase):
         self.assertFalse(self.ask("chat", True, ""))
 
 
+class HoldGroundTests(BridgeTestCase):
+    """What the viewport is painted while the workspace is held back.
+
+    The server masks the document it serves, but the artifact unpacks by
+    replacing documentElement, which throws that mask away mid-hold. From
+    there the canvas falls through to the artifact's own white body -- so the
+    hold has to carry its own ground onto whatever root it now holds.
+    """
+
+    def ground(self, saved=None):
+        return self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1', %s);"
+            "out = window.__hcPromptUI.groundColor();"
+            % json.dumps(json.dumps(saved or {})))
+
+    def test_a_chat_workspace_is_held_on_its_own_dark_ground(self):
+        self.assertEqual("#0d1117", self.ground())
+
+    def test_a_reader_who_chose_light_is_held_on_light(self):
+        self.assertEqual("#fff", self.ground({"themeMode": "light"}))
+
+    def test_holding_paints_the_root_and_releasing_gives_it_back(self):
+        held, shown = self.run_js(
+            "var root = document.documentElement;"
+            "window.__hcPromptUI.holdRoot(root);"
+            "var held = [root.style.visibility, root.style.background];"
+            "window.__hcPromptUI.releaseRoot(root);"
+            "out = [held, [root.style.visibility, root.style.background]];")
+        self.assertEqual(["hidden", "#0d1117"], held,
+                         "a held root must hide itself and keep the ground")
+        self.assertEqual(["", ""], shown,
+                         "releasing must hand both back to the workspace")
+
+
 class DeletedGoalTests(BridgeTestCase):
     """A goal the reader deleted is kept on disk but not drawn."""
 

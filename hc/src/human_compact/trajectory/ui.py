@@ -789,6 +789,13 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return {"ok": True}
 
 
+# The colour the dressed chat workspace lands on: the artifact paints its
+# `.hc` shell on it. The mask and the workspace meet on the same pixel at
+# reveal, so anything near-but-not-equal is a seam -- and the bridge holds the
+# same ground once the unpack has taken this mask away, from one constant.
+CHAT_GROUND = "#0d1117"
+
+
 def preboot_mask(chat_scoped):
     """Hide the artifact's own first frame, on the ground it will land on.
 
@@ -797,8 +804,8 @@ def preboot_mask(chat_scoped):
     white page in front of a dark workspace, which is the flash it was meant
     to remove. A chat opens dark unless the reader chose otherwise here.
     """
-    ground = "#101010" if chat_scoped else "#fff"
-    other = "#fff" if chat_scoped else "#101010"
+    ground = CHAT_GROUND if chat_scoped else "#fff"
+    other = "#fff" if chat_scoped else CHAT_GROUND
     want = "light" if chat_scoped else "dark"
     return (
         '<style id="hc-preboot">html{visibility:hidden!important}'
