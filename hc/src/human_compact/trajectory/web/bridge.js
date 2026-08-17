@@ -2118,7 +2118,7 @@
       // The window is named for what it is: one chat's goals. "Vault"
       // is the global product this scope is not.
       ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
-       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">goals</span>"
+       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span>"
             : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
