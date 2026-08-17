@@ -1,6 +1,7 @@
 """hc ui — localhost goal browser. Reads and writes the SAME goals.json
 through the goals model (goal_context.md stays in sync for SessionStart
 injection). Stdlib only; localhost only; Ctrl-C to stop."""
+import difflib
 import hashlib
 import json
 import os
@@ -500,9 +501,69 @@ def _goal_revision(goals, important):
     return hashlib.sha256(payload).hexdigest()
 
 
+# What Claude has been told about this chat's goals, read from the two files
+# that already record it: the context snapshot (the exact document the model
+# was last handed) and the session manifest (whether /goals-ui is on). Nothing
+# here writes; the numbers are characters, and the browser labels them "~ tok"
+# because a token count is an estimate this side cannot make honestly.
+#
+# Every point at which cli.py hands this chat's goal document to the model:
+# a session start (which re-sends the whole document), a user prompt, a
+# subagent start, and a tool batch (the last three carry a delta). Listing
+# only the three per-message ones understated it -- a session start is the
+# largest send there is, and a reader counting what Claude has been given
+# would have been counting short.
+INJECTION_READS = ("session start", "prompt", "subagent", "task")
+
+
+def _injection_state(session_id, root):
+    """What this chat has sent of its goal document, and what is pending.
+
+    ``cached`` is true once the document has actually been handed over, which
+    is the only thing the snapshot proves -- it records what was *rendered*
+    into a turn, not what the model read, so every label derived from it says
+    "sent". ``last_at`` is when that happened. ``last_delta_chars`` is the
+    size of the change *since* then -- the text a next message would carry,
+    0 when nothing has changed -- and None when nothing has been sent yet,
+    because there is no base to diff against.
+
+    Read-only, and called outside the session lock: see ``_payload``.
+    """
+    snapshot = CS.load_context_snapshot(session_id, root)
+    previous = snapshot.get("text")
+    cached = isinstance(previous, str) and bool(snapshot.get("sha256"))
+    delta = None
+    if cached:
+        try:
+            current = CS.paths(session_id, root).goal_context.read_text(
+                encoding="utf-8")
+        except (OSError, ValueError):
+            current = previous
+        if current == previous:
+            delta = 0
+        else:
+            delta = len("\n".join(difflib.unified_diff(
+                previous.splitlines(), current.splitlines(),
+                fromfile="goals (as you last saw them)", tofile="goals (now)",
+                lineterm="", n=1)))
+    at = snapshot.get("at")
+    return {
+        "cached": cached,
+        "last_delta_chars": delta,
+        "last_at": at if isinstance(at, str) else None,
+        "active": CS.goals_ui_active(session_id, root),
+        "reads": list(INJECTION_READS),
+    }
+
+
 def _payload(trajdir=None, chat_scoped=None):
     chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
     trajdir = _scope(trajdir)
+    # Set under the lock, read after it: the injection card is computed from
+    # two read-only files, and the hook that writes the snapshot waits only
+    # half a second for this same lock before dropping its injection. A poll
+    # every 1.5s per open tab must not be one of the things it waits behind.
+    identity = None
     with _state_access(trajdir, chat_scoped):
         goals, important = _load_goals(trajdir, chat_scoped)
         GM.sanitize(goals)
@@ -516,6 +577,11 @@ def _payload(trajdir=None, chat_scoped=None):
         # The tab needs a name, and only this side knows which conversation
         # the window belongs to.
         session = None
+        # Present in both scopes so the browser reads one shape; a global
+        # vault stands behind no chat, so nothing is injected for it.
+        injection = {"cached": False, "last_delta_chars": None,
+                     "last_at": None, "active": False,
+                     "reads": list(INJECTION_READS)}
         try:
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
@@ -525,22 +591,27 @@ def _payload(trajdir=None, chat_scoped=None):
             analyzer = CS.get_analyzer_state(session_id, root)
             notices = CS.load_notices(session_id, root)
             session = session_id
+            identity = (session_id, root)
         # Agent execution state is scoped to the goal tree it was launched
         # against; chat-scoped goal ids live in a different namespace.
         runs, claim = ({}, None) if chat_scoped else (
             AE.plans(trajdir), AE.pending_claim(trajdir))
-        return {"goals": goals["goals"], "items": important["items"],
-                "prompts": _load_prompts(trajdir, chat_scoped),
-                "generated_at": goals.get("generated_at", ""),
-                "sessions": ana.get("sessions_analyzed"),
-                "analyzer": analyzer,
-                "notices": notices,
-                "session_id": session,
-                "agent_runs": runs,
-                "agent_claim": claim,
-                "scope": "chat" if chat_scoped else "global",
-                "provider": _configured_provider(trajdir),
-                "revision": _goal_revision(goals, important)}
+        payload = {"goals": goals["goals"], "items": important["items"],
+                   "prompts": _load_prompts(trajdir, chat_scoped),
+                   "generated_at": goals.get("generated_at", ""),
+                   "sessions": ana.get("sessions_analyzed"),
+                   "analyzer": analyzer,
+                   "notices": notices,
+                   "session_id": session,
+                   "injection": injection,
+                   "agent_runs": runs,
+                   "agent_claim": claim,
+                   "scope": "chat" if chat_scoped else "global",
+                   "provider": _configured_provider(trajdir),
+                   "revision": _goal_revision(goals, important)}
+    if identity is not None:
+        payload["injection"] = _injection_state(*identity)
+    return payload
 
 
 def _apply(op, trajdir=None, chat_scoped=None):

@@ -57,6 +57,7 @@ function El(tag) {
   this.attrs = {};
   this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
   this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+  this.removeAttribute = (k) => { delete this.attrs[k]; };
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
     if (n.parentNode) n.parentNode.removeChild(n);
@@ -2473,11 +2474,13 @@ class ChatScopeSurfaceTests(BridgeTestCase):
 
     def test_the_keyboard_cycle_stops_at_the_tabs_a_chat_has(self):
         # ⌘↑/⌘↓ stepping onto AGENT or REVIEW would open a pane whose every
-        # control errors here. CONTEXT and PROMPT are the two it can serve.
+        # control errors here, and stepping onto PROMPT would swap the
+        # document out for something the right rail is already showing.
+        # CONTEXT is the only pane this workspace has left to open.
         out = self.patched_bundle("out;")
         self.assertIn(
             "const tabs = (typeof window !== 'undefined' && "
-            "window.__hcScope === 'chat') ? ['context', 'prompt'] : "
+            "window.__hcScope === 'chat') ? ['context'] : "
             "['context', 'prompt', 'agent', 'artifact'];", out)
         self.assertNotIn(
             "    const tabs = ['context', 'prompt', 'agent', 'artifact'];", out)
@@ -3219,3 +3222,201 @@ class ChatNoticeTests(BridgeTestCase):
         dialog = self.run_js("window.__hcPromptUI.dialogCss();")
         self.assertIn("z-index:100001", css)
         self.assertIn("z-index:100000", dialog)
+
+
+# Every class the chat-scope template patches introduce, and therefore every
+# class the stylesheet has something to dress. They are listed here rather
+# than scraped from bridge.js so that a patch quietly losing its anchor -- or
+# its class -- fails, instead of the test agreeing with whatever it finds.
+LAUNCH_CLASSES = (
+    "hc-row", "hc-rowtitle",
+    "hc-shell", "hc-main",
+    "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
+    "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
+    "hc-rail-none", "hc-inject",
+    "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
+    "hc-src-rm", "hc-src-add", "hc-tabs",
+    "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-session", "hc-updated",
+)
+
+
+def _luminance(hexcolor):
+    """WCAG relative luminance of a #rgb or #rrggbb string."""
+    digits = hexcolor.lstrip("#")
+    if len(digits) == 3:
+        digits = "".join(d * 2 for d in digits)
+    channels = []
+    for pair in (digits[0:2], digits[2:4], digits[4:6]):
+        c = int(pair, 16) / 255
+        channels.append(c / 12.92 if c <= 0.04045
+                        else ((c + 0.055) / 1.055) ** 2.4)
+    return (0.2126 * channels[0] + 0.7152 * channels[1]
+            + 0.0722 * channels[2])
+
+
+def _contrast(fg, bg):
+    """WCAG 2.1 contrast ratio between two CSS hex colours."""
+    lighter, darker = sorted((_luminance(fg), _luminance(bg)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class LaunchSkinTests(BridgeTestCase):
+    """The three-column skin: one root attribute, and only in a chat."""
+
+    def chat(self):
+        return ("window.__hcPromptUI.acceptState("
+                "{ goals: [], prompts: [], scope: 'chat',"
+                "  session_id: '7f3a1b2c-0000' });")
+
+    def patch_report(self, scope):
+        """Which anchors missed, and which classes never reached the source.
+
+        The skin is applied by patching the artifact's template *source*
+        before the runtime unpacks it, so a moved anchor is not a crash: the
+        pair no-ops and the layout silently does not apply. Every browser
+        assertion phrased as "this is hidden" or "this is styled" passes
+        vacuously in that state, which is why the anchors are asserted here,
+        against the checked-in bundle, and not only through a page.
+        """
+        return self.patched_bundle(
+            "[window.__hcPromptUI.patchMisses(),"
+            " %s.filter(function (c) {"
+            "   return out.indexOf('class=\"' + c + '\"') < 0; })];"
+            % json.dumps(list(LAUNCH_CLASSES)),
+            scope=scope)
+
+    def test_every_anchor_the_launch_shell_names_is_found_in_the_artifact(self):
+        misses, missing = self.patch_report("chat")
+        self.assertEqual([], misses)
+        self.assertEqual([], missing)
+
+    def test_a_global_vault_gets_a_source_with_none_of_those_names_in_it(self):
+        # The same reduce runs, and every pair is a no-op: nothing missed,
+        # and not one of the launch classes is in what a vault is served.
+        misses, missing = self.patch_report("global")
+        self.assertEqual([], misses)
+        self.assertEqual(sorted(LAUNCH_CLASSES), sorted(missing))
+
+    def test_the_copy_button_label_clears_aa_in_both_themes(self):
+        # 11.5px bold is not "large text", so both themes owe 4.5:1 -- and
+        # the fill is a variable each theme redefines, so the label cannot be
+        # one colour. The light fill is dark enough that only white clears
+        # it; the dark theme's fill is bright enough that only near-black
+        # does. This caught a 3.69:1 label the eye read as fine.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+
+        def first(pattern):
+            found = re.search(pattern, css)
+            self.assertIsNotNone(found, pattern)
+            return found.group(1)
+
+        dark = r"\[data-hc-launch\]\[data-hc-theme=\"dark\"\]"
+        pairs = [
+            (first(r"\[data-hc-launch\]\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
+             first(r"\[data-hc-launch\] \.hc-rail-copy\{"
+                   r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+            (first(dark + r"\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
+             first(dark + r" \.hc-rail-copy\{"
+                          r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+        ]
+        self.assertEqual(2, len({label for _, label in pairs}))
+        for fill, label in pairs:
+            self.assertGreaterEqual(round(_contrast(label, fill), 2), 4.5,
+                                    (label, fill))
+
+    def test_a_global_vault_is_never_dressed(self):
+        # Every rule in the sheet is behind [data-hc-launch], and the
+        # attribute is only ever written in a chat -- so a global vault does
+        # not so much as load the stylesheet.
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState("
+            "  { goals: [], prompts: [], scope: 'global' });"
+            "var applied = window.__hcPromptUI.applyLaunchSkin();"
+            "[applied, document.documentElement.getAttribute('data-hc-launch'),"
+            " document.getElementById('hc-launch-style') ? 1 : 0];")
+        self.assertEqual([False, None, 0], out)
+
+    def test_a_chat_is_dressed_once_and_stays_dressed(self):
+        out = self.run_js(
+            self.chat()
+            + "var first = window.__hcPromptUI.applyLaunchSkin();"
+            "var again = window.__hcPromptUI.applyLaunchSkin();"
+            "[first, again,"
+            " document.documentElement.getAttribute('data-hc-launch'),"
+            " document.getElementById('hc-launch-style').textContent"
+            "   .indexOf('[data-hc-launch]') === 0];")
+        self.assertEqual([True, False, "chat", True], out)
+
+    def test_every_rule_in_the_sheet_is_gated_on_the_root_attribute(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        rules = [rule for rule in css.split("}") if rule.strip()]
+        self.assertTrue(rules)
+        stray = [rule for rule in rules
+                 if not rule.lstrip().startswith("[data-hc-launch]")]
+        self.assertEqual([], stray)
+
+    def test_the_session_chip_names_the_conversation_the_window_watches(self):
+        out = self.run_js(
+            self.chat()
+            + "var slot = document.createElement('span');"
+            "slot.className = 'hc-session'; app.appendChild(slot);"
+            "var wrote = window.__hcPromptUI.renderSessionChip();"
+            "var again = window.__hcPromptUI.renderSessionChip();"
+            "[wrote, again, slot.textContent];")
+        self.assertEqual([True, False, "session 7f3a1b2c"], out)
+
+    def test_the_injection_card_says_only_what_the_state_proves(self):
+        # A chat nobody has opened the workspace for has been told nothing,
+        # and the card says that rather than leaving the line off.
+        self.assertEqual(
+            [["head", "context injection"],
+             ["off", "not sent to Claude yet"],
+             ["", "reads: prompt · subagent · task"],
+             ["off", "off · /goals-ui turns it back on"]],
+            self.run_js(
+                "window.__hcPromptUI.injectionLines("
+                "  { cached: false, last_delta_chars: null, last_at: null,"
+                "    active: false, reads: ['prompt', 'subagent', 'task'] });"))
+
+    def test_no_line_on_the_card_claims_the_model_read_anything(self):
+        # The snapshot behind these numbers records what the hook *rendered*
+        # into a turn; Claude Code may still drop or compact it. "sent" is
+        # what this side can prove, and it is what every line says.
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 570,"
+            "    last_at: '2026-08-17T10:49:20+00:00',"
+            "    active: true, reads: ['session start', 'prompt'] });")
+        self.assertEqual([], [row for row in rows if "read it" in row[1]])
+        self.assertIn(["", "reads: session start · prompt"], rows)
+        self.assertEqual(
+            1, len([row for row in rows if row[1].startswith("last sent ")]),
+            rows)
+
+    def test_a_pending_change_is_sized_as_an_estimate(self):
+        # Characters over four, and marked "~": the browser cannot count
+        # tokens, so it must not print a number that looks like it did.
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 570, last_at: null,"
+            "    active: true, reads: [] });")
+        self.assertIn(["on", "goal document sent ✓"], rows)
+        self.assertIn(["", "~143 tok changed since it was last sent"], rows)
+        self.assertIn(["on", "on · /goals-ui disable turns it off"], rows)
+
+    def test_a_document_the_model_is_current_on_says_so(self):
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 0, last_at: null,"
+            "    active: true, reads: [] });")
+        self.assertIn(["", "unchanged since it was last sent"], rows)
+        self.assertEqual(
+            [], [row for row in rows if "tok" in row[1]])
+
+    def test_a_state_with_no_injection_draws_no_card(self):
+        # `null` is what the bridge holds before the first poll lands, and an
+        # empty card is a claim about a chat nothing is known about yet.
+        self.assertEqual([], self.run_js(
+            "window.__hcPromptUI.injectionLines(null);"))
