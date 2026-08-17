@@ -2,20 +2,12 @@
 
 Claude Code / Codex plugin marketplace.
 
-## Packages
-
-| | what it is |
-|---|---|
-| [`human-vault`](./human-vault) | npm installer — puts `hc` and the Claude Code integration on a machine in one step |
-| [`hc`](./hc) | the local goal-state runtime: capture, inference, workspace server, context injection |
-| [`compact-focus`](./compact-focus) | inline, human-reviewed replacement for blind context compaction |
-
 ## Install
 
 macOS or Linux, Node 18+, Claude Code 2.1.175+.
 
 ```bash
-npx human-vault          # no options, no questions
+npx engelbart-cli
 ```
 
 Restart Claude Code (or `/reload-plugins`).
@@ -33,6 +25,23 @@ Restart Claude Code (or `/reload-plugins`).
   into the chat: whole file on session start and after compaction, a diff
   afterwards. Subagents and tool batches read it too.
 - **Persistence** — one invocation holds for the life of the chat.
+
+## About
+Goals and intent are usually implicit when you work with coding agents. They live across prompts, TODOs, implementation details, and your own head. This means that information is lost and confounded as protects grow in size. 
+
+Existing tools like \autocompact, projects, and claude-men try to solve parts of this problem through autonomous context preservation, but these processes still lose and conflate important information about the problem. Worse, the lack of human intervention in these tools means they fail to give humans the ability to inspect or steer what the agent thinks it is trying to accomplish. 
+
+That’s why we created Engelbart, a free, open-source tool for managing, planning, and syncing goals and TODOs across your coding agents. 
+
+Engelbart is a browser-based Claude Code plugin that gives you and your agent a shared representation of what you’re trying to accomplish while the agent implements changes in real time. 
+
+After installing Engelbart, you can run /goals-ui in Claude Code to kick off a local server. Engelbart then analyzes your current session and past conversation turns to infer your goals, plans, and TODOs, which it uses to open a proposed goal tree on a local server that you can inspect and correct before you resume building. 
+
+As you work, Engelbart keeps your agent in the loop as you plan new features, draft prompts, write TODOs, modify goals, jot down notes about the current system, and record key decisions. 
+
+We feel Engelbart is an important first step in making intent explicit, persistent, and steerable instead of leaving it buried inside a context window or tacit inside your head. 
+
+Engelbart is in early beta and still in the initial stages of development. It’s also part of our broader cognitive science research into how humans and AI systems plan, maintain goals, and coordinate over long-running work.
 
 ## Data boundary
 
