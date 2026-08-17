@@ -1,6 +1,7 @@
 """hc ui — localhost goal browser. Reads and writes the SAME goals.json
 through the goals model (goal_context.md stays in sync for SessionStart
 injection). Stdlib only; localhost only; Ctrl-C to stop."""
+import difflib
 import hashlib
 import json
 import os
@@ -500,6 +501,55 @@ def _goal_revision(goals, important):
     return hashlib.sha256(payload).hexdigest()
 
 
+# What Claude has been told about this chat's goals, read from the two files
+# that already record it: the context snapshot (the exact document the model
+# was last handed) and the session manifest (whether /goals-ui is on). Nothing
+# here writes; the numbers are characters, and the browser labels them "~ tok"
+# because a token count is an estimate this side cannot make honestly.
+#
+# The three injection points named here are the ones cli.py renders a delta
+# for on an ongoing conversation, and the ones the /goals-ui skill promises:
+# a user prompt, a subagent start, and a tool batch. (A SessionStart re-sends
+# the whole document; it is not a per-message read, so it is not listed.)
+INJECTION_READS = ("prompt", "subagent", "task")
+
+
+def _injection_state(session_id, root):
+    """What the model has of this chat's goal document, and what is pending.
+
+    ``cached`` is true once the document has actually been handed over, which
+    is the only thing the snapshot proves. ``last_at`` is when that happened.
+    ``last_delta_chars`` is the size of the change *since* then -- the text a
+    next message would carry, 0 when the model is up to date -- and None when
+    nothing has been sent yet, because there is no base to diff against.
+    """
+    snapshot = CS.load_context_snapshot(session_id, root)
+    previous = snapshot.get("text")
+    cached = isinstance(previous, str) and bool(snapshot.get("sha256"))
+    delta = None
+    if cached:
+        try:
+            current = CS.paths(session_id, root).goal_context.read_text(
+                encoding="utf-8")
+        except (OSError, ValueError):
+            current = previous
+        if current == previous:
+            delta = 0
+        else:
+            delta = len("\n".join(difflib.unified_diff(
+                previous.splitlines(), current.splitlines(),
+                fromfile="goals (as you last saw them)", tofile="goals (now)",
+                lineterm="", n=1)))
+    at = snapshot.get("at")
+    return {
+        "cached": cached,
+        "last_delta_chars": delta,
+        "last_at": at if isinstance(at, str) else None,
+        "active": CS.goals_ui_active(session_id, root),
+        "reads": list(INJECTION_READS),
+    }
+
+
 def _payload(trajdir=None, chat_scoped=None):
     chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
     trajdir = _scope(trajdir)
@@ -516,6 +566,11 @@ def _payload(trajdir=None, chat_scoped=None):
         # The tab needs a name, and only this side knows which conversation
         # the window belongs to.
         session = None
+        # Present in both scopes so the browser reads one shape; a global
+        # vault stands behind no chat, so nothing is injected for it.
+        injection = {"cached": False, "last_delta_chars": None,
+                     "last_at": None, "active": False,
+                     "reads": list(INJECTION_READS)}
         try:
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
@@ -525,6 +580,7 @@ def _payload(trajdir=None, chat_scoped=None):
             analyzer = CS.get_analyzer_state(session_id, root)
             notices = CS.load_notices(session_id, root)
             session = session_id
+            injection = _injection_state(session_id, root)
         # Agent execution state is scoped to the goal tree it was launched
         # against; chat-scoped goal ids live in a different namespace.
         runs, claim = ({}, None) if chat_scoped else (
@@ -536,6 +592,7 @@ def _payload(trajdir=None, chat_scoped=None):
                 "analyzer": analyzer,
                 "notices": notices,
                 "session_id": session,
+                "injection": injection,
                 "agent_runs": runs,
                 "agent_claim": claim,
                 "scope": "chat" if chat_scoped else "global",
