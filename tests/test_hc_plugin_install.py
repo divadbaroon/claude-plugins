@@ -209,8 +209,7 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertEqual(1, len(expansion))
             self.assertEqual("goals-ui", expansion[0]["matcher"])
             self.assertEqual(1, len(expansion[0]["hooks"]))
-            self.assertTrue(
-                expansion[0]["hooks"][0]["command"].endswith("chat-hook.sh"))
+            self.assertIn("chat-hook.sh", expansion[0]["hooks"][0]["command"])
             self.assertEqual(45, expansion[0]["hooks"][0]["timeout"])
 
             for event in self.CHAT_HOOK_EVENTS:
@@ -218,12 +217,12 @@ class HcPluginInstallTests(unittest.TestCase):
                             for group in installed["hooks"][event]
                             for entry in group["hooks"]]
                 self.assertTrue(
-                    any(c.endswith("chat-hook.sh") for c in commands), event)
+                    any("chat-hook.sh" in c for c in commands), event)
             every_command = [entry["command"]
                              for groups in installed["hooks"].values()
                              for group in groups for entry in group["hooks"]]
             self.assertEqual([], [c for c in every_command
-                                  if c.endswith("vault-hook.sh")])
+                                  if "vault-hook.sh" in c])
 
     def test_install_says_which_hook_set_it_wired(self):
         with tempfile.TemporaryDirectory() as td:

@@ -2,11 +2,13 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -134,6 +136,24 @@ class ChatCliTests(unittest.TestCase):
 
     def _snapshot_sha(self):
         return CS.load_context_snapshot(SID).get("sha256")
+
+    def _hold_session_lock(self):
+        """Hold the session lock the way another live process holds it."""
+        holder = subprocess.Popen([sys.executable, "-c",
+                                   "import time; time.sleep(30)"])
+        self.addCleanup(self._release_session_lock, holder)
+        lock_dir = CS.paths(SID).lock_dir
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        (lock_dir / "owner.json").write_text(
+            json.dumps({"pid": holder.pid, "created_at": "2026-08-17T00:00:00+00:00"}),
+            encoding="utf-8")
+        return holder
+
+    def _release_session_lock(self, holder):
+        shutil.rmtree(CS.paths(SID).lock_dir, ignore_errors=True)
+        if holder.poll() is None:
+            holder.terminate()
+            holder.wait(timeout=5)
 
     def test_prompt_hook_ingests_and_injects_cached_goal_context(self):
         goals = {
@@ -349,9 +369,14 @@ class ChatCliTests(unittest.TestCase):
         CS.save_goals(SID, two_goal_tree(), {"items": []})
         before = self._snapshot_sha()
 
-        raw = self._hook("SubagentStart", agent_type="Explore")
+        with mock.patch.object(CS, "ingest_hook") as ingest:
+            raw = self._hook("SubagentStart", argv=["--inject-only"],
+                             agent_type="Explore")
         response = json.loads(raw)
 
+        # Injecting into a subagent needs neither the ingest nor the
+        # agent-run observation, so it does not pay for them.
+        ingest.assert_not_called()
         self.assertEqual(
             "SubagentStart", response["hookSpecificOutput"]["hookEventName"])
         # A subagent starts with an empty context, so it needs everything.
@@ -362,6 +387,28 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(before, self._snapshot_sha())
         self.assertIn("+- Ship the diff cache",
                       self._injected(self._hook("UserPromptSubmit", prompt="Next")))
+
+    def test_a_locked_session_costs_the_injection_not_the_turn(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        self._hook("UserPromptSubmit", prompt="First")
+        CS.save_goals(SID, two_goal_tree(), {"items": []})
+        holder = self._hold_session_lock()
+
+        started = time.monotonic()
+        raw = self._hook("PostToolBatch", argv=["--inject-only"])
+        elapsed = time.monotonic() - started
+
+        # The async entry ingesting this same batch holds the session lock.
+        # Blocking on it would spend the model's whole 5s hook budget.
+        self.assertLess(elapsed, 1.0, f"hook stalled {elapsed:.2f}s on the lock")
+        self.assertEqual("", raw)
+
+        self._release_session_lock(holder)
+        # Nothing was recorded as seen, so the change is still pending and
+        # the next injection restates it rather than losing it.
+        self.assertIn("+- Ship the diff cache", self._injected(
+            self._hook("PostToolBatch", argv=["--inject-only"])))
 
     def test_post_tool_batch_injects_the_delta_without_ingesting_again(self):
         CS.save_goals(SID, one_goal_tree(), {"items": []})

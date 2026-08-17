@@ -19,6 +19,15 @@ PLUGIN_HOOKS = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
 VAULT_HOOK_EVENTS = {"SessionStart", "PreCompact", "PostCompact", "SessionEnd"}
 
 
+CHAT_HOOK = '"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh"'
+
+
+def script_of(entry):
+    """The hook script a command runs, with the quoting and any args off."""
+    command = entry["command"].split(" -", 1)[0].strip()
+    return command.strip('"').rsplit(" ", 1)[-1].strip('"')
+
+
 def chat_only(hooks):
     """The same hook map with every vault-hook.sh entry removed."""
     kept = {}
@@ -26,7 +35,7 @@ def chat_only(hooks):
         remaining = []
         for group in groups:
             entries = [entry for entry in group["hooks"]
-                       if not entry["command"].endswith("vault-hook.sh")]
+                       if not script_of(entry).endswith("vault-hook.sh")]
             if entries:
                 remaining.append({**group, "hooks": entries})
         if remaining:
@@ -37,7 +46,7 @@ def chat_only(hooks):
 def vault_hook_events(hooks):
     return {event for event, groups in hooks.items() for group in groups
             for entry in group["hooks"]
-            if entry["command"].endswith("vault-hook.sh")}
+            if script_of(entry).endswith("vault-hook.sh")}
 
 
 class HcOnboardingTests(unittest.TestCase):
@@ -132,7 +141,7 @@ class HcOnboardingTests(unittest.TestCase):
             for entry in (e for group in groups for e in group["hooks"]):
                 with self.subTest(event=event, command=entry["command"]):
                     self.assertEqual(
-                        entry["command"].endswith("vault-hook.sh"),
+                        script_of(entry).endswith("vault-hook.sh"),
                         entry["command"].startswith("HC_EXPERIMENTAL=1 "))
         self.assertNotIn("HC_EXPERIMENTAL", json.dumps(default))
 
@@ -145,19 +154,37 @@ class HcOnboardingTests(unittest.TestCase):
                 subagent = [entry for group in hooks["SubagentStart"]
                             for entry in group["hooks"]]
                 self.assertEqual(1, len(subagent))
-                self.assertTrue(subagent[0]["command"].endswith("chat-hook.sh"))
+                # A subagent injection reads cached state and speaks; it needs
+                # neither the ingest nor the agent-run observation.
+                self.assertEqual(f"{CHAT_HOOK} --inject-only",
+                                 subagent[0]["command"])
                 self.assertFalse(subagent[0].get("async"))
+                self.assertEqual(5, subagent[0]["timeout"])
 
                 batch = [entry for group in hooks["PostToolBatch"]
                          for entry in group["hooks"]]
                 # One entry ingests off the critical path; the other speaks on
                 # it. Collapsing them would either block Claude or say nothing.
                 self.assertEqual(
-                    [(True, False), (False, True)],
-                    [(bool(entry.get("async")),
-                      entry["command"].endswith("--inject-only"))
+                    [(True, CHAT_HOOK),
+                     (False, f"{CHAT_HOOK} --inject-only")],
+                    [(bool(entry.get("async")), entry["command"])
                      for entry in batch])
                 self.assertEqual(5, batch[1]["timeout"])
+
+    def test_hook_commands_quote_the_plugin_path(self):
+        # ${CLAUDE_PLUGIN_ROOT} is substituted into a shell command line. An
+        # unquoted install path containing a space would reach chat-hook.sh as
+        # two arguments and run nothing.
+        for name in ("hooks.json", "hooks.experimental.json"):
+            hooks = json.loads((PLUGIN_HOOKS / name).read_text())["hooks"]
+            for event, groups in hooks.items():
+                for entry in (e for group in groups for e in group["hooks"]):
+                    if not script_of(entry).endswith("chat-hook.sh"):
+                        continue
+                    with self.subTest(name=name, event=event):
+                        self.assertTrue(entry["command"].startswith(CHAT_HOOK),
+                                        entry["command"])
 
     def test_the_chat_hook_forwards_its_own_arguments(self):
         script = (HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /

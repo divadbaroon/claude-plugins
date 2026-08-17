@@ -1276,6 +1276,13 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
                     # A subagent reads on its own account; what it was shown
                     # says nothing about what this conversation has seen.
                     remember=event != "SubagentStart",
+                    # This runs inside the model's turn, against a 5s hook
+                    # budget, while the async ingest of the same batch may
+                    # hold the session lock. Recording the render is worth
+                    # half a second and no more: timing out raises, the
+                    # `except` below drops the injection, and the snapshot
+                    # stays put so the next one restates the same change.
+                    snapshot_wait_s=0.5,
                 )
             except Exception:  # noqa: BLE001 - a hook may never block Claude
                 context = ""

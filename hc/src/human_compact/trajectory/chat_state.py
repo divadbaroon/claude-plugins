@@ -284,7 +284,11 @@ def disable_goals_ui(session_id: str, root: Optional[Path] = None) -> None:
 
 
 def goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> bool:
-    """True once /goals-ui has opened this chat's workspace at least once."""
+    """True once /goals-ui has opened this chat's workspace at least once.
+
+    The public "has this chat ever opted in" query, which a disable does not
+    revoke; ``goals_ui_active`` is the narrower "may we act right now" gate.
+    """
     return bool(load_manifest(session_id, root).get("goals_ui_invoked_at"))
 
 
@@ -1355,15 +1359,28 @@ def load_context_snapshot(
 
 
 def save_context_snapshot(
-    session_id: str, text: str, root: Optional[Path] = None
+    session_id: str,
+    text: str,
+    root: Optional[Path] = None,
+    wait_s: float = 5.0,
 ) -> Dict[str, Any]:
-    """Remember the exact text just handed to the model."""
+    """Remember the exact text just handed to the model.
+
+    This records what was *rendered*, not what was delivered: Claude Code may
+    still drop or compact the injection, in which case the next diff is taken
+    against text the model no longer has. SessionStart's full re-send after
+    compaction and the mirror file are the recovery, not a delivery receipt.
+
+    ``wait_s`` is short on the injection path -- see the caller. Raising here
+    is the safe failure: the snapshot does not advance, so the change this
+    render described is still pending and the next one restates it.
+    """
     snapshot = {
         "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
         "text": text,
         "at": _now(),
     }
-    with session_lock(session_id, root, wait_s=5) as p:
+    with session_lock(session_id, root, wait_s=wait_s) as p:
         _atomic_json(p.context_snapshot, snapshot)
     return snapshot
 
@@ -1413,8 +1430,11 @@ def mirror_goal_context(
                 return target
         except (OSError, ValueError):
             pass
-        target_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(target_dir, 0o700)
+        if not target_dir.is_dir():
+            # Only tighten a directory we are the ones creating; re-chmoding
+            # one Claude or the user already owns is not ours to do.
+            target_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(target_dir, 0o700)
         _atomic_write(target, text.encode("utf-8"))
         return target
     except (OSError, ValueError, TypeError):
@@ -1428,6 +1448,7 @@ def render_context_injection(
     cwd: Optional[str] = None,
     root: Optional[Path] = None,
     remember: bool = True,
+    snapshot_wait_s: float = 5.0,
 ) -> str:
     """Render the goal document for one injection point.
 
@@ -1436,6 +1457,8 @@ def render_context_injection(
     the goal tree once a conversation and paying for it once a message.
     ``remember=False`` renders for a reader with its own separate context (a
     subagent) without claiming the main conversation has seen anything.
+    ``snapshot_wait_s`` bounds how long recording the render may wait on the
+    session lock; a hook on the model's own turn cannot afford the default.
     """
     p = paths(session_id, root)
     try:
@@ -1451,7 +1474,7 @@ def render_context_injection(
 
     def keep(text: str) -> str:
         if remember:
-            save_context_snapshot(session_id, current, root)
+            save_context_snapshot(session_id, current, root, snapshot_wait_s)
         return text
 
     if mode != "delta":

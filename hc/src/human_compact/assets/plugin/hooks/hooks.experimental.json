@@ -4,43 +4,43 @@
     "SessionStart": [
       { "hooks": [
         { "type": "command", "command": "HC_EXPERIMENTAL=1 ${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "timeout": 5 }
       ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "timeout": 5 }
       ] }
     ],
     "UserPromptExpansion": [
       { "matcher": "goals-ui", "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 45 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "timeout": 45 }
       ] }
     ],
     "PostToolBatch": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh --inject-only", "args": [], "timeout": 5 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 },
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\" --inject-only", "args": [], "timeout": 5 }
       ] }
     ],
     "SubagentStart": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\" --inject-only", "args": [], "timeout": 5 }
       ] }
     ],
     "Stop": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 }
       ] }
     ],
     "TaskCreated": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 }
       ] }
     ],
     "TaskCompleted": [
       { "hooks": [
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 }
       ] }
     ],
     "PreCompact": [
@@ -49,13 +49,13 @@
     "PostCompact": [
       { "hooks": [
         { "type": "command", "command": "HC_EXPERIMENTAL=1 ${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [] },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "async": true, "timeout": 30 }
       ] }
     ],
     "SessionEnd": [
       { "hooks": [
         { "type": "command", "command": "HC_EXPERIMENTAL=1 ${CLAUDE_PLUGIN_ROOT}/scripts/vault-hook.sh", "args": [], "timeout": 15 },
-        { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 5 }
+        { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh\"", "args": [], "timeout": 5 }
       ] }
     ]
   }
