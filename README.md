@@ -42,29 +42,3 @@ As you work, Engelbart keeps your agent in the loop as you plan new features, dr
 We feel Engelbart is an important first step in making intent explicit, persistent, and steerable instead of leaving it buried inside a context window or tacit inside your head. 
 
 Engelbart is in early beta and still in the initial stages of development. It’s also part of our broader cognitive science research into how humans and AI systems plan, maintain goals, and coordinate over long-running work.
-
-## Data boundary
-
-- Hooks record each chat's own prompts and events to
-  `~/.claude-vault/chat-sessions/<session-id>/`, owner-only. This starts at
-  install, not at `/goals-ui`.
-- **Nothing is analyzed or injected until `/goals-ui` runs in that chat.**
-- Inference runs through your own authenticated `claude` CLI. No telemetry,
-  no network egress of your own.
-
-## Experimental
-
-`HC_EXPERIMENTAL=1` re-enables the disconnected global layer — cross-chat
-capture and analysis, `hc ui`, goal-bound agent runs, older subcommands.
-[`STASHED.md`](./STASHED.md) is the inventory; [`LAUNCH_FEATURES.md`](./LAUNCH_FEATURES.md)
-is what ships.
-
-## Develop
-
-```bash
-python3 -W error::ResourceWarning -m unittest discover -s tests   # incl. real-browser tests
-cd human-vault && npm test && npm run test:pack
-cd human-vault && npm run build:vendor                            # re-vendor the wheel after hc/ changes
-```
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and [`hc/README.md`](./hc/README.md).
