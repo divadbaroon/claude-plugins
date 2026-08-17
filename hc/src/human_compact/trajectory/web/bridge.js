@@ -240,6 +240,9 @@
   }
 
   function refreshState() {
+    // An import we started is a change this page already shows. Reconciling
+    // against a half-applied revision is what turned a delete into a reload.
+    if (syncBusy) return;
     if (refreshPending) return;
     refreshPending = true;
     fetch("/api/state", { cache: "no-store" })
@@ -1748,6 +1751,74 @@
 
   var launchApplied = false;
 
+  function launchDressed() {
+    // Dressed is not the same as skinned: the artifact paints a frame with
+    // its bindings still written out ("saved {{ updatedLabel }}") before it
+    // resolves them, and showing that is showing the machinery. textContent,
+    // not innerText: innerText is computed from layout, and a document held
+    // hidden has none, so it would read as empty forever.
+    var root = document.documentElement;
+    if (!root || !root.getAttribute) return false;
+    if (root.getAttribute("data-hc-launch") !== "chat") return false;
+    if (!document.getElementById("hc-launch-style")) return false;
+    var text = "";
+    try { text = (document.body && document.body.textContent) || ""; }
+    catch (e) { return false; }
+    return text.length > 0 && text.indexOf("{{") < 0;
+  }
+
+  function revealWhenDressed() {
+    // The server hides the document until the artifact unpacks its template,
+    // because what it paints before that is not this product. The unpack
+    // takes that mask away with the rest of the original head -- and for one
+    // to several frames after it, the page is the artifact's own two-column
+    // light layout, which then rearranges when the skin lands. That is the
+    // same flash one step later. Hold the page for those frames instead:
+    // re-hide on whatever documentElement now is, dress it, then show it.
+    if (serverState.scope !== "chat") return;
+    var clock = function () {
+      return (window.performance && performance.now)
+        ? performance.now() : Date.now();
+    };
+    var started = clock();
+    var elapsed = function () { return clock() - started; };
+    var frames = 0;
+    var show = function (root) {
+      if (root && root.style) root.style.visibility = "";
+    };
+    var step = function () {
+      var root = document.documentElement;
+      if (!root) return;
+      if (root.style && root.style.visibility !== "hidden") {
+        root.style.visibility = "hidden";
+      }
+      var dressed;
+      try {
+        applyLaunchSkin();
+        mirrorRootState();
+        renderChatSurface();
+        dressed = launchDressed();
+      } catch (e) {
+        // Nothing here is worth a page the reader cannot see.
+        show(root);
+        return;
+      }
+      // Two seconds is the failsafe, not the plan: a page nobody can see is
+      // worse than a page that arrives badly dressed. Counted in time rather
+      // than frames, because the machine that needs the failsafe is the one
+      // whose frames are slow.
+      // Two bounds, because they fail differently: a slow machine runs out
+      // of time, and a host whose animation frames are synchronous runs out
+      // of stack long before any clock notices.
+      if (dressed || elapsed() > 2000 || ++frames > 240) {
+        show(root);
+        return;
+      }
+      (window.requestAnimationFrame || function (fn) { setTimeout(fn, 16); })(step);
+    };
+    step();
+  }
+
   function applyLaunchSkin() {
     // Chat scope only, and only once the artifact has unpacked its template
     // over documentElement -- which is why this is re-asserted by the same
@@ -2766,6 +2837,8 @@
     reconcileState: reconcileState,
     clearKeepPane: clearKeepPane,
     patchBundleSource: patchBundleSource,
+    revealWhenDressed: revealWhenDressed,
+    launchDressed: launchDressed,
     patchMisses: function () { return patchMisses.slice(); },
     seedPayload: seedPayload,
     mergeTrees: mergeTrees,
@@ -2830,6 +2903,9 @@
   // the template yet, so patching here is safe.
   patchBundleTemplate();
   function boot() {
+    // First: hold the page until it is dressed. Everything below can run
+    // while it is hidden.
+    revealWhenDressed();
     ensurePaneStyles();
     // Read once. Leaving it set would make every later reload land on
     // whatever pane happened to be open when a run last finished.

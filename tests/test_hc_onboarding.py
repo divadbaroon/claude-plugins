@@ -71,15 +71,16 @@ class HcOnboardingTests(unittest.TestCase):
             body = skill.read_text()
             self.assertNotIn('!`', body)
             self.assertIn('disable-model-invocation: true', body)
-            # /goals-ui is silent: the body is inert prose, not something
-            # Claude is told to act on, and no session id is templated in
-            # because Claude never reads it.
-            self.assertIn(
-                "Opens the goal workspace for this Claude Code chat in your "
-                "browser. Nothing is sent to Claude by this command; from now "
-                "on the chat's goals document is injected as context on later "
-                "messages, subagents, and tool batches. Run `/goals-ui "
-                "disable` to turn that off for this chat.", body)
+            # When the hook runs, /goals-ui is silent and this body never
+            # reaches Claude. The one case where it does reach Claude is the
+            # one that used to be silent for the wrong reason: a session that
+            # loaded its hooks before the plugin was installed. So the body
+            # is an instruction for exactly that case, and it says what to do.
+            self.assertIn("the `/goals-ui` hook did not run", body)
+            self.assertIn("restart\nClaude Code (or run `/reload-plugins`)", body)
+            self.assertIn("Do nothing\nelse", body)
+            self.assertIn("session start", body)
+            self.assertIn("`/goals-ui disable` turns that off", body)
             self.assertNotIn('${CLAUDE_SESSION_ID}', body)
             self.assertTrue(hooks.is_file())
             self.assertFalse((home / ".claude-vault" / "bin" / "claude").exists())

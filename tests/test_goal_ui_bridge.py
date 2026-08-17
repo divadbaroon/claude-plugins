@@ -245,6 +245,32 @@ class BridgeTestCase(unittest.TestCase):
             "window.__hcPromptUI.rootsFromState(%s);" % json.dumps(state or STATE))
 
 
+class LaunchDressedTests(BridgeTestCase):
+    """What counts as ready to be looked at."""
+
+    def ask(self, launch, style, text):
+        return self.run_js(
+            "var root = document.documentElement;"
+            "root.getAttribute = function (n) {"
+            "  return n === 'data-hc-launch' ? %s : null; };"
+            "document.getElementById = function (id) {"
+            "  return id === 'hc-launch-style' ? %s : null; };"
+            "document.body = {textContent: %s};"
+            "out = window.__hcPromptUI.launchDressed();"
+            % (json.dumps(launch), "{}" if style else "null", json.dumps(text)))
+
+    def test_ready_only_when_skinned_and_resolved(self):
+        self.assertTrue(self.ask("chat", True, "Engelbart session saved 11:07"))
+
+    def test_an_unresolved_binding_is_not_ready(self):
+        self.assertFalse(self.ask("chat", True, "saved {{ updatedLabel }}"))
+
+    def test_an_unskinned_or_empty_document_is_not_ready(self):
+        self.assertFalse(self.ask(None, True, "Engelbart"))
+        self.assertFalse(self.ask("chat", False, "Engelbart"))
+        self.assertFalse(self.ask("chat", True, ""))
+
+
 class DeletedGoalTests(BridgeTestCase):
     """A goal the reader deleted is kept on disk but not drawn."""
 

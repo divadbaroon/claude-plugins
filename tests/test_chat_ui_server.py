@@ -2165,6 +2165,17 @@ class PreHydrationMaskTests(unittest.TestCase):
         self.assertIn("visibility:hidden", body)
         self.assertIn("hc-preboot", body[body.index("setTimeout"):],
                       "a failsafe must remove the mask if the unpack never runs")
+        # Every /goals-ui is a fresh port, so a chat workspace is always a new
+        # origin with no saved theme. Following the operating system there
+        # paints white in front of a dark workspace -- the flash the mask was
+        # added to remove.
+        self.assertIn("#101010", body.split("</head>")[0])
+        self.assertNotIn("prefers-color-scheme", body.split("</head>")[0])
+
+    def test_a_global_vault_is_masked_on_its_own_ground(self):
+        from human_compact.trajectory import ui
+        self.assertIn("#fff", ui.preboot_mask(False))
+        self.assertIn("#101010", ui.preboot_mask(True))
 
     def test_the_reader_never_sees_the_onboarding_dialog_or_a_raw_binding(self):
         try:
@@ -2175,6 +2186,11 @@ class PreHydrationMaskTests(unittest.TestCase):
         with server_for(self.a) as url, sync_playwright() as playwright:
             browser = playwright.chromium.launch(executable_path=browser_path)
             page = browser.new_page()
+            # A fast machine closes the gap between the artifact's own layout
+            # and the launch skin inside one frame, which is exactly the gap
+            # this test is about. Slow the page down until the gap is real.
+            cdp = page.context.new_cdp_session(page)
+            cdp.send("Emulation.setCPUThrottlingRate", {"rate": 8})
             # Sample visibility from inside the page at the moment the parser
             # finishes, which is before the artifact's DOMContentLoaded unpack.
             page.add_init_script(
@@ -2182,13 +2198,34 @@ class PreHydrationMaskTests(unittest.TestCase):
                 "document.addEventListener('readystatechange', function () {"
                 "  try { window.__hcVis.push(document.readyState + ':' +"
                 "    getComputedStyle(document.documentElement).visibility); }"
-                "  catch (e) {} }, true);")
+                "  catch (e) {} }, true);"
+                # Record what the document was wearing the first frame it
+                # could be seen at all.
+                "window.__hcFirstVisibleSkin = null;"
+                "(function watch() {"
+                "  try {"
+                "    var root = document.documentElement;"
+                "    if (root && getComputedStyle(root).visibility === 'visible'"
+                "        && window.__hcFirstVisibleSkin === null) {"
+                "      window.__hcFirstVisibleSkin ="
+                "        root.getAttribute('data-hc-launch') || 'undressed';"
+                "      return;"
+                "    }"
+                "  } catch (e) {}"
+                "  requestAnimationFrame(watch);"
+                "})();")
             page.goto(url)
             page.wait_for_selector("text=real goal one", timeout=10000)
             seen = page.evaluate("window.__hcVis || []")
             self.assertTrue(
                 any(entry == "interactive:hidden" for entry in seen),
                 "the parsed-but-unhydrated document must never be shown: %r" % (seen,))
+            # And the first frame the reader can see is already the launch
+            # workspace, not the artifact's own layout waiting to be dressed.
+            self.assertEqual(
+                "chat",
+                page.evaluate("window.__hcFirstVisibleSkin"),
+                "the page became visible before the launch skin was applied")
             # The unpack replaced the head the mask lived in, so it is gone and
             # the page is visible again.
             self.assertEqual(0, page.locator("#hc-preboot").count())

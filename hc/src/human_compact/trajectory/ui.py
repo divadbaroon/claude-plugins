@@ -789,22 +789,32 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return {"ok": True}
 
 
-PREBOOT_MASK = (
-    '<style id="hc-preboot">html{visibility:hidden!important}'
-    'html,body{background:#fff!important}</style>'
-    '<script>(function(){'
-    'try{var dark=false,saved=null;'
-    'try{saved=JSON.parse(localStorage.getItem("hc-vault-ui-v1")||"null");}catch(e){}'
-    'if(saved&&saved.themeMode){dark=saved.themeMode==="dark";}'
-    'else if(window.matchMedia){'
-    'dark=window.matchMedia("(prefers-color-scheme: dark)").matches;}'
-    'if(dark){var s=document.getElementById("hc-preboot");'
-    'if(s){s.textContent="html{visibility:hidden!important}"'
-    '+"html,body{background:#101010!important}";}}}catch(e){}'
-    'setTimeout(function(){var s=document.getElementById("hc-preboot");'
-    'if(s&&s.parentNode){s.parentNode.removeChild(s);}},2500);'
-    '})();</script>'
-)
+def preboot_mask(chat_scoped):
+    """Hide the artifact's own first frame, on the ground it will land on.
+
+    Every /goals-ui opens a fresh port, so a chat workspace is always a new
+    origin with no saved theme: following the operating system there means a
+    white page in front of a dark workspace, which is the flash it was meant
+    to remove. A chat opens dark unless the reader chose otherwise here.
+    """
+    ground = "#101010" if chat_scoped else "#fff"
+    other = "#fff" if chat_scoped else "#101010"
+    want = "light" if chat_scoped else "dark"
+    return (
+        '<style id="hc-preboot">html{visibility:hidden!important}'
+        'html,body{background:%s!important}</style>'
+        '<script>(function(){'
+        'try{var saved=null;'
+        'try{saved=JSON.parse(localStorage.getItem("hc-vault-ui-v1")||"null");}'
+        'catch(e){}'
+        'if(saved&&saved.themeMode==="%s"){'
+        'var s=document.getElementById("hc-preboot");'
+        'if(s){s.textContent="html{visibility:hidden!important}"'
+        '+"html,body{background:%s!important}";}}}catch(e){}'
+        'setTimeout(function(){var s=document.getElementById("hc-preboot");'
+        'if(s&&s.parentNode){s.parentNode.removeChild(s);}},2500);'
+        '})();</script>'
+    ) % (ground, want, other)
 
 
 class H(BaseHTTPRequestHandler):
@@ -876,7 +886,9 @@ class H(BaseHTTPRequestHandler):
                 # the original head. The timer is the failsafe: if the unpack
                 # never happens, the page is shown anyway rather than staying
                 # blank.
-                html = html.replace("</head>", PREBOOT_MASK + "</head>", 1)
+                html = html.replace(
+                    "</head>",
+                    preboot_mask(self.server.chat_scoped) + "</head>", 1)
                 # Parse the artifact's template island before running the
                 # bridge, while still running the bridge synchronously before
                 # DOMContentLoaded lets the artifact unpack that template.
