@@ -43,6 +43,6 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: npm test
-        working-directory: human-vault
+        working-directory: engelbart
       - run: npm pack --ignore-scripts --dry-run
-        working-directory: human-vault
+        working-directory: engelbart

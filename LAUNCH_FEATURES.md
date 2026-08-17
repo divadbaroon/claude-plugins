@@ -6,7 +6,7 @@ sync with the chat and injected back into it as context.
 ## Install (one step)
 
 ```bash
-npx human-vault
+npx engelbart-cli
 ```
 
 Takes no required options, asks no questions. Installs the `hc` runtime (the
@@ -62,17 +62,19 @@ briefings, evidence graph, lens, important items, and a few smaller surfaces.
 complete inventory, with the commit that disconnected each one and how to turn
 it back on.
 
-## Test the launch PR locally (no push to main)
+## Test it locally
 
 ```bash
-git fetch origin && git checkout launch/goal-ui          # PR #12
-cd human-vault && npm pack && npx ./human-vault-0.18.0.tgz  # one-install from the branch
+git fetch origin && git checkout main
+cd engelbart && npm pack && npx ./engelbart-cli-0.18.0.tgz  # one-install from the checkout
 ```
 Then in any Claude Code chat: `/goals-ui` → workspace opens on *All*; type,
 reload, re-run `/goals-ui` → the document persists; ask Claude "what are my
 goals?" → it has them; `/goals-ui disable` → no more injection.
 
 Full checks from the checkout:
-`python3 -W error::ResourceWarning -m unittest discover -s tests` (770, incl.
-real-browser tests), `cd human-vault && npm test && npm run test:pack`.
-Rollback: `npx human-vault@0.17.89`.
+`python3 -W error::ResourceWarning -m unittest discover -s tests` (803, incl.
+real-browser tests), `cd engelbart && npm test && npm run test:pack`.
+
+Rollback: `npx human-vault@0.17.89` — the last release under the package's
+previous name. `engelbart-cli` starts at 0.18.0 and has nothing earlier.

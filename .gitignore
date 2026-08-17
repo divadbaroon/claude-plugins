@@ -8,3 +8,6 @@ dist/
 *.egg-info/
 .venv/
 /.claude/worktrees/
+
+# npm pack output
+*.tgz

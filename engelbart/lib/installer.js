@@ -6,8 +6,17 @@ const https = require('https');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const OWNER = 'human-vault';
+const OWNER = 'engelbart-cli';
+// The package was published as human-vault before the product was named, and
+// that token is written into the markers of every install it made. It is an
+// on-disk contract with those machines, not a brand: read it as ours, and
+// write the current name back when we touch it.
+const LEGACY_OWNERS = Object.freeze(['human-vault']);
 const INSTALL_SCHEMA = 1;
+
+function ownedByUs(owner) {
+  return owner === OWNER || LEGACY_OWNERS.indexOf(owner) >= 0;
+}
 const MIN_CLAUDE_VERSION = Object.freeze([2, 1, 175]);
 const MIN_CLAUDE_VERSION_TEXT = MIN_CLAUDE_VERSION.join('.');
 const UV_VERSION = '0.11.32';
@@ -58,7 +67,7 @@ function sha256File(file) {
 function inspectVendor(packageRoot, expectedVersion) {
   const vendorRoot = path.join(packageRoot, 'vendor');
   const manifest = readJson(path.join(vendorRoot, 'manifest.json'));
-  if (manifest.schema !== 1 || manifest.package !== 'human-vault') {
+  if (manifest.schema !== 1 || manifest.package !== 'engelbart-cli') {
     throw new Error('bundled backend manifest has an unsupported schema or package');
   }
   if (manifest.version !== expectedVersion) {
@@ -174,8 +183,11 @@ function establishOwnership(root) {
       throw new Error(`managed ownership marker is not a regular file: ${markerPath}`);
     }
     const marker = readJson(markerPath);
-    if (marker.owner !== OWNER || marker.schema !== INSTALL_SCHEMA) {
+    if (!ownedByUs(marker.owner) || marker.schema !== INSTALL_SCHEMA) {
       throw new Error(`${root} is not owned by human-compact`);
+    }
+    if (marker.owner !== OWNER) {
+      atomicWrite(markerPath, `${JSON.stringify({ owner: OWNER, schema: INSTALL_SCHEMA }, null, 2)}\n`);
     }
   } else {
     const legacyEntries = new Set(['state', '.DS_Store']);
@@ -410,7 +422,7 @@ async function ensureUv(options) {
   if (fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) {
     try {
       const manifest = readJson(path.join(toolRoot, 'manifest.json'));
-      if (manifest.owner === OWNER && manifest.version === UV_VERSION
+      if (ownedByUs(manifest.owner) && manifest.version === UV_VERSION
           && manifest.target === target.key
           && manifest.archiveSha256 === target.sha256
           && (fs.statSync(executable).mode & 0o111) !== 0
@@ -493,7 +505,7 @@ function loadOwnedInstall(root) {
     throw new Error(`${file} is not a regular owned install manifest`);
   }
   const manifest = readJson(file);
-  if (manifest.owner !== OWNER || manifest.schema !== INSTALL_SCHEMA) {
+  if (!ownedByUs(manifest.owner) || manifest.schema !== INSTALL_SCHEMA) {
     throw new Error(`${file} is not an owned human-compact install manifest`);
   }
   return manifest;
@@ -732,7 +744,7 @@ function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
   if (existing.includes(launcherDir) || existing.includes(relative)) {
     return { onPath: false, profile, added: false, present: true, linked: null, line };
   }
-  files.appendFileSync(profile, `\n# human-vault (runtime on PATH)\n${line}\n`);
+  files.appendFileSync(profile, `\n# engelbart-cli (runtime on PATH)\n${line}\n`);
   return { onPath: false, profile, added: true, linked: null, line };
 }
 

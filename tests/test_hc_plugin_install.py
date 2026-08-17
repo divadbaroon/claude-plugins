@@ -305,7 +305,7 @@ class HcPluginInstallTests(unittest.TestCase):
 class InstallBannerTests(unittest.TestCase):
     """The first line of an install must not name a product that does not exist.
 
-    The npm package is ``human-vault`` and the runtime is ``hc``. Both READMEs
+    The npm package is ``engelbart-cli`` and the runtime is ``hc``. Both READMEs
     say so; the banner used to greet every install with ``human-compact``,
     which is only ever a path (``~/.human-compact/``) and a distribution name.
     """

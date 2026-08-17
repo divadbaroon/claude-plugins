@@ -182,14 +182,14 @@ def _preflight_asset(source: Path, destination: Path, asset: str):
     if destination.is_symlink() or not destination.is_dir():
         raise RuntimeError(
             f"refusing to replace unmanaged Claude skill path: {destination}; "
-            "move it aside, then rerun npx human-vault")
+            "move it aside, then rerun npx engelbart-cli")
     if _owned_asset(destination, asset):
         return "managed"
     if _legacy_asset(destination, source, asset):
         return "legacy"
     raise RuntimeError(
         f"refusing to replace unmanaged Claude skill directory: {destination}; "
-        "move it aside, then rerun npx human-vault")
+        "move it aside, then rerun npx engelbart-cli")
 
 
 def _tighten_asset_modes(root: Path):
@@ -438,7 +438,7 @@ def _validate_claude_cli():
     executable = shutil.which("claude")
     if not executable:
         raise RuntimeError(
-            "Claude Code is required; install it, then rerun npx human-vault")
+            "Claude Code is required; install it, then rerun npx engelbart-cli")
     try:
         result = subprocess.run([executable, "--version"], capture_output=True,
                                 text=True, timeout=20)

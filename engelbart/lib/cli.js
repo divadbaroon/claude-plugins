@@ -14,7 +14,7 @@ class InputCancelled extends Error {}
 
 
 function usage() {
-  return `Usage: npx human-vault [options]
+  return `Usage: npx engelbart-cli [options]
 
 Options:
   --non-interactive     accepted for compatibility; the installer never prompts
@@ -112,7 +112,7 @@ async function run(deps = {}) {
     );
 
     let reach = null;
-    output.write(`\nhuman-vault ${packageJson.version}\n\n`);
+    output.write(`\nengelbart-cli ${packageJson.version}\n\n`);
     if (options.dryRun) {
       output.write(`Verified bundled backend ${vendor.version} (${vendor.sha256.slice(0, 12)}).\n`);
       output.write(`Target: ${target.name}; managed runtime: ${managedRoot}\n`);
