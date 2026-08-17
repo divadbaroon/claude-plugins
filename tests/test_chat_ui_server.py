@@ -2058,7 +2058,7 @@ class ChatUiServerTests(unittest.TestCase):
                 # The artifact unpacks its template over the whole
                 # documentElement, taking the bundle's own <title> with it.
                 # The standing chat sweep is what puts a name back.
-                title = "goals \u00b7 " + "chat-a"[:8]
+                title = "Engelbart \u00b7 " + "chat-a"[:8]
                 expect(page).to_have_title(title, timeout=5_000)
                 # Two polls' worth: the state carrying the old notice has
                 # certainly landed by now.
@@ -2114,7 +2114,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
-                title = "goals \u00b7 " + "chat-a"[:8]
+                title = "Engelbart \u00b7 " + "chat-a"[:8]
                 expect(page).to_have_title(title, timeout=5_000)
 
                 chat_state.add_notice("chat-a", "session_stopped",
@@ -2140,6 +2140,105 @@ class ChatUiServerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreHydrationMaskTests(unittest.TestCase):
+    """The artifact's own first frame must never reach the reader.
+
+    It paints a rust splash and the raw template -- unresolved bindings and
+    the global onboarding dialog included -- before it swaps documentElement.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "real goal one")], [])
+
+    def test_the_page_is_served_hidden_until_the_artifact_unpacks(self):
+        with server_for(self.a) as url:
+            with NO_PROXY_OPENER.open(url, timeout=5) as response:
+                body = response.read().decode()
+        self.assertIn('id="hc-preboot"', body)
+        self.assertLess(body.index('id="hc-preboot"'), body.index("</head>"),
+                        "the mask must be in the head, before any body paint")
+        self.assertIn("visibility:hidden", body)
+        self.assertIn("hc-preboot", body[body.index("setTimeout"):],
+                      "a failsafe must remove the mask if the unpack never runs")
+
+    def test_the_reader_never_sees_the_onboarding_dialog_or_a_raw_binding(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page()
+            # Sample visibility from inside the page at the moment the parser
+            # finishes, which is before the artifact's DOMContentLoaded unpack.
+            page.add_init_script(
+                "window.__hcVis = [];"
+                "document.addEventListener('readystatechange', function () {"
+                "  try { window.__hcVis.push(document.readyState + ':' +"
+                "    getComputedStyle(document.documentElement).visibility); }"
+                "  catch (e) {} }, true);")
+            page.goto(url)
+            page.wait_for_selector("text=real goal one", timeout=10000)
+            seen = page.evaluate("window.__hcVis || []")
+            self.assertTrue(
+                any(entry == "interactive:hidden" for entry in seen),
+                "the parsed-but-unhydrated document must never be shown: %r" % (seen,))
+            # The unpack replaced the head the mask lived in, so it is gone and
+            # the page is visible again.
+            self.assertEqual(0, page.locator("#hc-preboot").count())
+            self.assertEqual(
+                "visible",
+                page.evaluate("getComputedStyle(document.documentElement).visibility"))
+            self.assertEqual(0, page.get_by_text("Keep your Claude Code history").count())
+            browser.close()
+
+
+class DeletedGoalBrowserTests(unittest.TestCase):
+    """The row goes away; the record does not."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "keep this one"),
+                             goal("g2", "delete this one")], [])
+
+    def test_deleting_a_goal_takes_the_row_away_and_keeps_the_record(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_selector("text=delete this one", timeout=10000)
+            page.evaluate(
+                "() => { const t=[...document.querySelectorAll('*')]"
+                ".find(e=>e.children.length===0 && e.textContent.trim()==='delete this one');"
+                "  let row=t; for(let i=0;i<4 && row;i++){ const x=[...row.querySelectorAll('*')]"
+                "    .find(e=>e.children.length===0 && e.textContent.trim()==='\u00d7');"
+                "    if(x){ x.click(); return true; } row=row.parentElement; }"
+                "  return false; }")
+            page.wait_for_timeout(3000)
+            self.assertEqual(0, page.get_by_text("delete this one").count(),
+                             "the deleted row must not be drawn any more")
+            page.reload()
+            page.wait_for_selector("text=keep this one", timeout=10000)
+            self.assertEqual(0, page.get_by_text("delete this one").count(),
+                             "and it must not come back on reload")
+            browser.close()
+        state = json.loads((self.a / "goals.json").read_text())
+        kept = [g for g in state["goals"] if g["id"] == "g2"]
+        self.assertEqual(1, len(kept), "the record itself is kept, not erased")
+        self.assertEqual("abandoned", kept[0]["status"])
 
 
 class ConversationGoalAttributionTests(unittest.TestCase):

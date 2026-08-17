@@ -462,7 +462,12 @@
     array(st && st.prompts).forEach(function (p) {
       if (p && typeof p.id === "string") byId[p.id] = p;
     });
+    // A goal the reader deleted is kept on disk as "abandoned" rather than
+    // erased, so nothing they wrote is lost -- but it is deleted to them, and
+    // drawing it struck through under every filter makes the delete look like
+    // it failed. Leave it out of the tree; the record stays in goals.json.
     array(st && st.goals).forEach(function (goal) {
+      if (goal && goal.status === "abandoned") return;
       var parent = goal.parent_goal_id || null;
       (byParent[parent] = byParent[parent] || []).push(goal);
     });
@@ -1327,7 +1332,7 @@
     // what they all have in common. The same 8-character prefix the prompt
     // rows already use for a conversation, so the two line up.
     var sid = str(serverState.sessionId).slice(0, 8);
-    return sid ? "goals \u00b7 " + sid : "goals";
+    return sid ? "Engelbart \u00b7 " + sid : "Engelbart";
   }
 
   function applyPageTitle() {
