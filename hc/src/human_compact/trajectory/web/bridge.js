@@ -1709,7 +1709,10 @@
       "[data-hc-launch] .hc-rail-code{flex:0 1 auto;min-height:0;overflow:auto;margin:11px 12px 0;padding:10px 12px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
       "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-actions{flex:none;padding:10px 12px 0}",
-      "[data-hc-launch] .hc-rail-copy{display:block;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#08130c;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-copy{display:block;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
+      // The light fill is dark enough that only white clears AA on it; the
+      // dark theme's fill is bright enough that only near-black does.
+      "[data-hc-launch][data-hc-theme=\"dark\"] .hc-rail-copy{color:#08130c}",
       "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
       // What the chat is actually being told, from /api/state.injection.
       "[data-hc-launch] .hc-inject{flex:none;margin:auto 12px 0;padding:9px 11px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:10.5px/1.75 'Source Code Pro',monospace;color:var(--mut)}",
@@ -1797,10 +1800,15 @@
     return true;
   }
 
-  // What Claude has been told, and whether it is still being told it. Every
+  // What Claude has been sent, and whether it is still being sent it. Every
   // line here is a fact /api/state.injection reports; none of it is a
   // control, because none of it has one -- turning it off is a slash command
   // in the terminal, which is what the last line says.
+  //
+  // "sent", never "read": the snapshot behind these numbers records what the
+  // hook *rendered* into the turn (see save_context_snapshot). Claude Code
+  // may still drop or compact that injection, so the page cannot claim the
+  // model read it -- only that this side handed it over.
   var injectionShown = "";
 
   function injectionLines(state) {
@@ -1813,14 +1821,14 @@
     if (typeof state.last_delta_chars === "number") {
       rows.push(["", state.last_delta_chars
         ? "~" + Math.ceil(state.last_delta_chars / 4)
-          + " tok changed since Claude read it"
-        : "unchanged since Claude read it"]);
+          + " tok changed since it was last sent"
+        : "unchanged since it was last sent"]);
     }
     var at = str(state.last_at);
     if (at) {
       var when = new Date(Date.parse(at));
       if (!isNaN(when.getTime())) {
-        rows.push(["", "last read " + when.toLocaleTimeString("en-US",
+        rows.push(["", "last sent " + when.toLocaleTimeString("en-US",
           { hour: "2-digit", minute: "2-digit", hour12: false })]);
       }
     }
@@ -2033,6 +2041,9 @@
       setTimeout(function () { input.focus(); }, 0);
     });
   }
+
+  // Which anchors the last patch run failed to find. Reset on every call.
+  var patchMisses = [];
 
   // Its three add controls append a placeholder row. Make them ask for the
   // real value first; nothing else about them changes.
@@ -2415,11 +2426,19 @@
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
-    return parts.reduce(function (patched, part) {
+    // Every pair is a string match against a checked-in artifact, so a
+    // re-vendored bundle degrades to "the layout silently did not apply".
+    // The indexes that matched nothing are kept rather than only warned
+    // about, so a test can assert the whole set landed.
+    patchMisses = [];
+    return parts.reduce(function (patched, part, index) {
       if (patched.indexOf(part[1]) >= 0) return patched;
       var at = patched.indexOf(part[0]);
       if (at < 0) {
-        console.warn("[hc ui] an add-source control was not found; left as-is");
+        patchMisses.push(index);
+        console.warn("[hc ui] template anchor " + index
+                     + " was not found; left as-is: "
+                     + String(part[0]).slice(0, 60));
         return patched;
       }
       return patched.slice(0, at) + part[1] + patched.slice(at + part[0].length);
@@ -2742,6 +2761,7 @@
     reconcileState: reconcileState,
     clearKeepPane: clearKeepPane,
     patchBundleSource: patchBundleSource,
+    patchMisses: function () { return patchMisses.slice(); },
     seedPayload: seedPayload,
     mergeTrees: mergeTrees,
     acceptState: acceptState,

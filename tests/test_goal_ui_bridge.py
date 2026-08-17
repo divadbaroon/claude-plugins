@@ -3202,6 +3202,43 @@ class ChatNoticeTests(BridgeTestCase):
         self.assertIn("z-index:100000", dialog)
 
 
+# Every class the chat-scope template patches introduce, and therefore every
+# class the stylesheet has something to dress. They are listed here rather
+# than scraped from bridge.js so that a patch quietly losing its anchor -- or
+# its class -- fails, instead of the test agreeing with whatever it finds.
+LAUNCH_CLASSES = (
+    "hc-row", "hc-rowtitle",
+    "hc-shell", "hc-main",
+    "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
+    "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
+    "hc-rail-none", "hc-inject",
+    "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
+    "hc-src-rm", "hc-src-add", "hc-tabs",
+    "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-session", "hc-updated",
+)
+
+
+def _luminance(hexcolor):
+    """WCAG relative luminance of a #rgb or #rrggbb string."""
+    digits = hexcolor.lstrip("#")
+    if len(digits) == 3:
+        digits = "".join(d * 2 for d in digits)
+    channels = []
+    for pair in (digits[0:2], digits[2:4], digits[4:6]):
+        c = int(pair, 16) / 255
+        channels.append(c / 12.92 if c <= 0.04045
+                        else ((c + 0.055) / 1.055) ** 2.4)
+    return (0.2126 * channels[0] + 0.7152 * channels[1]
+            + 0.0722 * channels[2])
+
+
+def _contrast(fg, bg):
+    """WCAG 2.1 contrast ratio between two CSS hex colours."""
+    lighter, darker = sorted((_luminance(fg), _luminance(bg)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
@@ -3210,6 +3247,62 @@ class LaunchSkinTests(BridgeTestCase):
         return ("window.__hcPromptUI.acceptState("
                 "{ goals: [], prompts: [], scope: 'chat',"
                 "  session_id: '7f3a1b2c-0000' });")
+
+    def patch_report(self, scope):
+        """Which anchors missed, and which classes never reached the source.
+
+        The skin is applied by patching the artifact's template *source*
+        before the runtime unpacks it, so a moved anchor is not a crash: the
+        pair no-ops and the layout silently does not apply. Every browser
+        assertion phrased as "this is hidden" or "this is styled" passes
+        vacuously in that state, which is why the anchors are asserted here,
+        against the checked-in bundle, and not only through a page.
+        """
+        return self.patched_bundle(
+            "[window.__hcPromptUI.patchMisses(),"
+            " %s.filter(function (c) {"
+            "   return out.indexOf('class=\"' + c + '\"') < 0; })];"
+            % json.dumps(list(LAUNCH_CLASSES)),
+            scope=scope)
+
+    def test_every_anchor_the_launch_shell_names_is_found_in_the_artifact(self):
+        misses, missing = self.patch_report("chat")
+        self.assertEqual([], misses)
+        self.assertEqual([], missing)
+
+    def test_a_global_vault_gets_a_source_with_none_of_those_names_in_it(self):
+        # The same reduce runs, and every pair is a no-op: nothing missed,
+        # and not one of the launch classes is in what a vault is served.
+        misses, missing = self.patch_report("global")
+        self.assertEqual([], misses)
+        self.assertEqual(sorted(LAUNCH_CLASSES), sorted(missing))
+
+    def test_the_copy_button_label_clears_aa_in_both_themes(self):
+        # 11.5px bold is not "large text", so both themes owe 4.5:1 -- and
+        # the fill is a variable each theme redefines, so the label cannot be
+        # one colour. The light fill is dark enough that only white clears
+        # it; the dark theme's fill is bright enough that only near-black
+        # does. This caught a 3.69:1 label the eye read as fine.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+
+        def first(pattern):
+            found = re.search(pattern, css)
+            self.assertIsNotNone(found, pattern)
+            return found.group(1)
+
+        dark = r"\[data-hc-launch\]\[data-hc-theme=\"dark\"\]"
+        pairs = [
+            (first(r"\[data-hc-launch\]\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
+             first(r"\[data-hc-launch\] \.hc-rail-copy\{"
+                   r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+            (first(dark + r"\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
+             first(dark + r" \.hc-rail-copy\{"
+                          r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+        ]
+        self.assertEqual(2, len({label for _, label in pairs}))
+        for fill, label in pairs:
+            self.assertGreaterEqual(round(_contrast(label, fill), 2), 4.5,
+                                    (label, fill))
 
     def test_a_global_vault_is_never_dressed(self):
         # Every rule in the sheet is behind [data-hc-launch], and the
@@ -3265,6 +3358,21 @@ class LaunchSkinTests(BridgeTestCase):
                 "  { cached: false, last_delta_chars: null, last_at: null,"
                 "    active: false, reads: ['prompt', 'subagent', 'task'] });"))
 
+    def test_no_line_on_the_card_claims_the_model_read_anything(self):
+        # The snapshot behind these numbers records what the hook *rendered*
+        # into a turn; Claude Code may still drop or compact it. "sent" is
+        # what this side can prove, and it is what every line says.
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 570,"
+            "    last_at: '2026-08-17T10:49:20+00:00',"
+            "    active: true, reads: ['session start', 'prompt'] });")
+        self.assertEqual([], [row for row in rows if "read it" in row[1]])
+        self.assertIn(["", "reads: session start · prompt"], rows)
+        self.assertEqual(
+            1, len([row for row in rows if row[1].startswith("last sent ")]),
+            rows)
+
     def test_a_pending_change_is_sized_as_an_estimate(self):
         # Characters over four, and marked "~": the browser cannot count
         # tokens, so it must not print a number that looks like it did.
@@ -3273,7 +3381,7 @@ class LaunchSkinTests(BridgeTestCase):
             "  { cached: true, last_delta_chars: 570, last_at: null,"
             "    active: true, reads: [] });")
         self.assertIn(["on", "goal document sent ✓"], rows)
-        self.assertIn(["", "~143 tok changed since Claude read it"], rows)
+        self.assertIn(["", "~143 tok changed since it was last sent"], rows)
         self.assertIn(["on", "on · /goals-ui disable turns it off"], rows)
 
     def test_a_document_the_model_is_current_on_says_so(self):
@@ -3281,7 +3389,7 @@ class LaunchSkinTests(BridgeTestCase):
             "window.__hcPromptUI.injectionLines("
             "  { cached: true, last_delta_chars: 0, last_at: null,"
             "    active: true, reads: [] });")
-        self.assertIn(["", "unchanged since Claude read it"], rows)
+        self.assertIn(["", "unchanged since it was last sent"], rows)
         self.assertEqual(
             [], [row for row in rows if "tok" in row[1]])
 

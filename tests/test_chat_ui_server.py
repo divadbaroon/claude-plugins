@@ -1140,6 +1140,12 @@ class ChatUiServerTests(unittest.TestCase):
                 # CONTEXT is the only tab left. The assembled prompt did not
                 # go away with the tab that used to hold it -- it is on
                 # screen the whole time now, in its own rail.
+                #
+                # The tab bar is named by a template patch, so "PROMPT is
+                # hidden inside .hc-tabs" is also true of a page where the
+                # patch missed and .hc-tabs does not exist. Prove the bar is
+                # there before proving what is not in it.
+                expect(page.locator(".hc-tabs")).to_have_count(1)
                 expect(page.locator(".hc-tabs").get_by_text(
                     "PROMPT", exact=True)).to_be_hidden()
                 expect(page.locator(".hc-rail-right").get_by_text(
@@ -1845,7 +1851,8 @@ class ChatUiServerTests(unittest.TestCase):
         empty = ui._payload(self.a, chat_scoped=True)["injection"]
         self.assertEqual(
             {"cached": False, "last_delta_chars": None, "last_at": None,
-             "active": False, "reads": ["prompt", "subagent", "task"]},
+             "active": False,
+             "reads": ["session start", "prompt", "subagent", "task"]},
             empty,
         )
 
@@ -1871,6 +1878,44 @@ class ChatUiServerTests(unittest.TestCase):
         # Disabling clears the snapshot, so there is no base left to diff.
         self.assertFalse(off["cached"])
         self.assertIsNone(off["last_delta_chars"])
+
+    def test_the_injection_card_is_computed_after_the_lock_is_given_back(self):
+        """It is two read-only file reads, and something waits on that lock.
+
+        ``_state_access`` is chat_state's cross-process session lock, shared
+        with ingestion and analysis. The hook that renders an injection into
+        a turn waits half a second for the same lock before giving up and
+        dropping the injection, so a poll running every 1.5s per open tab
+        must not hold it for work that does not need it. Reading a snapshot
+        and diffing a file does not need it.
+        """
+        released = []
+        real_access = ui._state_access
+
+        @contextmanager
+        def watched(trajdir, chat_scoped):
+            with real_access(trajdir, chat_scoped):
+                yield
+            released.append(True)
+
+        def injection(session_id, root):
+            self.assertTrue(released,
+                            "injection computed while still under the lock")
+            return {"sentinel": session_id}
+
+        with mock.patch.object(ui, "_state_access", watched), \
+                mock.patch.object(ui, "_injection_state", injection):
+            payload = ui._payload(self.a, chat_scoped=True)
+            unlocked = ui._payload(self.a, chat_scoped=False)
+
+        # The key is still on the payload, still filled by the same
+        # function, and still only in a chat.
+        self.assertEqual([True], released[:1])
+        self.assertEqual({"sentinel": "chat-a"}, payload["injection"])
+        self.assertEqual(["a1", "a2"], [g["id"] for g in payload["goals"]])
+        self.assertFalse(unlocked["injection"]["cached"])
+        self.assertEqual(["session start", "prompt", "subagent", "task"],
+                         unlocked["injection"]["reads"])
 
     def test_the_injection_card_prints_what_the_state_reports(self):
         try:
@@ -1899,8 +1944,12 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(card).to_be_visible(timeout=10_000)
                 expect(card).to_contain_text("context injection")
                 expect(card).to_contain_text("goal document sent")
-                expect(card).to_contain_text("unchanged since Claude read it")
-                expect(card).to_contain_text("reads: prompt · subagent · task")
+                # "sent", not "read": the snapshot these lines are
+                # derived from records what the hook rendered into a turn,
+                # which Claude Code may still drop or compact.
+                expect(card).to_contain_text("unchanged since it was last sent")
+                expect(card).to_contain_text(
+                    "reads: session start · prompt · subagent · task")
                 expect(card).to_contain_text("/goals-ui disable turns it off")
                 # No control: turning it off is a slash command in the
                 # terminal, and the card says so rather than offering one.
