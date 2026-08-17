@@ -460,6 +460,93 @@ class ChatSynthesisTests(unittest.TestCase):
         S.clear_worker_record(SID, root=self.root, owner_token="successor")
         self.assertFalse(worker.exists())
 
+    def test_initial_sections_become_the_goals_markdown_document(self):
+        self.hook("UserPromptSubmit", prompt="Make each goal one document")
+        provider = Provider([{"goals": [{
+            "id": "g1", "title": "One document per goal", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "sections": {
+                "objective": "Give every goal a single markdown document.",
+                "in_my_words": "",
+                "decisions": ["notes IS the document"],
+                "built": ["split_doc", "append_to_section"],
+                "blockers": [],
+                "open_questions": [],
+            },
+        }]}])
+
+        S.refresh(SID, root=self.root, provider=provider)
+
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertIn('"sections"', provider.prompts[0])
+        self.assertIn(
+            "# Objective\nGive every goal a single markdown document.",
+            goal["notes"])
+        self.assertIn("# Decisions\n- notes IS the document", goal["notes"])
+        self.assertIn("# Built\n- split_doc\n- append_to_section", goal["notes"])
+        self.assertIn("# In my words\n\n", goal["notes"])
+        self.assertNotIn("sections", goal)
+
+    def test_sections_append_below_notes_a_human_already_wrote(self):
+        proposed = {"version": 1, "goals": [{
+            "id": "g1", "title": "Ship it", "status": "active",
+            "parent_goal_id": None, "notes": "# Decisions\n- keep sqlite\n",
+            "sections": {"decisions": ["use WAL"], "built": ["the doc model"]},
+        }]}
+
+        S._apply_sections(proposed)
+
+        notes = proposed["goals"][0]["notes"]
+        self.assertIn("# Decisions\n- keep sqlite\n\n- use WAL", notes)
+        self.assertLess(notes.index("- keep sqlite"), notes.index("- use WAL"))
+        self.assertIn("# Built\n- the doc model", notes)
+        self.assertNotIn("sections", proposed["goals"][0])
+
+    def test_incremental_append_section_adds_once_and_never_again(self):
+        first = self.hook("UserPromptSubmit", prompt="Write the doc model")
+        CS.save_goals(SID, {"version": 1, "goals": [{
+            "id": "g1", "title": "Write the doc model", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "prompt_ids": [], "important_item_ids": [],
+            "notes": "# Decisions\n- keep sqlite\n",
+        }]}, {"items": []}, root=self.root)
+        CS.set_analyzer_state(SID, last_analyzed_ordinal=first.last_ordinal,
+                              status="idle", root=self.root)
+        self.hook("UserPromptSubmit", prompt="Second turn")
+        op = {"op": "append_section", "goal_id": "g1", "section": "decisions",
+              "text": "- use WAL"}
+
+        provider = Provider([{"operations": [op]}])
+        S.refresh(SID, root=self.root, provider=provider)
+
+        notes = CS.load_goals(SID, self.root)[0]["goals"][0]["notes"]
+        self.assertIn("append_section", provider.prompts[0])
+        self.assertIn("# Decisions\n- keep sqlite\n\n- use WAL", notes)
+
+        self.hook("UserPromptSubmit", prompt="Third turn")
+        again = Provider([{"operations": [op]}])
+        S.refresh(SID, root=self.root, provider=again)
+
+        self.assertEqual(
+            notes, CS.load_goals(SID, self.root)[0]["goals"][0]["notes"])
+
+    def test_a_manual_source_survives_an_initial_race(self):
+        merged = S._merge_initial_with_manual(
+            {"version": 1, "goals": [{"id": "g1", "title": "Inferred",
+                                      "status": "active",
+                                      "parent_goal_id": None}]},
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Inferred", "status": "active",
+                "parent_goal_id": None, "notes": "mine",
+                "sources": [{"id": "s1", "type": "github",
+                             "label": "octo/repo"}]}]})
+
+        goal = merged["goals"][0]
+        self.assertEqual("mine", goal["notes"])
+        self.assertEqual([{"id": "s1", "type": "github", "label": "octo/repo"}],
+                         goal["sources"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

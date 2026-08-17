@@ -640,7 +640,8 @@ def _apply(op, trajdir=None, chat_scoped=None):
         elif kind == "set_priority" and g and op.get("priority") in ("urgent", "high", "normal"):
             g["priority"] = op["priority"]
         elif kind == "set_notes" and g:
-            g["notes"] = str(op.get("notes", ""))[:4000]
+            # The goal's whole markdown document: stored as written.
+            g["notes"] = str(op.get("notes", ""))
         elif kind == "set_sources" and g:
             raw = op.get("sources")
             if not isinstance(raw, list):
@@ -1116,7 +1117,7 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "detached_prompt_ids": prev.get("detached_prompt_ids", []),
                         "priority": node.get("prio") if node.get("prio") in
                             ("urgent", "high", "normal") else "normal",
-                        "notes": str(node.get("notes") or "")[:4000],
+                        "notes": str(node.get("notes") or ""),
                         "description": str(node.get("desc") or "")[:600],
                         "origin": prev.get("origin", "ui"),
                         "updated_at": prev.get("updated_at", GM._now())}

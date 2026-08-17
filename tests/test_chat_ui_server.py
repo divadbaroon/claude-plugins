@@ -1077,3 +1077,43 @@ class PlanPreviewTests(unittest.TestCase):
             got = ui.plan_preview(self.trajdir, "g1")
         self.assertFalse(got["ok"])
         self.assertNotIn("steps", got)
+
+
+class GoalDocumentRoundTripTests(unittest.TestCase):
+    """A goal's notes are a whole document; nothing on the way in cuts it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.a = self.root / "chat-a"
+        write_scope(self.a, [goal("a1", "goal in chat a")], [])
+        self.document = "# Decisions\n" + "\n".join(
+            f"- decision {n:04d} kept in full" for n in range(220))
+        self.assertGreaterEqual(len(self.document), 6000)
+
+    def test_a_six_thousand_character_document_survives_op_and_import(self):
+        with server_for(self.a) as url:
+            self.assertEqual(
+                {"ok": True},
+                post_json(url + "/api/op", {
+                    "op": "set_notes", "goal_id": "a1",
+                    "notes": self.document,
+                }),
+            )
+            state = get_json(url + "/api/state")
+            self.assertEqual(self.document, state["goals"][0]["notes"])
+
+            imported = post_json(url + "/api/import", {
+                "base_revision": state["revision"],
+                "goals": [{
+                    "id": "a1", "title": "goal in chat a", "done": False,
+                    "status": "todo", "prio": "normal",
+                    "notes": self.document, "desc": "", "children": [],
+                }],
+            })
+            self.assertTrue(imported["ok"])
+            self.assertEqual(
+                self.document,
+                get_json(url + "/api/state")["goals"][0]["notes"],
+            )

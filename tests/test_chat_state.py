@@ -538,7 +538,8 @@ class ChatStateTests(unittest.TestCase):
         self.assertIn("Connect this chat", context)
         self.assertIn("USER PROMPT: Persist this requirement", context)
         self.assertIn("DESCRIPTION: Keep the scoped UI synchronized", context)
-        self.assertIn("USER NOTES: Preserve browser-authored relationships", context)
+        self.assertIn(
+            "  - USER NOTES:\n    Preserve browser-authored relationships", context)
         self.assertIn("PRIORITY: high", context)
         self.assertIn("Recent inactive goals:", context)
         self.assertIn("Debug the rebuild timeout [completed]", context)
@@ -625,6 +626,39 @@ class ChatStateTests(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 CS.paths(bad, self.base)
         self.assertFalse((Path(self.temp.name) / "escape").exists())
+
+    def test_goal_context_carries_the_whole_notes_document(self):
+        self.transcript.touch()
+        CS.ingest_hook(
+            {
+                "session_id": SID,
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "Write the doc model",
+                "transcript_path": str(self.transcript),
+            },
+            root=self.base,
+        )
+        body = "\n".join(f"- decision {n}" for n in range(120))
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Write the doc model", "status": "active",
+                "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                "prompt_ids": [],
+                "notes": f"# Objective\n\n# Decisions\n{body}\n\n# Blockers\n",
+            }]},
+            {"items": []},
+            root=self.base,
+        )
+
+        context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertIn("# Decisions", context)
+        self.assertIn("- decision 0", context)
+        self.assertIn("- decision 119", context)
+        self.assertGreater(len(body), 280)
+        self.assertNotIn("# Objective", context)
+        self.assertNotIn("# Blockers", context)
+
 
 
 if __name__ == "__main__":

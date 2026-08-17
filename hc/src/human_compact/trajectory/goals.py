@@ -40,6 +40,101 @@ def _machine_authored(text: str) -> bool:
     return any(stripped.startswith(p) for p in MACHINE_PROMPT_PREFIXES)
 
 
+# A goal's `notes` field is one markdown document, not a scratch string. The
+# headers below are its spine: inference writes under them and the human writes
+# beside that, so both halves live in one editable place instead of a row of
+# machine-owned textboxes the user may not overwrite.
+DOC_SECTIONS = ("Objective", "In my words", "Decisions", "Built", "Blockers",
+                "Open questions")
+SECTION_KEYS = {"objective": "Objective", "in_my_words": "In my words",
+                "decisions": "Decisions", "built": "Built",
+                "blockers": "Blockers", "open_questions": "Open questions"}
+_H1 = re.compile(r"^# (.*)$")
+
+
+def default_doc() -> str:
+    """The empty document: every section header, no body under any of them."""
+    return "\n\n".join(f"# {title}" for title in DOC_SECTIONS) + "\n"
+
+
+def split_doc(notes):
+    """Parse a notes document into ``{h1 title: body}`` in document order.
+
+    Only ``# `` starts a section — an ``##`` heading is body text belonging to
+    the section above it. Text written before the first header keeps the ``""``
+    key, and a header the user invented keeps its own, so nothing a person
+    typed can be silently dropped by a round trip.
+    """
+    sections, title = {}, ""
+
+    def start(name):
+        if name not in sections:
+            sections[name] = []
+
+    for line in str(notes or "").splitlines():
+        match = _H1.match(line)
+        if match:
+            title = match.group(1).strip()
+            start(title)
+            continue
+        if title not in sections and not line.strip():
+            continue           # blank lines before any text open nothing
+        start(title)
+        sections[title].append(line)
+    return {title: "\n".join(body).strip("\n")
+            for title, body in sections.items()
+            if title or "\n".join(body).strip()}
+
+
+def join_doc(sections) -> str:
+    """Render sections back to markdown in canonical order."""
+    known = [t for t in DOC_SECTIONS if t in sections]
+    extra = [t for t in sections if t and t not in DOC_SECTIONS]
+    blocks = []
+    preamble = str(sections.get("") or "").strip("\n")
+    if preamble.strip():
+        blocks.append(preamble)
+    for title in known + extra:
+        body = str(sections.get(title) or "").strip("\n")
+        blocks.append(f"# {title}\n{body}" if body.strip() else f"# {title}")
+    return "\n\n".join(blocks) + "\n" if blocks else ""
+
+
+def ensure_doc_sections(notes: str) -> str:
+    """Give a document every default header without editing what is there."""
+    if not str(notes or "").strip():
+        return default_doc()
+    sections = split_doc(notes)
+    for title in DOC_SECTIONS:
+        sections.setdefault(title, "")
+    return join_doc(sections)
+
+
+def append_to_section(notes: str, section_title: str, text: str) -> str:
+    """Add *text* to the end of one section, leaving every other one alone.
+
+    Append-only by construction: a refresh may extend the record of a goal but
+    never rewrites the human's sentences, and a line the section already holds
+    is dropped, so re-running inference over the same evidence is a no-op
+    rather than a growing pile of duplicates.
+    """
+    document = ensure_doc_sections(notes)
+    block = str(text or "").strip()
+    if not block:
+        return document
+    sections = split_doc(document)
+    sections.setdefault(section_title, "")
+    body = sections[section_title]
+    present = {line.strip() for line in body.splitlines() if line.strip()}
+    fresh = [line for line in block.splitlines()
+             if line.strip() and line.strip() not in present]
+    if not fresh:
+        return document
+    addition = "\n".join(fresh)
+    sections[section_title] = f"{body}\n\n{addition}" if body.strip() else addition
+    return join_doc(sections)
+
+
 SOURCE_TYPES = ("github", "local", "doc")
 
 
@@ -261,7 +356,10 @@ def sanitize(goals):
                 pid for pid in raw if isinstance(pid, str))) \
                 if isinstance(raw, list) else []
         g.setdefault("updated_at", _now())
-        g.setdefault("priority", "normal"); g.setdefault("notes", "")
+        g.setdefault("priority", "normal")
+        # The goal's whole markdown document. Coerced, never truncated: a cap
+        # here would silently eat the tail of something a person wrote.
+        g["notes"] = str(g.get("notes") or "")
         g.setdefault("description", "")
         g.setdefault("opening", "")
         # Extra context the user chose to attach. Never inferred — a local
@@ -372,6 +470,20 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                 g["parent_goal_id"] = parent["id"]
                 g["updated_at"] = parent["updated_at"] = _now()
                 changes.append(f"moved {g['title'][:34]} under {parent['title'][:30]}")
+        elif op == "append_section" and g:
+            # The only write inference gets on a goal's document, and it can
+            # only add to the end of one named section. Nothing is written --
+            # not even a missing header -- unless that section really gained
+            # text, so a repeated inference leaves the document untouched.
+            title = SECTION_KEYS.get(str(o.get("section") or ""))
+            text = str(o.get("text") or "").strip()
+            before = str(g.get("notes") or "")
+            after = append_to_section(before, title, text) if title and text \
+                else before
+            if split_doc(after).get(title) != split_doc(before).get(title):
+                g["notes"] = after
+                g["updated_at"] = _now()
+                changes.append(f"notes → {g['title'][:30]} / {title}")
         elif op == "attach_important":
             it = next((i for i in important["items"] if i["id"] == o.get("item_id")), None)
             tgt = by_id(goals, o.get("goal_id", ""))

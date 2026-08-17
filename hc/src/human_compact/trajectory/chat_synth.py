@@ -42,8 +42,14 @@ Infer completion only from explicit completion evidence. Distinguish a goal
 from its implementation tasks. Prefer 1-4 top-level goals, depth at most 3.
 Never use private assistant thinking. Copy only supplied event ids.
 
+Each goal also has "sections": the goal's own markdown document, which the
+user reads and edits by hand. objective and in_my_words are plain sentences;
+decisions, built, blockers and open_questions are lists of short bullet
+strings. Write only what THIS chat's evidence supports and leave a section
+empty when it supports nothing. Never invent, pad, or restate the title.
+
 Return ONLY minified JSON:
-{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}]}],"important":{"items":[]}}
+{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
 
 PROJECT CONTEXT:
 <<CONTEXT>>
@@ -62,11 +68,15 @@ Return ONLY minified JSON {"operations":[...]} using these operations:
 {"op":"complete_todo","goal_id":"","text_match":""}
 {"op":"set_status","goal_id":"","status":"active|in_progress|completed|abandoned"}
 {"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":""}
+{"op":"append_section","goal_id":"","section":"objective|in_my_words|decisions|built|blockers|open_questions","text":""}
 
 Rules: infer completion only from explicit evidence. A top-level new_goal needs
 an explicitly distinct objective in distinct_because. Prefer attaching evidence
-or creating a todo/subgoal. Do not rename, move, merge, delete, or edit notes,
-priority, prompt_ids, important links, or manually authored content.
+or creating a todo/subgoal. Do not rename, move, merge, delete, or edit
+priority, prompt_ids, important links, or manually authored content. A goal's
+notes are one markdown document the user owns; you may only APPEND to it via
+append_section, one section at a time, with markdown lines ("- …" bullets for
+the list sections). Never repeat a line the section already holds.
 
 CURRENT STATE:
 <<TREE>>
@@ -277,13 +287,58 @@ def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
                 ][:20],
             })
         goal["todos"] = todos
+        sections = value.get("sections")
+        if isinstance(sections, dict):
+            goal["sections"] = {
+                key: _section_text(sections.get(key)) for key in GM.SECTION_KEYS
+            }
+        else:
+            goal.pop("sections", None)
         out["goals"].append(goal)
     GM.sanitize(out)
     return out
 
 
+def _section_text(value: Any) -> str:
+    """Render one model-supplied section as the markdown it will become."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(
+            f"- {' '.join(str(item).split())}"
+            for item in value
+            if isinstance(item, (str, int, float)) and str(item).strip()
+        )
+    return ""
+
+
+def _apply_sections(goals: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold each goal's inferred sections into its markdown document.
+
+    First run writes the document; every run after that appends under the same
+    headers. Inference never gets to replace notes, because the field it would
+    overwrite is the one the user writes in.
+    """
+    for goal in goals.get("goals", []):
+        sections = goal.pop("sections", None)
+        if not isinstance(sections, dict):
+            continue
+        notes = str(goal.get("notes") or "")
+        if not notes.strip():
+            goal["notes"] = GM.join_doc({
+                title: _section_text(sections.get(key))
+                for key, title in GM.SECTION_KEYS.items()
+            })
+            continue
+        for key, title in GM.SECTION_KEYS.items():
+            notes = GM.append_to_section(notes, title, _section_text(sections.get(key)))
+        goal["notes"] = notes
+    return goals
+
+
 def _filtered_ops(data: Dict[str, Any], valid_ids: set) -> List[Dict[str, Any]]:
-    allowed = {"attach_evidence", "add_todo", "complete_todo", "set_status", "new_goal"}
+    allowed = {"attach_evidence", "add_todo", "complete_todo", "set_status",
+               "new_goal", "append_section"}
     out = []
     for value in data.get("operations", []) if isinstance(data, dict) else []:
         if not isinstance(value, dict) or value.get("op") not in allowed:
@@ -305,7 +360,8 @@ def _merge_initial_with_manual(inferred: Dict[str, Any], current: Dict[str, Any]
     for goal in inferred.get("goals", []):
         old = previous.get(goal.get("id"))
         if old:
-            for field in ("prompt_ids", "important_item_ids", "notes", "priority"):
+            for field in ("prompt_ids", "important_item_ids", "notes",
+                          "priority", "sources"):
                 if field in old:
                     goal[field] = deepcopy(old[field])
             if old.get("origin") == "user":
@@ -558,7 +614,8 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 prompt = (INITIAL_PROMPT.replace("<<CONTEXT>>", context)
                           .replace("<<EVENTS>>", json.dumps(digest, ensure_ascii=False)))
                 proposed = _normalize_initial(_provider(provider).generate_json(prompt), valid_ids)
-                proposed = _merge_initial_with_manual(proposed, goals)
+                proposed = _apply_sections(
+                    _merge_initial_with_manual(proposed, goals))
                 new_important = important
                 step_changes = [f"goal + {g['title']}" for g in proposed["goals"]]
             else:

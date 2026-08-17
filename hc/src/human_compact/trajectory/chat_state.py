@@ -21,7 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
-from .goals import link_evidence_prompts, promote_todos  # noqa: F401
+from .goals import (  # noqa: F401
+    join_doc,
+    link_evidence_prompts,
+    promote_todos,
+    split_doc,
+)
 from .secure_io import secure_dir
 
 
@@ -1190,12 +1195,19 @@ def _goal_context_text(
         )
         if details:
             description = " ".join(str(goal.get("description") or "").split())[:280]
-            notes = " ".join(str(goal.get("notes") or "").split())[:280]
             priority = str(goal.get("priority") or "normal")
             if description:
                 lines.append(f"{indent}  - DESCRIPTION: {description}")
-            if notes:
-                lines.append(f"{indent}  - USER NOTES: {notes}")
+            # The goal's markdown document, whole. Squashing it to one capped
+            # line used to throw away the bullets that carry the actual state;
+            # only sections nobody has written in are left out.
+            written = {title: body
+                       for title, body in split_doc(goal.get("notes")).items()
+                       if body.strip()}
+            if written:
+                lines.append(f"{indent}  - USER NOTES:")
+                lines.extend(f"{indent}    {line}".rstrip()
+                             for line in join_doc(written).splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
         for todo in goal.get("todos", []):

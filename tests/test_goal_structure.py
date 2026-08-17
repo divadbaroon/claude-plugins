@@ -354,3 +354,102 @@ class InferredProjectDirectoryTests(unittest.TestCase):
         shutil.rmtree(self.project)
         self.assertEqual(0, self.W.attach_project_dirs(self.trajdir, self.goals))
         self.assertNotIn("sources", self.goals["goals"][0])
+
+
+class GoalDocumentTests(unittest.TestCase):
+    """A goal's notes field is one markdown document with H1 sections."""
+
+    def test_default_doc_is_the_six_h1_sections_in_order(self):
+        self.assertEqual(
+            "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n"
+            "# Blockers\n\n# Open questions\n",
+            GM.default_doc(),
+        )
+        self.assertEqual(list(GM.DOC_SECTIONS), list(GM.SECTION_KEYS.values()))
+
+    def test_split_and_join_round_trip_preamble_and_unknown_sections(self):
+        doc = ("scratch line\n\n# Objective\nShip it\n\n"
+               "# Decisions\n- keep sqlite\n\n# Scratch\nkeep me\n")
+
+        parts = GM.split_doc(doc)
+
+        self.assertEqual(["", "Objective", "Decisions", "Scratch"], list(parts))
+        self.assertEqual("scratch line", parts[""])
+        self.assertEqual("- keep sqlite", parts["Decisions"])
+        self.assertEqual(doc, GM.join_doc(parts))
+
+    def test_an_h2_stays_inside_the_body_of_its_h1(self):
+        parts = GM.split_doc("# Built\n## Done\n- a\n")
+
+        self.assertEqual(["Built"], list(parts))
+        self.assertEqual("## Done\n- a", parts["Built"])
+
+    def test_ensure_doc_sections_is_idempotent_and_keeps_written_text(self):
+        once = GM.ensure_doc_sections("# Decisions\n- keep sqlite\n")
+
+        self.assertEqual(once, GM.ensure_doc_sections(once))
+        self.assertIn("# Decisions\n- keep sqlite", once)
+        for title in GM.DOC_SECTIONS:
+            self.assertIn(f"# {title}", once)
+        self.assertEqual(GM.default_doc(), GM.ensure_doc_sections(""))
+
+    def test_append_to_section_lands_at_the_end_and_spares_its_neighbours(self):
+        start = GM.ensure_doc_sections(
+            "# Decisions\n- keep sqlite\n\n# Blockers\n- no ci yet\n")
+
+        out = GM.append_to_section(start, "Decisions", "- use WAL")
+
+        parts = GM.split_doc(out)
+        self.assertEqual("- keep sqlite\n\n- use WAL", parts["Decisions"])
+        self.assertEqual(GM.split_doc(start)["Blockers"], parts["Blockers"])
+        self.assertLess(out.index("- keep sqlite"), out.index("- use WAL"))
+
+    def test_append_to_section_refuses_to_repeat_a_line_it_already_holds(self):
+        once = GM.append_to_section(GM.default_doc(), "Built", "- the doc model")
+        twice = GM.append_to_section(once, "Built", "- the doc model")
+
+        self.assertEqual(once, twice)
+        self.assertEqual(1, once.count("- the doc model"))
+
+    def test_append_to_section_creates_the_section_it_needs(self):
+        out = GM.append_to_section("", "Open questions", "- who owns the cap?")
+
+        self.assertIn("# Open questions\n- who owns the cap?", out)
+        self.assertIn("# Objective", out)
+
+    def test_sanitize_leaves_a_long_document_uncut(self):
+        document = "# Decisions\n" + "\n".join(f"- decision {n}" for n in range(900))
+        goals = {"version": 1, "goals": [dict(goal("g1"), notes=document)]}
+
+        GM.sanitize(goals)
+
+        self.assertEqual(document, goals["goals"][0]["notes"])
+        self.assertGreater(len(document), 4000)
+
+    def test_an_empty_or_unnamed_append_section_op_writes_nothing(self):
+        goals = {"version": 1, "goals": [dict(goal("g1"), notes="mine")]}
+
+        changes = GM.apply_ops(goals, {"items": []}, [
+            {"op": "append_section", "goal_id": "g1", "section": "decisions",
+             "text": "   "},
+            {"op": "append_section", "goal_id": "g1", "section": "nonsense",
+             "text": "- smuggled"},
+        ])
+
+        self.assertEqual([], changes)
+        self.assertEqual("mine", goals["goals"][0]["notes"])
+
+    def test_append_section_op_adds_once_and_reports_only_real_writes(self):
+        goals = {"version": 1, "goals": [
+            dict(goal("g1"), notes="# Decisions\n- keep sqlite\n")]}
+        op = {"op": "append_section", "goal_id": "g1", "section": "decisions",
+              "text": "- use WAL"}
+
+        first = GM.apply_ops(goals, {"items": []}, [op])
+        notes = goals["goals"][0]["notes"]
+        second = GM.apply_ops(goals, {"items": []}, [op])
+
+        self.assertEqual(1, len(first))
+        self.assertEqual([], second)
+        self.assertIn("# Decisions\n- keep sqlite\n\n- use WAL", notes)
+        self.assertEqual(notes, goals["goals"][0]["notes"])
