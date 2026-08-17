@@ -1198,10 +1198,14 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             )
             if not url:
                 raise RuntimeError("launcher returned no localhost URL")
-            json.dump({"hookSpecificOutput": {
-                "hookEventName": "UserPromptExpansion",
-                "additionalContext": f"goals-ui opened for this chat at {url}",
-            }}, stdout)
+            # Blocking the expansion ends the turn with no model call, and
+            # Claude Code prints `reason` to the user. That is the closest a
+            # plugin gets to a built-in local command like /model: the
+            # workspace opens and Claude never speaks. Handing back
+            # additionalContext instead would buy a whole turn to say a URL
+            # the user can already see.
+            json.dump({"decision": "block", "reason": f"goals-ui: {url}"},
+                      stdout)
             stdout.write("\n")
         except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
             json.dump({

@@ -279,14 +279,39 @@ class ChatCliTests(unittest.TestCase):
                 [], stdin=io.StringIO(json.dumps(payload)), stdout=output
             )
         self.assertEqual(0, code)
-        response = json.loads(output.getvalue())
-        self.assertEqual(
-            "goals-ui opened for this chat at http://127.0.0.1:9012/",
-            response["hookSpecificOutput"]["additionalContext"],
-        )
         launch.assert_called_once_with(
             ["--session", SID, "--cwd", "/stable/project"]
         )
+        # Nothing is handed to the model on the way past, so the launch cannot
+        # cost a turn even when it succeeds.
+        self.assertNotIn("hookSpecificOutput", json.loads(output.getvalue()))
+
+    def test_ui_expansion_ends_the_turn_with_the_url_and_never_calls_claude(self):
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "UserPromptExpansion",
+            "cwd": "/stable/project",
+        }
+        self._register_server()
+        output = io.StringIO()
+        # The real launcher runs here: opening the workspace must still opt
+        # this chat in, and must still be the only thing that speaks.
+        with (mock.patch.object(self.cli, "_healthy_chat_server",
+                                return_value=True),
+              mock.patch.object(self.cli, "_request_chat_refresh"),
+              mock.patch("webbrowser.open") as opened):
+            code = self.cli.chat_hook_main(
+                [], stdin=io.StringIO(json.dumps(payload)), stdout=output
+            )
+        self.assertEqual(0, code)
+        # `decision: block` ends the turn with no model call and shows `reason`
+        # to the user; that line is the whole of what /goals-ui says.
+        self.assertEqual(
+            {"decision": "block", "reason": "goals-ui: http://127.0.0.1:9012/"},
+            json.loads(output.getvalue()),
+        )
+        opened.assert_called_once_with("http://127.0.0.1:9012/")
+        self.assertTrue(CS.goals_ui_invoked(SID))
 
     def test_ui_expansion_blocks_instead_of_claiming_success_on_launch_failure(self):
         payload = {
