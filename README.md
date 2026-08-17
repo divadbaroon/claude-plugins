@@ -1,11 +1,14 @@
 
-# Engelbart
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/b77059b3-b9eb-4339-aece-1e1f9d53f43e" width="100%" alt="Engelbart Demo">
+</p>
 
-┌──────────────────────────────────────────────────────────────┐
-│                          Engelbart                           │
-│               tools for steering coding agents               │
-└──────────────────────────────────────────────────────────────┘
-https://github.com/user-attachments/assets/b77059b3-b9eb-4339-aece-1e1f9d53f43e
+<h1 align="center">Engelbart</h1>
+
+<p align="center">
+  Tools for steering coding agents.
+</p>
+
 
 **Open-Source Claude Code Plugin for Goals and TODOs**
 
