@@ -244,6 +244,28 @@ class BridgeTestCase(unittest.TestCase):
             "window.__hcPromptUI.rootsFromState(%s);" % json.dumps(state or STATE))
 
 
+class DeletedGoalTests(BridgeTestCase):
+    """A goal the reader deleted is kept on disk but not drawn."""
+
+    STATE = {"goals": [
+        {"id": "g1", "title": "keep this one", "status": "active",
+         "parent_goal_id": None},
+        {"id": "g2", "title": "deleted one", "status": "abandoned",
+         "parent_goal_id": None},
+        {"id": "g3", "title": "finished one", "status": "completed",
+         "parent_goal_id": None},
+    ], "prompts": []}
+
+    def test_an_abandoned_goal_is_left_out_of_the_tree(self):
+        titles = [n["title"] for n in self.roots(self.STATE)]
+        self.assertEqual(["keep this one", "finished one"], titles)
+
+    def test_a_completed_goal_is_still_drawn(self):
+        done = [n for n in self.roots(self.STATE) if n["title"] == "finished one"]
+        self.assertEqual(1, len(done))
+        self.assertTrue(done[0]["done"], "completed still renders struck through")
+
+
 class NodeMappingTests(BridgeTestCase):
     """Server records become the fields the artifact renders."""
 
@@ -3063,7 +3085,7 @@ class ChatNoticeTests(BridgeTestCase):
             "titles.push(document.title);"
             "titles;")
         self.assertEqual(
-            ["goals · 7f3a1b2c", "● goals · 7f3a1b2c", "goals · 7f3a1b2c"], out)
+            ["Engelbart · 7f3a1b2c", "● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
     def test_a_notice_takes_itself_away(self):
         out = self.notices(
@@ -3112,7 +3134,7 @@ class ChatNoticeTests(BridgeTestCase):
             "var box = stack()[0];"
             "fire('click', box.querySelector('.hc-notice-close'));"
             "[stack().length, document.title];")
-        self.assertEqual([0, "goals · 7f3a1b2c"], out)
+        self.assertEqual([0, "Engelbart · 7f3a1b2c"], out)
 
     def test_a_dismissed_notice_does_not_come_back_on_the_next_poll(self):
         out = self.notices(
@@ -3151,14 +3173,14 @@ class ChatNoticeTests(BridgeTestCase):
         # A day with three of these open needs the tab strip to tell them
         # apart, and the goal tree is what they all have in common.
         self.assertEqual(
-            "goals · 7f3a1b2c",
+            "Engelbart · 7f3a1b2c",
             self.notices("window.__hcPromptUI.pageTitle();"))
 
     def test_a_workspace_that_was_never_told_its_session_still_has_a_name(self):
         # /api/state answers the session id; a page that booted before it
         # answered says what it knows rather than "undefined".
         self.assertEqual(
-            ["goals", "goals"],
+            ["Engelbart", "Engelbart"],
             self.notices("[window.__hcPromptUI.pageTitle(), document.title];",
                          session=""))
 
@@ -3173,7 +3195,7 @@ class ChatNoticeTests(BridgeTestCase):
             "window.__hcPromptUI.renderChatSurface();"
             "seen.push(document.title);"
             "seen;")
-        self.assertEqual(["goals · 7f3a1b2c", "goals · 7f3a1b2c"], out)
+        self.assertEqual(["Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
     def test_a_wipe_while_a_notice_stands_comes_back_marked(self):
         # The mark is derived from what the tab should say, not remembered
@@ -3187,7 +3209,7 @@ class ChatNoticeTests(BridgeTestCase):
             "var marked = document.title;"
             "window.fireTimers();"
             "[marked, document.title];")
-        self.assertEqual(["● goals · 7f3a1b2c", "goals · 7f3a1b2c"], out)
+        self.assertEqual(["● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
     def test_the_banner_sits_just_above_the_prompt_picker(self):
         # Both are fixed overlays. A banner under the picker is a banner

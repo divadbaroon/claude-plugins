@@ -718,6 +718,24 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return {"ok": True}
 
 
+PREBOOT_MASK = (
+    '<style id="hc-preboot">html{visibility:hidden!important}'
+    'html,body{background:#fff!important}</style>'
+    '<script>(function(){'
+    'try{var dark=false,saved=null;'
+    'try{saved=JSON.parse(localStorage.getItem("hc-vault-ui-v1")||"null");}catch(e){}'
+    'if(saved&&saved.themeMode){dark=saved.themeMode==="dark";}'
+    'else if(window.matchMedia){'
+    'dark=window.matchMedia("(prefers-color-scheme: dark)").matches;}'
+    'if(dark){var s=document.getElementById("hc-preboot");'
+    'if(s){s.textContent="html{visibility:hidden!important}"'
+    '+"html,body{background:#101010!important}";}}}catch(e){}'
+    'setTimeout(function(){var s=document.getElementById("hc-preboot");'
+    'if(s&&s.parentNode){s.parentNode.removeChild(s);}},2500);'
+    '})();</script>'
+)
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):                  # quiet
         pass
@@ -777,6 +795,17 @@ class H(BaseHTTPRequestHandler):
             elif self.path in ("/", "/index.html"):
                 html = resources.files("human_compact.trajectory").joinpath(
                     "web/goals_bundle.html").read_text(encoding="utf-8")
+                # The artifact ships its own pre-hydration body: a rust splash
+                # and the raw template, unresolved {{ bindings }} and the
+                # global onboarding dialog included. It paints that for a frame
+                # before it unpacks the template and replaces documentElement.
+                # Reading it is worse than reading nothing -- it shows setup
+                # questions this release does not ask. Hide the document until
+                # the unpack, which removes this style along with the rest of
+                # the original head. The timer is the failsafe: if the unpack
+                # never happens, the page is shown anyway rather than staying
+                # blank.
+                html = html.replace("</head>", PREBOOT_MASK + "</head>", 1)
                 # Parse the artifact's template island before running the
                 # bridge, while still running the bridge synchronously before
                 # DOMContentLoaded lets the artifact unpack that template.
