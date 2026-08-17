@@ -696,6 +696,37 @@ class NoDemoDescriptionBackfillTests(BridgeTestCase):
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoDemoContextTests(BridgeTestCase):
+    """The artifact's second demo door: its context defaults.
+
+    `contextOf` sets every text field explicitly, including to "", so a goal
+    the server knows about never reaches these. A goal the reader adds in the
+    tree does: the artifact mints it with `ctx: null`, and until the next
+    reload its assembled prompt carried a demo objective, a demo GitHub repo
+    and a demo document -- text the reader then pastes into a real session.
+    """
+
+    def test_the_context_defaults_hold_nothing(self):
+        for scope in (None, "chat"):
+            with self.subTest(scope=scope or "global"):
+                out = self.patched_bundle("out;", scope=scope)
+                self.assertIn("const CTXDEF = {};", out)
+                self.assertIn("const CODEDEF = [];", out)
+                self.assertIn("const DOCDEF = [];", out)
+                self.assertNotIn("Get the drawable frame populating", out)
+                self.assertNotIn("divadbaroon/claude-plugins", out)
+                self.assertNotIn("design-notes.md", out)
+
+    def test_the_artifact_itself_still_carries_them(self):
+        # A control, as above: these tests must fail for the right reason.
+        source = json.loads(re.search(
+            r'<script type="__bundler/template">\s*([\s\S]*?)\s*</script>',
+            BUNDLE.read_text()).group(1))
+        self.assertIn("Get the drawable frame populating", source)
+        self.assertIn("divadbaroon/claude-plugins", source)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class NoSimulatedAgentTests(BridgeTestCase):
     """The agent panel must reflect a real session, never imitate one."""
 

@@ -1788,6 +1788,20 @@
       ["    try { ad(g0); } catch (e) {}",
        "    /* the demo backfill above is not applied: its keys are the ids\n"
        + "       the vault mints, so it would overwrite real goals */"],
+      // Its other demo door is a fallback rather than a backfill: a goal
+      // the reader adds in the tree is minted with ctx: null, and every
+      // context read then answered from the artifact's own sample -- so
+      // the prompt for a goal named a second ago claimed an objective, a
+      // GitHub repo and a document belonging to somebody else's demo, and
+      // said so until the page was next reloaded. contextOf already sets
+      // every field for a goal the server knows about; these three are
+      // what the gap was filled with.
+      ["    const CTXDEF = { objective: 'Get the drawable frame populating in Chrome and validate the boundary feature end-to-end.', said: '\"why is the drawable boundary not showing up?\"\\n\"ok i put the frame in google chrome but it doesnt seem to be getting populated\u2026\"', decided: '- Build as LSUIElement menu bar app (no dock icon, no window)\\n- Split responsibilities: extension handles Chrome, native app handles other apps', built: '- Menu bar record icon (33\u00d724 points, positioned at x=1079)\\n- Captured events in Supabase database (41 events from test session)', hit: '- Accessibility permissions invalidated after rebuilds (code hash mismatch)\\n- Chrome doesn\\'t expose page content to OS Accessibility layer\\n- Full validation that drawable frame feature works as intended', open: '- Full validation that drawable frame feature works as intended' };",
+       "    const CTXDEF = {};"],
+      ["    const CODEDEF = [{ id: 'c1', type: 'github', label: 'divadbaroon/claude-plugins' }];",
+       "    const CODEDEF = [];"],
+      ["    const DOCDEF = [{ id: 'd1', type: 'doc', label: 'design-notes.md' }];",
+       "    const DOCDEF = [];"],
       // Its agent panel simulated a session: templated todos, a hardcoded file
       // list, and diff stats computed from the length of each filename. Both
       // entry points now start a real goal-bound session instead.

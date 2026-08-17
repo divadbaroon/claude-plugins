@@ -623,6 +623,60 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_goal_added_in_the_tree_gets_no_demo_context(self):
+        """The artifact mints a new goal with no context at all.
+
+        Its own defaults then filled the gap, so the prompt for a goal the
+        reader had just named claimed an objective, a GitHub repo and a
+        document that belong to the artifact's demo -- and stayed that way
+        until the page was reloaded.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.get_by_text("goal in chat a", exact=True).first
+                       ).to_be_visible(timeout=10_000)
+
+                page.get_by_text("Add goal", exact=True).click()
+                page.keyboard.type("brand new goal")
+                page.keyboard.press("Enter")
+                expect(page.get_by_text("brand new goal", exact=True).first
+                       ).to_be_visible(timeout=10_000)
+                page.get_by_text("brand new goal", exact=True).first.click()
+                page.get_by_text("PROMPT", exact=True).click()
+                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
+                       ).to_be_visible()
+
+                draft = page.evaluate(
+                    """() => {
+                         const gen = document.querySelector(
+                           '[title="Regenerate prompt"]');
+                         return gen && gen.previousElementSibling.value;
+                       }""")
+                self.assertIn("brand new goal", draft)
+                self.assertNotIn("Get the drawable frame", draft)
+                self.assertNotIn("divadbaroon/claude-plugins", draft)
+                self.assertNotIn("design-notes.md", draft)
+                self.assertNotIn("Objective:", draft)
+                self.assertNotIn("Code context:", draft)
+                self.assertNotIn("Document context:", draft)
+            finally:
+                browser.close()
+
     def test_a_completion_persists_and_the_filter_decides_where_it_shows(self):
         """Completing a goal, and what each filter then shows of it.
 
