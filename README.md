@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/b77059b3-b9eb-4339-aece-1e1f9d53f43e
 macOS or Linux, Node 18+, Claude Code 2.1.175+.
 
 ```bash
-npx engelbart-cli          # no options, no questions
+npx engelbart-cli         
 ```
 
 Restart Claude Code (or `/reload-plugins`).
@@ -39,28 +39,19 @@ Restart Claude Code (or `/reload-plugins`).
   afterwards. Subagents and tool batches read it too.
 - **Persistence** — one invocation holds for the life of the chat.
 
-## Data boundary
+## About
+Goals and intent are usually implicit when you work with coding agents. They live across prompts, TODOs, implementation details, and your own head. This means that information is lost and confounded as protects grow in size. 
 
-- Hooks record each chat's own prompts and events to
-  `~/.claude-vault/chat-sessions/<session-id>/`, owner-only. This starts at
-  install, not at `/goals-ui`.
-- **Nothing is analyzed or injected until `/goals-ui` runs in that chat.**
-- Inference runs through your own authenticated `claude` CLI. No telemetry,
-  no network egress of your own.
+Existing tools like \autocompact, projects, and claude-men try to solve parts of this problem through autonomous context preservation, but these processes still lose and conflate important information about the problem. Worse, the lack of human intervention in these tools means they fail to give humans the ability to inspect or steer what the agent thinks it is trying to accomplish. 
 
-## Experimental
+That’s why we created Engelbart, a free, open-source tool for managing, planning, and syncing goals and TODOs across your coding agents. 
 
-`HC_EXPERIMENTAL=1` re-enables the disconnected global layer — cross-chat
-capture and analysis, `hc ui`, goal-bound agent runs, older subcommands.
-[`STASHED.md`](./STASHED.md) is the inventory; [`LAUNCH_FEATURES.md`](./LAUNCH_FEATURES.md)
-is what ships.
+Engelbart is a browser-based Claude Code plugin that gives you and your agent a shared representation of what you’re trying to accomplish while the agent implements changes in real time. 
 
-## Develop
+After installing Engelbart, you can run /goals-ui in Claude Code to kick off a local server. Engelbart then analyzes your current session and past conversation turns to infer your goals, plans, and TODOs, which it uses to open a proposed goal tree on a local server that you can inspect and correct before you resume building. 
 
-```bash
-python3 -W error::ResourceWarning -m unittest discover -s tests   # incl. real-browser tests
-cd engelbart && npm test && npm run test:pack
-cd engelbart && npm run build:vendor                            # re-vendor the wheel after hc/ changes
-```
+As you work, Engelbart keeps your agent in the loop as you plan new features, draft prompts, write TODOs, modify goals, jot down notes about the current system, and record key decisions. 
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) and [`hc/README.md`](./hc/README.md).
+We feel Engelbart is an important first step in making intent explicit, persistent, and steerable instead of leaving it buried inside a context window or tacit inside your head. 
+
+Engelbart is in early beta and still in the initial stages of development. It’s also part of our broader cognitive science research into how humans and AI systems plan, maintain goals, and coordinate over long-running work.
