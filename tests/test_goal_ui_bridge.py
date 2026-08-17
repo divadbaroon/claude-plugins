@@ -2655,6 +2655,26 @@ class ChatPromptTabTests(BridgeTestCase):
         self.assertIn('sc-camel-on-click="{{ copyPrompt }}"', pane)
         self.assertIn("{{ copyPromptLabel }}", pane)
 
+    def test_a_chat_prompt_pane_is_read_only_and_says_so(self):
+        # Nothing here keeps an edit -- not across a reload, not across a
+        # tab switch -- so the box must not invite one and the copy must
+        # not promise one.
+        pane = self.prompt_pane(scope="chat")
+        self.assertIn('readonly="readonly"', pane)
+        self.assertNotIn("Edit it here", pane)
+        self.assertNotIn("{{ promptInput }}", pane)
+        self.assertIn("assembled from your goal document \u00b7 read-only",
+                      pane)
+        # And the way to take it away is still there.
+        self.assertIn('sc-camel-on-click="{{ copyPrompt }}"', pane)
+
+    def test_a_global_prompt_pane_is_still_the_agents_to_edit(self):
+        # There the draft is what `runAgent` sends, so editing it is the
+        # point; only the chat pane loses the box.
+        pane = self.prompt_pane()
+        self.assertNotIn("readonly", pane)
+        self.assertIn("{{ promptInput }}", pane)
+
     def test_a_chat_prompt_pane_offers_no_run(self):
         # Every op behind a run answers "global scope only" here.
         pane = self.prompt_pane(scope="chat")

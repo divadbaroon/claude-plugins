@@ -1435,6 +1435,78 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_the_assembled_prompt_is_read_only_and_still_copyable(self):
+        """It is assembled, not authored.
+
+        The box kept no edit -- not across a reload, not across a CONTEXT ->
+        PROMPT round trip -- while the copy beside it said to edit it here.
+        A control that mutates the page and nothing else is the one thing
+        this pane must not offer, so the box is now read-only and the line
+        says which of the two it is.
+        """
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        goals_path = self.a / "goals.json"
+        stored = json.loads(goals_path.read_text())
+        stored["goals"][0]["notes"] = "# Objective\nShip the document pane.\n"
+        goals_path.write_text(json.dumps(stored))
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1400, "height": 900},
+                    permissions=["clipboard-read", "clipboard-write"],
+                )
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
+                page.get_by_text("PROMPT", exact=True).click()
+                expect(page.get_by_text("RECOMMENDED PROMPT", exact=True)
+                       ).to_be_visible()
+                expect(page.get_by_text(
+                    "assembled from your goal document \u00b7 read-only",
+                    exact=True)).to_be_visible()
+
+                box = page.locator(
+                    '[title="Regenerate prompt"]').locator("xpath=..").locator(
+                        "textarea")
+                expect(box).to_have_count(1)
+                self.assertTrue(box.evaluate("el => el.readOnly"))
+
+                before = box.input_value()
+                self.assertIn("Objective:\nShip the document pane.", before)
+                box.click()
+                page.keyboard.type("EDITED BY HAND")
+                page.wait_for_timeout(1_500)
+                self.assertEqual(before, box.input_value())
+                unchanged = [g for g in get_json(url + "/api/state")["goals"]
+                             if g["id"] == "a1"][0]
+                self.assertEqual("# Objective\nShip the document pane.\n",
+                                 unchanged["notes"])
+                self.assertEqual("", unchanged["description"])
+                self.assertNotIn("EDITED BY HAND", goals_path.read_text())
+
+                copy = page.get_by_text("Copy prompt", exact=True)
+                copy.click()
+                expect(page.get_by_text("copied \u2713", exact=True)
+                       ).to_be_visible()
+                self.assertEqual(before, page.evaluate(
+                    "() => navigator.clipboard.readText()"))
+                context.close()
+            finally:
+                browser.close()
+
     # --- notices: the workspace speaks for the terminal --------------------
 
     def test_state_carries_the_notices_a_chat_workspace_draws(self):
