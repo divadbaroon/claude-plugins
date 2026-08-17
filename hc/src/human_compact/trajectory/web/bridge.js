@@ -568,38 +568,46 @@
   }
 
   function seed() {
-    try {
-      var setup = new XMLHttpRequest();
-      setup.open("GET", "/api/setup", false);
-      setup.send();
-      var answered = JSON.parse(setup.responseText);
-      if (answered && answered.ok) {
-        setupState = answered;
-        if (answered.convos && answered.convos.length) {
-          window.__hcConvos = answered.convos;
+    // Which scope this is decides most of what follows, and only one route
+    // is never gated. Asking it first costs one cheap call and saves two
+    // blocking ones: /api/setup and /api/briefings speak for the global
+    // vault, so in a chat they are two synchronous round trips on the path
+    // to first paint whose only possible answer is "not here".
+    askHealthForScope();
+    if (serverState.scope !== "chat") {
+      try {
+        var setup = new XMLHttpRequest();
+        setup.open("GET", "/api/setup", false);
+        setup.send();
+        var answered = JSON.parse(setup.responseText);
+        if (answered && answered.ok) {
+          setupState = answered;
+          if (answered.convos && answered.convos.length) {
+            window.__hcConvos = answered.convos;
+          }
         }
+      } catch (e) {
+        setupState = null;
       }
-    } catch (e) {
-      setupState = null;
-    }
-    try {
-      // Same reason as the state fetch: the panels are baked into the
-      // artifact's saved state at boot, and anything fetched afterwards has
-      // nowhere to land until the page reloads.
-      var briefs = new XMLHttpRequest();
-      briefs.open("GET", "/api/briefings", false);
-      briefs.send();
-      var all = JSON.parse(briefs.responseText);
-      if (all && all.ok && all.goals) {
-        Object.keys(all.goals).forEach(function (id) {
-          var one = all.goals[id] || {};
-          details[id] = { sections: briefingSections(one), opening: "",
-                          cwd: str(one.cwd), review: [],
-                          brief: briefFacts(one) };
-        });
+      try {
+        // Same reason as the state fetch: the panels are baked into the
+        // artifact's saved state at boot, and anything fetched afterwards
+        // has nowhere to land until the page reloads.
+        var briefs = new XMLHttpRequest();
+        briefs.open("GET", "/api/briefings", false);
+        briefs.send();
+        var all = JSON.parse(briefs.responseText);
+        if (all && all.ok && all.goals) {
+          Object.keys(all.goals).forEach(function (id) {
+            var one = all.goals[id] || {};
+            details[id] = { sections: briefingSections(one), opening: "",
+                            cwd: str(one.cwd), review: [],
+                            brief: briefFacts(one) };
+          });
+        }
+      } catch (e) {
+        // No briefings: the panels stay empty rather than showing a guess.
       }
-    } catch (e) {
-      // No briefings: the panels stay empty rather than showing a guess.
     }
     try {
       var request = new XMLHttpRequest();
@@ -618,9 +626,9 @@
     } catch (e) {
       // Server unreachable, or answering something that is not state: let
       // the artifact boot on whatever it already has. Which scope this is
-      // is still worth asking, on the one route that is never gated -- the
-      // controls a chat must not offer do not depend on the tree loading.
-      askHealthForScope();
+      // was settled before the fetch, on the one route that is never gated
+      // -- the controls a chat must not offer do not depend on the tree
+      // loading, and nothing here has to ask a second time.
     }
   }
 
@@ -2222,6 +2230,12 @@
   }
 
   function watchAnalysis() {
+    // The analysis this reports is the global vault's, and the route it
+    // reads answers "global scope only" in a chat -- so polling it there is
+    // a request every few seconds for the life of the page whose answer
+    // cannot change anything on screen. Same early return as loadPlan and
+    // watchRunFeed, and it still resolves so callers can await first paint.
+    if (serverState.scope === "chat") return Promise.resolve();
     // Never decide from state that has not been fetched. Guarding the poll on
     // "is anything running" deadlocked: the answer is false until the first
     // fetch, and the first fetch was what the guard skipped.

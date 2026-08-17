@@ -111,7 +111,13 @@ const document = {
   }
 };
 function XHR() {}
-XHR.prototype.open = function (method, url) { this._url = String(url || ""); };
+// Every synchronous route the boot path opens, in order, so a test can say
+// which of them a scope pays for.
+const xhrs = [];
+XHR.prototype.open = function (method, url) {
+  this._url = String(url || "");
+  xhrs.push(this._url);
+};
 XHR.prototype.send = function () {
   this.responseText = this._url.indexOf("/api/health") >= 0
     ? (process.env.HC_HEALTH || "{}")
@@ -123,7 +129,7 @@ XHR.prototype.send = function () {
 };
 const sandbox = {
   console, document, XMLHttpRequest: XHR, made, require, calls, app, sub,
-  listeners,
+  listeners, xhrs,
   header, panel,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
   fetch: (url, opts) => {
@@ -2459,6 +2465,57 @@ class ScopeFallbackTests(BridgeTestCase):
     def test_nothing_answering_at_all_leaves_it_where_it_was(self):
         self.assertEqual("global", self.run_js(
             "window.__hcScope;", state={"broken": True}))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class DeadRouteTests(BridgeTestCase):
+    """A chat workspace must not pay for the two routes that refuse it.
+
+    /api/setup and /api/briefings speak for the global vault, and in chat
+    scope both answer ok:false. Both were asked at boot -- as blocking
+    synchronous XHRs on the path to first paint -- and /api/setup again on
+    the analysis poll, for the life of the page.
+    """
+
+    CHAT = {"scope": "chat", "generated_at": "2026-08-16T00:00:00+00:00",
+            "revision": "r1", "goals": [], "prompts": []}
+    IS_CHAT = {"HC_HEALTH": '{"ok": true, "scope": "chat"}'}
+
+    def boot_routes(self, **kwargs):
+        return json.loads(self.run_js(
+            "xhrs.length = 0;"
+            "window.__hcPromptUI.seedForTest();"
+            "JSON.stringify(xhrs);", **kwargs))
+
+    def polled(self, **kwargs):
+        return json.loads(self.run_js(
+            "calls.length = 0;"
+            "window.__hcPromptUI.watchAnalysis().then(function () {"
+            "  return JSON.stringify(calls.map(function (c) {"
+            "    return String(c[0]); })); });", **kwargs))
+
+    def test_a_chat_boot_asks_neither_of_them(self):
+        routes = self.boot_routes(state=self.CHAT, extra_env=self.IS_CHAT)
+        self.assertNotIn("/api/setup", routes)
+        self.assertNotIn("/api/briefings", routes)
+
+    def test_it_finds_out_which_scope_it_is_before_deciding(self):
+        # /api/health is the one route no scope gates, and it is cheap.
+        routes = self.boot_routes(state=self.CHAT, extra_env=self.IS_CHAT)
+        self.assertEqual(["/api/health", "/api/state"], routes)
+
+    def test_a_global_boot_still_asks_both(self):
+        routes = self.boot_routes()
+        self.assertIn("/api/setup", routes)
+        self.assertIn("/api/briefings", routes)
+        self.assertIn("/api/state", routes)
+
+    def test_a_chat_page_never_polls_the_analysis_route(self):
+        self.assertEqual([], self.polled(state=self.CHAT,
+                                         extra_env=self.IS_CHAT))
+
+    def test_a_global_page_still_polls_it(self):
+        self.assertIn("/api/setup", self.polled())
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
