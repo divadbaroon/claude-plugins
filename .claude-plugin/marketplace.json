@@ -13,7 +13,7 @@
     {
       "name": "vault",
       "source": "./hc/src/human_compact/assets/plugin",
-      "description": "Chat-scoped goals, goal-bound Claude sessions, and live task observation. Needs the hc runtime: npx human-vault."
+      "description": "Chat-scoped goals for Claude Code via /goals-ui: an inferred goal document per chat, injected as context. Needs the hc runtime: npx human-vault."
     }
   ]
 }

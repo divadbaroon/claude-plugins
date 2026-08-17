@@ -1,7 +1,7 @@
 {
   "name": "human-vault",
-  "version": "0.17.89",
-  "description": "One-command installer for chat-scoped goals and optional global context in Claude Code.",
+  "version": "0.18.0",
+  "description": "One-command installer for /goals-ui: chat-scoped goals for Claude Code.",
   "bin": {
     "human-vault": "bin/human-vault.js"
   },
@@ -27,12 +27,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/divadbaroon/claude-plugins.git",
-    "directory": "human-compact"
+    "directory": "human-vault"
   },
   "bugs": {
     "url": "https://github.com/divadbaroon/claude-plugins/issues"
   },
-  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/human-compact#readme",
+  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/human-vault#readme",
   "publishConfig": {
     "access": "public"
   },

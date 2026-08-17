@@ -50,7 +50,8 @@ class HcSetupTests(unittest.TestCase):
             gv.enable_always_on()
             with mock.patch.object(cli, "install_main") as install, \
                     mock.patch.object(cli, "_validate_claude_cli"), \
-                    mock.patch.object(gv, "backfill") as backfill:
+                    mock.patch.object(gv, "backfill") as backfill, \
+                    contextlib.redirect_stdout(io.StringIO()):
                 cli.setup_main(["--global-vault", "no", "--goals", "no"])
             install.assert_called_once_with([])
             backfill.assert_not_called()
@@ -69,7 +70,8 @@ class HcSetupTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             cli, _ = self._modules(Path(td))
             with self.assertRaises(SystemExit) as raised, \
-                    mock.patch.object(cli, "install_main") as install:
+                    mock.patch.object(cli, "install_main") as install, \
+                    contextlib.redirect_stderr(io.StringIO()):
                 cli.setup_main(["--global-vault", "no", "--goals", "yes"])
             self.assertEqual(2, raised.exception.code)
             install.assert_not_called()
@@ -89,7 +91,9 @@ class HcSetupTests(unittest.TestCase):
                     mock.patch.object(gv, "backfill",
                                       return_value={"imported": 2, "skipped": 1}), \
                     mock.patch.object(cli, "trajectory_main") as trajectory, \
-                    mock.patch.object(cli, "goals_main", side_effect=write_goals) as goals:
+                    mock.patch.object(cli, "goals_main", side_effect=write_goals) as goals, \
+                    mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": "1"}), \
+                    contextlib.redirect_stdout(io.StringIO()):
                 cli.setup_main(["--global-vault", "yes", "--goals", "yes"])
 
             trajectory.assert_called_once_with([
@@ -101,11 +105,74 @@ class HcSetupTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"CLAUDE_VAULT": "0"}):
                 self.assertTrue(gv.is_enabled())
 
+    def _setup_output(self, cli, argv, experimental=""):
+        """setup_main's own narration, with the install itself stubbed out."""
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": experimental}), \
+                mock.patch.object(cli, "install_main"), \
+                mock.patch.object(cli, "_validate_claude_cli"), \
+                contextlib.redirect_stdout(out):
+            cli.setup_main(argv)
+        return out.getvalue()
+
+    def test_keep_never_implies_capture_this_release_does_not_wire(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli, gv = self._modules(Path(td))
+            gv.enable_always_on()
+
+            # "unchanged" was a lie: the install just rewrote hooks.json
+            # without the capture hooks, so this vault stopped recording.
+            withheld = self._setup_output(
+                cli, ["--global-vault", "keep", "--goals", "no"])
+            self.assertIn("HC_EXPERIMENTAL=1", withheld)
+            self.assertNotIn("unchanged by this install", withheld)
+            self.assertEqual("enabled", gv.enable_file().read_text().strip())
+
+            wired = self._setup_output(
+                cli, ["--global-vault", "keep", "--goals", "no"], experimental="1")
+            self.assertIn("global Vault stays enabled", wired)
+            self.assertNotIn("HC_EXPERIMENTAL=1", wired)
+
+    def test_a_vault_that_is_off_is_described_without_naming_the_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli, gv = self._modules(Path(td))
+            with mock.patch.dict(os.environ, {"CLAUDE_VAULT": "0"}):
+                never_configured = self._setup_output(
+                    cli, ["--global-vault", "keep", "--goals", "no"])
+            self.assertIn("global Vault not enabled", never_configured)
+            self.assertNotIn("HC_EXPERIMENTAL", never_configured)
+
+            gv.enable_always_on()
+            turned_off = self._setup_output(
+                cli, ["--global-vault", "no", "--goals", "no"])
+            self.assertEqual("disabled", gv.enable_file().read_text().strip())
+            self.assertIn("global Vault not enabled", turned_off)
+
+    def test_enabling_global_vault_is_gated_behind_the_experimental_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli, _ = self._modules(Path(td))
+            for argv in (["--global-vault", "yes", "--goals", "no"],
+                         ["--global-vault", "yes", "--goals", "yes"]):
+                with self.subTest(argv=argv):
+                    err = io.StringIO()
+                    with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}), \
+                            mock.patch.object(cli, "install_main") as install, \
+                            contextlib.redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as raised:
+                        cli.setup_main(argv)
+                    self.assertEqual(2, raised.exception.code)
+                    # Nothing is installed or enabled by a rejected request.
+                    install.assert_not_called()
+                    self.assertIn(
+                        "--global-vault yes is experimental in this release; "
+                        "set HC_EXPERIMENTAL=1", err.getvalue())
+
     def test_missing_claude_fails_after_base_integration_is_installed(self):
         with tempfile.TemporaryDirectory() as td:
             cli, _ = self._modules(Path(td))
             with mock.patch.object(cli, "install_main") as install, \
-                    mock.patch("human_compact.cli.shutil.which", return_value=None):
+                    mock.patch("human_compact.cli.shutil.which", return_value=None), \
+                    contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(RuntimeError, "Claude Code is required"):
                     cli.setup_main(["--global-vault", "no", "--goals", "no"])
             install.assert_called_once_with([])
@@ -143,6 +210,7 @@ class HcSetupTests(unittest.TestCase):
                                return_value="/usr/bin/claude"), \
                     mock.patch("human_compact.cli.subprocess.run",
                                return_value=completed), \
+                    contextlib.redirect_stdout(io.StringIO()), \
                     self.assertRaisesRegex(
                         RuntimeError,
                         r"2\.1\.150 is too old.*2\.1\.175 or newer",
@@ -247,7 +315,8 @@ class ReinstallPreservesCaptureTests(unittest.TestCase):
         with mock.patch("human_compact.global_vault.disable_always_on") as off, \
              mock.patch("human_compact.global_vault.enable_always_on") as on, \
              mock.patch.object(cli, "install_main") as install, \
-             mock.patch.object(cli, "_validate_claude_cli"):
+             mock.patch.object(cli, "_validate_claude_cli"), \
+             contextlib.redirect_stdout(io.StringIO()):
             cli.setup_main(["--global-vault", "keep", "--goals", "no"])
         off.assert_not_called()
         on.assert_not_called()
@@ -257,6 +326,7 @@ class ReinstallPreservesCaptureTests(unittest.TestCase):
         from human_compact import cli
         with mock.patch("human_compact.global_vault.disable_always_on") as off, \
              mock.patch.object(cli, "install_main"), \
-             mock.patch.object(cli, "_validate_claude_cli"):
+             mock.patch.object(cli, "_validate_claude_cli"), \
+             contextlib.redirect_stdout(io.StringIO()):
             cli.setup_main(["--global-vault", "no", "--goals", "no"])
         off.assert_called_once()

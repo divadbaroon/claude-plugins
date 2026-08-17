@@ -40,6 +40,169 @@ def _machine_authored(text: str) -> bool:
     return any(stripped.startswith(p) for p in MACHINE_PROMPT_PREFIXES)
 
 
+# A goal's `notes` field is one markdown document, not a scratch string. The
+# headers below are its spine: inference writes under them and the human writes
+# beside that, so both halves live in one editable place instead of a row of
+# machine-owned textboxes the user may not overwrite.
+DOC_SECTIONS = ("Objective", "In my words", "Decisions", "Built", "Blockers",
+                "Open questions")
+SECTION_KEYS = {"objective": "Objective", "in_my_words": "In my words",
+                "decisions": "Decisions", "built": "Built",
+                "blockers": "Blockers", "open_questions": "Open questions"}
+_H1 = re.compile(r"^# (.*)$")
+_FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+
+
+def default_doc() -> str:
+    """The empty document: every section header, no body under any of them."""
+    return "\n\n".join(f"# {title}" for title in DOC_SECTIONS) + "\n"
+
+
+def _scan_doc(notes):
+    """Locate each section as a line span, and report an unterminated fence.
+
+    Returns ``(lines, spans, open_fence)`` where each span is
+    ``(title, start, end)``. Fence-aware on purpose: a ``# install deps``
+    comment at column 0 inside a fenced code block is not a heading, and
+    treating it as one would tear the user's code block across two sections
+    and leave the fence unterminated -- in state that is persisted and
+    injected into later sessions. ``open_fence`` is the same scan's answer to
+    "does this document end inside a code block", so callers never have to
+    parse it a second time to find out.
+    """
+    lines = str(notes or "").splitlines()
+    fence, heads = None, []
+    for index, line in enumerate(lines):
+        body = line.lstrip(" ")
+        if len(line) - len(body) <= 3:
+            marker = _FENCE.match(body)
+            if marker:
+                char, run = marker.group(1)[0], len(marker.group(1))
+                rest = marker.group(2)
+                if fence is None:
+                    # An opening backtick fence may not carry a backtick in
+                    # its info string; anything else opens one.
+                    if not (char == "`" and "`" in rest):
+                        fence = (char, run)
+                elif char == fence[0] and run >= fence[1] and not rest.strip():
+                    fence = None
+                continue
+        if fence is None:
+            heading = _H1.match(line)
+            if heading:
+                heads.append((heading.group(1).strip(), index))
+    spans = []
+    first = heads[0][1] if heads else len(lines)
+    if any(line.strip() for line in lines[:first]):
+        spans.append(("", 0, first))
+    for position, (title, index) in enumerate(heads):
+        following = heads[position + 1][1] if position + 1 < len(heads) else len(lines)
+        spans.append((title, index + 1, following))
+    return lines, spans, fence is not None
+
+
+def split_doc(notes):
+    """Parse a notes document into ``[(h1 title, body)]`` in document order.
+
+    A list, not a mapping: a person may write the same heading twice, or write
+    them in an order of their own, and a dict would silently swallow the second
+    one. Only ``# `` at column 0 outside a code fence starts a section -- an
+    ``##`` heading is body text belonging to the section above it. Text written
+    before the first header keeps the ``""`` title.
+    """
+    lines, spans, _ = _scan_doc(notes)
+    return [(title, "\n".join(lines[start:end]).strip("\n"))
+            for title, start, end in spans]
+
+
+def section_body(notes, section_title):
+    """The body of the first section with this title, or None if absent."""
+    for title, body in split_doc(notes):
+        if title == section_title:
+            return body
+    return None
+
+
+def join_doc(sections) -> str:
+    """Render ``[(title, body)]`` back to markdown, in the order given.
+
+    Order-preserving and duplicate-preserving, so ``join_doc(split_doc(x))``
+    returns *x* -- a document the user arranged their own way survives a round
+    trip through this module unchanged.
+    """
+    blocks = []
+    for title, body in sections:
+        body = str(body or "").strip("\n")
+        if not title:
+            if body.strip():
+                blocks.append(body)
+            continue
+        blocks.append(f"# {title}\n{body}" if body.strip() else f"# {title}")
+    return "\n\n".join(blocks) + "\n" if blocks else ""
+
+
+def ensure_doc_sections(notes: str) -> str:
+    """Add the default headers a document lacks, at the end, changing nothing else.
+
+    Deliberately not a re-join: headings the user wrote keep their place and
+    their duplicates, and only the tail of the document is touched.
+    """
+    document = str(notes or "")
+    if not document.strip():
+        return default_doc()
+    _, spans, open_fence = _scan_doc(document)
+    if open_fence:
+        # A fence the user has not closed yet runs to the end of the document,
+        # so headers spliced at EOF would land inside their code block, where
+        # the next scan cannot see them -- and every refresh would append them
+        # again. Their unfinished text is theirs to finish; wait for it.
+        return document
+    present = {span[0] for span in spans}
+    missing = [title for title in DOC_SECTIONS if title not in present]
+    if not missing:
+        return document
+    tail = "\n\n".join(f"# {title}" for title in missing)
+    return document.rstrip("\n") + "\n\n" + tail + "\n"
+
+
+def append_to_section(notes: str, section_title: str, text: str) -> str:
+    """Add *text* to the end of one section, leaving every other one alone.
+
+    Append-only by construction: a refresh may extend the record of a goal but
+    never rewrites the human's sentences, and a line the section already holds
+    is dropped, so re-running inference over the same evidence is a no-op
+    rather than a growing pile of duplicates. Edits land as line surgery on the
+    document rather than a re-render, so untouched sections stay byte-identical
+    down to their own spacing. A document ending inside an unterminated code
+    fence is left exactly as it is: there is no position in it that is provably
+    outside the user's code block.
+    """
+    document = ensure_doc_sections(notes)
+    block = str(text or "").strip()
+    if not block:
+        return document
+    lines, spans, open_fence = _scan_doc(document)
+    if open_fence:
+        return document          # never write inside an unterminated fence
+    span = next((s for s in spans if s[0] == section_title), None)
+    if span is None:
+        fresh = [line for line in block.splitlines() if line.strip()]
+        return (document.rstrip("\n") + f"\n\n# {section_title}\n"
+                + "\n".join(fresh) + "\n")
+    _, start, end = span
+    present = {line.strip() for line in lines[start:end] if line.strip()}
+    fresh = [line for line in block.splitlines()
+             if line.strip() and line.strip() not in present]
+    if not fresh:
+        return document
+    cut = end
+    while cut > start and not lines[cut - 1].strip():
+        cut -= 1       # trailing blank lines belong after the new paragraph
+    addition = ([""] if cut > start else []) + fresh
+    return "\n".join(lines[:cut] + addition + lines[cut:]) + \
+        ("\n" if document.endswith("\n") else "")
+
+
 SOURCE_TYPES = ("github", "local", "doc")
 
 
@@ -261,7 +424,10 @@ def sanitize(goals):
                 pid for pid in raw if isinstance(pid, str))) \
                 if isinstance(raw, list) else []
         g.setdefault("updated_at", _now())
-        g.setdefault("priority", "normal"); g.setdefault("notes", "")
+        g.setdefault("priority", "normal")
+        # The goal's whole markdown document. Coerced, never truncated: a cap
+        # here would silently eat the tail of something a person wrote.
+        g["notes"] = str(g.get("notes") or "")
         g.setdefault("description", "")
         g.setdefault("opening", "")
         # Extra context the user chose to attach. Never inferred — a local
@@ -372,6 +538,21 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                 g["parent_goal_id"] = parent["id"]
                 g["updated_at"] = parent["updated_at"] = _now()
                 changes.append(f"moved {g['title'][:34]} under {parent['title'][:30]}")
+        elif op == "append_section" and g:
+            # The only write inference gets on a goal's document, and it can
+            # only add to the end of one named section. Nothing is written --
+            # not even a missing header -- unless that section really gained
+            # text, so a repeated inference leaves the document untouched.
+            title = SECTION_KEYS.get(str(o.get("section") or ""))
+            text = str(o.get("text") or "").strip()
+            before = str(g.get("notes") or "")
+            after = append_to_section(before, title, text) if title and text \
+                else before
+            if (section_body(after, title) or "") != \
+                    (section_body(before, title) or ""):
+                g["notes"] = after
+                g["updated_at"] = _now()
+                changes.append(f"notes → {g['title'][:30]} / {title}")
         elif op == "attach_important":
             it = next((i for i in important["items"] if i["id"] == o.get("item_id")), None)
             tgt = by_id(goals, o.get("goal_id", ""))

@@ -84,6 +84,9 @@ class ReplaceLaunchTests(unittest.TestCase):
     def launch(self, *extra):
         env = os.environ.copy()
         env["CLAUDE_VAULT_DIR"] = str(self.vault)
+        # The global browser UI is experimental in this release; these are its
+        # contracts for when it is switched on.
+        env["HC_EXPERIMENTAL"] = "1"
         env["PYTHONPATH"] = str(HC_SRC) + os.pathsep + env.get("PYTHONPATH", "")
         child = subprocess.Popen(
             [sys.executable, "-m", "human_compact.cli", "ui", "--no-open",

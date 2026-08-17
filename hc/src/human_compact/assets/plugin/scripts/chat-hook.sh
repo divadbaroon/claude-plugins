@@ -25,21 +25,21 @@ fi
 
 if [ -z "$HC_CMD" ]; then
   if [ "$IS_EXPANSION" = "1" ]; then
-    printf '%s\n' '{"decision":"block","reason":"hc-ui could not open: its runtime is unavailable; rerun npx human-vault, then restart Claude Code"}'
+    printf '%s\n' '{"decision":"block","reason":"goals-ui could not open: its runtime is unavailable; rerun npx human-vault, then restart Claude Code"}'
   elif [[ "$INPUT" =~ \"hook_event_name\"[[:space:]]*:[[:space:]]*\"SessionStart\" ]]; then
     # Installed from the marketplace without the runtime: hooks would otherwise
     # do nothing at all, which reads as a broken plugin rather than a missing
     # dependency. Say it once, at the only moment it is actionable.
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The vault plugin is installed but its runtime is not. Goals, /hc-ui and goal-bound sessions stay inactive until you run: npx human-vault"}}'
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The vault plugin is installed but its runtime is not. Goals, /goals-ui and goal-bound sessions stay inactive until you run: npx human-vault"}}'
   fi
   exit 0
 fi
 
-OUTPUT=$(printf '%s' "$INPUT" | "$HC_CMD" chat-hook 2>/dev/null)
+OUTPUT=$(printf '%s' "$INPUT" | "$HC_CMD" chat-hook "$@" 2>/dev/null)
 STATUS=$?
 if [ -n "$OUTPUT" ]; then
   printf '%s\n' "$OUTPUT"
 elif [ "$IS_EXPANSION" = "1" ]; then
-  printf '%s\n' "{\"decision\":\"block\",\"reason\":\"hc-ui could not open: hc chat-hook exited without a response (status $STATUS)\"}"
+  printf '%s\n' "{\"decision\":\"block\",\"reason\":\"goals-ui could not open: hc chat-hook exited without a response (status $STATUS)\"}"
 fi
 exit 0

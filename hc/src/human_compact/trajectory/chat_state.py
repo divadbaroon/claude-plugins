@@ -1,13 +1,14 @@
 """Durable, session-scoped Claude Code event ingestion for chat goals.
 
 The global trajectory pipeline intentionally summarizes many Vault sessions.
-This module is the separate state boundary for ``/hc-ui``: one Claude session,
+This module is the separate state boundary for ``/goals-ui``: one Claude session,
 one append-only logical event stream, one goal tree.  Transcript files are
 treated as replaceable caches (Claude may truncate or rewrite them); stable
 record ids and event deduplication are the correctness boundary.
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -21,12 +22,27 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
-from .goals import link_evidence_prompts, promote_todos  # noqa: F401
+from .goals import (  # noqa: F401
+    join_doc,
+    link_evidence_prompts,
+    normalize_sources,
+    promote_todos,
+    split_doc,
+)
 from .secure_io import secure_dir
 
 
 SCHEMA_VERSION = 1
 _TAIL_BYTES = 4096
+# The three sentences the goals workspace is allowed to say about the chat it
+# is attached to.  Each one is exactly what a single hook payload proves, and
+# nothing further: a Stop means Claude finished a turn, not that anything was
+# decided, updated or completed.
+NOTICE_KINDS = ("session_stopped", "subagent_returned", "session_ended")
+# Enough to catch up on what was missed, few enough that the store stays a
+# file the browser can be handed on every poll.
+NOTICE_LIMIT = 20
+_NOTICE_DETAIL = 160
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 _COMMAND_TAG_RE = re.compile(
     r"<command-(name|message|args)>[\s\S]*?</command-\1>", re.IGNORECASE
@@ -48,6 +64,8 @@ class ChatPaths:
     goals: Path
     important: Path
     goal_context: Path
+    context_snapshot: Path
+    notices: Path
     lock_dir: Path
 
 
@@ -63,6 +81,17 @@ class IngestResult:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _now_ms() -> str:
+    """A timestamp a browser can compare against its own page-load moment.
+
+    ``_now()`` rounds down to the second, which places a notice written a
+    fraction of a second *after* a page opened a fraction of a second
+    *before* it.  The banner filters on "newer than this page", so that
+    rounding does not make it late -- it makes it never appear.
+    """
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 def _absolute(path: Path) -> Path:
@@ -103,6 +132,8 @@ def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
         goals=session_dir / "goals.json",
         important=session_dir / "important.json",
         goal_context=session_dir / "goal_context.md",
+        context_snapshot=session_dir / "context_snapshot.json",
+        notices=session_dir / "notices.json",
         lock_dir=session_dir / ".lock",
     )
 
@@ -242,6 +273,112 @@ def load_manifest(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
     return value
 
 
+def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
+    """Record that this chat opened its goal workspace, keeping the first time.
+
+    Every session's history is ingested, but analysis and context injection
+    belong only to the chats whose owner asked for them by running /goals-ui.
+    Opening the workspace again is also how a disabled chat is turned back on.
+    """
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = load_manifest(session_id, root)
+        opened = bool(manifest.get("goals_ui_invoked_at"))
+        disabled = bool(manifest.get("goals_ui_disabled_at"))
+        if opened and not disabled:
+            return
+        if not opened:
+            manifest["goals_ui_invoked_at"] = _now()
+        manifest.pop("goals_ui_disabled_at", None)
+        manifest["updated_at"] = _now()
+        _atomic_json(p.manifest, manifest)
+
+
+def disable_goals_ui(session_id: str, root: Optional[Path] = None) -> None:
+    """Stop injecting and analyzing this chat until /goals-ui is run again."""
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = load_manifest(session_id, root)
+        manifest["goals_ui_disabled_at"] = _now()
+        manifest["updated_at"] = _now()
+        _atomic_json(p.manifest, manifest)
+        # Claude is told nothing while this is off, so whatever it "last saw"
+        # stops being a base a later diff can honestly be taken against.
+        p.context_snapshot.unlink(missing_ok=True)
+
+
+def goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> bool:
+    """True once /goals-ui has opened this chat's workspace at least once.
+
+    The public "has this chat ever opted in" query, which a disable does not
+    revoke; ``goals_ui_active`` is the narrower "may we act right now" gate.
+    """
+    return bool(load_manifest(session_id, root).get("goals_ui_invoked_at"))
+
+
+def goals_ui_active(session_id: str, root: Optional[Path] = None) -> bool:
+    """True while this chat's goals may be analyzed and injected.
+
+    One /goals-ui is the whole opt-in: it does not expire when the browser
+    tab closes or the workspace server exits, because the goals the user
+    wrote there outlive the window that wrote them.
+    """
+    manifest = load_manifest(session_id, root)
+    return bool(manifest.get("goals_ui_invoked_at")) and not manifest.get(
+        "goals_ui_disabled_at"
+    )
+
+
+def _notice_detail(text: Any) -> str:
+    """One scannable line, from whatever the hook happened to carry."""
+    return " ".join(str(text or "").split())[:_NOTICE_DETAIL]
+
+
+def load_notices(session_id: str, root: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """What this chat's session has done lately, oldest first.
+
+    Read without the session lock, like ``load_manifest`` and
+    ``load_context_snapshot``: the file is only ever replaced whole
+    (``os.replace``), so a reader sees one version or the other and never a
+    torn one -- and this is on the path of an HTTP handler that already holds
+    the lock, where a second timed acquisition could only add a way to fail.
+    """
+    value = _read_json(paths(session_id, root).notices, [])
+    if not isinstance(value, list):
+        return []
+    return [row for row in value
+            if isinstance(row, dict) and row.get("id")
+            and row.get("kind") in NOTICE_KINDS]
+
+
+def add_notice(
+    session_id: str,
+    kind: str,
+    detail: str = "",
+    root: Optional[Path] = None,
+    wait_s: float = 5.0,
+) -> Optional[Dict[str, Any]]:
+    """Record something the open workspace should tell the reader about.
+
+    An unknown *kind* is dropped rather than stored: the browser draws one of
+    three fixed sentences, and a kind nobody wrote a sentence for would reach
+    the reader as a blank banner.  ``wait_s`` is short on the hook path -- a
+    banner may never be the reason Claude waits.
+    """
+    if kind not in NOTICE_KINDS:
+        return None
+    row = {
+        "id": os.urandom(8).hex(),
+        "kind": kind,
+        "at": _now_ms(),
+        "detail": _notice_detail(detail),
+    }
+    with session_lock(session_id, root, wait_s=wait_s) as p:
+        rows = load_notices(session_id, root)
+        rows.append(row)
+        # A workspace opened now wants the last few minutes, not the session.
+        _atomic_json(p.notices, rows[-NOTICE_LIMIT:])
+    return row
+
+
 def load_events(session_id: str, root: Optional[Path] = None) -> List[Dict[str, Any]]:
     p = paths(session_id, root)
     out: List[Dict[str, Any]] = []
@@ -268,7 +405,7 @@ def load_prompts(session_id: str, root: Optional[Path] = None) -> List[Dict[str,
     return [
         p for p in prompts
         if (isinstance(p, dict) and p.get("role") == "user"
-            and not _is_hc_ui_launcher(str(p.get("text") or ""))
+            and not _is_goals_ui_launcher(str(p.get("text") or ""))
             and not _is_command_prompt(str(p.get("text") or "")))
     ]
 
@@ -333,16 +470,21 @@ def _human_origin(record: Dict[str, Any]) -> bool:
     )
 
 
-def _is_hc_ui_launcher(text: str) -> bool:
-    """Keep the command that opens the workspace out of its own goal model."""
+def _is_goals_ui_launcher(text: str) -> bool:
+    """Keep the command that opens the workspace out of its own goal model.
+
+    ``hc-ui`` is the pre-rename spelling and still appears in transcripts
+    recorded before the rename, so both names are recognized.
+    """
     lowered = str(text or "").strip().lower()
-    return (
-        lowered in ("/hc-ui", "\\hc-ui", "hc-ui")
-        or lowered.startswith("/hc-ui ")
-        or bool(re.search(
-            r"^\s*<command-name>\s*/?hc-ui\s*</command-name>", lowered
-        ))
-    )
+    for name in ("goals-ui", "hc-ui"):
+        if (lowered in (f"/{name}", f"\\{name}", name)
+                or lowered.startswith(f"/{name} ")
+                or re.search(
+                    rf"^\s*<command-name>\s*/?{re.escape(name)}\s*</command-name>",
+                    lowered)):
+            return True
+    return False
 
 
 def _is_command_prompt(text: str) -> bool:
@@ -432,7 +574,7 @@ def _normalize_record(
             prompt_id = record.get("promptId")
             event_id = f"prompt:{prompt_id}" if prompt_id else _record_id(record, raw, "prompt")
             kind = "human_prompt"
-            usable = not (_is_hc_ui_launcher(text) or _is_command_prompt(text))
+            usable = not (_is_goals_ui_launcher(text) or _is_command_prompt(text))
         elif record.get("isMeta"):
             event_id = _record_id(record, raw, "context")
             kind, usable = "context", False
@@ -516,7 +658,7 @@ def _normalize_record(
                 kind="queued_prompt",
                 role="user",
                 text=text,
-                usable_for_goals=not _is_hc_ui_launcher(text),
+                usable_for_goals=not _is_goals_ui_launcher(text),
             )
             out.append(event)
         return out
@@ -687,7 +829,7 @@ def _assignable_prompts(events: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
             continue
         text = str(event["text"]).strip()
         if (not event.get("usable_for_goals", True)
-                or _is_hc_ui_launcher(text) or _is_command_prompt(text)):
+                or _is_goals_ui_launcher(text) or _is_command_prompt(text)):
             continue
         prompts.append(
             {
@@ -917,6 +1059,33 @@ def _post_tool_batch_events(
     return out
 
 
+def _hook_notice(
+    payload: Dict[str, Any], hook_event: str
+) -> Optional[Tuple[str, str]]:
+    """What this hook proves, in the reader's terms, or nothing.
+
+    Deliberately narrow.  A hook fires with a payload and no wider knowledge:
+    a ``Stop`` means the turn ended, and says nothing about whether goals
+    moved, tasks closed or work succeeded.  The banner may only repeat what
+    is in the payload.
+    """
+    if hook_event == "Stop":
+        return "session_stopped", _notice_detail(
+            payload.get("last_assistant_message"))
+    if hook_event == "SubagentStop":
+        # agent_type is what the matcher filters on and what the reader would
+        # recognize; agent_id is the fallback when a payload omits the name.
+        who = _notice_detail(
+            payload.get("agent_type") or payload.get("agent_id"))
+        said = _notice_detail(payload.get("last_assistant_message"))
+        if who and said:
+            return "subagent_returned", _notice_detail(f"{who}: {said}")
+        return "subagent_returned", who or said
+    if hook_event == "SessionEnd":
+        return "session_ended", _notice_detail(payload.get("reason"))
+    return None
+
+
 def ingest_hook(payload: Dict[str, Any], root: Optional[Path] = None) -> IngestResult:
     """Ingest a Claude hook payload and any transcript bytes already flushed.
 
@@ -968,7 +1137,7 @@ def _ingest_hook_locked(
                 hook_event,
             )
             boundary["usable_for_goals"] = not (
-                _is_hc_ui_launcher(text) or _is_command_prompt(text)
+                _is_goals_ui_launcher(text) or _is_command_prompt(text)
             )
     elif hook_event == "Stop" and isinstance(payload.get("last_assistant_message"), str):
         text = payload["last_assistant_message"].strip()
@@ -998,6 +1167,16 @@ def _ingest_hook_locked(
         boundaries = _post_tool_batch_events(
             session_id, payload, result.last_ordinal
         )
+
+    notice = _hook_notice(payload, hook_event)
+    if notice is not None:
+        try:
+            # Already inside this session's lock, so the wait is nominal --
+            # and a banner may never be what costs a hook its ingest.
+            add_notice(session_id, notice[0], notice[1], root, wait_s=0.5)
+        except (OSError, ValueError, TypeError):
+            pass
+
     if boundary is not None:
         boundaries.append(boundary)
     if not boundaries:
@@ -1164,27 +1343,46 @@ def _goal_context_text(
             f"[{str(goal.get('status', 'active')).replace('_', ' ')}]"
         )
         if details:
-            description = " ".join(str(goal.get("description") or "").split())[:280]
-            notes = " ".join(str(goal.get("notes") or "").split())[:280]
+            description = " ".join(str(goal.get("description") or "").split())
             priority = str(goal.get("priority") or "normal")
             if description:
                 lines.append(f"{indent}  - DESCRIPTION: {description}")
-            if notes:
-                lines.append(f"{indent}  - USER NOTES: {notes}")
+            # The goal's markdown document, whole. Squashing it to one capped
+            # line used to throw away the bullets that carry the actual state;
+            # only sections nobody has written in are left out.
+            written = [(title, body)
+                       for title, body in split_doc(goal.get("notes"))
+                       if body.strip()]
+            if written:
+                lines.append(f"{indent}  - USER NOTES:")
+                lines.extend(f"{indent}    {line}".rstrip()
+                             for line in join_doc(written).splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
+            # What the user attached as background for this goal, named by
+            # kind so the reader knows whether a label is a checkout, a repo
+            # or a URL before deciding to go read it. Normalized on the way
+            # out because nothing between the browser and here guarantees the
+            # stored rows are typed. Six is a list, not a manifest: sources
+            # are pointers away from the goal, so they stay a short index
+            # while everything the user wrote here is rendered whole.
+            for source in normalize_sources(goal.get("sources"))[:6]:
+                lines.append(f"{indent}  - SOURCE ({source['type']}): "
+                             f"{source['label']}")
         for todo in goal.get("todos", []):
             if details and isinstance(todo, dict) and not todo.get("done"):
                 lines.append(f"{indent}  - TODO: {todo.get('text', '')}")
-        for prompt_id in goal.get("prompt_ids", [])[:4]:
+        # No arbitrary head-of-list here: the evidence a user linked to a
+        # goal, and the lines they marked important, are the goal.
+        for prompt_id in goal.get("prompt_ids", []):
             prompt = prompt_map.get(prompt_id)
             if details and prompt:
-                text = " ".join(str(prompt.get("text") or "").split())[:220]
+                text = " ".join(str(prompt.get("text") or "").split())
                 lines.append(f"{indent}  - USER PROMPT: {text}")
-        for item_id in goal.get("important_item_ids", [])[:3]:
+        for item_id in goal.get("important_item_ids", []):
             item = item_map.get(item_id)
             if details and item:
-                lines.append(f"{indent}  - IMPORTANT: {str(item.get('text') or '')[:220]}")
+                lines.append(f"{indent}  - IMPORTANT: {str(item.get('text') or '')}")
         for child in by_parent.get(goal.get("id"), []):
             emit(child, depth + 1, details=details)
 
@@ -1209,7 +1407,10 @@ def _goal_context_text(
         lines.extend(("", "Recent inactive goals:"))
         for goal in inactive[:8]:
             emit(goal, 0, details=False)
-    return "\n".join(lines)[:8000] + "\n"
+    # Deliberately unbounded. Claude Code caps a single additionalContext at
+    # 10,000 characters and degrades to a file plus a preview past that, so a
+    # second budget here could only silently drop the user's own words.
+    return "\n".join(lines) + "\n"
 
 
 def write_goal_context(
@@ -1252,3 +1453,159 @@ def save_goals(
         text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))
         return True
+
+
+def _project_key(cwd: Path) -> str:
+    # Claude encodes an absolute project path by replacing all non-word path
+    # punctuation (including spaces) with hyphens.
+    return re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd))
+
+
+def load_context_snapshot(
+    session_id: str, root: Optional[Path] = None
+) -> Dict[str, Any]:
+    """What this chat's model was last shown, or ``{}`` if nothing or unusable."""
+    value = _read_json(paths(session_id, root).context_snapshot, {})
+    return value if isinstance(value, dict) else {}
+
+
+def save_context_snapshot(
+    session_id: str,
+    text: str,
+    root: Optional[Path] = None,
+    wait_s: float = 5.0,
+) -> Dict[str, Any]:
+    """Remember the exact text just handed to the model.
+
+    This records what was *rendered*, not what was delivered: Claude Code may
+    still drop or compact the injection, in which case the next diff is taken
+    against text the model no longer has. SessionStart's full re-send after
+    compaction and the mirror file are the recovery, not a delivery receipt.
+
+    ``wait_s`` is short on the injection path -- see the caller. Raising here
+    is the safe failure: the snapshot does not advance, so the change this
+    render described is still pending and the next one restates it.
+    """
+    snapshot = {
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "text": text,
+        "at": _now(),
+    }
+    with session_lock(session_id, root, wait_s=wait_s) as p:
+        _atomic_json(p.context_snapshot, snapshot)
+    return snapshot
+
+
+def clear_context_snapshot(session_id: str, root: Optional[Path] = None) -> None:
+    """Forget it, so the next injection sends the whole document again."""
+    with session_lock(session_id, root, wait_s=5) as p:
+        p.context_snapshot.unlink(missing_ok=True)
+
+
+def mirror_goal_context(
+    session_id: str,
+    transcript_path: Optional[str] = None,
+    cwd: Optional[str] = None,
+    root: Optional[Path] = None,
+) -> Optional[Path]:
+    """Copy this chat's goal document beside Claude's own transcript.
+
+    Context arrives as a system reminder the user never sees.  The mirror is
+    the readable half of that bargain: an ordinary markdown file, in the
+    directory the session already lives in, that can be opened, diffed and
+    deleted.  Best effort by construction -- a hook must not fail over a copy.
+    """
+    try:
+        text = paths(session_id, root).goal_context.read_text(encoding="utf-8")
+    except (OSError, ValueError, TypeError):
+        return None
+    try:
+        if transcript_path:
+            project = _absolute(Path(str(transcript_path))).parent
+        elif cwd:
+            project = (Path.home() / ".claude" / "projects"
+                       / _project_key(_absolute(Path(str(cwd)))))
+            # Only ever sit beside a project directory Claude itself made.
+            # Guessing one into existence would scatter files under homes
+            # that never ran this session.
+            if not project.is_dir():
+                return None
+        else:
+            return None
+        target_dir = project / "goals-ui"
+        target = target_dir / f"{session_id}.md"
+        if target_dir.is_symlink():
+            return None
+        try:
+            if target.read_text(encoding="utf-8") == text:
+                return target
+        except (OSError, ValueError):
+            pass
+        if not target_dir.is_dir():
+            # Only tighten a directory we are the ones creating; re-chmoding
+            # one Claude or the user already owns is not ours to do.
+            target_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(target_dir, 0o700)
+        _atomic_write(target, text.encode("utf-8"))
+        return target
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def render_context_injection(
+    session_id: str,
+    mode: str,
+    transcript_path: Optional[str] = None,
+    cwd: Optional[str] = None,
+    root: Optional[Path] = None,
+    remember: bool = True,
+    snapshot_wait_s: float = 5.0,
+) -> str:
+    """Render the goal document for one injection point.
+
+    ``full`` states the whole document; ``delta`` states only what changed
+    since the model last saw it, which is the difference between paying for
+    the goal tree once a conversation and paying for it once a message.
+    ``remember=False`` renders for a reader with its own separate context (a
+    subagent) without claiming the main conversation has seen anything.
+    ``snapshot_wait_s`` bounds how long recording the render may wait on the
+    session lock; a hook on the model's own turn cannot afford the default.
+    """
+    p = paths(session_id, root)
+    try:
+        current = p.goal_context.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    if not current.strip():
+        return ""
+    location = mirror_goal_context(session_id, transcript_path, cwd, root) \
+        or p.goal_context
+    full = (f"# Goals for this Claude chat (full file: {location})\n\n"
+            f"{current}")
+
+    def keep(text: str) -> str:
+        if remember:
+            save_context_snapshot(session_id, current, root, snapshot_wait_s)
+        return text
+
+    if mode != "delta":
+        return keep(full)
+    snapshot = load_context_snapshot(session_id, root)
+    previous = snapshot.get("text")
+    if not isinstance(previous, str) or not snapshot.get("sha256"):
+        return keep(full)
+    if snapshot["sha256"] == hashlib.sha256(current.encode("utf-8")).hexdigest():
+        return ""
+    diff = "\n".join(difflib.unified_diff(
+        previous.splitlines(),
+        current.splitlines(),
+        fromfile="goals (as you last saw them)",
+        tofile="goals (now)",
+        lineterm="",
+        n=1,
+    ))
+    delta = (f"# Goals for this chat changed since your last message "
+             f"(full file: {location})\n\n{diff}\n")
+    # A diff of a document that was rewritten end to end is longer than the
+    # document; there is nothing to be gained by sending it twice over.
+    return keep(delta if len(delta) < len(full) else full)

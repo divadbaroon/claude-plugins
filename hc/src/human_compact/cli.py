@@ -14,7 +14,9 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
-HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
+GOALS_UI_SKILL_DIR = HOME / ".claude" / "skills" / "goals-ui"
+# Pre-rename install path. Retired by install_plugin() when it is ours.
+LEGACY_HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
 VAULT_BIN = HOME / ".claude-vault" / "bin"
 ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
@@ -26,18 +28,51 @@ MANAGED_MARKER = ".human-compact-managed.json"
 _ASSET_FILES = {
     "vault": {
         ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
-        "scripts/chat-hook.sh", "scripts/vault-backfill.sh",
-        "scripts/vault-hook.sh",
+        "hooks/hooks.experimental.json", "scripts/chat-hook.sh",
+        "scripts/vault-backfill.sh", "scripts/vault-hook.sh",
     },
-    "hc-ui": {"SKILL.md"},
+    "goals-ui": {"SKILL.md"},
 }
+# This release ships the chat-scoped goal UI. The global Vault layer and the
+# analysis commands built on it stay in the tree, but nothing reaches them
+# unless the operator asks for them by name.
+EXPERIMENTAL_COMMANDS = ("ui", "backup", "trajectory", "lens", "goals", "work",
+                         "mark", "status", "refresh", "analyze", "worker")
+_LAUNCH_COMMAND_HELP = (
+    ("install", "install /goals-ui for Claude Code"),
+    ("setup", "noninteractive npm onboarding"),
+    ("chat-ui", "goal tree for one Claude chat"),
+    ("chat-serve", "session-scoped goal server (internal)"),
+    ("chat-hook", "Claude Code chat-state hook (internal)"),
+    ("chat-refresh", "session-scoped goal analyzer (internal)"),
+    ("global-hook", "Vault lifecycle hook (internal)"),
+)
+_EXPERIMENTAL_COMMAND_HELP = (
+    ("goals", "your goal tree + important items"),
+    ("work", "start Claude working on one goal"),
+    ("ui", "goal tree in the browser (localhost)"),
+    ("mark", "mark something important — never lose it"),
+    ("lens", "the derived compaction lens"),
+    ("status", "vault + analysis pipeline status"),
+    ("refresh", "process pending conversations, regenerate lens"),
+    ("backup", "onboard Vault / import history"),
+    ("trajectory", "full analyze + lens (alias)"),
+    ("analyze", "analyze the vaulted history, build the goal tree"),
+    ("worker", "internal analysis worker"),
+)
 # Exact unmarked v0.15.0 assets. This permits migration of installs created by
 # this project before ownership markers existed without claiming arbitrary
 # directories that merely happen to use the same names.
 _LEGACY_DIGESTS = {
     "vault": {"4f5319b78efe7f90eccb967bbcd787b7ddcfbfdae8643e82281f01e6551dda02"},
-    "hc-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
+    # This digest is the v0.15.0 /hc-ui SKILL.md, which the rename
+    # superseded; it now only identifies a legacy ~/.claude/skills/hc-ui.
+    "goals-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
 }
+
+
+def experimental_enabled() -> bool:
+    return os.environ.get("HC_EXPERIMENTAL") == "1"
 
 
 def say(msg):
@@ -77,8 +112,14 @@ def _path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _asset_digest(root: Path, asset: str):
-    """Return an exact tree digest, or None for any unexpected path/layout."""
+def _asset_digest(root: Path, asset: str, overrides=None):
+    """Return an exact tree digest, or None for any unexpected path/layout.
+
+    `overrides` substitutes file contents for the digest only, so a staged tree
+    that intentionally differs from the package can still be validated against
+    exactly the difference we made.
+    """
+    overrides = overrides or {}
     expected_files = _ASSET_FILES[asset]
     if not root.is_dir() or root.is_symlink():
         return None
@@ -108,7 +149,8 @@ def _asset_digest(root: Path, asset: str):
     try:
         for name in sorted(expected_files):
             digest.update(name.encode() + b"\0")
-            digest.update((root / name).read_bytes())
+            digest.update(overrides[name] if name in overrides
+                          else (root / name).read_bytes())
             digest.update(b"\0")
     except OSError:
         return None
@@ -163,10 +205,23 @@ def _tighten_asset_modes(root: Path):
             os.chmod(path, 0o700 if executable else 0o600)
 
 
+def _asset_overrides(source: Path, asset: str):
+    """Packaged files this install replaces before anything is promoted."""
+    if asset != "vault" or not experimental_enabled():
+        return {}
+    return {"hooks/hooks.json":
+            (source / "hooks" / "hooks.experimental.json").read_bytes()}
+
+
 def _stage_asset(source: Path, destination: Path, asset: str) -> Path:
     stage = destination.parent / f".{destination.name}.hc-stage-{uuid.uuid4().hex}"
     try:
         shutil.copytree(source, stage, symlinks=True)
+        # Applied here so the promoted tree, its modes, and the digest that
+        # validates it all describe the same bytes.
+        overrides = _asset_overrides(source, asset)
+        for name, content in overrides.items():
+            (stage / name).write_bytes(content)
         marker = stage / MANAGED_MARKER
         marker.write_text(json.dumps({
             "owner": "human-compact", "asset": asset, "format": 1,
@@ -174,9 +229,10 @@ def _stage_asset(source: Path, destination: Path, asset: str) -> Path:
         _tighten_asset_modes(stage)
         if not _owned_asset(stage, asset):
             raise RuntimeError(f"staged {asset} ownership marker is invalid")
-        # The marker is intentionally the only difference from packaged data.
+        # Beyond the overrides above, the marker is intentionally the only
+        # difference from packaged data.
         marker.unlink()
-        source_digest = _asset_digest(source, asset)
+        source_digest = _asset_digest(source, asset, overrides)
         valid = (source_digest is not None and
                  _asset_digest(stage, asset) == source_digest)
         marker.write_text(json.dumps({
@@ -199,14 +255,33 @@ def _remove_asset(path: Path):
         shutil.rmtree(path)
 
 
+def _retire_legacy_hc_ui():
+    """Remove the pre-rename /hc-ui skill, but only when we installed it."""
+    path = LEGACY_HC_UI_SKILL_DIR
+    if not _path_exists(path):
+        return
+    ours = (not path.is_symlink() and path.is_dir()
+            and (_owned_asset(path, "hc-ui")
+                 or _asset_digest(path, "goals-ui") in _LEGACY_DIGESTS["goals-ui"]))
+    if not ours:
+        say(f"left unmanaged {path} in place")
+        return
+    try:
+        _remove_asset(path)
+    except OSError as exc:
+        say(f"could not remove superseded {path}: {exc}")
+        return
+    say(f"removed superseded {path}")
+
+
 def install_plugin():
     parent = SKILLS_DIR.parent
     parent.mkdir(parents=True, exist_ok=True)
     specs = [
         {"asset": "vault", "source": asset_root() / "plugin",
          "destination": SKILLS_DIR},
-        {"asset": "hc-ui", "source": asset_root() / "hc-ui-skill",
-         "destination": HC_UI_SKILL_DIR},
+        {"asset": "goals-ui", "source": asset_root() / "goals-ui-skill",
+         "destination": GOALS_UI_SKILL_DIR},
     ]
     for spec in specs:
         spec["ownership"] = _preflight_asset(
@@ -257,22 +332,29 @@ def install_plugin():
         if spec["ownership"] == "legacy":
             say(f"migrated legacy {spec['asset']} install")
     say(f"plugin installed -> {SKILLS_DIR}")
-    say(f"/hc-ui installed -> {HC_UI_SKILL_DIR}")
+    say("hooks: chat-scoped + global Vault (HC_EXPERIMENTAL=1)"
+        if experimental_enabled() else
+        "hooks: chat-scoped only (set HC_EXPERIMENTAL=1 at install to wire "
+        "global Vault hooks)")
+    say(f"/goals-ui installed -> {GOALS_UI_SKILL_DIR}")
+    # Only after promotion: a stale /hc-ui skill would otherwise still claim a
+    # workspace URL that nothing supplies.
+    _retire_legacy_hc_ui()
 
 
 def install_main(argv=None):
     """Install the chat-scoped UI without enabling the global Vault layer."""
     ap = argparse.ArgumentParser(
         prog="hc install",
-        description="Install /hc-ui for Claude Code (no global context layer).")
+        description="Install /goals-ui for Claude Code (no global context layer).")
     ap.parse_args(argv or [])
-    print("\nhuman-compact · chat goal UI\n")
+    print("\nhc · /goals-ui\n")
     if not (HOME / ".claude").exists():
         say("WARNING: ~/.claude not found — install Claude Code first")
     install_plugin()
     print()
     say("Done. Start a new Claude Code session (or run /reload-plugins),")
-    say("then type /hc-ui in any chat.")
+    say("then type /goals-ui in any chat.")
     print()
 
 
@@ -310,7 +392,7 @@ def backup_main():
                     help="capture mode without prompting")
     args = ap.parse_args()
 
-    print("\nhuman-compact · Vault onboarding\n")
+    print("\nhc · Vault onboarding (experimental)\n")
 
     if shutil.which("jq") is None:
         say("WARNING: jq not found (brew install jq) — Vault hooks need it")
@@ -385,33 +467,46 @@ def _validate_claude_cli():
     return executable
 
 
+def _say_global_vault_state():
+    """Describe the capture the install actually leaves running."""
+    from . import global_vault
+    if not global_vault.is_enabled():
+        say("global Vault not enabled; nothing is captured")
+    elif experimental_enabled():
+        say("global Vault stays enabled; its capture hooks are installed")
+    else:
+        say("global Vault stays enabled on disk, but its capture hooks are "
+            "not installed in this release; reinstall with HC_EXPERIMENTAL=1 "
+            "to wire them")
+
+
 def setup_main(argv=None):
     """One noninteractive orchestration seam for the npm installer."""
     ap = argparse.ArgumentParser(
         prog="hc setup",
-        description="Install /hc-ui and optionally initialize global Vault state.")
+        description="Install /goals-ui and optionally initialize global Vault state.")
     ap.add_argument("--global-vault", required=True,
                     choices=["yes", "no", "keep"])
     ap.add_argument("--goals", required=True, choices=["yes", "no"])
     args = ap.parse_args(argv or [])
     if args.goals == "yes" and args.global_vault != "yes":
         ap.error("--goals yes requires --global-vault yes")
+    if args.global_vault == "yes" and not experimental_enabled():
+        ap.error("--global-vault yes is experimental in this release; "
+                 "set HC_EXPERIMENTAL=1")
 
-    # This is deliberately first: /hc-ui remains installed even when optional
+    # This is deliberately first: /goals-ui remains installed even when optional
     # global-history setup fails later and the user retries the installer.
     install_main([])
-    if args.global_vault == "keep":
-        # The installer has no opinion: onboarding happens in the UI. Saying
-        # "no" here would silently stop capturing a vault the user already
-        # turned on, and they would lose history without being told.
-        say("global Vault unchanged by this install")
+    if args.global_vault in ("keep", "no"):
+        if args.global_vault == "no":
+            from . import global_vault
+            global_vault.disable_always_on()
+        # "keep" leaves the recorded choice alone, but the install just rewrote
+        # hooks.json. Report what is on disk now, not what was requested: a
+        # vault that stays enabled is no longer being captured.
+        _say_global_vault_state()
         _validate_claude_cli()
-        return
-    if args.global_vault == "no":
-        from . import global_vault
-        global_vault.disable_always_on()
-    _validate_claude_cli()
-    if args.global_vault == "no":
         return
 
     from . import global_vault
@@ -1030,30 +1125,59 @@ def _request_chat_refresh(session_id):
     return chat_synth.spawn_refresh(session_id)
 
 
+def _chat_context_active(session_id):
+    """True when this chat opted in to goal context and has not turned it off.
+
+    Goal context is this chat's own state, so it is injected only into the
+    chat that asked for it -- but one /goals-ui is the whole ask.  The
+    workspace server does not have to still be running: goals outlive the
+    browser tab that wrote them, and a chat that silently stopped honouring
+    them the moment a window closed would read as broken.
+    """
+    from .trajectory import chat_state as CS
+    try:
+        return bool(CS.goals_ui_active(session_id))
+    except Exception:  # noqa: BLE001 - a hook may never block Claude
+        # Corrupt session state must cost the user their goal context, never
+        # their prompt.
+        return False
+
+
 def chat_hook_main(argv=None, stdin=None, stdout=None):
     """Ingest one Claude Code hook payload and inject cached goal context."""
     import json
     ap = argparse.ArgumentParser(prog="hc chat-hook",
         description="Internal Claude Code chat-state hook.")
-    ap.parse_args(argv or [])
+    # PostToolBatch is wired twice: an async entry that ingests the batch off
+    # the critical path, and this one, which runs inside the model's own turn
+    # and may therefore only read cached state and speak.
+    ap.add_argument("--inject-only", action="store_true",
+                    help=argparse.SUPPRESS)
+    args = ap.parse_args(argv or [])
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
     if os.environ.get("HC_CHAT_INFERENCE") == "1":
         return 0
     payload = {}
     event = ""
+    session_id = ""
     try:
         payload = json.loads(stdin.read())
         if not isinstance(payload, dict):
             return 0
         event = str(payload.get("hook_event_name") or "")
         from .trajectory import chat_state as CS
-        result = CS.ingest_hook(payload)
+        if args.inject_only:
+            session_id = str(payload.get("session_id")
+                             or payload.get("sessionId") or "")
+            CS.paths(session_id)  # reject a path-like id before touching disk
+        else:
+            session_id = CS.ingest_hook(payload).session_id
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
         if event == "UserPromptExpansion":
             json.dump({
                 "decision": "block",
-                "reason": f"hc-ui could not initialize chat state: {exc}",
+                "reason": f"goals-ui could not initialize chat state: {exc}",
             }, stdout)
             stdout.write("\n")
         return 0
@@ -1061,18 +1185,36 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
     # Claude's live task list for a Vault goal is execution state, not goal
     # state, so it is observed into its own store and never edits goals.json.
     run = None
-    try:
-        from .trajectory import agent_exec as AE
-        run = AE.observe_hook(payload)
-    except Exception:  # noqa: BLE001 - a hook may never block Claude
-        run = None
+    if not args.inject_only:
+        try:
+            from .trajectory import agent_exec as AE
+            run = AE.observe_hook(payload)
+        except Exception:  # noqa: BLE001 - a hook may never block Claude
+            run = None
 
     if event == "UserPromptExpansion":
+        if str(payload.get("command_args") or "").strip().lower() == "disable":
+            try:
+                CS.disable_goals_ui(session_id)
+            except (OSError, ValueError, TypeError, TimeoutError) as exc:
+                json.dump({
+                    "decision": "block",
+                    "reason": f"goals-ui could not be disabled: {exc}",
+                }, stdout)
+                stdout.write("\n")
+                return 0
+            json.dump({
+                "decision": "block",
+                "reason": "goals-ui: disabled for this chat — run /goals-ui "
+                          "to turn it back on",
+            }, stdout)
+            stdout.write("\n")
+            return 0
         # Launch from the hook rather than a skill `!` shell expansion. This
-        # keeps /hc-ui functional under disableSkillShellExecution policies.
+        # keeps /goals-ui functional under disableSkillShellExecution policies.
         import contextlib
         import io
-        launch_args = ["--session", result.session_id,
+        launch_args = ["--session", session_id,
                        "--cwd", str(payload.get("cwd") or os.getcwd())]
         try:
             launched = io.StringIO()
@@ -1085,30 +1227,65 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             )
             if not url:
                 raise RuntimeError("launcher returned no localhost URL")
-            json.dump({"hookSpecificOutput": {
-                "hookEventName": "UserPromptExpansion",
-                "additionalContext": f"hc-ui opened for this chat at {url}",
-            }}, stdout)
+            # Blocking the expansion ends the turn with no model call, and
+            # Claude Code prints `reason` to the user. That is the closest a
+            # plugin gets to a built-in local command like /model: the
+            # workspace opens and Claude never speaks. Handing back
+            # additionalContext instead would buy a whole turn to say a URL
+            # the user can already see.
+            json.dump({"decision": "block", "reason": f"goals-ui: {url}"},
+                      stdout)
             stdout.write("\n")
         except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
             json.dump({
                 "decision": "block",
-                "reason": f"hc-ui could not open: {exc}",
+                "reason": f"goals-ui could not open: {exc}",
             }, stdout)
             stdout.write("\n")
         return 0
     if event in ("Stop", "TaskCompleted", "PostCompact", "SessionEnd"):
         try:
-            _request_chat_refresh(result.session_id)
+            # Ingestion above is unconditional so history exists whenever the
+            # user opens /goals-ui; paying for inference is not.
+            if CS.goals_ui_active(session_id):
+                _request_chat_refresh(session_id)
+                # Keep the user-readable copy current with what inference
+                # last wrote, not only with what was last injected.
+                if event == "Stop":
+                    CS.mirror_goal_context(session_id,
+                                           payload.get("transcript_path"),
+                                           payload.get("cwd"))
         except Exception:  # noqa: BLE001 - a hook may never block Claude
             pass
 
-    if event in ("SessionStart", "UserPromptSubmit"):
-        context_path = CS.paths(result.session_id).goal_context
-        try:
-            context = context_path.read_text(encoding="utf-8")[:8000]
-        except OSError:
-            context = ""
+    # A subagent begins with an empty context and a tool batch may have just
+    # created tasks, so both are injection points -- but only the synchronous
+    # PostToolBatch entry speaks, or the async one would consume the delta
+    # into a stdout nobody reads.
+    if (event in ("SessionStart", "UserPromptSubmit", "SubagentStart")
+            or (event == "PostToolBatch" and args.inject_only)):
+        context = ""
+        if _chat_context_active(session_id):
+            try:
+                context = CS.render_context_injection(
+                    session_id,
+                    "full" if event in ("SessionStart", "SubagentStart")
+                    else "delta",
+                    transcript_path=payload.get("transcript_path"),
+                    cwd=payload.get("cwd"),
+                    # A subagent reads on its own account; what it was shown
+                    # says nothing about what this conversation has seen.
+                    remember=event != "SubagentStart",
+                    # This runs inside the model's turn, against a 5s hook
+                    # budget, while the async ingest of the same batch may
+                    # hold the session lock. Recording the render is worth
+                    # half a second and no more: timing out raises, the
+                    # `except` below drops the injection, and the snapshot
+                    # stays put so the next one restates the same change.
+                    snapshot_wait_s=0.5,
+                )
+            except Exception:  # noqa: BLE001 - a hook may never block Claude
+                context = ""
         if run is not None and event == "SessionStart":
             try:
                 from .trajectory import goals as GM, state as ST
@@ -1118,7 +1295,7 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             except Exception:  # noqa: BLE001 - context is best-effort
                 briefing = ""
             if briefing.strip():
-                context = (briefing + "\n" + context)[:12000]
+                context = briefing + "\n" + context
         if context.strip():
             json.dump({
                 "hookSpecificOutput": {
@@ -1290,11 +1467,21 @@ def chat_ui_main(argv=None):
             "session_id": args.session,
             "hook_event_name": "SessionStart",
             # Do not overwrite the stable project root already captured by
-            # SessionStart merely because the user invoked /hc-ui after `cd`.
+            # SessionStart merely because the user invoked /goals-ui after `cd`.
             "cwd": CS.load_manifest(args.session).get("cwd") or session_cwd,
         })
+        # Opening the workspace is the opt-in: from here this chat may be
+        # analyzed, and may have its goal context injected while it is open.
+        CS.mark_goals_ui_invoked(args.session)
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
         raise SystemExit(f"could not initialize chat state: {exc}") from exc
+
+    # The workspace is where the user reads their goals; the mirror is where
+    # they read them once it is closed. Only the manifest knows where Claude
+    # keeps this session's transcript. Mirroring itself never raises.
+    CS.mirror_goal_context(args.session,
+                           CS.load_manifest(args.session).get("transcript_path"),
+                           session_cwd)
 
     with CS.session_lock(args.session, wait_s=8):
         record = _read_server_registry(p.session_dir)
@@ -1365,25 +1552,30 @@ def chat_ui_main(argv=None):
     return 0
 
 
+def _hc_usage() -> str:
+    commands = list(_LAUNCH_COMMAND_HELP)
+    if experimental_enabled():
+        commands += list(_EXPERIMENTAL_COMMAND_HELP)
+    width = max(len(name) for name, _ in commands) + 2
+    lines = "".join(f"  {name:<{width}}{description}\n"
+                    for name, description in commands)
+    text = f"usage: hc <command>\n\n{lines}"
+    if not experimental_enabled():
+        text += "\nExperimental commands are available with HC_EXPERIMENTAL=1.\n"
+    return text
+
+
 def hc_main():
     import sys
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
-        print("usage: hc <command>\n\n"
-              "  goals       your goal tree + important items (primary)\n"
-              "  work        start Claude working on one goal\n"
-              "  ui          goal tree in the browser (localhost)\n"
-              "  chat-ui     goal tree for one Claude chat\n"
-              "  mark        mark something important — never lose it\n"
-              "  lens        the derived compaction lens\n"
-              "  status      vault + analysis pipeline status\n"
-              "  refresh     process pending conversations, regenerate lens\n"
-              "  install     install /hc-ui without enabling global Vault\n"
-              "  setup       noninteractive npm onboarding\n"
-              "  backup      onboard Vault / import history\n"
-              "  trajectory  full analyze + lens (alias)\n")
+        print(_hc_usage(), end="")
         return
     cmd, rest = args[0], args[1:]
+    if cmd in EXPERIMENTAL_COMMANDS and not experimental_enabled():
+        print(f"hc {cmd} is experimental in this release; "
+              "set HC_EXPERIMENTAL=1 to enable it", file=sys.stderr)
+        sys.exit(2)
     if cmd == "backup":
         sys.argv = ["hc-backup"] + rest
         backup_main()

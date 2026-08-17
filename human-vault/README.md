@@ -1,22 +1,33 @@
-# human-compact
+# human-vault
 
-Install chat-scoped goal workspaces for Claude Code with one command:
+Install `/goals-ui` — chat-scoped goal workspaces for Claude Code — with one
+command:
 
 ```bash
 npx human-vault
 ```
 
-The installer asks two numeric questions:
+The installer takes no required options and asks no questions. It installs
+the `hc` runtime, the Claude Code hooks, and the `/goals-ui` command.
 
-1. whether to enable the optional global Vault; and
-2. if Vault is enabled, whether to analyze history and build global goals now.
+From then on the hooks record each chat's own prompts and events to a local,
+owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
+same conversation Claude Code already keeps in `~/.claude/projects/`. Nothing
+is analyzed or injected until you run `/goals-ui` in that chat, and nothing
+leaves your machine except the model calls your own `claude` CLI makes.
 
-It always installs the Claude Code integration for chat-scoped goals. Start a
-new Claude Code session (or run `/reload-plugins`), then run:
+Start a new Claude Code session (or run `/reload-plugins`), then run:
 
 ```text
-/hc-ui
+/goals-ui
 ```
+
+That opens the goal workspace for the current chat. From then on that chat's
+goals are inferred with your own authenticated Claude CLI and injected back
+into the chat as context — the whole goals document first, then only what
+changed since your last message. Subagents and tool batches receive it too.
+`/goals-ui disable` turns analysis and injection off again for that chat;
+`/goals-ui` turns them back on.
 
 The Python backend is an exact wheel bundled in the npm release. It is
 installed into a managed private runtime under `~/.human-compact/`; the npm
@@ -25,21 +36,37 @@ lifecycle scripts.
 
 ## Noninteractive installation
 
-Use numeric flags in automation:
+There is nothing to answer, so a scripted install is the same command:
 
 ```bash
-# Chat-scoped /hc-ui only
-npx human-vault --non-interactive --global-vault 2
-
-# Global Vault plus global goal inference
-npx human-vault --non-interactive --global-vault 1 --goals 1
-
-# Global Vault without running goal inference now
-npx human-vault --non-interactive --global-vault 1 --goals 2
+npx human-vault
 ```
 
-Values other than `1` and `2` are rejected. `--goals 1` is invalid when the
+`--non-interactive` is still accepted for compatibility and changes nothing.
+`--dry-run` verifies the bundled wheel and prints the plan without installing.
+
+## Experimental (HC_EXPERIMENTAL=1)
+
+The global Vault — cross-chat conversation capture — and the global goal
+inference built on it are experimental in this release. `--global-vault 1` and
+`--goals 1` are refused unless `HC_EXPERIMENTAL=1` is set, and the global
+capture hooks are installed only when the flag is set at install time:
+
+```bash
+# Global Vault plus global goal inference
+HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1 --goals 1
+
+# Global Vault without running goal inference now
+HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1 --goals 2
+```
+
+Values other than `1` and `2` are rejected, and `--goals 1` is invalid when the
 global Vault is disabled.
+
+If you already had the global Vault enabled, a plain reinstall leaves it
+enabled on disk but stops capturing, because the default hook set no longer
+calls the Vault hook. Reinstall with `HC_EXPERIMENTAL=1` to wire it again.
+See [`STASHED.md`](../STASHED.md) for the full inventory.
 
 ## Requirements and state
 

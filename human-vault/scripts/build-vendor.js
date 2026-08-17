@@ -30,6 +30,21 @@ if (gitStatus.stdout.trim()) {
 const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
 if (revision.status !== 0) throw new Error('could not resolve source revision');
 
+// setuptools' build_py copies src/ into hc/build/lib without pruning, so a
+// file deleted from the source tree survives there and is packed into the next
+// wheel. The git check above cannot see it -- both paths are gitignored. Start
+// from a clean tree so the wheel is a function of the commit alone.
+for (const stale of [
+  path.join(hcRoot, 'build'),
+  ...fs.existsSync(path.join(hcRoot, 'src'))
+    ? fs.readdirSync(path.join(hcRoot, 'src'))
+      .filter((name) => name.endsWith('.egg-info'))
+      .map((name) => path.join(hcRoot, 'src', name))
+    : [],
+]) {
+  fs.rmSync(stale, { recursive: true, force: true });
+}
+
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'human-compact-wheel-'));
 try {
   const uv = process.env.HUMAN_COMPACT_BUILD_UV || 'uv';

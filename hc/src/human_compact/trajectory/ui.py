@@ -1,6 +1,7 @@
 """hc ui — localhost goal browser. Reads and writes the SAME goals.json
 through the goals model (goal_context.md stays in sync for SessionStart
 injection). Stdlib only; localhost only; Ctrl-C to stop."""
+import difflib
 import hashlib
 import json
 import os
@@ -23,6 +24,41 @@ from . import secure_io as SIO
 DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
 SERVER_REGISTRY = "server.json"
+
+# This release ships one surface: the per-chat goal workspace. The rest of the
+# goal system is built and tested but not exposed, so its entry points are
+# disconnected here rather than deleted — the implementations stay reachable to
+# anyone who opts in, and to the tests that hold their contracts.
+EXPERIMENTAL_OPS = frozenset({
+    "set_opening", "start_agent_run", "cancel_agent_run", "launch_agent_run",
+    "resume_agent_run", "enable_capture", "start_analysis",
+})
+EXPERIMENTAL_ROUTES = ("/api/briefing", "/api/briefings", "/api/plan",
+                       "/api/review", "/api/setup", "/api/conversation")
+EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
+
+
+def _experimental_enabled():
+    """One flag, one spelling, shared with the CLI's command gate.
+
+    Imported inside the call rather than at module load: ``cli`` reaches these
+    trajectory modules from inside its own functions, so a module-level import
+    back into ``cli`` would close that loop and break the day someone hoists
+    one of those imports.
+    """
+    from ..cli import experimental_enabled
+    return experimental_enabled()
+
+
+def _experimental_route(path):
+    """True for any GET the router would hand to a disconnected handler.
+
+    The router reaches several of these by prefix (``/api/plan`` matches
+    ``/api/plan?goal=x`` and anything after it), so the gate matches by prefix
+    too: a route that is off is off for every path that reaches it.
+    """
+    base = path.split("?", 1)[0]
+    return any(base.startswith(route) for route in EXPERIMENTAL_ROUTES)
 
 
 def _version():
@@ -465,14 +501,87 @@ def _goal_revision(goals, important):
     return hashlib.sha256(payload).hexdigest()
 
 
+# What Claude has been told about this chat's goals, read from the two files
+# that already record it: the context snapshot (the exact document the model
+# was last handed) and the session manifest (whether /goals-ui is on). Nothing
+# here writes; the numbers are characters, and the browser labels them "~ tok"
+# because a token count is an estimate this side cannot make honestly.
+#
+# Every point at which cli.py hands this chat's goal document to the model:
+# a session start (which re-sends the whole document), a user prompt, a
+# subagent start, and a tool batch (the last three carry a delta). Listing
+# only the three per-message ones understated it -- a session start is the
+# largest send there is, and a reader counting what Claude has been given
+# would have been counting short.
+INJECTION_READS = ("session start", "prompt", "subagent", "task")
+
+
+def _injection_state(session_id, root):
+    """What this chat has sent of its goal document, and what is pending.
+
+    ``cached`` is true once the document has actually been handed over, which
+    is the only thing the snapshot proves -- it records what was *rendered*
+    into a turn, not what the model read, so every label derived from it says
+    "sent". ``last_at`` is when that happened. ``last_delta_chars`` is the
+    size of the change *since* then -- the text a next message would carry,
+    0 when nothing has changed -- and None when nothing has been sent yet,
+    because there is no base to diff against.
+
+    Read-only, and called outside the session lock: see ``_payload``.
+    """
+    snapshot = CS.load_context_snapshot(session_id, root)
+    previous = snapshot.get("text")
+    cached = isinstance(previous, str) and bool(snapshot.get("sha256"))
+    delta = None
+    if cached:
+        try:
+            current = CS.paths(session_id, root).goal_context.read_text(
+                encoding="utf-8")
+        except (OSError, ValueError):
+            current = previous
+        if current == previous:
+            delta = 0
+        else:
+            delta = len("\n".join(difflib.unified_diff(
+                previous.splitlines(), current.splitlines(),
+                fromfile="goals (as you last saw them)", tofile="goals (now)",
+                lineterm="", n=1)))
+    at = snapshot.get("at")
+    return {
+        "cached": cached,
+        "last_delta_chars": delta,
+        "last_at": at if isinstance(at, str) else None,
+        "active": CS.goals_ui_active(session_id, root),
+        "reads": list(INJECTION_READS),
+    }
+
+
 def _payload(trajdir=None, chat_scoped=None):
     chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
     trajdir = _scope(trajdir)
+    # Set under the lock, read after it: the injection card is computed from
+    # two read-only files, and the hook that writes the snapshot waits only
+    # half a second for this same lock before dropping its injection. A poll
+    # every 1.5s per open tab must not be one of the things it waits behind.
+    identity = None
     with _state_access(trajdir, chat_scoped):
         goals, important = _load_goals(trajdir, chat_scoped)
         GM.sanitize(goals)
         ana = {}
         analyzer = None
+        # What the Claude session behind this workspace has done lately. A
+        # global vault stands behind no one session, so there is nothing it
+        # could report -- the field is still present, so the browser reads
+        # one shape in both scopes.
+        notices = []
+        # The tab needs a name, and only this side knows which conversation
+        # the window belongs to.
+        session = None
+        # Present in both scopes so the browser reads one shape; a global
+        # vault stands behind no chat, so nothing is injected for it.
+        injection = {"cached": False, "last_delta_chars": None,
+                     "last_at": None, "active": False,
+                     "reads": list(INJECTION_READS)}
         try:
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
@@ -480,20 +589,29 @@ def _payload(trajdir=None, chat_scoped=None):
         if chat_scoped:
             session_id, root = _chat_identity(trajdir)
             analyzer = CS.get_analyzer_state(session_id, root)
+            notices = CS.load_notices(session_id, root)
+            session = session_id
+            identity = (session_id, root)
         # Agent execution state is scoped to the goal tree it was launched
         # against; chat-scoped goal ids live in a different namespace.
         runs, claim = ({}, None) if chat_scoped else (
             AE.plans(trajdir), AE.pending_claim(trajdir))
-        return {"goals": goals["goals"], "items": important["items"],
-                "prompts": _load_prompts(trajdir, chat_scoped),
-                "generated_at": goals.get("generated_at", ""),
-                "sessions": ana.get("sessions_analyzed"),
-                "analyzer": analyzer,
-                "agent_runs": runs,
-                "agent_claim": claim,
-                "scope": "chat" if chat_scoped else "global",
-                "provider": _configured_provider(trajdir),
-                "revision": _goal_revision(goals, important)}
+        payload = {"goals": goals["goals"], "items": important["items"],
+                   "prompts": _load_prompts(trajdir, chat_scoped),
+                   "generated_at": goals.get("generated_at", ""),
+                   "sessions": ana.get("sessions_analyzed"),
+                   "analyzer": analyzer,
+                   "notices": notices,
+                   "session_id": session,
+                   "injection": injection,
+                   "agent_runs": runs,
+                   "agent_claim": claim,
+                   "scope": "chat" if chat_scoped else "global",
+                   "provider": _configured_provider(trajdir),
+                   "revision": _goal_revision(goals, important)}
+    if identity is not None:
+        payload["injection"] = _injection_state(*identity)
+    return payload
 
 
 def _apply(op, trajdir=None, chat_scoped=None):
@@ -503,6 +621,10 @@ def _apply(op, trajdir=None, chat_scoped=None):
         goals, important = _load_goals(trajdir, chat_scoped)
         GM.sanitize(goals)
         kind = op.get("op")
+        # Checked before any scope or goal reasoning: a disconnected op gives
+        # the same answer everywhere, and never half-applies on the way out.
+        if kind in EXPERIMENTAL_OPS and not _experimental_enabled():
+            return {"ok": False, "error": EXPERIMENTAL_ERROR}
         g = GM.by_id(goals, op.get("goal_id", ""))
         # Execution-state ops touch the agent-run store only: choosing to work
         # on a goal must not rewrite the goal itself.
@@ -601,7 +723,8 @@ def _apply(op, trajdir=None, chat_scoped=None):
         elif kind == "set_priority" and g and op.get("priority") in ("urgent", "high", "normal"):
             g["priority"] = op["priority"]
         elif kind == "set_notes" and g:
-            g["notes"] = str(op.get("notes", ""))[:4000]
+            # The goal's whole markdown document: stored as written.
+            g["notes"] = str(op.get("notes", ""))
         elif kind == "set_sources" and g:
             raw = op.get("sources")
             if not isinstance(raw, list):
@@ -666,6 +789,41 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return {"ok": True}
 
 
+# The colour the dressed chat workspace lands on: the artifact paints its
+# `.hc` shell on it. The mask and the workspace meet on the same pixel at
+# reveal, so anything near-but-not-equal is a seam -- and the bridge holds the
+# same ground once the unpack has taken this mask away, from one constant.
+CHAT_GROUND = "#0d1117"
+
+
+def preboot_mask(chat_scoped):
+    """Hide the artifact's own first frame, on the ground it will land on.
+
+    Every /goals-ui opens a fresh port, so a chat workspace is always a new
+    origin with no saved theme: following the operating system there means a
+    white page in front of a dark workspace, which is the flash it was meant
+    to remove. A chat opens dark unless the reader chose otherwise here.
+    """
+    ground = CHAT_GROUND if chat_scoped else "#fff"
+    other = "#fff" if chat_scoped else CHAT_GROUND
+    want = "light" if chat_scoped else "dark"
+    return (
+        '<style id="hc-preboot">html{visibility:hidden!important}'
+        'html,body{background:%s!important}</style>'
+        '<script>(function(){'
+        'try{var saved=null;'
+        'try{saved=JSON.parse(localStorage.getItem("hc-vault-ui-v1")||"null");}'
+        'catch(e){}'
+        'if(saved&&saved.themeMode==="%s"){'
+        'var s=document.getElementById("hc-preboot");'
+        'if(s){s.textContent="html{visibility:hidden!important}"'
+        '+"html,body{background:%s!important}";}}}catch(e){}'
+        'setTimeout(function(){var s=document.getElementById("hc-preboot");'
+        'if(s&&s.parentNode){s.parentNode.removeChild(s);}},2500);'
+        '})();</script>'
+    ) % (ground, want, other)
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):                  # quiet
         pass
@@ -718,9 +876,26 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
-            if self.path in ("/", "/index.html"):
+            # Before the scope logic: whether this build exposes the route at
+            # all is a question that comes ahead of which vault it would read.
+            if _experimental_route(self.path) and not _experimental_enabled():
+                self._send(200, {"ok": False, "error": EXPERIMENTAL_ERROR})
+            elif self.path in ("/", "/index.html"):
                 html = resources.files("human_compact.trajectory").joinpath(
                     "web/goals_bundle.html").read_text(encoding="utf-8")
+                # The artifact ships its own pre-hydration body: a rust splash
+                # and the raw template, unresolved {{ bindings }} and the
+                # global onboarding dialog included. It paints that for a frame
+                # before it unpacks the template and replaces documentElement.
+                # Reading it is worse than reading nothing -- it shows setup
+                # questions this release does not ask. Hide the document until
+                # the unpack, which removes this style along with the rest of
+                # the original head. The timer is the failsafe: if the unpack
+                # never happens, the page is shown anyway rather than staying
+                # blank.
+                html = html.replace(
+                    "</head>",
+                    preboot_mask(self.server.chat_scoped) + "</head>", 1)
                 # Parse the artifact's template island before running the
                 # bridge, while still running the bridge synchronously before
                 # DOMContentLoaded lets the artifact unpack that template.
@@ -1073,7 +1248,7 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "detached_prompt_ids": prev.get("detached_prompt_ids", []),
                         "priority": node.get("prio") if node.get("prio") in
                             ("urgent", "high", "normal") else "normal",
-                        "notes": str(node.get("notes") or "")[:4000],
+                        "notes": str(node.get("notes") or ""),
                         "description": str(node.get("desc") or "")[:600],
                         "origin": prev.get("origin", "ui"),
                         "updated_at": prev.get("updated_at", GM._now())}

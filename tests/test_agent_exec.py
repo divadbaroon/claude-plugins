@@ -59,6 +59,9 @@ class AgentExecTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop(AE.GOAL_ENV, None)
+        # Agent runs are experimental in this release; these tests hold the
+        # contract for when it is switched on.
+        os.environ["HC_EXPERIMENTAL"] = "1"
 
     # --- helpers ---------------------------------------------------------
 
@@ -902,8 +905,11 @@ class OnboardingTests(unittest.TestCase):
             patch = mock.patch.object(module, attr, value)
             patch.start()
             self.addCleanup(patch.stop)
+        # Global capture and analysis are experimental in this release; these
+        # tests hold their contracts for when it is switched on.
         home = mock.patch.dict(os.environ, {"HC_HOME": str(self.temp.name),
-                                            "CLAUDE_VAULT_DIR": str(self.vault)})
+                                            "CLAUDE_VAULT_DIR": str(self.vault),
+                                            "HC_EXPERIMENTAL": "1"})
         home.start()
         self.addCleanup(home.stop)
         # is_enabled() honours a legacy CLAUDE_VAULT=1 export when no explicit
@@ -1129,6 +1135,13 @@ class RunReportTests(unittest.TestCase):
 
 class LaunchCommandTests(unittest.TestCase):
     """A confirmed run asks for --start; an unconfirmed one does not."""
+
+    def setUp(self):
+        # Launching a run is experimental in this release; this holds the
+        # contract for when it is switched on.
+        env = mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": "1"})
+        env.start()
+        self.addCleanup(env.stop)
 
     def _command(self, confirmed):
         seen = {}

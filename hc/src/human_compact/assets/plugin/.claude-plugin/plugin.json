@@ -1,7 +1,7 @@
 {
   "name": "vault",
-  "version": "0.4.0",
-  "description": "Maintain chat-scoped goals and optionally persist global conversation history across compaction.",
+  "version": "0.5.0",
+  "description": "Chat-scoped goals for Claude Code via /goals-ui.",
   "author": {
     "name": "David Baroon"
   }

@@ -460,6 +460,207 @@ class ChatSynthesisTests(unittest.TestCase):
         S.clear_worker_record(SID, root=self.root, owner_token="successor")
         self.assertFalse(worker.exists())
 
+    def test_initial_sections_become_the_goals_markdown_document(self):
+        self.hook("UserPromptSubmit", prompt="Make each goal one document")
+        provider = Provider([{"goals": [{
+            "id": "g1", "title": "One document per goal", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "sections": {
+                "objective": "Give every goal a single markdown document.",
+                "in_my_words": "",
+                "decisions": ["notes IS the document"],
+                "built": ["split_doc", "append_to_section"],
+                "blockers": [],
+                "open_questions": [],
+            },
+        }]}])
+
+        S.refresh(SID, root=self.root, provider=provider)
+
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertIn('"sections"', provider.prompts[0])
+        self.assertIn(
+            "# Objective\nGive every goal a single markdown document.",
+            goal["notes"])
+        self.assertIn("# Decisions\n- notes IS the document", goal["notes"])
+        self.assertIn("# Built\n- split_doc\n- append_to_section", goal["notes"])
+        self.assertIn("# In my words\n\n", goal["notes"])
+        self.assertNotIn("sections", goal)
+
+    def test_sections_append_below_notes_a_human_already_wrote(self):
+        proposed = {"version": 1, "goals": [{
+            "id": "g1", "title": "Ship it", "status": "active",
+            "parent_goal_id": None, "notes": "# Decisions\n- keep sqlite\n",
+            "sections": {"decisions": ["use WAL"], "built": ["the doc model"]},
+        }]}
+
+        S._apply_sections(proposed)
+
+        notes = proposed["goals"][0]["notes"]
+        self.assertIn("# Decisions\n- keep sqlite\n\n- use WAL", notes)
+        self.assertLess(notes.index("- keep sqlite"), notes.index("- use WAL"))
+        self.assertIn("# Built\n- the doc model", notes)
+        self.assertNotIn("sections", proposed["goals"][0])
+
+    def test_incremental_append_section_adds_once_and_never_again(self):
+        first = self.hook("UserPromptSubmit", prompt="Write the doc model")
+        CS.save_goals(SID, {"version": 1, "goals": [{
+            "id": "g1", "title": "Write the doc model", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "prompt_ids": [], "important_item_ids": [],
+            "notes": "# Decisions\n- keep sqlite\n",
+        }]}, {"items": []}, root=self.root)
+        CS.set_analyzer_state(SID, last_analyzed_ordinal=first.last_ordinal,
+                              status="idle", root=self.root)
+        self.hook("UserPromptSubmit", prompt="Second turn")
+        op = {"op": "append_section", "goal_id": "g1", "section": "decisions",
+              "text": "- use WAL"}
+
+        provider = Provider([{"operations": [op]}])
+        S.refresh(SID, root=self.root, provider=provider)
+
+        notes = CS.load_goals(SID, self.root)[0]["goals"][0]["notes"]
+        self.assertIn("append_section", provider.prompts[0])
+        self.assertIn("# Decisions\n- keep sqlite\n\n- use WAL", notes)
+
+        self.hook("UserPromptSubmit", prompt="Third turn")
+        again = Provider([{"operations": [op]}])
+        S.refresh(SID, root=self.root, provider=again)
+
+        self.assertEqual(
+            notes, CS.load_goals(SID, self.root)[0]["goals"][0]["notes"])
+
+    def test_a_manual_source_survives_an_initial_race(self):
+        merged = S._merge_initial_with_manual(
+            {"version": 1, "goals": [{"id": "g1", "title": "Inferred",
+                                      "status": "active",
+                                      "parent_goal_id": None}]},
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Inferred", "status": "active",
+                "parent_goal_id": None, "notes": "mine",
+                "sources": [{"id": "s1", "type": "github",
+                             "label": "octo/repo"}]}]})
+
+        goal = merged["goals"][0]
+        self.assertEqual("mine", goal["notes"])
+        self.assertEqual([{"id": "s1", "type": "github", "label": "octo/repo"}],
+                         goal["sources"])
+
+    def test_a_detached_prompt_stays_detached_across_an_initial_race(self):
+        merged = S._merge_initial_with_manual(
+            {"version": 1, "goals": [{"id": "g1", "title": "Inferred",
+                                      "status": "active",
+                                      "parent_goal_id": None}]},
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Inferred", "status": "active",
+                "parent_goal_id": None, "prompt_ids": ["p2"],
+                "auto_prompt_ids": ["p2"], "detached_prompt_ids": ["p1"]}]})
+
+        goal = merged["goals"][0]
+        self.assertEqual(["p2"], goal["prompt_ids"])
+        self.assertEqual(["p2"], goal["auto_prompt_ids"])
+        self.assertEqual(["p1"], goal["detached_prompt_ids"])
+
+    def test_a_manual_source_survives_an_incremental_refresh(self):
+        first = self.hook("UserPromptSubmit", prompt="Attach my repo")
+        CS.save_goals(SID, {"version": 1, "goals": [{
+            "id": "g1", "title": "Attach my repo", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "prompt_ids": [], "important_item_ids": [],
+            "sources": [{"id": "s1", "type": "local", "label": "~/proj"}],
+        }]}, {"items": []}, root=self.root)
+        CS.set_analyzer_state(SID, last_analyzed_ordinal=first.last_ordinal,
+                              status="idle", root=self.root)
+        self.hook("UserPromptSubmit", prompt="Second turn")
+        provider = Provider([{"operations": [
+            {"op": "set_status", "goal_id": "g1", "status": "in_progress"},
+            {"op": "append_section", "goal_id": "g1", "section": "built",
+             "text": "- the source list"},
+        ]}])
+
+        S.refresh(SID, root=self.root, provider=provider)
+
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertEqual("in_progress", goal["status"])
+        self.assertEqual([{"id": "s1", "type": "local", "label": "~/proj"}],
+                         goal["sources"])
+
+    def test_sections_with_nothing_new_leave_the_document_untouched(self):
+        written = "# Decisions\n- keep sqlite\n"
+        proposed = {"version": 1, "goals": [{
+            "id": "g1", "title": "Ship it", "status": "active",
+            "parent_goal_id": None, "notes": written,
+            "sections": {"decisions": ["keep sqlite"], "built": []},
+        }]}
+
+        S._apply_sections(proposed)
+
+        self.assertEqual(written, proposed["goals"][0]["notes"])
+
+    def test_model_supplied_notes_never_bypass_the_section_grammar(self):
+        self.hook("UserPromptSubmit", prompt="Try to smuggle notes")
+        provider = Provider([{"goals": [{
+            "id": "g1", "title": "Smuggler", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "notes": "notes the model wrote by hand",
+            "opening": "and an opening it does not own",
+            "sections": {"built": ["the parser"]},
+        }]}])
+
+        S.refresh(SID, root=self.root, provider=provider)
+
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertNotIn("notes the model wrote by hand", goal["notes"])
+        self.assertEqual("", goal["opening"])
+        self.assertIn("# Built\n- the parser", goal["notes"])
+
+
+class ChatProviderGateTests(unittest.TestCase):
+    """Ollama is stashed for this release, including as a chat provider.
+
+    It must fail closed: silently answering with the claude provider would send
+    a digest off-device to someone who asked for the on-device one.
+    """
+
+    def _kind(self, env):
+        patcher = mock.patch.dict(os.environ, env, clear=False)
+        for name in ("HC_CHAT_PROVIDER", "HC_EXPERIMENTAL", "HC_CHAT_MODEL"):
+            if name not in env:
+                os.environ.pop(name, None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_ollama_is_refused_without_the_flag(self):
+        from human_compact.trajectory import providers as P
+        self._kind({"HC_CHAT_PROVIDER": "ollama"})
+        with self.assertRaises(P.ProviderError) as caught:
+            S._provider()
+        self.assertIn("ollama is experimental in this release", str(caught.exception))
+        self.assertIn("HC_EXPERIMENTAL=1", str(caught.exception))
+
+    def test_ollama_never_falls_back_to_claude(self):
+        from human_compact.trajectory import providers as P
+        self._kind({"HC_CHAT_PROVIDER": "ollama", "HC_EXPERIMENTAL": "0"})
+        with self.assertRaises(P.ProviderError):
+            S._provider()
+
+    def test_the_flag_restores_the_on_device_provider(self):
+        from human_compact.trajectory import providers as P
+        self._kind({"HC_CHAT_PROVIDER": "ollama", "HC_EXPERIMENTAL": "1"})
+        self.assertIsInstance(S._provider(), P.Ollama)
+
+    def test_the_default_and_the_test_provider_are_untouched(self):
+        from human_compact.trajectory import providers as P
+        self._kind({})
+        self.assertIsInstance(S._provider(), P.ClaudeCLI)
+        self._kind({"HC_CHAT_PROVIDER": "mock"})
+        self.assertIsInstance(S._provider(), P.Mock)
+
+    def test_an_explicit_provider_argument_still_wins(self):
+        self._kind({"HC_CHAT_PROVIDER": "ollama"})
+        sentinel = Provider([{"goals": []}])
+        self.assertIs(sentinel, S._provider(sentinel))
+
 
 if __name__ == "__main__":
     unittest.main()

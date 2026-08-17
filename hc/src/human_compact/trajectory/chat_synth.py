@@ -42,8 +42,14 @@ Infer completion only from explicit completion evidence. Distinguish a goal
 from its implementation tasks. Prefer 1-4 top-level goals, depth at most 3.
 Never use private assistant thinking. Copy only supplied event ids.
 
+Each goal also has "sections": the goal's own markdown document, which the
+user reads and edits by hand. objective and in_my_words are plain sentences;
+decisions, built, blockers and open_questions are lists of short bullet
+strings. Write only what THIS chat's evidence supports and leave a section
+empty when it supports nothing. Never invent, pad, or restate the title.
+
 Return ONLY minified JSON:
-{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}]}],"important":{"items":[]}}
+{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
 
 PROJECT CONTEXT:
 <<CONTEXT>>
@@ -62,11 +68,15 @@ Return ONLY minified JSON {"operations":[...]} using these operations:
 {"op":"complete_todo","goal_id":"","text_match":""}
 {"op":"set_status","goal_id":"","status":"active|in_progress|completed|abandoned"}
 {"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":""}
+{"op":"append_section","goal_id":"","section":"objective|in_my_words|decisions|built|blockers|open_questions","text":""}
 
 Rules: infer completion only from explicit evidence. A top-level new_goal needs
 an explicitly distinct objective in distinct_because. Prefer attaching evidence
-or creating a todo/subgoal. Do not rename, move, merge, delete, or edit notes,
-priority, prompt_ids, important links, or manually authored content.
+or creating a todo/subgoal. Do not rename, move, merge, delete, or edit
+priority, prompt_ids, important links, or manually authored content. A goal's
+notes are one markdown document the user owns; you may only APPEND to it via
+append_section, one section at a time, with markdown lines ("- …" bullets for
+the list sections). Never repeat a line the section already holds.
 
 CURRENT STATE:
 <<TREE>>
@@ -76,12 +86,6 @@ PROJECT CONTEXT:
 
 NEW EVIDENCE:
 <<EVENTS>>"""
-
-
-def _project_key(cwd: Path) -> str:
-    # Claude encodes an absolute project path by replacing all non-word path
-    # punctuation (including spaces) with hyphens.
-    return re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd))
 
 
 def _read_bounded(path: Path, remaining: int) -> str:
@@ -181,7 +185,7 @@ def project_context(cwd_value: Optional[str], events: Iterable[Dict[str, Any]]) 
             break
 
     memory_dir = (
-        Path.home() / ".claude" / "projects" / _project_key(cwd) / "memory"
+        Path.home() / ".claude" / "projects" / CS._project_key(cwd) / "memory"
     )
     index = memory_dir / "MEMORY.md"
     index_text = _read_bounded(index, min(5_000, remaining))
@@ -237,8 +241,17 @@ def _provider(provider=None):
     kind = os.environ.get("HC_CHAT_PROVIDER", "claude")
     if kind not in P.DEFAULTS:
         raise P.ProviderError(f"unknown chat provider: {kind}")
+    # The on-device path is stashed for this release. It fails closed on
+    # purpose: quietly answering with the claude provider would ship a digest
+    # off-device to the one person who explicitly asked it not to.
+    if kind == "ollama" and os.environ.get("HC_EXPERIMENTAL") != "1":
+        raise P.ProviderError(
+            "ollama is experimental in this release; set HC_EXPERIMENTAL=1")
     model = os.environ.get("HC_CHAT_MODEL")
     return P.make(kind, "synthesize", model)
+
+
+_INITIAL_FIELDS = ("status", "parent_goal_id", "description", "priority")
 
 
 def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
@@ -250,22 +263,26 @@ def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
     for index, value in enumerate(raw[:60], 1):
         if not isinstance(value, dict):
             continue
-        goal = deepcopy(value)
-        gid = str(goal.get("id") or f"g{index}")[:80]
+        # Whitelisted, not copied wholesale: a model that returns "notes" or
+        # "opening" must not land text in fields the user owns. Everything the
+        # schema does allow is normalized below.
+        goal = {key: deepcopy(value[key]) for key in _INITIAL_FIELDS
+                if key in value}
+        gid = str(value.get("id") or f"g{index}")[:80]
         if gid in seen:
             gid = f"g{index}"
         seen.add(gid)
         goal["id"] = gid
-        goal["title"] = str(goal.get("title") or "Untitled goal")[:120]
+        goal["title"] = str(value.get("title") or "Untitled goal")[:120]
         goal["origin"] = "inferred"
         goal["prompt_ids"] = []
         goal["important_item_ids"] = []
         goal["evidence_ids"] = [
-            eid for eid in goal.get("evidence_ids", [])
+            eid for eid in (value.get("evidence_ids") or [])
             if isinstance(eid, str) and eid in valid_ids
         ][:40]
         todos = []
-        for todo in goal.get("todos", [])[:30]:
+        for todo in (value.get("todos") or [])[:30]:
             if not isinstance(todo, dict) or not str(todo.get("text") or "").strip():
                 continue
             todos.append({
@@ -277,13 +294,69 @@ def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
                 ][:20],
             })
         goal["todos"] = todos
+        sections = value.get("sections")
+        if isinstance(sections, dict):
+            goal["sections"] = {
+                key: _section_text(sections.get(key)) for key in GM.SECTION_KEYS
+            }
+        else:
+            goal.pop("sections", None)
         out["goals"].append(goal)
     GM.sanitize(out)
     return out
 
 
+def _section_text(value: Any) -> str:
+    """Render one model-supplied section as the markdown it will become."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(
+            f"- {' '.join(str(item).split())}"
+            for item in value
+            if isinstance(item, (str, int, float)) and str(item).strip()
+        )
+    return ""
+
+
+def _apply_sections(goals: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold each goal's inferred sections into its markdown document.
+
+    First run writes the document; every run after that appends under the same
+    headers. Inference never gets to replace notes, because the field it would
+    overwrite is the one the user writes in.
+    """
+    for goal in goals.get("goals", []):
+        sections = goal.pop("sections", None)
+        if not isinstance(sections, dict):
+            continue
+        notes = str(goal.get("notes") or "")
+        if not notes.strip():
+            goal["notes"] = GM.join_doc(
+                (title, _section_text(sections.get(key)))
+                for key, title in GM.SECTION_KEYS.items()
+            )
+            continue
+        document = notes
+        for key, title in GM.SECTION_KEYS.items():
+            text = _section_text(sections.get(key))
+            if not text:
+                continue
+            candidate = GM.append_to_section(document, title, text)
+            # Only a section that really gained text earns a write. Materializing
+            # an absent header is not a gain, so a run with nothing new to say
+            # leaves the user's document exactly as they left it.
+            if (GM.section_body(candidate, title) or "") != \
+                    (GM.section_body(document, title) or ""):
+                document = candidate
+        if document != notes:
+            goal["notes"] = document
+    return goals
+
+
 def _filtered_ops(data: Dict[str, Any], valid_ids: set) -> List[Dict[str, Any]]:
-    allowed = {"attach_evidence", "add_todo", "complete_todo", "set_status", "new_goal"}
+    allowed = {"attach_evidence", "add_todo", "complete_todo", "set_status",
+               "new_goal", "append_section"}
     out = []
     for value in data.get("operations", []) if isinstance(data, dict) else []:
         if not isinstance(value, dict) or value.get("op") not in allowed:
@@ -305,7 +378,14 @@ def _merge_initial_with_manual(inferred: Dict[str, Any], current: Dict[str, Any]
     for goal in inferred.get("goals", []):
         old = previous.get(goal.get("id"))
         if old:
-            for field in ("prompt_ids", "important_item_ids", "notes", "priority"):
+            # Everything on this list is authored or decided in the browser,
+            # never by the model — including the two bookkeeping lists that
+            # record *which* prompt links were machine-made and which the user
+            # tore off. Drop those and the next pass re-links a prompt the
+            # person deliberately detached.
+            for field in ("prompt_ids", "auto_prompt_ids",
+                          "detached_prompt_ids", "important_item_ids",
+                          "notes", "priority", "sources"):
                 if field in old:
                     goal[field] = deepcopy(old[field])
             if old.get("origin") == "user":
@@ -558,7 +638,8 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 prompt = (INITIAL_PROMPT.replace("<<CONTEXT>>", context)
                           .replace("<<EVENTS>>", json.dumps(digest, ensure_ascii=False)))
                 proposed = _normalize_initial(_provider(provider).generate_json(prompt), valid_ids)
-                proposed = _merge_initial_with_manual(proposed, goals)
+                proposed = _apply_sections(
+                    _merge_initial_with_manual(proposed, goals))
                 new_important = important
                 step_changes = [f"goal + {g['title']}" for g in proposed["goals"]]
             else:

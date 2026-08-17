@@ -9,8 +9,14 @@
 
   var KEY = "hc-vault-ui-v1";
   var SYNC_KEY = "hc-vault-ui-sync-v1";
+  // The document a goal opens as when nobody has written one yet. Kept
+  // byte-identical to human_compact.trajectory.goals.default_doc(), because
+  // inference appends into these exact headings: a heading only the browser
+  // knows about is a section the analyzer can never add to. A test in
+  // tests/test_goal_ui_bridge.py greps this line and compares the two.
+  var DEFAULT_DOC = "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n# Blockers\n\n# Open questions\n";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
-                      scope: "global" };
+                      scope: "global", sessionId: "" };
   var stateFingerprint = null;
   var lastObservedGoals = null;
   var refreshPending = false;
@@ -234,6 +240,9 @@
   }
 
   function refreshState() {
+    // An import we started is a change this page already shows. Reconciling
+    // against a half-applied revision is what turned a delete into a reload.
+    if (syncBusy) return;
     if (refreshPending) return;
     refreshPending = true;
     fetch("/api/state", { cache: "no-store" })
@@ -243,6 +252,9 @@
       })
       .then(function (st) {
         acceptState(st);
+        injectionState = (st && st.injection && typeof st.injection === "object")
+          ? st.injection : null;
+        showNotices(st && st.notices);
         reconcileState(st);
       })
       .catch(function () {})
@@ -267,6 +279,14 @@
   // --- server records -> the fields this artifact renders ------------------
 
   function promptRows(goal, byId) {
+    // Which links inference made rather than the reader. The server clears
+    // this id the moment they attach or detach it by hand ("an auto link the
+    // user keeps becomes theirs"), so it reports who is standing behind the
+    // link, not who first proposed it.
+    var automatic = Object.create(null);
+    array(goal && goal.auto_prompt_ids).forEach(function (id) {
+      automatic[id] = true;
+    });
     return array(goal && goal.prompt_ids).map(function (id) {
       var prompt = byId[id];
       if (!prompt) return null;
@@ -281,6 +301,7 @@
                // Which conversation this was said in. The short form is the
                // same prefix the evidence ids use, so the two line up.
                conv: str(prompt.session_id).slice(0, 8),
+               auto: !!automatic[id],
                ts: isFinite(when) ? when : Date.now() };
     }).filter(Boolean);
   }
@@ -444,7 +465,12 @@
     array(st && st.prompts).forEach(function (p) {
       if (p && typeof p.id === "string") byId[p.id] = p;
     });
+    // A goal the reader deleted is kept on disk as "abandoned" rather than
+    // erased, so nothing they wrote is lost -- but it is deleted to them, and
+    // drawing it struck through under every filter makes the delete look like
+    // it failed. Leave it out of the tree; the record stays in goals.json.
     array(st && st.goals).forEach(function (goal) {
+      if (goal && goal.status === "abandoned") return;
       var parent = goal.parent_goal_id || null;
       (byParent[parent] = byParent[parent] || []).push(goal);
     });
@@ -464,21 +490,46 @@
     var tabs = { context: true, prompt: true, agent: true, artifact: true };
     var selection = typeof saved.selId === "string" && flat[saved.selId] ?
       saved.selId : (roots.length ? roots[0].id : null);
+    var chat = !!(st && st.scope === "chat");
+    // Only a store we wrote carries a filter the reader actually chose. A
+    // page opened for the first time in a chat has no such history, and a
+    // chat's tree is small enough that hiding most of it behind "active"
+    // reads as an empty workspace.
+    var mine = saved.v >= 7;
+    var filter = filters[saved.filter] ? saved.filter : null;
+    var paneTab = tabs[saved.paneTab] ? saved.paneTab : "context";
+    // The panes those two tabs open are driven by ops this scope refuses,
+    // so a saved value pointing at one would restore an empty inspector.
+    if (chat && paneTab !== "context") {
+      paneTab = "context";
+    }
     return {
       v: 7,
       goals: roots,
       selId: selection,
-      filter: filters[saved.filter] ? saved.filter : "active",
+      filter: chat ? ((filter && mine) ? filter : "all")
+                   : (filter || "active"),
       updatedAt: st.generated_at ? Date.parse(st.generated_at) : Date.now(),
       labels: array(saved.labels),
-      paneTab: tabs[saved.paneTab] ? saved.paneTab : "context",
+      paneTab: paneTab,
+      // A chat workspace opens dark; the toggle in its header still
+      // decides, and what it decides is what comes back on the next load.
       themeMode: saved.themeMode === "light" || saved.themeMode === "dark" ?
-        saved.themeMode : null,
+        saved.themeMode : (chat ? "dark" : null),
       view: saved.view === "tree" || saved.view === "inspect" ? saved.view : "split",
-      page: saved.page === "convos" ? "convos" : "goals",
+      // A chat workspace has one conversation -- its own -- and no page to
+      // list them on, so there is nowhere for 'convos' to land.
+      page: (saved.page === "convos" && !chat) ? "convos" : "goals",
       // Onboarding is the artifact's, and these are the real answers: what the
       // vault has actually been told, not an assumption that it is set up.
-      setup: setupState || { sv: 9, storage: false, analysis: null, done: false }
+      // A chat workspace was never asked any of it: its goals are inferred
+      // from this chat by the Claude CLI, and the transcript it reads is the
+      // one the chat is already keeping. Answering the wizard's questions
+      // here is reporting that, not assuming it -- and /api/setup speaks for
+      // the global vault only, so it is not consulted.
+      setup: chat ? { sv: 9, storage: true, analysis: "claude", done: true }
+                  : (setupState ||
+                     { sv: 9, storage: false, analysis: null, done: false })
     };
   }
 
@@ -497,7 +548,10 @@
       // open with the prompt typed, waiting on a keypress the UI cannot make.
       claim: (st.agent_claim && typeof st.agent_claim === "object")
         ? st.agent_claim : null,
-      scope: st.scope === "chat" ? "chat" : "global"
+      scope: st.scope === "chat" ? "chat" : "global",
+      // Which Claude conversation this window is a second view of. Only the
+      // server knows; it is what names the tab.
+      sessionId: str(st.session_id)
     };
     var fingerprint = JSON.stringify([
       serverState.goals.map(function (g) {
@@ -510,46 +564,71 @@
     return true;
   }
 
+  function askHealthForScope() {
+    try {
+      var health = new XMLHttpRequest();
+      health.open("GET", "/api/health", false);
+      health.send();
+      var answered = JSON.parse(health.responseText);
+      if (answered.scope === "chat") {
+        serverState.scope = "chat";
+        // This is the path where /api/state did not answer, so the poll has
+        // not named the tab yet and this is the only place that can.
+        serverState.sessionId = str(answered.session_id);
+      }
+    } catch (e) { /* nothing left to ask */ }
+  }
+
   function seed() {
-    try {
-      var setup = new XMLHttpRequest();
-      setup.open("GET", "/api/setup", false);
-      setup.send();
-      var answered = JSON.parse(setup.responseText);
-      if (answered && answered.ok) {
-        setupState = answered;
-        if (answered.convos && answered.convos.length) {
-          window.__hcConvos = answered.convos;
+    // Which scope this is decides most of what follows, and only one route
+    // is never gated. Asking it first costs one cheap call and saves two
+    // blocking ones: /api/setup and /api/briefings speak for the global
+    // vault, so in a chat they are two synchronous round trips on the path
+    // to first paint whose only possible answer is "not here".
+    askHealthForScope();
+    if (serverState.scope !== "chat") {
+      try {
+        var setup = new XMLHttpRequest();
+        setup.open("GET", "/api/setup", false);
+        setup.send();
+        var answered = JSON.parse(setup.responseText);
+        if (answered && answered.ok) {
+          setupState = answered;
+          if (answered.convos && answered.convos.length) {
+            window.__hcConvos = answered.convos;
+          }
         }
+      } catch (e) {
+        setupState = null;
       }
-    } catch (e) {
-      setupState = null;
-    }
-    try {
-      // Same reason as the state fetch: the panels are baked into the
-      // artifact's saved state at boot, and anything fetched afterwards has
-      // nowhere to land until the page reloads.
-      var briefs = new XMLHttpRequest();
-      briefs.open("GET", "/api/briefings", false);
-      briefs.send();
-      var all = JSON.parse(briefs.responseText);
-      if (all && all.ok && all.goals) {
-        Object.keys(all.goals).forEach(function (id) {
-          var one = all.goals[id] || {};
-          details[id] = { sections: briefingSections(one), opening: "",
-                          cwd: str(one.cwd), review: [],
-                          brief: briefFacts(one) };
-        });
+      try {
+        // Same reason as the state fetch: the panels are baked into the
+        // artifact's saved state at boot, and anything fetched afterwards
+        // has nowhere to land until the page reloads.
+        var briefs = new XMLHttpRequest();
+        briefs.open("GET", "/api/briefings", false);
+        briefs.send();
+        var all = JSON.parse(briefs.responseText);
+        if (all && all.ok && all.goals) {
+          Object.keys(all.goals).forEach(function (id) {
+            var one = all.goals[id] || {};
+            details[id] = { sections: briefingSections(one), opening: "",
+                            cwd: str(one.cwd), review: [],
+                            brief: briefFacts(one) };
+          });
+        }
+      } catch (e) {
+        // No briefings: the panels stay empty rather than showing a guess.
       }
-    } catch (e) {
-      // No briefings: the panels stay empty rather than showing a guess.
     }
     try {
       var request = new XMLHttpRequest();
       request.open("GET", "/api/state", false);   // sync: must beat app boot
       request.send();
       var st = JSON.parse(request.responseText);
-      if (!acceptState(st)) return;
+      // Not a return: a reply that is not a state payload is a failed fetch,
+      // and the fallback below has to see it as one.
+      if (!acceptState(st)) throw new Error("not a state payload");
       var roots = rootsFromState(st);
       var saved = null;
       try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
@@ -557,7 +636,11 @@
       lastObservedGoals = JSON.stringify(roots);
       if (typeof st.revision === "string") writeSync(st.revision, roots);
     } catch (e) {
-      // Server unreachable: let the artifact boot on whatever it already has.
+      // Server unreachable, or answering something that is not state: let
+      // the artifact boot on whatever it already has. Which scope this is
+      // was settled before the fetch, on the one route that is never gated
+      // -- the controls a chat must not offer do not depend on the tree
+      // loading, and nothing here has to ask a second time.
     }
   }
 
@@ -851,7 +934,7 @@
   // pathological one cannot lock the tab building rows.
   var PICK_LIMIT = 2000;
 
-  function pickPrompt(goalId) {
+  function pickPrompt(goalId, trigger) {
     var goal = array(serverState.goals).filter(function (g) {
       return g && g.id === goalId;
     })[0];
@@ -878,11 +961,37 @@
       count.className = "hc-pick-count";
       var list = document.createElement("div");
       list.className = "hc-pick-list";
+      // A way out in the corner the eye goes to first. Cancel is at the
+      // bottom of a box that can be 84vh tall, which is a long way from
+      // where a reader who opened this by mistake is looking.
+      var shut = document.createElement("button");
+      shut.className = "hc-pick-close";
+      shut.type = "button";
+      shut.setAttribute("aria-label", "Close");
+      shut.textContent = "×";
+
+      function onKey(event) {
+        // Bound on the document, not on the filter input: Escape has to work
+        // wherever focus has landed inside the box -- a picked row, the close
+        // button, the scrolled list.
+        if (!overlay.parentNode) return;
+        if (!event || event.key !== "Escape") return;
+        if (event.preventDefault) event.preventDefault();
+        close(null);
+      }
 
       function close(value) {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (document.removeEventListener) {
+          document.removeEventListener("keydown", onKey, true);
+        }
+        // Back where they were. Closing a modal onto <body> loses a keyboard
+        // reader's place on the page entirely.
+        if (trigger && trigger.focus) trigger.focus();
         resolve(value || null);
       }
+
+      shut.onclick = function () { close(null); };
 
       function draw() {
         // str(): a value that is not a string throws inside a promise
@@ -943,6 +1052,7 @@
         if (e.key === "Escape") { e.preventDefault(); close(null); }
       };
       overlay.onclick = function (e) { if (e.target === overlay) close(null); };
+      box.appendChild(shut);
       box.appendChild(title);
       box.appendChild(filter);
       box.appendChild(count);
@@ -950,6 +1060,9 @@
       box.appendChild(row);
       overlay.appendChild(box);
       (document.body || document.documentElement).appendChild(overlay);
+      if (document.addEventListener) {
+        document.addEventListener("keydown", onKey, true);
+      }
       // Anything thrown from here rejects a promise the caller only
       // listens to for a chosen id, so a failure reads as "the button
       // does nothing". Say what went wrong, in the box being looked at.
@@ -991,7 +1104,7 @@
       button.textContent = "select a goal first";
       return;
     }
-    pickPrompt(goalId).catch(function (error) {
+    pickPrompt(goalId, button).catch(function (error) {
       // Never fail quietly: a click that does nothing is the one bug
       // the reader cannot report usefully.
       button.textContent = "could not open it: " + error;
@@ -1039,7 +1152,10 @@
   }
 
   function renderPromptAdd() {
-    if (serverState.scope === "chat") return false;
+    // Chat scope used to be turned away here. Both ops behind this button --
+    // attach_prompt and detach_prompt -- answer in this scope, and the
+    // prompts it offers are the ones this chat recorded, so a chat that
+    // could not correct a wrong inference was the only thing missing.
     var slot = promptAddSlot();
     if (!slot) return false;
     bindPromptAdd();
@@ -1058,6 +1174,327 @@
   function watchPromptAdd() {
     renderPromptAdd();
     setInterval(renderPromptAdd, 700);
+  }
+
+  // --- controls a chat workspace has no backend for ------------------------
+  // The artifact was drawn for the global vault. Three of its controls lead
+  // somewhere this scope cannot go, and a fourth -- the PROMPT tab -- leads
+  // somewhere this workspace now keeps permanently on screen: the assembled
+  // prompt has its own rail, so a tab that swaps the document out for it is
+  // a second route to something already visible. The Conversations page lists a vault's
+  // whole history, which arrives on /api/setup and /api/conversation -- both
+  // refuse here, and the artifact answers a refusal by falling back to its
+  // own sample list, so the page would read as a history nobody has. The
+  // AGENT and REVIEW tabs open panes whose every op -- /api/plan,
+  // launch_agent_run, resume_agent_run, /api/review -- refuses too. All
+  // three are taken off the page rather than left to fail on click.
+
+  function leafSpansNamed(name) {
+    var out = [], nodes = document.querySelectorAll("span");
+    for (var i = 0; i < nodes.length; i++) {
+      // Leaf nodes only: an ancestor's textContent contains its children's,
+      // so a wrapper would match the name its child carries.
+      if (nodes[i].children && nodes[i].children.length) continue;
+      if (str(nodes[i].textContent).trim() === name) out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  function rowHolding(name, companions) {
+    // A row is identified by two of its labels, not one. The artifact
+    // re-renders these rows from its own state, so text it has to draw is
+    // the only handle that cannot be re-rendered away -- but a goal the
+    // reader titled "CONTEXT" or "Goals" draws that same text, and hiding
+    // something inside their tree row would erase their own goal. Requiring
+    // a sibling that only the real row has is what tells them apart.
+    var found = leafSpansNamed(name);
+    for (var i = 0; i < found.length; i++) {
+      var row = found[i].parentNode;
+      var kids = (row && row.children) || [];
+      for (var k = 0; k < kids.length; k++) {
+        if (kids[k] === found[i]) continue;
+        if (companions.indexOf(str(kids[k].textContent).trim()) >= 0) return row;
+      }
+    }
+    return null;
+  }
+
+  function paneTabBar() {
+    return rowHolding("CONTEXT", ["PROMPT", "AGENT", "REVIEW"]);
+  }
+
+  function headerNav() {
+    return rowHolding("Goals", ["Conversations"]);
+  }
+
+  function hideNode(node) {
+    if (!node || !node.style || node.style.display === "none") return false;
+    node.style.display = "none";
+    return true;
+  }
+
+  function hideLabelsIn(row, labels) {
+    var kids = (row && row.children) || [], hidden = 0;
+    for (var i = 0; i < kids.length; i++) {
+      if (labels.indexOf(str(kids[i].textContent).trim()) >= 0
+          && hideNode(kids[i])) hidden += 1;
+    }
+    return hidden;
+  }
+
+  function renderChatSurface() {
+    if (serverState.scope !== "chat") return false;
+    // REVIEW arrives late -- it is behind an sc-if that only turns on once
+    // a run exists -- so this is a standing sweep, not a one-shot.
+    //
+    // The tab's name rides along here for the same reason the sweep exists
+    // at all: the artifact unpacks its template by replacing the whole
+    // documentElement, which takes the document's <title> with it. Anything
+    // written before that is gone, so the name has to be re-asserted by
+    // something that keeps running. applyPageTitle is idempotent and lives
+    // with the banner that prefixes it.
+    return (hideLabelsIn(headerNav(), ["Conversations"])
+            + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
+            + (applyPageTitle() ? 1 : 0)) > 0;
+  }
+
+  function watchChatSurface() {
+    renderChatSurface();
+    setInterval(renderChatSurface, 700);
+  }
+
+  // --- what the session behind this workspace just did ---------------------
+  // This page is a second window on a conversation happening in a terminal,
+  // usually on another screen. The one thing it can say that the terminal
+  // cannot is that the terminal is finished. Hooks record a notice when the
+  // session stops, when a subagent returns and when the session ends; this
+  // draws it and then gets out of the way. Chat scope only: a global vault
+  // stands behind no one session, so it has nothing to report.
+
+  var NOTICE_MS = 8000;
+  // Three is what fits above the fold without covering the page it reports on.
+  var NOTICE_MAX = 3;
+  var NOTICE_MARK = "● ";
+  // Exactly what one hook payload proves, and no further. A Stop means the
+  // turn ended -- not that goals moved, that tasks closed, or that anything
+  // succeeded. A map with no prototype so a kind named "constructor" reads
+  // as unknown rather than as a function.
+  var NOTICE_SAYS = Object.create(null);
+  NOTICE_SAYS.session_stopped = "Claude finished responding";
+  NOTICE_SAYS.subagent_returned = "A subagent returned";
+  NOTICE_SAYS.session_ended = "Session ended";
+
+  var NOTICE_CSS = [
+      ".hc-notice-stack{position:fixed;right:16px;bottom:16px;z-index:100001;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
+      ".hc-notice{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-notice-title{font-weight:600;color:var(--ink,#111)}",
+      ".hc-notice-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-notice-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
+      ".hc-notice-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}"
+  ].join("");
+
+  // Everything this page has already had its chance to show. The store keeps
+  // its last twenty rows and state is polled every 1.5s, so without this the
+  // same notice arrives again on every poll for the rest of the session.
+  var noticeSeen = Object.create(null);
+  // Anything older than this window belongs to the part of the conversation
+  // it was not open for. Replaying that would report old news as new.
+  var noticeSince = Date.now();
+  var noticeTimers = Object.create(null);
+  var noticeBox = null;
+  var noticeMarked = false;
+  var noticeBound = false;
+
+  function ensureNoticeStyles() {
+    if (document.getElementById("hc-notice-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-notice-style";
+    style.textContent = NOTICE_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function noticeStack() {
+    return (noticeBox && noticeBox.parentNode) ? noticeBox : null;
+  }
+
+  function noticeHost() {
+    if (noticeStack()) return noticeBox;
+    ensureNoticeStyles();
+    noticeBox = document.createElement("div");
+    noticeBox.className = "hc-notice-stack";
+    // Parented on the body, outside the artifact's own subtree: the artifact
+    // rebuilds that subtree whenever its state changes, and anything living
+    // inside it is silently dropped.
+    (document.body || document.documentElement).appendChild(noticeBox);
+    return noticeBox;
+  }
+
+  function pageTitle() {
+    // Named after the session rather than the goal tree: a day with several
+    // of these open needs the tab strip to tell them apart, and the tree is
+    // what they all have in common. The same 8-character prefix the prompt
+    // rows already use for a conversation, so the two line up.
+    var sid = str(serverState.sessionId).slice(0, 8);
+    return sid ? "Engelbart \u00b7 " + sid : "Engelbart";
+  }
+
+  function applyPageTitle() {
+    // Chat scope only: a global vault's tab is the artifact's own business,
+    // and there is no one session it could be named after.
+    if (serverState.scope !== "chat" || typeof document.title !== "string") {
+      return false;
+    }
+    // Derived, never remembered. Restoring a title by putting back the
+    // string that was there when the banner appeared restores whatever the
+    // artifact had most recently wiped it to; recomputing cannot.
+    var want = (noticeMarked ? NOTICE_MARK : "") + pageTitle();
+    if (document.title === want) return false;
+    document.title = want;
+    return true;
+  }
+
+  function markNoticeTitle() {
+    noticeMarked = true;
+    applyPageTitle();
+  }
+
+  function unmarkNoticeTitle() {
+    if (!noticeMarked) return;
+    noticeMarked = false;
+    applyPageTitle();
+  }
+
+  function noticeIdOf(box) {
+    return (box && box.getAttribute) ? str(box.getAttribute("data-hc-notice")) : "";
+  }
+
+  function holdNotice(box) {
+    var id = noticeIdOf(box);
+    if (!id || !noticeTimers[id]) return;
+    clearTimeout(noticeTimers[id]);
+    delete noticeTimers[id];
+  }
+
+  function armNotice(box) {
+    var id = noticeIdOf(box);
+    if (!id) return;
+    holdNotice(box);
+    noticeTimers[id] = setTimeout(function () { dropNotice(box); }, NOTICE_MS);
+  }
+
+  function dropNotice(box) {
+    if (!box) return;
+    holdNotice(box);
+    if (box.parentNode) box.parentNode.removeChild(box);
+    var host = noticeStack();
+    if (!host || !host.children || !host.children.length) unmarkNoticeTitle();
+    // The banner has a line of its own in the launch layout, so its arrival
+    // and its departure both move the page. Waiting for the next sweep to
+    // notice would make the columns jump a beat after it.
+    mirrorRootState();
+  }
+
+  function closestNotice(node) {
+    while (node && node !== document) {
+      var name = node.className ? String(node.className) : "";
+      if (name.split(" ").indexOf("hc-notice") >= 0) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function bindNotices() {
+    // Delegated, like the other controls here. These nodes come and go on
+    // their own timers, so a listener bound to one of them is a listener
+    // that outlives the thing it was for.
+    if (noticeBound || !document.addEventListener) return;
+    noticeBound = true;
+    document.addEventListener("click", function (event) {
+      var target = event && event.target;
+      var name = (target && target.className) ? String(target.className) : "";
+      if (name.indexOf("hc-notice-close") < 0) return;
+      var box = closestNotice(target);
+      if (!box) return;
+      if (event.preventDefault) event.preventDefault();
+      if (event.stopPropagation) event.stopPropagation();
+      dropNotice(box);
+    }, true);
+    // Eight seconds is not long enough to read a line and think about it, so
+    // the clock stops while the pointer is on it.
+    document.addEventListener("mouseover", function (event) {
+      var box = closestNotice(event && event.target);
+      if (box) holdNotice(box);
+    }, true);
+    document.addEventListener("mouseout", function (event) {
+      var box = closestNotice(event && event.target);
+      if (!box) return;
+      // mouseout also fires crossing from the headline to the detail line.
+      // Leaving one of its own children is not leaving it.
+      var to = event.relatedTarget;
+      if (to && box.contains && box.contains(to)) return;
+      armNotice(box);
+    }, true);
+  }
+
+  function noticesToShow(rows, since, seen) {
+    var fresh = [];
+    array(rows).forEach(function (row) {
+      if (!row || typeof row !== "object") return;
+      var id = str(row.id);
+      var says = NOTICE_SAYS[str(row.kind)];
+      var at = Date.parse(str(row.at));
+      if (!id || typeof says !== "string" || seen[id]) return;
+      if (!isFinite(at) || at <= since) return;
+      // Marked here rather than at draw time: one this page decided not to
+      // draw is not one it should draw 1.5s later, when it is older still.
+      seen[id] = true;
+      fresh.push({ id: id, says: says, detail: str(row.detail) });
+    });
+    return fresh.slice(-NOTICE_MAX);
+  }
+
+  function noticeNode(row) {
+    var box = document.createElement("div");
+    box.className = "hc-notice";
+    box.setAttribute("data-hc-notice", row.id);
+    var close = document.createElement("span");
+    close.className = "hc-notice-close";
+    close.textContent = "×";
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Dismiss");
+    box.appendChild(close);
+    var title = document.createElement("div");
+    title.className = "hc-notice-title";
+    title.textContent = row.says;
+    box.appendChild(title);
+    // A hook that carried nothing to quote gets a headline and no blank line
+    // pretending there was something to say.
+    if (row.detail) {
+      var detail = document.createElement("div");
+      detail.className = "hc-notice-detail";
+      detail.textContent = row.detail;
+      box.appendChild(detail);
+    }
+    return box;
+  }
+
+  function showNotices(rows) {
+    if (serverState.scope !== "chat") return 0;
+    var fresh = noticesToShow(rows, noticeSince, noticeSeen);
+    if (!fresh.length) return 0;
+    var host = noticeHost();
+    bindNotices();
+    var made = fresh.map(function (row) {
+      return host.appendChild(noticeNode(row));
+    });
+    while (host.children.length > NOTICE_MAX) dropNotice(host.children[0]);
+    // Marked before the timers start: on a page whose clock is running fast
+    // enough to dismiss one immediately, marking afterwards leaves the tab
+    // claiming a banner nobody can see.
+    markNoticeTitle();
+    mirrorRootState();
+    made.forEach(function (box) { armNotice(box); });
+    return fresh.length;
   }
 
   function watchRunFeed() {
@@ -1217,6 +1654,412 @@
   }
 
 
+
+  // --- the launch skin: one chat workspace, three columns ------------------
+  // Everything below is gated on chat scope and on a single root attribute,
+  // so a global vault renders exactly as it did. The artifact keeps owning
+  // state and rendering; this only names its containers (through the same
+  // template patch the rest of the bridge uses) and dresses them.
+
+  var LAUNCH_CSS = [
+      // A darker, flatter palette than the artifact's own dark theme. Only
+      // the greys move: the accent stays the artifact's, so every control
+      // that was accented still is, in both themes.
+      "[data-hc-launch] .hc[data-dark=\"true\"]{--bg:#0d1117;--panel:#0d1117;--panel2:#161b22;--ink:#e6edf3;--mut:#8b949e;--fnt:#6e7681;--bd:#21262d;--bd2:#30363d;--line:#21262d;--hov:#161b22;--dtxt:#c9d1d9}",
+      // On the root, not on .hc: the banner is parented on <body>, outside
+      // the artifact's subtree, so anything declared inside .hc never
+      // reaches it. The theme is mirrored onto the root for the same reason.
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-top:116px}",
+      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922;--hc-noticetxt:#8aa495}",
+      // A banner is not an overlay: it takes its own line, and the columns
+      // give it back when it goes.
+      "[data-hc-launch][data-hc-notice]{--hc-top:150px}",
+      "[data-hc-launch][data-hc-notice] .hc>div:nth-child(2){padding-top:34px!important}",
+      // The page is the workspace: it fills the window and does not scroll
+      // as a whole -- each column scrolls in its own right, the way the
+      // screenshots read.
+      "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0 14px 12px!important}",
+      // Header bar: brand, chips, session.
+      "[data-hc-launch] .hc>div:first-child{padding:9px 16px!important;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-brand{font:700 13px 'Source Code Pro',ui-monospace,monospace!important;letter-spacing:.2px}",
+      "[data-hc-launch] .hc-brand::before{content:'\\25ae';color:var(--acc);margin-right:7px}",
+      "[data-hc-launch] .hc-session{font:11px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-session:not(:empty)::before{content:'\\25cf';color:var(--hc-ok);margin-right:6px;font-size:9px;vertical-align:1px}",
+      "[data-hc-launch] .hc-updated{color:var(--fnt)}",
+      // The title row keeps the chips and loses the page heading: a chat
+      // workspace has one page, and it is already named in the header.
+      "[data-hc-launch] .hc-titlerow{margin-top:0;padding:9px 4px 8px!important;align-items:center!important}",
+      "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
+      "[data-hc-launch] .hc-chiprow{gap:6px!important}",
+      "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
+      "[data-hc-launch] .hc-chip:hover{border-color:var(--bd2);text-decoration:none!important}",
+      // The selected chip is the one the artifact draws bold; reading its
+      // own inline style is what keeps this in step with its state.
+      "[data-hc-launch] .hc-chip[style*=\"700 11px\"]{background:var(--panel2);border-color:var(--bd2);color:var(--ink)!important}",
+      // Three columns. The artifact's own flex row becomes the shell; the
+      // prompt rail is emitted before the inspector and ordered after it,
+      // so nothing has to be re-parented after a render.
+      "[data-hc-launch] .hc-shell{gap:12px!important;align-items:stretch!important;margin-top:0!important}",
+      "[data-hc-launch] .hc-rail-left{flex:0 0 300px!important;height:calc(100vh - var(--hc-top))!important;padding:0 0 6px!important;border-radius:6px}",
+      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border-radius:6px;padding:14px 20px 18px!important}",
+      "[data-hc-launch] .hc-rail-right{order:3;flex:0 0 330px;display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:1px solid var(--bd);border-radius:6px;background:transparent;padding:0 0 12px}",
+      // Rail headings, shared by both rails.
+      "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
+      "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-left>div:nth-child(2){padding:6px 6px 0}",
+      "[data-hc-launch] .hc-rail-left>div:last-child{padding:8px 12px 6px!important;border-top:1px solid var(--bd);font-size:9.5px!important;line-height:1.6}",
+      // A tree row is one line high, so its title has to be one line: a
+      // wrapped one overlapped the row under it at this width.
+      "[data-hc-launch] .hc-row{white-space:nowrap}",
+      "[data-hc-launch] .hc-rowtitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}",
+      // The prompt itself: a code block, not a box to type in.
+      "[data-hc-launch] .hc-rail-code{flex:0 1 auto;min-height:0;overflow:auto;margin:11px 12px 0;padding:10px 12px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-actions{flex:none;padding:10px 12px 0}",
+      "[data-hc-launch] .hc-rail-copy{display:block;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
+      // The light fill is dark enough that only white clears AA on it; the
+      // dark theme's fill is bright enough that only near-black does.
+      "[data-hc-launch][data-hc-theme=\"dark\"] .hc-rail-copy{color:#08130c}",
+      "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
+      // What the chat is actually being told, from /api/state.injection.
+      "[data-hc-launch] .hc-inject{flex:none;margin:auto 12px 0;padding:9px 11px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:10.5px/1.75 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-inject-head{color:var(--fnt);letter-spacing:.6px}",
+      "[data-hc-launch] .hc-inject-on{color:var(--hc-ok)}",
+      "[data-hc-launch] .hc-inject-off{color:var(--fnt)}",
+      // Sources, as a chip rail above the document.
+      "[data-hc-launch] .hc-sources{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:12px}",
+      "[data-hc-launch] .hc-sources-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut);margin-right:2px}",
+      "[data-hc-launch] .hc-src{display:inline-flex;align-items:center;gap:6px;max-width:280px;padding:3px 8px;border:1px solid var(--bd);border-radius:99px;background:var(--panel2);font:10.5px 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-src-tag{font:600 8px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt)}",
+      "[data-hc-launch] .hc-src-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-src-rm{color:var(--fnt);cursor:pointer;font-size:11px}",
+      "[data-hc-launch] .hc-src-rm:hover{color:var(--del)}",
+      "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-src-add:hover{color:var(--acc);border-color:var(--acc)}",
+      "[data-hc-launch] .hc-tabs{margin-top:14px!important}",
+      // The session banner. Same nodes, same timers, same close button as
+      // the toast it replaces -- a bar under the header rather than a card
+      // in the corner, because it reports on the whole workspace.
+      "[data-hc-launch] .hc-notice-stack{position:fixed;top:40px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
+      "[data-hc-launch] .hc-notice{width:auto;max-width:none;border:none;border-bottom:1px solid var(--hc-okbd);border-left:none;border-radius:0;background:var(--hc-okbg);box-shadow:none;display:flex;align-items:baseline;gap:10px;padding:7px 34px 7px 16px}",
+      "[data-hc-launch] .hc-notice-title{color:var(--hc-ok);flex:none}",
+      "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
+      "[data-hc-launch] .hc-notice-detail{margin-top:0;color:var(--hc-noticetxt);flex:1;min-width:0}",
+      "[data-hc-launch] .hc-notice-close{top:6px;right:12px;color:var(--hc-noticetxt)}",
+  ].join("");
+
+  var launchApplied = false;
+
+  function launchDressed() {
+    // Dressed is not the same as skinned: the artifact paints a frame with
+    // its bindings still written out ("saved {{ updatedLabel }}") before it
+    // resolves them, and showing that is showing the machinery. textContent,
+    // not innerText: innerText is computed from layout, and a document held
+    // hidden has none, so it would read as empty forever.
+    var root = document.documentElement;
+    if (!root || !root.getAttribute) return false;
+    if (root.getAttribute("data-hc-launch") !== "chat") return false;
+    if (!document.getElementById("hc-launch-style")) return false;
+    var text = "";
+    try { text = (document.body && document.body.textContent) || ""; }
+    catch (e) { return false; }
+    return text.length > 0 && text.indexOf("{{") < 0;
+  }
+
+  // Kept in step with ui.CHAT_GROUND, which paints the same colour into the
+  // mask the server serves. Two writers, one ground: the server owns the
+  // frames before the unpack, this owns every frame after it.
+  var CHAT_GROUND = "#0d1117";
+
+  function groundColor() {
+    // What the workspace will land on, decided the way the served mask decides
+    // it: the reader's own choice if they have made one, dark otherwise. A
+    // fresh port is a fresh origin, so most opens have nothing saved.
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); }
+    catch (e) { saved = null; }
+    return (saved && saved.themeMode === "light") ? "#fff" : CHAT_GROUND;
+  }
+
+  function holdRoot(root) {
+    // `visibility:hidden` hides the element, not the viewport canvas: the
+    // canvas keeps painting the background propagated from the root, and
+    // where the root has none it falls through to the body's -- which in this
+    // artifact is white. So holding the page is two things, not one. Hiding
+    // it alone is what turned the hold into the flash it was added to remove.
+    if (!root || !root.style) return;
+    if (root.style.visibility !== "hidden") root.style.visibility = "hidden";
+    var ground = groundColor();
+    if (root.style.background !== ground) root.style.background = ground;
+  }
+
+  function releaseRoot(root) {
+    // Both, and in this order: a root that keeps the ground after the reveal
+    // would fight the reader's own theme at the edges the workspace does not
+    // cover.
+    if (!root || !root.style) return;
+    root.style.visibility = "";
+    root.style.background = "";
+  }
+
+  function revealWhenDressed() {
+    // The server hides the document until the artifact unpacks its template,
+    // because what it paints before that is not this product. The unpack
+    // takes that mask away with the rest of the original head -- and for one
+    // to several frames after it, the page is the artifact's own two-column
+    // light layout, which then rearranges when the skin lands. That is the
+    // same flash one step later. Hold the page for those frames instead:
+    // re-hide on whatever documentElement now is, dress it, then show it.
+    if (serverState.scope !== "chat") return;
+    var clock = function () {
+      return (window.performance && performance.now)
+        ? performance.now() : Date.now();
+    };
+    var started = clock();
+    var elapsed = function () { return clock() - started; };
+    var frames = 0;
+    var show = releaseRoot;
+    var step = function () {
+      var root = document.documentElement;
+      if (!root) return;
+      holdRoot(root);
+      var dressed;
+      try {
+        applyLaunchSkin();
+        mirrorRootState();
+        renderChatSurface();
+        dressed = launchDressed();
+      } catch (e) {
+        // Nothing here is worth a page the reader cannot see.
+        show(root);
+        return;
+      }
+      // Two seconds is the failsafe, not the plan: a page nobody can see is
+      // worse than a page that arrives badly dressed. Counted in time rather
+      // than frames, because the machine that needs the failsafe is the one
+      // whose frames are slow.
+      // Two bounds, because they fail differently: a slow machine runs out
+      // of time, and a host whose animation frames are synchronous runs out
+      // of stack long before any clock notices.
+      if (dressed || elapsed() > 2000 || ++frames > 240) {
+        show(root);
+        return;
+      }
+      (window.requestAnimationFrame || function (fn) { setTimeout(fn, 16); })(step);
+    };
+    step();
+  }
+
+  function applyLaunchSkin() {
+    // Chat scope only, and only once the artifact has unpacked its template
+    // over documentElement -- which is why this is re-asserted by the same
+    // standing sweep that keeps the tab named.
+    if (serverState.scope !== "chat") return false;
+    var root = document.documentElement;
+    var changed = false;
+    if (root && root.setAttribute
+        && root.getAttribute("data-hc-launch") !== "chat") {
+      root.setAttribute("data-hc-launch", "chat");
+      changed = true;
+    }
+    if (!document.getElementById("hc-launch-style")) {
+      var style = document.createElement("style");
+      style.id = "hc-launch-style";
+      style.textContent = LAUNCH_CSS;
+      (document.head || document.documentElement).appendChild(style);
+      changed = true;
+      launchApplied = true;
+    }
+    return changed;
+  }
+
+  // The launch stylesheet lives on the root so it can reach the banner,
+  // which is parented on <body>. Two facts it cannot read from there: which
+  // theme the artifact is drawing, and whether a banner is up.
+  function mirrorRootState() {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute) return false;
+    var app = document.querySelector(".hc");
+    var theme = (app && app.getAttribute && app.getAttribute("data-dark") === "true")
+      ? "dark" : "light";
+    var host = noticeStack();
+    var up = !!(host && host.children && host.children.length);
+    var changed = false;
+    if (root.getAttribute("data-hc-theme") !== theme) {
+      root.setAttribute("data-hc-theme", theme);
+      changed = true;
+    }
+    if (up !== (root.getAttribute("data-hc-notice") !== null)) {
+      if (up) root.setAttribute("data-hc-notice", "");
+      else root.removeAttribute("data-hc-notice");
+      changed = true;
+    }
+    return changed;
+  }
+
+  function renderSessionChip() {
+    var slot = document.querySelector(".hc-session");
+    if (!slot) return false;
+    var sid = str(serverState.sessionId).slice(0, 8);
+    var want = sid ? "session " + sid : "";
+    if (slot.textContent === want) return false;
+    slot.textContent = want;
+    return true;
+  }
+
+  // What Claude has been sent, and whether it is still being sent it. Every
+  // line here is a fact /api/state.injection reports; none of it is a
+  // control, because none of it has one -- turning it off is a slash command
+  // in the terminal, which is what the last line says.
+  //
+  // "sent", never "read": the snapshot behind these numbers records what the
+  // hook *rendered* into the turn (see save_context_snapshot). Claude Code
+  // may still drop or compact that injection, so the page cannot claim the
+  // model read it -- only that this side handed it over.
+  var injectionShown = "";
+
+  function injectionLines(state) {
+    var rows = [];
+    if (!state || typeof state !== "object") return rows;
+    rows.push(["head", "context injection"]);
+    rows.push([state.cached ? "on" : "off",
+               state.cached ? "goal document sent ✓"
+                            : "not sent to Claude yet"]);
+    if (typeof state.last_delta_chars === "number") {
+      rows.push(["", state.last_delta_chars
+        ? "~" + Math.ceil(state.last_delta_chars / 4)
+          + " tok changed since it was last sent"
+        : "unchanged since it was last sent"]);
+    }
+    var at = str(state.last_at);
+    if (at) {
+      var when = new Date(Date.parse(at));
+      if (!isNaN(when.getTime())) {
+        rows.push(["", "last sent " + when.toLocaleTimeString("en-US",
+          { hour: "2-digit", minute: "2-digit", hour12: false })]);
+      }
+    }
+    var reads = array(state.reads).map(str).filter(Boolean);
+    if (reads.length) rows.push(["", "reads: " + reads.join(" · ")]);
+    rows.push([state.active ? "on" : "off",
+               state.active ? "on · /goals-ui disable turns it off"
+                            : "off · /goals-ui turns it back on"]);
+    return rows;
+  }
+
+  function renderInjection(state) {
+    var host = document.querySelector(".hc-inject");
+    if (!host) return false;
+    var rows = injectionLines(state);
+    var stamp = JSON.stringify(rows);
+    if (stamp === injectionShown && host.children && host.children.length) {
+      return true;
+    }
+    injectionShown = stamp;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    rows.forEach(function (row) {
+      var line = document.createElement("div");
+      if (row[0]) line.className = "hc-inject-" + row[0];
+      line.textContent = row[1];
+      host.appendChild(line);
+    });
+    return true;
+  }
+
+  var injectionState = null;
+
+  function watchLaunchSurface() {
+    function sweep() {
+      if (serverState.scope !== "chat") return;
+      applyLaunchSkin();
+      mirrorRootState();
+      renderSessionChip();
+      renderInjection(injectionState);
+    }
+    sweep();
+    setInterval(sweep, 700);
+  }
+
+  // Asking which kind of source, and then for the value. The three kinds are
+  // the three the store keeps (github, local, doc); the value goes back
+  // through the artifact's own ctx lists, so it lands on set_sources by the
+  // path every other source edit already takes.
+  function askSource() {
+    return new Promise(function (resolve) {
+      ensureDialogStyles();
+      var overlay = document.createElement("div");
+      overlay.className = "hc-ask";
+      var box = document.createElement("div");
+      box.className = "hc-ask-box";
+      var title = document.createElement("div");
+      title.className = "hc-ask-title";
+      title.textContent = "Attach a source to this goal";
+      var kinds = document.createElement("div");
+      kinds.className = "hc-ask-kinds";
+      var input = document.createElement("input");
+      input.type = "text";
+      input.className = "hc-ask-input";
+      var chosen = "github";
+      var buttons = [];
+
+      function pick(kind) {
+        chosen = kind;
+        input.placeholder = ASK[kind].placeholder;
+        buttons.forEach(function (b) {
+          b.className = "hc-ask-btn"
+            + (b.getAttribute("data-kind") === kind ? " hc-ask-ok" : "");
+        });
+      }
+
+      [["github", "GitHub repo"], ["local", "Local folder"],
+       ["doc", "Document"]].forEach(function (row) {
+        var button = document.createElement("button");
+        button.type = "button";
+        button.setAttribute("data-kind", row[0]);
+        button.textContent = row[1];
+        button.onclick = function () { pick(row[0]); input.focus(); };
+        buttons.push(button);
+        kinds.appendChild(button);
+      });
+
+      var row = document.createElement("div");
+      row.className = "hc-ask-row";
+      var cancel = document.createElement("button");
+      cancel.className = "hc-ask-btn";
+      cancel.textContent = "Cancel";
+      var confirm = document.createElement("button");
+      confirm.className = "hc-ask-btn hc-ask-ok";
+      confirm.textContent = "Attach";
+
+      function close(value) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(value || null);
+      }
+      function take() {
+        var label = str(input.value).trim();
+        close(label ? { type: chosen, label: label } : null);
+      }
+      cancel.onclick = function () { close(null); };
+      confirm.onclick = take;
+      input.onkeydown = function (e) {
+        if (e.key === "Enter") { e.preventDefault(); take(); }
+        if (e.key === "Escape") { e.preventDefault(); close(null); }
+      };
+      overlay.onclick = function (e) { if (e.target === overlay) close(null); };
+      row.appendChild(cancel);
+      row.appendChild(confirm);
+      box.appendChild(title);
+      box.appendChild(kinds);
+      box.appendChild(input);
+      box.appendChild(row);
+      overlay.appendChild(box);
+      (document.querySelector(".hc") || document.body).appendChild(overlay);
+      pick("github");
+      setTimeout(function () { input.focus(); }, 0);
+    });
+  }
+
   // --- asking for a value the artifact would otherwise invent --------------
 
   var ASK = {
@@ -1235,6 +2078,7 @@
       ".hc-ask-input{width:100%;box-sizing:border-box;border:1px solid var(--bd2);border-radius:2px;background:var(--panel2);color:var(--ink);outline:none;padding:8px 10px;font:12px 'Source Code Pro',monospace}",
       ".hc-ask-input:focus{border-color:var(--acc)}",
       ".hc-ask-row{display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-top:14px}",
+      ".hc-ask-kinds{display:flex;gap:6px;margin-bottom:10px}",
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
@@ -1247,6 +2091,9 @@
       ".hc-pick-when{display:block;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:3px}",
       ".hc-pick-text{display:block;white-space:pre-wrap;word-break:break-word}",
       ".hc-pick-none{padding:12px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-pick-box{position:relative}",
+      ".hc-pick-close{position:absolute;top:8px;right:8px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:2px;cursor:pointer;font:15px/1 'Source Code Pro',monospace}",
+      ".hc-pick-close:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
   ].join("");
 
   function ensureDialogStyles() {
@@ -1303,10 +2150,84 @@
     });
   }
 
+  // Which anchors the last patch run failed to find. Reset on every call.
+  var patchMisses = [];
+
   // Its three add controls append a placeholder row. Make them ask for the
   // real value first; nothing else about them changes.
   function patchBundleSource(source) {
+    // Four of the pairs below differ by workspace, and markup cannot ask at
+    // render time the way stepTab's patched expression can. The scope is
+    // published from the state fetch -- a synchronous XHR -- before this
+    // runs, so it is already settled here; a standalone artifact with no
+    // bridge never reaches this function at all.
+    var chat = (typeof window !== "undefined" && window.__hcScope === "chat");
     var parts = [
+      // One line per goal. At rail width a wrapped title overlapped
+      // the row under it, so the row says which span is the title.
+      ["<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">",
+       chat ? "<div class=\"hc-row\" sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"
+            : "<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"],
+      ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
+       chat ? "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span class=\"hc-rowtitle\" style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"
+            : "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"],
+      // --- the launch layout, chat scope only ---------------------------
+      // Names for the containers the skin dresses, and the one column the
+      // artifact does not have: a rail for the prompt it assembles. The
+      // rail is emitted before the inspector and ordered after it in CSS,
+      // so no node is re-parented and a re-render cannot un-place it.
+      ["<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">",
+       chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
+            : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
+      ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div>"
+            : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
+      ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-name\">PROMPT</span><span class=\"hc-rail-count\">{{ draftTok }}</span></div><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-code\">{{ draft }}</div><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt it assembles from that goal\u2019s document.</div></sc-if><div class=\"hc-inject\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+            : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
+      // The sources this goal was written against, as a rail over the
+      // document. Both lists and both remove handlers are the artifact's
+      // own, so every edit lands on set_sources through the path that was
+      // already there -- this is the source control the textbox pane had.
+      ["<div style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">",
+       chat ? "<div class=\"hc-sources\"><span class=\"hc-sources-label\">SOURCES</span><sc-for list=\"{{ codeRows }}\" as=\"cr\" hint-placeholder-count=\"1\"><span class=\"hc-src\"><span class=\"hc-src-tag\">{{ cr.tag }}</span><span class=\"hc-src-label\">{{ cr.label }}</span><span sc-camel-on-click=\"{{ cr.rm }}\" title=\"Remove this source\" class=\"hc-src-rm\">\u00d7</span></span></sc-for><sc-for list=\"{{ docRows }}\" as=\"dr\" hint-placeholder-count=\"1\"><span class=\"hc-src\"><span class=\"hc-src-tag\">DOC</span><span class=\"hc-src-label\">{{ dr.label }}</span><span sc-camel-on-click=\"{{ dr.rm }}\" title=\"Remove this source\" class=\"hc-src-rm\">\u00d7</span></span></sc-for><span sc-camel-on-click=\"{{ srcAdd }}\" class=\"hc-src-add\">+ Add source</span></div>\n<div class=\"hc-tabs\" style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"
+            : "<div style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"],
+      // + Add source asks which of the three kinds the store keeps and
+      // then for the value, rather than appending a placeholder row.
+      ["      codeEmpty: codeList.length === 0,",
+       chat ? "      srcAdd: () => window.__hcAskSource().then(function (v) { if (!v) return; if (v.type === 'doc') { setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v.label }])); } else { setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: v.type, label: v.label }])); } }),\n      codeEmpty: codeList.length === 0,"
+            : "      codeEmpty: codeList.length === 0,"],
+      // Two numbers the rails print: how many goals this chat has, and
+      // how big the assembled prompt is. Characters over four, labelled
+      // "~", because a token count is not something a browser can know.
+      ["      hasCrumb: !!(trail && trail.length > 1),",
+       chat ? "      goalCount: total,\n      draftTok: '~' + Math.ceil(String(draft || '').length / 4) + ' tok',\n      hasCrumb: !!(trail && trail.length > 1),"
+            : "      hasCrumb: !!(trail && trail.length > 1),"],
+      // All first, because a chat opens on All and its tree is small.
+      // The count moves to the end so a chip reads as a name with a
+      // number rather than a parenthetical aside.
+      ["const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',",
+       chat ? "const filters = [['all', 'All', total], ['active', 'Active', activeN], ['inprog', 'In progress', ipN], ['done', 'Done', doneN]].map(([k, lab, n], i) => ({\n      lab: lab + ' ' + n,"
+            : "const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',"],
+      ["<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>",
+       chat ? "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span class=\"hc-chip\" sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"
+            : "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"],
+      ["<div style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">",
+       chat ? "<div class=\"hc-titlerow\" style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">"
+            : "<div style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">"],
+      ["<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">",
+       chat ? "<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-chiprow\" style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">"
+            : "<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">"],
+      // The window is named for what it is: one chat's goals. "Vault"
+      // is the global product this scope is not.
+      ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
+       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span>"
+            : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
+      // Room for the session this window is a second view of. The bridge
+      // fills it in: only the server knows which conversation this is.
+      ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
+       chat ? "</span><span class=\"hc-session\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+            : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
       // Both subtitles were sized for the shorter copy they replaced, so the
@@ -1321,6 +2242,25 @@
       // landing on Agent or Artifact for a goal that has neither.
       ["paneTab: (saved && saved.v >= 6 && ['prompt', 'agent', 'artifact'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',",
        "paneTab: (saved && saved.hcKeepPane && ['prompt', 'agent', 'artifact', 'context'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',"],
+      // The seeded filter never reached the page: the constructor read
+      // saved.selId, saved.labels and saved.paneTab, but hardcoded the
+      // filter. A chat opening on 'active' hides its finished goals, and
+      // the chip row said 'active' while the store said otherwise.
+      ["      filter: 'active',",
+       "      filter: (saved && ['active', 'inprog', 'done', 'all'].indexOf(saved.filter) >= 0) ? saved.filter : 'active',"],
+      // And the store it writes back has to declare the version the seed
+      // trusts, or the reader's own choice is discarded on the next load
+      // as if it were the artifact's default. v7 means "this origin has
+      // been seeded by the bridge", which is true the moment it saves.
+      ["localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 6, goals,",
+       "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals,"],
+      // A chat workspace is not offered AGENT or REVIEW -- the ops behind
+      // them answer "global scope only" here -- so the keyboard must not
+      // step onto them either. It reads the scope at the moment of the
+      // keypress rather than at patch time, which keeps this one string
+      // true for whichever server the artifact is served from.
+      ["const tabs = ['context', 'prompt', 'agent', 'artifact'];",
+       "const tabs = (typeof window !== 'undefined' && window.__hcScope === 'chat') ? ['context'] : ['context', 'prompt', 'agent', 'artifact'];"],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -1334,6 +2274,29 @@
       // them. The seed marks itself v7 so only a seeded store qualifies.
       ["if (saved && saved.v >= 4 && Array.isArray(saved.goals) && saved.goals.length && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);",
        "if (saved && saved.v >= 4 && Array.isArray(saved.goals) && (saved.goals.length || saved.v >= 7) && cnt(saved.goals) <= 2000) g0 = norm(saved.goals);"],
+      // And the same demo copy reaches a real tree by a second door: the
+      // constructor backfilled any empty desc from a map keyed by the sample
+      // tree's own ids -- g1, g2, g3, g4 among them -- which are exactly the
+      // ids the vault mints. One filter chip was enough to write four
+      // sentences nobody wrote into goals.json, and from there into the
+      // prompt the reader copied. The map stays; nothing applies it.
+      ["    try { ad(g0); } catch (e) {}",
+       "    /* the demo backfill above is not applied: its keys are the ids\n"
+       + "       the vault mints, so it would overwrite real goals */"],
+      // Its other demo door is a fallback rather than a backfill: a goal
+      // the reader adds in the tree is minted with ctx: null, and every
+      // context read then answered from the artifact's own sample -- so
+      // the prompt for a goal named a second ago claimed an objective, a
+      // GitHub repo and a document belonging to somebody else's demo, and
+      // said so until the page was next reloaded. contextOf already sets
+      // every field for a goal the server knows about; these three are
+      // what the gap was filled with.
+      ["    const CTXDEF = { objective: 'Get the drawable frame populating in Chrome and validate the boundary feature end-to-end.', said: '\"why is the drawable boundary not showing up?\"\\n\"ok i put the frame in google chrome but it doesnt seem to be getting populated\u2026\"', decided: '- Build as LSUIElement menu bar app (no dock icon, no window)\\n- Split responsibilities: extension handles Chrome, native app handles other apps', built: '- Menu bar record icon (33\u00d724 points, positioned at x=1079)\\n- Captured events in Supabase database (41 events from test session)', hit: '- Accessibility permissions invalidated after rebuilds (code hash mismatch)\\n- Chrome doesn\\'t expose page content to OS Accessibility layer\\n- Full validation that drawable frame feature works as intended', open: '- Full validation that drawable frame feature works as intended' };",
+       "    const CTXDEF = {};"],
+      ["    const CODEDEF = [{ id: 'c1', type: 'github', label: 'divadbaroon/claude-plugins' }];",
+       "    const CODEDEF = [];"],
+      ["    const DOCDEF = [{ id: 'd1', type: 'doc', label: 'design-notes.md' }];",
+       "    const DOCDEF = [];"],
       // Its agent panel simulated a session: templated todos, a hardcoded file
       // list, and diff stats computed from the length of each filename. Both
       // entry points now start a real goal-bound session instead.
@@ -1396,22 +2359,40 @@
       // The prompt is what the run sends, so it belongs with the run —
       // behind a disclosure, because it is long and rarely the thing the
       // reader came for.
+      // In a chat the draft is not sent anywhere: it is assembled from the
+      // goal's document and read out through Copy prompt. Nothing kept an
+      // edit to it -- not a reload, not a CONTEXT round trip -- so the box
+      // is read-only and the line above it says which of the two it is.
+      // The global pane keeps its editable box: there the draft is what
+      // runAgent actually sends.
       ["showPrompt: !!sel && paneTab === 'prompt'",
-       "showPrompt: !!sel && paneTab === 'agent'"],
+       chat ? "showPrompt: !!sel && paneTab === 'prompt' /* its own tab here */"
+            : "showPrompt: !!sel && paneTab === 'agent'"],
       ["<span sc-camel-on-click=\"{{ tabPrompt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tpC }};border-bottom:2px solid {{ tpBd }};margin-bottom:-1px\">PROMPT</span>\n",
-       "<!--prompt folded into agent-->\n"],
+       chat ? "<!--prompt tab kept for chat scope--><span sc-camel-on-click=\"{{ tabPrompt }}\" style=\"padding:0 2px 7px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;cursor:pointer;color:{{ tpC }};border-bottom:2px solid {{ tpBd }};margin-bottom:-1px\">PROMPT</span>\n"
+            : "<!--prompt folded into agent-->\n"],
       ["<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\">\n<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</sc-if>",
-       "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">Run Claude Code on this goal with the self-contained context Vault has assembled. Progress appears in REVIEW.</div><details class=\"hc-promptbox\"><summary class=\"hc-promptsum\">RECOMMENDED PROMPT</summary>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</details></sc-if>"],
-      // AGENT reads top to bottom: what it is, the prompt it will send,
-      // the notes the user adds to it, then the button that runs it.
+       chat ? "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">assembled from your goal document \u00b7 read-only</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" readonly=\"readonly\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n<div style=\"margin-top:10px;display:flex;justify-content:flex-end\"><span sc-camel-on-click=\"{{ copyPrompt }}\" style=\"padding:4px 11px;border:1px solid var(--bd2);border-radius:2px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);border-color:var(--acc)\">{{ copyPromptLabel }}</span></div>\n</sc-if>"
+            : "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">Run Claude Code on this goal with the self-contained context Vault has assembled. Progress appears in REVIEW.</div><details class=\"hc-promptbox\"><summary class=\"hc-promptsum\">RECOMMENDED PROMPT</summary>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</details></sc-if>"],
+      // The notes box is the Context pane now: one markdown document per
+      // goal, rendered as it is typed, with the prompts that fed it below.
+      // The textbox pane it replaces -- objective, code, documents,
+      // decisions, blockers, built -- goes dormant in BOTH scopes. Nothing
+      // is deleted: every field, handler and getter behind it stays, so the
+      // markup can be re-gated in one line if the document does not hold.
       ["showNotes: !!sel && paneTab === 'prompt'",
-       "showNotes: !!sel && paneTab === 'agent'"],
+       "showNotes: !!sel && paneTab === 'context'"],
+      ["showCtx: !!sel && paneTab === 'context',",
+       "showCtx: false,"],
       // The goal is already named at the top of the inspector; the draft
       // restating it just pushed the actual content down.
       ["blocks.push(isSub ? 'Within the main goal \"' + (trail[0].title || 'Untitled') + '\", I am working on: ' + (sel.title || 'Untitled') + '.' : 'I am working on the goal: ' + (sel.title || 'Untitled') + '.');\n",
        "void 0;\n"],
-      ["placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"",
-       "placeholder=\"Add any other thoughts you would like the agent to know...\""],
+      // The pane, top to bottom: the goal's own document, then the prompts
+      // it was written from. The heading rule above it went with the
+      // "additional" framing -- this is not an addendum to anything.
+      ["<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ADDITIONAL NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:96px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>",
+       "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:360px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>"],
       // The section reports the run's state, not only a task list.
       [">AGENT TODOS</div>",
        ">AGENT STATUS</div>"],
@@ -1471,7 +2452,7 @@
       // way, what is done. Decisions follow what was built -- both are
       // settled, and neither belongs between the goal and its blockers.
       ["<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">DECISIONS</span><sc-if value=\"{{ inhDecided }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxDecided }}\" sc-camel-on-change=\"{{ ctxDecidedCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">BLOCKERS &amp; OPEN QUESTIONS</span><sc-if value=\"{{ inhHit }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxHit }}\" sc-camel-on-change=\"{{ ctxHitCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ALREADY BUILT</span><sc-if value=\"{{ inhBuilt }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxBuilt }}\" sc-camel-on-change=\"{{ ctxBuiltCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>",
-       "<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">BLOCKERS &amp; OPEN QUESTIONS</span><sc-if value=\"{{ inhHit }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxHit }}\" sc-camel-on-change=\"{{ ctxHitCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ALREADY BUILT</span><sc-if value=\"{{ inhBuilt }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxBuilt }}\" sc-camel-on-change=\"{{ ctxBuiltCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">DECISIONS</span><sc-if value=\"{{ inhDecided }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxDecided }}\" sc-camel-on-change=\"{{ ctxDecidedCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>"],
+       "<!--related prompts moved under the document-->\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">BLOCKERS &amp; OPEN QUESTIONS</span><sc-if value=\"{{ inhHit }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxHit }}\" sc-camel-on-change=\"{{ ctxHitCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ALREADY BUILT</span><sc-if value=\"{{ inhBuilt }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxBuilt }}\" sc-camel-on-change=\"{{ ctxBuiltCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>\n<div style=\"margin-top:15px;display:flex;align-items:center;gap:7px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">DECISIONS</span><sc-if value=\"{{ inhDecided }}\" hint-placeholder-val=\"{{ false }}\"><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">INHERITED</span></sc-if></div>\n<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\"><textarea key=\"{{ selCtxKey }}\" value=\"{{ ctxDecided }}\" sc-camel-on-change=\"{{ ctxDecidedCh }}\" sc-camel-on-input=\"{{ ctxSize }}\" ref=\"{{ ctxRef }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;border:none;outline:none;resize:none;background:transparent;padding:8px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);overflow:hidden\"></textarea></div>"],
       // The tree position, in the pane and in the prompt. The crumb under
       // the title said the same thing in a place that had no room for it.
       ["\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"display:inline-flex;gap:7px;align-items:center\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">CODE CONTEXT</span>",
@@ -1481,12 +2462,17 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n"],
-      // A prompt without its conversation is a quote without a source.
+       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = false, fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
+      // A prompt without its conversation is a quote without a source. The
+      // separator belongs to the source, not to the line: chat prompt
+      // records carry no session_id (chat_state writes id, ordinal, role,
+      // text and created_at), so a middot drawn beside the value rendered
+      // on every row with nothing after it.
       ["        text: p.text,\n",
-       "        text: p.text,\n        conv: p.conv ? 'conversation ' + p.conv : '',\n"],
+       "        text: p.text,\n        conv: p.conv ? ' \u00b7 conversation ' + p.conv : '',\n"
+       + "        origin: p.auto ? 'automatic' : 'yours',\n"],
       ["<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span>",
-       "<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ hr.when }}<span style=\"color:var(--bd2);padding:0 6px\">\u00b7</span>{{ hr.conv }}</span>"],
+       "<span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis\">{{ hr.when }}{{ hr.conv }}</span>"],
       // The goals panel reports any analysis, not only the tree build:
       // switching to this tab while conversations are still being read
       // used to show a banner over an empty tree. It is also read from
@@ -1518,14 +2504,49 @@
       // The run's state opens the artifact card it describes.
       ["<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div style=\"font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)\">{{ artSummary }}</div>",
        "<div style=\"margin-top:6px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 12px\">\n<div class=\"hc-live\"></div>\n<sc-if value=\"{{ artHasSummary }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"max-height:230px;overflow-y:auto;border:1px solid var(--acc);border-radius:2px;background:var(--accbg);padding:9px 11px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ artSummary }}</div></sc-if>"],
+      // A goal nobody has written to yet shows the six headings rather
+      // than an empty box: the shape of the document is the prompt to fill
+      // it in. Nothing is stored until the first keystroke, which persists
+      // the whole document through the existing notesChange -> import path.
+      ["notesVal: sel ? (sel.notes || '') : '',",
+       "notesVal: sel ? (sel.notes || window.__hcDefaultDoc || '') : '',"],
+      ["notesOverlay: sel ? this.md(sel.notes || '') : null,",
+       "notesOverlay: sel ? this.md(sel.notes || window.__hcDefaultDoc || '') : null,"],
+      // Copying the recommended prompt, without doCopy's two side effects:
+      // it appends a metadata footer nobody asked for, and it records the
+      // draft as a prompt the user is then shown as one of their own words.
+      ["      copy: () => this.doCopy(),\n",
+       !chat ? "      copy: () => this.doCopy(),\n" :
+       "      copy: () => this.doCopy(),\n"
+       // The rail is where the prompt is read in a chat, and the pane that
+       // owned the textarea is not drawn there -- so this falls back to the
+       // assembled draft the rail is printing, which is the same string.
+       + "      copyPrompt: () => { const t = this._draftEl ? this._draftEl.value : String(draft || ''); "
+       + "const done = () => { this.setState({ copied: true }); clearTimeout(this._ct); "
+       + "this._ct = setTimeout(() => this.setState({ copied: false }), 1600); }; "
+       + "const fb = () => { const ta = document.createElement('textarea'); ta.value = t; "
+       + "ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); "
+       + "ta.select(); let ok = false; try { ok = document.execCommand('copy') === true; } catch (e) { ok = false; } ta.remove(); return ok; }; "
+       + "if (navigator.clipboard && navigator.clipboard.writeText) "
+       + "{ navigator.clipboard.writeText(t).then(done, () => { if (fb()) done(); }); } "
+       + "else { if (fb()) done(); } },\n"
+       + "      copyPromptLabel: copied ? 'copied \u2713' : 'Copy prompt',\n"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
        "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
     ];
-    return parts.reduce(function (patched, part) {
+    // Every pair is a string match against a checked-in artifact, so a
+    // re-vendored bundle degrades to "the layout silently did not apply".
+    // The indexes that matched nothing are kept rather than only warned
+    // about, so a test can assert the whole set landed.
+    patchMisses = [];
+    return parts.reduce(function (patched, part, index) {
       if (patched.indexOf(part[1]) >= 0) return patched;
       var at = patched.indexOf(part[0]);
       if (at < 0) {
-        console.warn("[hc ui] an add-source control was not found; left as-is");
+        patchMisses.push(index);
+        console.warn("[hc ui] template anchor " + index
+                     + " was not found; left as-is: "
+                     + String(part[0]).slice(0, 60));
         return patched;
       }
       return patched.slice(0, at) + part[1] + patched.slice(at + part[0].length);
@@ -1546,6 +2567,7 @@
   }
 
   window.__hcAsk = ask;
+  window.__hcAskSource = askSource;
 
   // --- a banner for work happening outside the page ------------------------
   // Analysis runs in a detached worker over the user's whole history. Without
@@ -1729,6 +2751,12 @@
   }
 
   function watchAnalysis() {
+    // The analysis this reports is the global vault's, and the route it
+    // reads answers "global scope only" in a chat -- so polling it there is
+    // a request every few seconds for the life of the page whose answer
+    // cannot change anything on screen. Same early return as loadPlan and
+    // watchRunFeed, and it still resolves so callers can await first paint.
+    if (serverState.scope === "chat") return Promise.resolve();
     // Never decide from state that has not been fetched. Guarding the poll on
     // "is anything running" deadlocked: the answer is false until the first
     // fetch, and the first fetch was what the guard skipped.
@@ -1841,6 +2869,12 @@
     reconcileState: reconcileState,
     clearKeepPane: clearKeepPane,
     patchBundleSource: patchBundleSource,
+    revealWhenDressed: revealWhenDressed,
+    launchDressed: launchDressed,
+    groundColor: groundColor,
+    holdRoot: holdRoot,
+    releaseRoot: releaseRoot,
+    patchMisses: function () { return patchMisses.slice(); },
     seedPayload: seedPayload,
     mergeTrees: mergeTrees,
     acceptState: acceptState,
@@ -1863,6 +2897,15 @@
     liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
+    renderChatSurface: renderChatSurface,
+    showNotices: showNotices,
+    noticesToShow: noticesToShow,
+    pageTitle: pageTitle,
+    applyPageTitle: applyPageTitle,
+    noticeStack: noticeStack,
+    noticeCss: function () { return NOTICE_CSS; },
+    paneTabBar: paneTabBar,
+    headerNav: headerNav,
     promptAddSlot: promptAddSlot,
     openPromptPicker: openPromptPicker,
     pickPrompt: pickPrompt,
@@ -1872,20 +2915,39 @@
     setSetupForTest: function (value) { setupState = value; },
     setDetailForTest: function (id, value) { details[id] = value; },
     seedForTest: seed,
-    loadDetailForTest: loadDetail
+    loadDetailForTest: loadDetail,
+    applyLaunchSkin: applyLaunchSkin,
+    launchCss: function () { return LAUNCH_CSS; },
+    injectionLines: injectionLines,
+    renderInjection: renderInjection,
+    renderSessionChip: renderSessionChip,
+    askSource: askSource
   };
 
   seed();
+  // Published before the template is patched and before the artifact boots,
+  // because both read it: the patched source asks it which tabs exist, and
+  // the watcher below asks it which controls to take off the page.
+  window.__hcScope = serverState.scope;
+  // The empty document's spine, read by the patched notesVal/notesOverlay
+  // getters. A goal with no notes shows the six headings rather than an
+  // empty box, and the first keystroke persists the whole document.
+  window.__hcDefaultDoc = DEFAULT_DOC;
   // Placed after the template island and before the closing body tag: the
   // artifact's DOMContentLoaded listener is registered but has not unpacked
   // the template yet, so patching here is safe.
   patchBundleTemplate();
   function boot() {
+    // First: hold the page until it is dressed. Everything below can run
+    // while it is hidden.
+    revealWhenDressed();
     ensurePaneStyles();
     // Read once. Leaving it set would make every later reload land on
     // whatever pane happened to be open when a run last finished.
     clearKeepPane();
     watchPromptAdd();
+    watchChatSurface();
+    watchLaunchSurface();
     watchGoals();
     watchAnalysis();
     watchSelection();

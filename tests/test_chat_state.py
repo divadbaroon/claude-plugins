@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -80,6 +81,10 @@ class ChatStateTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.base = Path(self.temp.name) / "state"
         self.transcript = Path(self.temp.name) / "chat.jsonl"
+        # A stand-in for Claude's own per-project transcript, so mirrored
+        # goal documents never land in the developer's real home.
+        self.chat_jsonl = str(
+            Path(self.temp.name) / "claude-project" / f"{SID}.jsonl")
 
     def tearDown(self):
         self.temp.cleanup()
@@ -300,10 +305,10 @@ class ChatStateTests(unittest.TestCase):
         write_jsonl(
             self.transcript,
             [
-                user_record("/hc-ui", uuid="launcher", prompt_id="launcher"),
+                user_record("/goals-ui", uuid="launcher", prompt_id="launcher"),
                 user_record(
-                    "<command-name>/hc-ui</command-name>\n"
-                    "<command-message>hc-ui</command-message>",
+                    "<command-name>/goals-ui</command-name>\n"
+                    "<command-message>goals-ui</command-message>",
                     uuid="wrapped-launcher",
                     prompt_id="wrapped-launcher",
                 ),
@@ -344,7 +349,7 @@ class ChatStateTests(unittest.TestCase):
         self.assertIn("task_notification", kinds)
         launchers = [
             event for event in CS.load_events(SID, self.base)
-            if "hc-ui" in event.get("text", "")
+            if "goals-ui" in event.get("text", "")
         ]
         self.assertEqual(2, len(launchers))
         self.assertTrue(all(not event["usable_for_goals"] for event in launchers))
@@ -538,7 +543,8 @@ class ChatStateTests(unittest.TestCase):
         self.assertIn("Connect this chat", context)
         self.assertIn("USER PROMPT: Persist this requirement", context)
         self.assertIn("DESCRIPTION: Keep the scoped UI synchronized", context)
-        self.assertIn("USER NOTES: Preserve browser-authored relationships", context)
+        self.assertIn(
+            "  - USER NOTES:\n    Preserve browser-authored relationships", context)
         self.assertIn("PRIORITY: high", context)
         self.assertIn("Recent inactive goals:", context)
         self.assertIn("Debug the rebuild timeout [completed]", context)
@@ -610,11 +616,446 @@ class ChatStateTests(unittest.TestCase):
         self.assertEqual([second, first], goal["prompt_ids"])
         self.assertEqual([first], goal["auto_prompt_ids"])
 
+    def test_ui_launcher_detection_spans_current_and_legacy_spellings(self):
+        for text in ("/goals-ui", "/goals-ui now", "\\goals-ui", "goals-ui",
+                     "<command-name>/goals-ui</command-name>",
+                     "/hc-ui", "<command-name>/hc-ui</command-name>"):
+            with self.subTest(launcher=text):
+                self.assertTrue(CS._is_goals_ui_launcher(text))
+        for text in ("goal", "open the goal ui please", "/goals-ui-ish", ""):
+            with self.subTest(other=text):
+                self.assertFalse(CS._is_goals_ui_launcher(text))
+
     def test_session_id_rejects_traversal(self):
         for bad in ("", "../escape", "a/b", ".", " space", "x" * 201):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 CS.paths(bad, self.base)
         self.assertFalse((Path(self.temp.name) / "escape").exists())
+
+    def test_goal_context_carries_the_whole_notes_document(self):
+        self.transcript.touch()
+        CS.ingest_hook(
+            {
+                "session_id": SID,
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "Write the doc model",
+                "transcript_path": str(self.transcript),
+            },
+            root=self.base,
+        )
+        body = "\n".join(f"- decision {n}" for n in range(120))
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Write the doc model", "status": "active",
+                "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                "prompt_ids": [],
+                "notes": f"# Objective\n\n# Decisions\n{body}\n\n# Blockers\n",
+            }]},
+            {"items": []},
+            root=self.base,
+        )
+
+        context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertIn("# Decisions", context)
+        self.assertIn("- decision 0", context)
+        self.assertIn("- decision 119", context)
+        self.assertGreater(len(body), 280)
+        self.assertNotIn("# Objective", context)
+        self.assertNotIn("# Blockers", context)
+
+    def test_goal_context_names_every_attached_source_by_kind(self):
+        self.transcript.touch()
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [
+                {"id": "g1", "title": "With sources", "status": "active",
+                 "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                 "prompt_ids": [], "priority": "high",
+                 "sources": [
+                     {"id": "s1", "type": "local", "label": "~/proj"},
+                     {"id": "s2", "type": "github", "label": "octo/repo"},
+                     {"id": "s3", "type": "doc",
+                      "label": "https://example.com/spec"},
+                 ]},
+                {"id": "g2", "title": "Without sources", "status": "active",
+                 "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                 "prompt_ids": []},
+            ]},
+            {"items": []},
+            root=self.base,
+        )
+
+        context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertIn("  - SOURCE (local): ~/proj", context)
+        self.assertIn("  - SOURCE (github): octo/repo", context)
+        self.assertIn("  - SOURCE (doc): https://example.com/spec", context)
+        self.assertLess(context.index("PRIORITY: high"),
+                        context.index("SOURCE (local)"))
+        # The goal that has none contributes no SOURCE line at all.
+        self.assertEqual(3, context.count("- SOURCE ("))
+
+    def test_goal_context_caps_a_long_source_list_at_six(self):
+        self.transcript.touch()
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "Many sources", "status": "active",
+                "parent_goal_id": None, "todos": [], "important_item_ids": [],
+                "prompt_ids": [],
+                "sources": [{"id": f"s{n}", "type": "local",
+                             "label": f"~/p{n}"} for n in range(10)],
+            }]},
+            {"items": []},
+            root=self.base,
+        )
+
+        context = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertEqual(6, context.count("- SOURCE ("))
+        self.assertIn("- SOURCE (local): ~/p5", context)
+        self.assertNotIn("~/p6", context)
+
+    def test_goal_context_is_never_truncated_by_a_character_budget(self):
+        # Every cap here was ours, not the host's. A goal the user wrote 4,000
+        # characters into is not served by handing the model the first 280.
+        description = "why this matters " * 240
+        notes = "\n".join(f"- decision {n}" for n in range(400))
+        prompt_text = "rebuild the pipeline " * 200
+        goals = {"version": 1, "goals": [{
+            "id": f"g{n}", "title": f"Goal {n}", "status": "active",
+            "parent_goal_id": None, "todos": [],
+            "description": description,
+            "notes": f"# Decisions\n{notes}\n",
+            "prompt_ids": [f"p{i}" for i in range(6)],
+            "important_item_ids": [f"i{i}" for i in range(5)],
+        } for n in range(4)]}
+        important = {"items": [{"id": f"i{i}", "text": f"important {i} " * 60}
+                               for i in range(5)]}
+        prompts = [{"id": f"p{i}", "text": f"{i} {prompt_text}"}
+                   for i in range(6)]
+
+        text = CS._goal_context_text(SID, goals, important, prompts)
+
+        self.assertGreater(len(text), 8_000)
+        self.assertIn(description.strip(), text)
+        self.assertIn("- decision 0", text)
+        self.assertIn("- decision 399", text)
+        for i in range(6):
+            self.assertIn(f"USER PROMPT: {i} {prompt_text}".strip(), text)
+        for i in range(5):
+            self.assertIn(f"IMPORTANT: {important['items'][i]['text']}", text)
+        self.assertIn("Goal 3", text)
+
+    def test_goals_ui_stays_on_until_it_is_disabled_and_can_be_re_enabled(self):
+        self.assertFalse(CS.goals_ui_active(SID, self.base))
+        CS.mark_goals_ui_invoked(SID, self.base)
+        self.assertTrue(CS.goals_ui_active(SID, self.base))
+        opened_at = CS.load_manifest(SID, self.base)["goals_ui_invoked_at"]
+
+        CS.disable_goals_ui(SID, self.base)
+        self.assertFalse(CS.goals_ui_active(SID, self.base))
+        self.assertTrue(CS.goals_ui_invoked(SID, self.base))
+
+        CS.mark_goals_ui_invoked(SID, self.base)
+        self.assertTrue(CS.goals_ui_active(SID, self.base))
+        # Re-opening clears the disable without rewriting the first opt-in.
+        self.assertEqual(opened_at,
+                         CS.load_manifest(SID, self.base)["goals_ui_invoked_at"])
+        self.assertIsNone(
+            CS.load_manifest(SID, self.base).get("goals_ui_disabled_at"))
+
+    def test_disabling_forgets_the_snapshot_so_re_opening_resends_everything(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        CS.mark_goals_ui_invoked(SID, self.base)
+        CS.render_context_injection(SID, "delta", transcript_path=self.chat_jsonl,
+                                    root=self.base)
+        self.assertTrue(CS.load_context_snapshot(SID, self.base))
+
+        CS.disable_goals_ui(SID, self.base)
+
+        # Claude was told nothing while the feature was off, so a diff against
+        # what it "last saw" would be against text it no longer has.
+        self.assertEqual({}, CS.load_context_snapshot(SID, self.base))
+
+    def test_context_snapshot_is_owner_only_and_survives_corruption(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        CS.save_context_snapshot(SID, "hello", self.base)
+        snapshot = CS.paths(SID, self.base).context_snapshot
+
+        self.assertEqual(0o600, snapshot.stat().st_mode & 0o777)
+        self.assertEqual("hello", CS.load_context_snapshot(SID, self.base)["text"])
+        snapshot.write_text("[]", encoding="utf-8")
+        self.assertEqual({}, CS.load_context_snapshot(SID, self.base))
+        CS.clear_context_snapshot(SID, self.base)
+        self.assertFalse(snapshot.exists())
+        CS.clear_context_snapshot(SID, self.base)
+
+    def test_mirror_lands_beside_the_transcript_and_only_rewrites_on_change(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        transcript = Path(self.temp.name) / "claude-project" / f"{SID}.jsonl"
+
+        target = CS.mirror_goal_context(SID, str(transcript), "/repo",
+                                        root=self.base)
+
+        stored = CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8")
+        self.assertEqual(transcript.parent / "goals-ui" / f"{SID}.md", target)
+        self.assertEqual(stored, target.read_text(encoding="utf-8"))
+        self.assertEqual(0o600, target.stat().st_mode & 0o777)
+        self.assertEqual(0o700, target.parent.stat().st_mode & 0o777)
+
+        # Unchanged goals must not rewrite the file on every prompt.
+        before = target.stat().st_mtime_ns
+        self.assertEqual(target, CS.mirror_goal_context(
+            SID, str(transcript), "/repo", root=self.base))
+        self.assertEqual(before, target.stat().st_mtime_ns)
+
+    def test_mirror_falls_back_to_a_project_directory_claude_already_made(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        home = Path(self.temp.name) / "home"
+        cwd = Path(self.temp.name) / "work space"
+        # Claude encodes a project by hyphenating its absolute path.
+        project = (home / ".claude" / "projects"
+                   / re.sub(r"[^A-Za-z0-9_-]", "-", str(cwd)))
+
+        with mock.patch("pathlib.Path.home", return_value=home):
+            # Nothing of Claude's is there yet, so there is nothing to sit
+            # beside: inventing the directory would be litter, not a mirror.
+            self.assertIsNone(
+                CS.mirror_goal_context(SID, None, str(cwd), root=self.base))
+            project.mkdir(parents=True)
+            target = CS.mirror_goal_context(SID, None, str(cwd), root=self.base)
+
+        self.assertEqual(project / "goals-ui" / f"{SID}.md", target)
+        self.assertTrue(target.is_file())
+
+    def test_mirror_never_raises_when_it_cannot_write(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        not_a_directory = Path(self.temp.name) / "occupied"
+        not_a_directory.write_text("in the way", encoding="utf-8")
+
+        self.assertIsNone(CS.mirror_goal_context(
+            SID, str(not_a_directory / "chat.jsonl"), None, root=self.base))
+        # No location to write to at all is a silent no-op, not a crash.
+        self.assertIsNone(CS.mirror_goal_context(SID, None, None, root=self.base))
+
+    def test_delta_falls_back_to_the_whole_file_when_the_diff_is_not_smaller(self):
+        CS.mark_goals_ui_invoked(SID, self.base)
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": f"g{n}", "title": f"Goal {n}", "status": "active",
+                "parent_goal_id": None, "todos": [], "prompt_ids": [],
+            } for n in range(30)]},
+            {"items": []},
+            root=self.base,
+        )
+        first = CS.render_context_injection(
+            SID, "full", transcript_path=self.chat_jsonl, root=self.base)
+        self.assertIn("# Goals for this Claude chat (full file:", first)
+
+        # Every goal renamed: the diff restates the file twice over, so the
+        # file itself is the cheaper thing to send.
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": f"g{n}", "title": f"Renamed goal {n}", "status": "active",
+                "parent_goal_id": None, "todos": [], "prompt_ids": [],
+            } for n in range(30)]},
+            {"items": []},
+            root=self.base,
+        )
+        second = CS.render_context_injection(
+            SID, "delta", transcript_path=self.chat_jsonl, root=self.base)
+
+        self.assertIn("# Goals for this Claude chat (full file:", second)
+        self.assertNotIn("changed since your last message", second)
+        self.assertEqual(
+            CS.paths(SID, self.base).goal_context.read_text(encoding="utf-8"),
+            CS.load_context_snapshot(SID, self.base)["text"],
+        )
+
+    def test_a_remembered_render_is_the_only_one_that_moves_the_snapshot(self):
+        CS.save_goals(SID, {"version": 1, "goals": []}, {"items": []},
+                      root=self.base)
+        CS.render_context_injection(SID, "full", transcript_path=self.chat_jsonl,
+                                    root=self.base)
+        before = CS.load_context_snapshot(SID, self.base)["sha256"]
+        CS.save_goals(
+            SID,
+            {"version": 1, "goals": [{
+                "id": "g1", "title": "New", "status": "active",
+                "parent_goal_id": None, "todos": [], "prompt_ids": [],
+            }]},
+            {"items": []},
+            root=self.base,
+        )
+
+        text = CS.render_context_injection(
+            SID, "full", transcript_path=self.chat_jsonl, root=self.base,
+            remember=False)
+
+        self.assertIn("New", text)
+        self.assertEqual(before, CS.load_context_snapshot(SID, self.base)["sha256"])
+
+    # --- notices: what the workspace is allowed to tell the reader ---------
+
+    def test_a_notice_store_keeps_only_the_newest_twenty_newest_last(self):
+        # A workspace opened after a long session should not replay every
+        # turn that ever finished, and the ones worth showing are the last.
+        for n in range(25):
+            CS.add_notice(SID, "session_stopped", f"turn {n}", self.base)
+
+        rows = CS.load_notices(SID, self.base)
+
+        self.assertEqual(20, len(rows))
+        self.assertEqual([f"turn {n}" for n in range(5, 25)],
+                         [row["detail"] for row in rows])
+        self.assertEqual(20, len({row["id"] for row in rows}))
+        for row in rows:
+            self.assertEqual("session_stopped", row["kind"])
+            self.assertRegex(row["id"], r"^[0-9a-f]+$")
+            self.assertRegex(row["at"], r"^\d{4}-\d{2}-\d{2}T")
+
+    def test_a_notice_is_timestamped_finely_enough_to_beat_a_page_load(self):
+        # The browser shows a notice only when it is newer than the moment
+        # the page opened. Second-resolution timestamps round a notice
+        # written just after that moment back before it, and the banner then
+        # never appears at all.
+        row = CS.add_notice(SID, "session_stopped", "", self.base)
+        self.assertRegex(row["at"], r"T\d{2}:\d{2}:\d{2}\.\d{3}")
+
+    def test_a_notice_detail_is_one_scannable_line(self):
+        long = "x" * 400
+        row = CS.add_notice(
+            SID, "session_stopped", f"  wrapped\n  over\tlines {long}", self.base)
+
+        self.assertEqual(160, len(row["detail"]))
+        self.assertTrue(row["detail"].startswith("wrapped over lines xxx"))
+        self.assertNotIn("\n", row["detail"])
+        self.assertEqual(row["detail"], CS.load_notices(SID, self.base)[0]["detail"])
+
+    def test_a_kind_with_no_copy_is_not_recorded(self):
+        # The banner says one of three sentences. A kind nobody wrote a
+        # sentence for would reach the reader as a blank or a raw enum.
+        self.assertIsNone(CS.add_notice(SID, "compacted", "whatever", self.base))
+        self.assertEqual([], CS.load_notices(SID, self.base))
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission semantics")
+    def test_notices_are_owner_only_and_survive_corruption(self):
+        CS.add_notice(SID, "session_ended", "clear", self.base)
+        p = CS.paths(SID, self.base)
+        self.assertEqual(0o600, p.notices.stat().st_mode & 0o777)
+
+        p.notices.write_text("{not json", encoding="utf-8")
+        self.assertEqual([], CS.load_notices(SID, self.base))
+        # And the store repairs itself rather than staying unreadable.
+        CS.add_notice(SID, "session_ended", "again", self.base)
+        self.assertEqual(["again"],
+                         [row["detail"] for row in CS.load_notices(SID, self.base)])
+
+    def test_a_missing_store_reads_as_nothing_to_say(self):
+        self.assertEqual([], CS.load_notices(SID, self.base))
+
+    def test_stopping_a_turn_records_what_claude_last_said(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "Stop",
+            "cwd": "/repo",
+            "last_assistant_message": "  Done.\nTests   pass.  ",
+        }, root=self.base)
+
+        rows = CS.load_notices(SID, self.base)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("session_stopped", rows[0]["kind"])
+        self.assertEqual("Done. Tests pass.", rows[0]["detail"])
+
+    def test_a_returning_subagent_names_itself_without_ingesting_its_words(self):
+        # SubagentStop.last_assistant_message is the *subagent's* final
+        # response, not the conversation's. It may name the agent in a
+        # notice; it may not enter this session's event stream as something
+        # Claude said to the user.
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo",
+            "agent_id": "def456",
+            "agent_type": "Explore",
+            "last_assistant_message": "Analysis complete. Found 3 potential issues",
+        }, root=self.base)
+
+        rows = CS.load_notices(SID, self.base)
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual("subagent_returned", rows[0]["kind"])
+        self.assertEqual("Explore: Analysis complete. Found 3 potential issues",
+                         rows[0]["detail"])
+        self.assertEqual([], [event for event in CS.load_events(SID, self.base)
+                              if "Analysis complete" in event["text"]])
+
+    def test_a_nameless_subagent_still_returns(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo",
+            "last_assistant_message": "done",
+        }, root=self.base)
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SubagentStop",
+            "cwd": "/repo",
+            "agent_id": "agent-77",
+        }, root=self.base)
+
+        self.assertEqual([("subagent_returned", "done"),
+                          ("subagent_returned", "agent-77")],
+                         [(row["kind"], row["detail"])
+                          for row in CS.load_notices(SID, self.base)])
+
+    def test_a_session_ending_records_the_reason_it_gave(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "SessionEnd",
+            "cwd": "/repo",
+            "reason": "clear",
+        }, root=self.base)
+
+        self.assertEqual([("session_ended", "clear")],
+                         [(row["kind"], row["detail"])
+                          for row in CS.load_notices(SID, self.base)])
+
+    def test_an_ordinary_hook_says_nothing(self):
+        CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "UserPromptSubmit",
+            "cwd": "/repo",
+            "prompt": "keep going",
+        }, root=self.base)
+
+        self.assertEqual([], CS.load_notices(SID, self.base))
+
+    def test_a_notice_that_cannot_be_written_does_not_cost_the_ingest(self):
+        # A hook may never fail over a banner.
+        CS.paths(SID, self.base).session_dir.mkdir(parents=True, exist_ok=True)
+        CS.paths(SID, self.base).notices.mkdir()
+
+        result = CS.ingest_hook({
+            "session_id": SID,
+            "hook_event_name": "Stop",
+            "cwd": "/repo",
+            "last_assistant_message": "still ingested",
+        }, root=self.base)
+
+        self.assertEqual(1, result.appended)
+        self.assertEqual([], CS.load_notices(SID, self.base))
+        self.assertIn("still ingested",
+                      [event["text"] for event in CS.load_events(SID, self.base)])
+
 
 
 if __name__ == "__main__":

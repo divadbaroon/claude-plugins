@@ -5,6 +5,7 @@ only maps records onto the fields it reads, mirrors edits back, and makes its
 add-source controls ask for a value. These tests hold that contract.
 """
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -56,6 +57,7 @@ function El(tag) {
   this.attrs = {};
   this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
   this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+  this.removeAttribute = (k) => { delete this.attrs[k]; };
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
     if (n.parentNode) n.parentNode.removeChild(n);
@@ -82,9 +84,10 @@ const header = new El("div"); header.className = "hc-head"; app.appendChild(head
 const sub = new El("div"); sub.className = "hc-sub"; header.appendChild(sub);
 const panel = new El("div"); panel.className = "conv-panel"; app.appendChild(panel);
 const listeners = [];
+const pending = [];
 const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
-  body: root,
+  body: root, title: "Goals",
   addEventListener: (type, fn) => listeners.push([type, fn]),
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
@@ -109,9 +112,17 @@ const document = {
   }
 };
 function XHR() {}
-XHR.prototype.open = function (method, url) { this._url = String(url || ""); };
+// Every synchronous route the boot path opens, in order, so a test can say
+// which of them a scope pays for.
+const xhrs = [];
+XHR.prototype.open = function (method, url) {
+  this._url = String(url || "");
+  xhrs.push(this._url);
+};
 XHR.prototype.send = function () {
-  this.responseText = this._url.indexOf("/api/setup") >= 0
+  this.responseText = this._url.indexOf("/api/health") >= 0
+    ? (process.env.HC_HEALTH || "{}")
+    : this._url.indexOf("/api/setup") >= 0
     ? (process.env.HC_SETUP || "{}")
     : this._url.indexOf("/api/briefings") >= 0
     ? (process.env.HC_BRIEFS || '{"ok":true,"goals":{}}')
@@ -119,7 +130,7 @@ XHR.prototype.send = function () {
 };
 const sandbox = {
   console, document, XMLHttpRequest: XHR, made, require, calls, app, sub,
-  listeners,
+  listeners, xhrs,
   header, panel,
   localStorage: { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = String(v); } },
   fetch: (url, opts) => {
@@ -143,8 +154,21 @@ const sandbox = {
       : { ok: true, terminal: "Terminal", cwd: "/repo" };
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   },
-  setInterval: () => 0, setTimeout: (f) => { if (f) f(); return 0; },
-  clearTimeout() {}, navigator: {}, store
+  setInterval: () => 0,
+  // Timers fire the moment they are set, which is what nearly every test
+  // here wants. A test about something that is supposed to happen *later*
+  // (a banner taking itself away after eight seconds) sets HC_DEFER_TIMEOUT
+  // and drives the callback itself.
+  setTimeout: (f) => {
+    if (!f) return 0;
+    if (process.env.HC_DEFER_TIMEOUT === "1") { pending.push(f); return pending.length; }
+    f();
+    return 0;
+  },
+  clearTimeout(id) { if (id) pending[id - 1] = null; },
+  navigator: {}, store, pending,
+  fireTimers: () => { const due = pending.slice(); pending.length = 0;
+                      due.forEach(f => { if (f) f(); }); }
 };
 sandbox.window = sandbox;
 vm.createContext(sandbox);
@@ -200,10 +224,16 @@ class BridgeTestCase(unittest.TestCase):
         return json.loads(result.stdout)
 
 
-    def patched_bundle(self, tail):
-        """Apply patchBundleSource to the checked-in artifact, then evaluate."""
+    def patched_bundle(self, tail, scope=None):
+        """Apply patchBundleSource to the checked-in artifact, then evaluate.
+
+        `scope` overrides what the bridge read from /api/state, because the
+        patch itself is scope-aware: a chat workspace gets a PROMPT tab and a
+        copyable prompt, a global vault keeps the folded AGENT pane.
+        """
         return self.run_js(
-            "var fs = require('fs');"
+            ("window.__hcScope = %s;" % json.dumps(scope) if scope else "")
+            + "var fs = require('fs');"
             "var html = fs.readFileSync(%s, 'utf8');"
             "var src = JSON.parse(html.match("
             "  /<script type=\"__bundler\\/template\">\\s*([\\s\\S]*?)\\s*<\\/script>/)[1]);"
@@ -213,6 +243,88 @@ class BridgeTestCase(unittest.TestCase):
     def roots(self, state=None):
         return self.run_js(
             "window.__hcPromptUI.rootsFromState(%s);" % json.dumps(state or STATE))
+
+
+class LaunchDressedTests(BridgeTestCase):
+    """What counts as ready to be looked at."""
+
+    def ask(self, launch, style, text):
+        return self.run_js(
+            "var root = document.documentElement;"
+            "root.getAttribute = function (n) {"
+            "  return n === 'data-hc-launch' ? %s : null; };"
+            "document.getElementById = function (id) {"
+            "  return id === 'hc-launch-style' ? %s : null; };"
+            "document.body = {textContent: %s};"
+            "out = window.__hcPromptUI.launchDressed();"
+            % (json.dumps(launch), "{}" if style else "null", json.dumps(text)))
+
+    def test_ready_only_when_skinned_and_resolved(self):
+        self.assertTrue(self.ask("chat", True, "Engelbart session saved 11:07"))
+
+    def test_an_unresolved_binding_is_not_ready(self):
+        self.assertFalse(self.ask("chat", True, "saved {{ updatedLabel }}"))
+
+    def test_an_unskinned_or_empty_document_is_not_ready(self):
+        self.assertFalse(self.ask(None, True, "Engelbart"))
+        self.assertFalse(self.ask("chat", False, "Engelbart"))
+        self.assertFalse(self.ask("chat", True, ""))
+
+
+class HoldGroundTests(BridgeTestCase):
+    """What the viewport is painted while the workspace is held back.
+
+    The server masks the document it serves, but the artifact unpacks by
+    replacing documentElement, which throws that mask away mid-hold. From
+    there the canvas falls through to the artifact's own white body -- so the
+    hold has to carry its own ground onto whatever root it now holds.
+    """
+
+    def ground(self, saved=None):
+        return self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1', %s);"
+            "out = window.__hcPromptUI.groundColor();"
+            % json.dumps(json.dumps(saved or {})))
+
+    def test_a_chat_workspace_is_held_on_its_own_dark_ground(self):
+        self.assertEqual("#0d1117", self.ground())
+
+    def test_a_reader_who_chose_light_is_held_on_light(self):
+        self.assertEqual("#fff", self.ground({"themeMode": "light"}))
+
+    def test_holding_paints_the_root_and_releasing_gives_it_back(self):
+        held, shown = self.run_js(
+            "var root = document.documentElement;"
+            "window.__hcPromptUI.holdRoot(root);"
+            "var held = [root.style.visibility, root.style.background];"
+            "window.__hcPromptUI.releaseRoot(root);"
+            "out = [held, [root.style.visibility, root.style.background]];")
+        self.assertEqual(["hidden", "#0d1117"], held,
+                         "a held root must hide itself and keep the ground")
+        self.assertEqual(["", ""], shown,
+                         "releasing must hand both back to the workspace")
+
+
+class DeletedGoalTests(BridgeTestCase):
+    """A goal the reader deleted is kept on disk but not drawn."""
+
+    STATE = {"goals": [
+        {"id": "g1", "title": "keep this one", "status": "active",
+         "parent_goal_id": None},
+        {"id": "g2", "title": "deleted one", "status": "abandoned",
+         "parent_goal_id": None},
+        {"id": "g3", "title": "finished one", "status": "completed",
+         "parent_goal_id": None},
+    ], "prompts": []}
+
+    def test_an_abandoned_goal_is_left_out_of_the_tree(self):
+        titles = [n["title"] for n in self.roots(self.STATE)]
+        self.assertEqual(["keep this one", "finished one"], titles)
+
+    def test_a_completed_goal_is_still_drawn(self):
+        done = [n for n in self.roots(self.STATE) if n["title"] == "finished one"]
+        self.assertEqual(1, len(done))
+        self.assertTrue(done[0]["done"], "completed still renders struck through")
 
 
 class NodeMappingTests(BridgeTestCase):
@@ -617,6 +729,84 @@ class NoSampleLeakageTests(BridgeTestCase):
         ctx = self.ctx_of("g1a")
         self.assertEqual([], ctx["code"])
         self.assertEqual([], ctx["docs"])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoDemoDescriptionBackfillTests(BridgeTestCase):
+    """The artifact's demo copy must never become a real goal's description.
+
+    Its constructor filled any empty `desc` from a map keyed by the sample
+    tree's own ids -- g1, g2, g3, g4 among them -- and those are exactly the
+    ids the vault mints (`goals.next_goal_id`, `chat_synth`'s schema). So the
+    first control that persisted anything, including a filter chip or the
+    theme toggle, wrote four sentences nobody had written onto the reader's
+    goals, and from there into the prompt they copied.
+    """
+
+    def artifact_source(self):
+        return json.loads(re.search(
+            r'<script type="__bundler/template">\s*([\s\S]*?)\s*</script>',
+            BUNDLE.read_text()).group(1))
+
+    def test_the_backfill_is_never_called_in_either_scope(self):
+        for scope in (None, "chat"):
+            with self.subTest(scope=scope or "global"):
+                self.assertNotIn("ad(g0)",
+                                 self.patched_bundle("out;", scope=scope))
+
+    def test_the_artifact_itself_still_carries_the_collision(self):
+        # A control. If the artifact ever stopped keying its demo copy by the
+        # ids the vault mints, the test above would pass for the wrong reason
+        # and this one would say so.
+        source = self.artifact_source()
+        self.assertIn("ad(g0)", source)
+        self.assertIn("g1: 'Stand up the shared goal model", source)
+
+    def test_a_real_tree_leaves_the_constructor_as_it_arrived(self):
+        # Runs the emitted constructor body over goals shaped like the ones
+        # the vault mints, rather than trusting the absence of a call.
+        got = json.loads(self.patched_bundle(
+            "var at = out.indexOf('const D = {');"
+            "var body = out.slice(at, out.indexOf('this.state = {', at));"
+            "var tree = [{ id: 'g1', desc: '', children: ["
+            "  { id: 'a1', desc: '', children: [] }] },"
+            "  { id: 'g2', desc: '', children: [] }];"
+            "eval('(function (g0) {' + body + '\\nreturn g0; })')(tree);"
+            "JSON.stringify(tree);", scope="chat"))
+        self.assertEqual(
+            ["", "", ""],
+            [got[0]["desc"], got[0]["children"][0]["desc"], got[1]["desc"]])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoDemoContextTests(BridgeTestCase):
+    """The artifact's second demo door: its context defaults.
+
+    `contextOf` sets every text field explicitly, including to "", so a goal
+    the server knows about never reaches these. A goal the reader adds in the
+    tree does: the artifact mints it with `ctx: null`, and until the next
+    reload its assembled prompt carried a demo objective, a demo GitHub repo
+    and a demo document -- text the reader then pastes into a real session.
+    """
+
+    def test_the_context_defaults_hold_nothing(self):
+        for scope in (None, "chat"):
+            with self.subTest(scope=scope or "global"):
+                out = self.patched_bundle("out;", scope=scope)
+                self.assertIn("const CTXDEF = {};", out)
+                self.assertIn("const CODEDEF = [];", out)
+                self.assertIn("const DOCDEF = [];", out)
+                self.assertNotIn("Get the drawable frame populating", out)
+                self.assertNotIn("divadbaroon/claude-plugins", out)
+                self.assertNotIn("design-notes.md", out)
+
+    def test_the_artifact_itself_still_carries_them(self):
+        # A control, as above: these tests must fail for the right reason.
+        source = json.loads(re.search(
+            r'<script type="__bundler/template">\s*([\s\S]*?)\s*</script>',
+            BUNDLE.read_text()).group(1))
+        self.assertIn("Get the drawable frame populating", source)
+        self.assertIn("divadbaroon/claude-plugins", source)
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -1302,16 +1492,19 @@ class LiveFeedTests(BridgeTestCase):
         # the AGENT pane has its own branch line; only the artifact's went
         self.assertIn("{{ agentBranch }}", out)
 
-    def test_agent_reads_name_then_prompt_then_notes_then_run(self):
+    def test_agent_reads_name_then_prompt_then_run(self):
+        # The notes box left this pane for CONTEXT, where the document the
+        # user writes now lives; the rest of the AGENT order is unchanged.
         out = self.patched_bundle("out;")
         self.assertLess(out.index(">AGENT</div>"), out.index("hc-promptbox"))
-        self.assertLess(out.index("hc-promptbox"), out.index("ADDITIONAL NOTES"))
-        self.assertLess(out.index("ADDITIONAL NOTES"), out.index("AGENT STATUS"))
+        self.assertLess(out.index("hc-promptbox"), out.index("AGENT STATUS"))
         self.assertLess(out.index("AGENT STATUS"), out.index("{{ runAgent }}"))
 
-    def test_the_notes_box_moved_to_the_agent_pane(self):
+    def test_the_notes_box_is_the_context_pane_itself(self):
         out = self.patched_bundle("out;")
-        self.assertIn("showNotes: !!sel && paneTab === 'agent'", out)
+        self.assertIn("showNotes: !!sel && paneTab === 'context'", out)
+        self.assertNotIn("showNotes: !!sel && paneTab === 'agent'", out)
+        self.assertNotIn("showNotes: !!sel && paneTab === 'prompt'", out)
 
     def test_the_pane_says_what_it_is_for(self):
         self.assertIn("Run Claude Code on this goal with the self-contained "
@@ -1324,9 +1517,13 @@ class LiveFeedTests(BridgeTestCase):
         self.assertNotIn("Within the main goal", out)
 
     def test_the_notes_box_invites_the_users_own_thoughts(self):
+        # It is the goal's whole document now, not an addendum to a prompt,
+        # so the invitation names the markup it renders as you type.
         out = self.patched_bundle("out;")
-        self.assertIn("Add any other thoughts you would like the agent to "
-                      "know...", out)
+        self.assertIn("Write in markdown \u2014 # heading, - list, - [ ] task, "
+                      "**bold**, `code`", out)
+        self.assertNotIn("Add any other thoughts you would like the agent to "
+                         "know...", out)
         self.assertNotIn("Plan in markdown", out)
 
     def test_the_prompt_heading_is_the_disclosure_itself(self):
@@ -1406,7 +1603,7 @@ class LiveFeedTests(BridgeTestCase):
         # settled, and neither belongs between the goal and its blockers.
         out = self.patched_bundle("out;")
         order = [">OBJECTIVE</span>", "WHERE THIS SITS", ">CODE CONTEXT</span>",
-                 ">DOCUMENT CONTEXT</span>", "RELATED PROMPTS",
+                 ">DOCUMENT CONTEXT</span>",
                  "BLOCKERS &amp; OPEN QUESTIONS", ">ALREADY BUILT</span>",
                  ">DECISIONS</span>"]
         at = [out.index(name) for name in order]
@@ -1436,10 +1633,10 @@ class LiveFeedTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
         at = [draft.index(name) for name in
-              ("'Objective:", "'Where this sits:", "'Code context:",
+              ("'Objective'", "'Where this sits:", "'Code context:",
                "'Document context:", "'Related prompts, in my own words:",
-               "'Blockers & open questions:", "'Already built:",
-               "'Established decisions:")]
+               "'In my words'", "'Decisions'", "'Built'", "'Blockers'",
+               "'Open questions'")]
         self.assertEqual(sorted(at), at)
 
     def test_the_prompt_quotes_the_words_the_pane_lists(self):
@@ -1457,21 +1654,27 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("blocks.push(isSub ? 'Implement this subgoal for me.' : "
                       "'Implement this goal for me.');", draft)
         # it is the last thing said, after the context it is asking about
-        self.assertLess(draft.index("'Established decisions:"),
+        self.assertLess(draft.index("'Open questions'"),
                         draft.index("Implement this subgoal for me."))
 
-    def test_the_prompt_rows_carry_no_controls(self):
-        # The list is the record of what was said, not a place to act.
+    def test_a_prompt_row_carries_only_the_control_that_undoes_the_link(self):
+        # The list is the record of what was said, not a place to act on it
+        # -- except for the one act the record itself can be wrong about:
+        # inference tying a prompt to the wrong goal.
         out = self.patched_bundle("out;")
+        self.assertIn('sc-camel-on-click="{{ hr.del }}"', out)
+        self.assertIn('title="Unlink this prompt"', out)
         self.assertNotIn("{{ hr.copy }}", out)
-        self.assertNotIn("{{ hr.del }}", out)
         self.assertNotIn("{{ hr.use }}", out)
 
     def test_each_prompt_names_the_conversation_it_came_from(self):
         # A quote without a source cannot be checked.
         out = self.patched_bundle("out;")
         self.assertIn("{{ hr.conv }}", out)
-        self.assertIn("conv: p.conv ? 'conversation ' + p.conv : ''", out)
+        # The separator travels with the source, so a prompt that has no
+        # conversation leaves no punctuation behind.
+        self.assertIn(
+            "conv: p.conv ? ' \u00b7 conversation ' + p.conv : ''", out)
         rows = self.roots()[0]["prompts"]
         self.assertTrue(all(r["conv"] for r in rows), rows)
 
@@ -1485,14 +1688,16 @@ class LiveFeedTests(BridgeTestCase):
         state["prompts"][0].pop("session_id", None)
         self.assertEqual("", self.roots(state)[0]["prompts"][0]["conv"])
 
-    def test_the_words_come_before_what_stands_in_their_way(self):
-        # They are context to read with the sources, not a footnote: what was
-        # asked for lands before the blockers and the settled sections.
+    def test_the_words_sit_under_the_document_they_are_evidence_for(self):
+        # They used to be filed between the dormant textboxes. The pane is
+        # one document now, and the prompts that fed it read below it.
         out = self.patched_bundle("out;")
-        self.assertLess(out.index(">DOCUMENT CONTEXT</span>"),
+        self.assertLess(out.index("{{ notesOverlay }}"),
                         out.index("RELATED PROMPTS"))
         self.assertLess(out.index("RELATED PROMPTS"),
-                        out.index("BLOCKERS &amp; OPEN QUESTIONS"))
+                        out.index('<sc-if value="{{ showAgent }}"'))
+        self.assertLess(out.index("BLOCKERS &amp; OPEN QUESTIONS"),
+                        out.index("RELATED PROMPTS"))
         self.assertEqual(1, out.count("RELATED PROMPTS"))
 
     def test_a_long_history_scrolls_rather_than_pushing_the_pane_down(self):
@@ -2126,3 +2331,1152 @@ class AnalysisBannerTests(BridgeTestCase):
         self.assertIn("inferred once your conversations have all been analyzed",
                       out)
         self.assertIn("__hcAnalysisPending", out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatScopeSeedTests(BridgeTestCase):
+    """A chat workspace boots into its own tree, not the vault's wizard."""
+
+    CHAT = {"scope": "chat", "generated_at": "2026-08-16T00:00:00+00:00",
+            "revision": "r1", "goals": [], "prompts": []}
+
+    def payload(self, state=None, saved="null"):
+        return self.run_js(
+            "window.__hcPromptUI.seedPayload(%s, [], %s);"
+            % (json.dumps(state or self.CHAT), saved))
+
+    def test_the_wizard_is_answered_from_what_a_chat_actually_does(self):
+        # mainDisp/gateShow/obShow in the artifact all read this one object.
+        # Chat inference runs through the Claude CLI over a transcript the
+        # chat is already keeping, so every field here is a report.
+        setup = self.payload()["setup"]
+        self.assertEqual({"sv": 9, "storage": True, "analysis": "claude",
+                          "done": True}, setup)
+
+    def test_a_dead_setup_route_cannot_drag_a_chat_into_onboarding(self):
+        # /api/setup speaks for the global vault and answers ok:false here.
+        # The chat seed must not be built from its silence.
+        setup = self.run_js(
+            "window.__hcPromptUI.setSetupForTest(null);"
+            "window.__hcPromptUI.seedPayload(%s, [], null).setup;"
+            % json.dumps(self.CHAT))
+        self.assertTrue(setup["done"])
+        self.assertTrue(setup["storage"])
+
+    def test_a_global_vault_still_reports_its_own_answers(self):
+        fresh = self.run_js(
+            "window.__hcPromptUI.setSetupForTest(null);"
+            "window.__hcPromptUI.seedPayload({ scope: 'global' }, [], null)"
+            ".setup;")
+        self.assertFalse(fresh["done"])
+        self.assertFalse(fresh["storage"])
+        self.assertIsNone(fresh["analysis"])
+
+    def test_a_fresh_chat_page_lands_on_all(self):
+        # A chat's tree is small and often finished; opening it filtered to
+        # active reads as an empty workspace.
+        self.assertEqual("all", self.payload()["filter"])
+        self.assertEqual("all", self.payload(saved="{}")["filter"])
+
+    def test_a_filter_the_reader_chose_here_survives(self):
+        # v7 marks a store this bridge wrote, which is the only evidence
+        # that the saved filter is a choice rather than the artifact's own
+        # default of 'active'.
+        self.assertEqual("done",
+                         self.payload(saved="{ v: 7, filter: 'done' }")["filter"])
+
+    def test_the_artifacts_own_default_is_not_read_as_a_choice(self):
+        self.assertEqual(
+            "all", self.payload(saved="{ v: 6, filter: 'active' }")["filter"])
+
+    def test_a_global_page_still_opens_on_active(self):
+        glob = {"scope": "global", "goals": [], "prompts": []}
+        self.assertEqual("active", self.payload(glob)["filter"])
+        self.assertEqual(
+            "done", self.payload(glob, saved="{ filter: 'done' }")["filter"])
+
+    def test_a_chat_has_nowhere_for_the_conversations_page_to_land(self):
+        self.assertEqual(
+            "goals", self.payload(saved="{ v: 7, page: 'convos' }")["page"])
+
+    def test_a_global_page_keeps_the_conversations_page(self):
+        glob = {"scope": "global", "goals": [], "prompts": []}
+        self.assertEqual(
+            "convos", self.payload(glob, saved="{ page: 'convos' }")["page"])
+
+    def test_a_saved_agent_or_review_pane_resolves_to_context(self):
+        for pane in ("agent", "artifact"):
+            self.assertEqual("context", self.payload(
+                saved="{ v: 7, paneTab: '%s' }" % pane)["paneTab"])
+
+    def test_a_global_page_still_restores_those_panes(self):
+        glob = {"scope": "global", "goals": [], "prompts": []}
+        self.assertEqual("agent", self.payload(
+            glob, saved="{ paneTab: 'agent' }")["paneTab"])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatScopeSurfaceTests(BridgeTestCase):
+    """Controls whose only backend answers 'global scope only' come off."""
+
+    def tab_bar(self, *labels):
+        """A stand-in for the artifact's re-rendered pane tab row."""
+        return ("var bar = document.createElement('div');"
+                "app.appendChild(bar);"
+                + "".join(
+                    "var t%d = document.createElement('span');"
+                    "t%d.textContent = %s; bar.appendChild(t%d);"
+                    % (i, i, json.dumps(label), i)
+                    for i, label in enumerate(labels)))
+
+    def nav_bar(self):
+        """A stand-in for the artifact's header page nav."""
+        return ("var nav = document.createElement('div'); app.appendChild(nav);"
+                "var pg = document.createElement('span');"
+                "pg.textContent = 'Goals'; nav.appendChild(pg);"
+                "var pc = document.createElement('span');"
+                "pc.textContent = 'Conversations'; nav.appendChild(pc);")
+
+    def chat(self):
+        return ("window.__hcPromptUI.acceptState("
+                "{ goals: [], prompts: [], scope: 'chat' });")
+
+    def displays(self, scope_js, labels):
+        return self.run_js(
+            scope_js + self.tab_bar(*labels)
+            + "window.__hcPromptUI.renderChatSurface();"
+            + "bar.children.map(function (n) { return n.style.display || ''; });")
+
+    def test_the_agent_and_review_tabs_are_taken_off_a_chat_page(self):
+        self.assertEqual(
+            ["", "none", "none"],
+            self.displays(self.chat(), ["CONTEXT", "AGENT", "REVIEW"]))
+
+    def test_a_review_tab_that_appears_later_is_swept_too(self):
+        # REVIEW sits behind an sc-if that only turns on once a run exists,
+        # so it is not on the page when the first sweep runs.
+        self.assertEqual(
+            ["", "none"], self.displays(self.chat(), ["CONTEXT", "REVIEW"]))
+
+    def test_a_global_page_keeps_every_tab(self):
+        state = ("window.__hcPromptUI.acceptState("
+                 "{ goals: [], prompts: [], scope: 'global' });")
+        self.assertEqual(
+            ["", "", ""],
+            self.displays(state, ["CONTEXT", "AGENT", "REVIEW"]))
+
+    def test_headings_that_share_a_tabs_name_are_left_alone(self):
+        # 'AGENT' is also a heading inside the pane. Only the row holding
+        # CONTEXT is the tab bar.
+        out = self.run_js(
+            self.chat()
+            + "var head = document.createElement('span');"
+            "head.textContent = 'AGENT'; app.appendChild(head);"
+            + self.tab_bar("CONTEXT", "AGENT")
+            + "window.__hcPromptUI.renderChatSurface();"
+            "[head.style.display || '', bar.children[1].style.display || ''];")
+        self.assertEqual(["", "none"], out)
+
+    def test_the_conversations_nav_comes_off_a_chat_page(self):
+        out = self.run_js(
+            self.chat() + self.nav_bar()
+            + "window.__hcPromptUI.renderChatSurface();"
+            "nav.children.map(function (n) { return n.style.display || ''; });")
+        self.assertEqual(["", "none"], out)
+
+    def test_a_global_page_keeps_the_conversations_nav(self):
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState("
+            "{ goals: [], prompts: [], scope: 'global' });" + self.nav_bar()
+            + "window.__hcPromptUI.renderChatSurface();"
+            "nav.children.map(function (n) { return n.style.display || ''; });")
+        self.assertEqual(["", ""], out)
+
+    def test_a_goal_the_reader_titled_conversations_is_left_alone(self):
+        # The nav row is the one holding both page names. A tree row that
+        # happens to carry one of them is the reader's own goal.
+        out = self.run_js(
+            self.chat()
+            + "var row = document.createElement('div'); app.appendChild(row);"
+            "var goal = document.createElement('span');"
+            "goal.textContent = 'Conversations'; row.appendChild(goal);"
+            + self.nav_bar()
+            + "window.__hcPromptUI.renderChatSurface();"
+            "[goal.style.display || '', nav.children[1].style.display || ''];")
+        self.assertEqual(["", "none"], out)
+
+    def test_a_goal_the_reader_titled_context_cannot_re_anchor_the_tabs(self):
+        # Without the companion check the sweep would take the first
+        # CONTEXT it found -- a goal row -- and never reach the real bar.
+        out = self.run_js(
+            self.chat()
+            + "var row = document.createElement('div'); app.appendChild(row);"
+            "var goal = document.createElement('span');"
+            "goal.textContent = 'CONTEXT'; row.appendChild(goal);"
+            + self.tab_bar("CONTEXT", "AGENT", "REVIEW")
+            + "window.__hcPromptUI.renderChatSurface();"
+            "[goal.style.display || ''].concat("
+            "  bar.children.map(function (n) { return n.style.display || ''; }));")
+        self.assertEqual(["", "", "none", "none"], out)
+
+    def test_a_lone_label_with_no_companion_anchors_nothing(self):
+        self.assertEqual(
+            [None, None],
+            self.run_js(
+                self.chat()
+                + "var row = document.createElement('div'); app.appendChild(row);"
+                "var a = document.createElement('span'); a.textContent = 'CONTEXT';"
+                "row.appendChild(a);"
+                "var b = document.createElement('span'); b.textContent = 'Goals';"
+                "row.appendChild(b);"
+                "[window.__hcPromptUI.paneTabBar(),"
+                " window.__hcPromptUI.headerNav()];"))
+
+    def test_the_keyboard_cycle_stops_at_the_tabs_a_chat_has(self):
+        # ⌘↑/⌘↓ stepping onto AGENT or REVIEW would open a pane whose every
+        # control errors here, and stepping onto PROMPT would swap the
+        # document out for something the right rail is already showing.
+        # CONTEXT is the only pane this workspace has left to open.
+        out = self.patched_bundle("out;")
+        self.assertIn(
+            "const tabs = (typeof window !== 'undefined' && "
+            "window.__hcScope === 'chat') ? ['context'] : "
+            "['context', 'prompt', 'agent', 'artifact'];", out)
+        self.assertNotIn(
+            "    const tabs = ['context', 'prompt', 'agent', 'artifact'];", out)
+
+    def test_the_seeded_filter_is_what_the_tree_opens_on(self):
+        # The constructor read saved.selId and saved.paneTab but hardcoded
+        # the filter, so the seed's answer never reached the chip row.
+        out = self.patched_bundle("out;")
+        self.assertIn(
+            "filter: (saved && ['active', 'inprog', 'done', 'all']"
+            ".indexOf(saved.filter) >= 0) ? saved.filter : 'active',", out)
+        self.assertNotIn("\n      filter: 'active',\n", out)
+
+    def test_the_store_it_writes_back_declares_the_seeded_version(self):
+        # saved.v >= 7 is what the seed reads as "this origin is ours", and
+        # what lets a reader's filter choice survive their next reload.
+        out = self.patched_bundle("out;")
+        self.assertIn(
+            "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7,",
+            out)
+        self.assertNotIn("JSON.stringify({ v: 6,", out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ScopeFallbackTests(BridgeTestCase):
+    """A dead state route must not make a chat page look like the vault."""
+
+    def test_health_names_the_scope_when_the_state_fetch_fails(self):
+        self.assertEqual("chat", self.run_js(
+            "window.__hcScope;", state={"broken": True},
+            extra_env={"HC_HEALTH": '{"ok": true, "scope": "chat"}'}))
+
+    def test_a_global_server_is_still_read_as_global(self):
+        self.assertEqual("global", self.run_js(
+            "window.__hcScope;", state={"broken": True},
+            extra_env={"HC_HEALTH": '{"ok": true, "scope": "global"}'}))
+
+    def test_nothing_answering_at_all_leaves_it_where_it_was(self):
+        self.assertEqual("global", self.run_js(
+            "window.__hcScope;", state={"broken": True}))
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class DeadRouteTests(BridgeTestCase):
+    """A chat workspace must not pay for the two routes that refuse it.
+
+    /api/setup and /api/briefings speak for the global vault, and in chat
+    scope both answer ok:false. Both were asked at boot -- as blocking
+    synchronous XHRs on the path to first paint -- and /api/setup again on
+    the analysis poll, for the life of the page.
+    """
+
+    CHAT = {"scope": "chat", "generated_at": "2026-08-16T00:00:00+00:00",
+            "revision": "r1", "goals": [], "prompts": []}
+    IS_CHAT = {"HC_HEALTH": '{"ok": true, "scope": "chat"}'}
+
+    def boot_routes(self, **kwargs):
+        return json.loads(self.run_js(
+            "xhrs.length = 0;"
+            "window.__hcPromptUI.seedForTest();"
+            "JSON.stringify(xhrs);", **kwargs))
+
+    def polled(self, **kwargs):
+        return json.loads(self.run_js(
+            "calls.length = 0;"
+            "window.__hcPromptUI.watchAnalysis().then(function () {"
+            "  return JSON.stringify(calls.map(function (c) {"
+            "    return String(c[0]); })); });", **kwargs))
+
+    def test_a_chat_boot_asks_neither_of_them(self):
+        routes = self.boot_routes(state=self.CHAT, extra_env=self.IS_CHAT)
+        self.assertNotIn("/api/setup", routes)
+        self.assertNotIn("/api/briefings", routes)
+
+    def test_it_finds_out_which_scope_it_is_before_deciding(self):
+        # /api/health is the one route no scope gates, and it is cheap.
+        routes = self.boot_routes(state=self.CHAT, extra_env=self.IS_CHAT)
+        self.assertEqual(["/api/health", "/api/state"], routes)
+
+    def test_a_global_boot_still_asks_both(self):
+        routes = self.boot_routes()
+        self.assertIn("/api/setup", routes)
+        self.assertIn("/api/briefings", routes)
+        self.assertIn("/api/state", routes)
+
+    def test_a_chat_page_never_polls_the_analysis_route(self):
+        self.assertEqual([], self.polled(state=self.CHAT,
+                                         extra_env=self.IS_CHAT))
+
+    def test_a_global_page_still_polls_it(self):
+        self.assertIn("/api/setup", self.polled())
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class DocumentPaneTests(BridgeTestCase):
+    """The Context pane is one markdown document, rendered as it is typed."""
+
+    def test_the_document_is_what_the_context_tab_opens(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("showNotes: !!sel && paneTab === 'context'", out)
+
+    def test_the_textbox_pane_is_dormant_in_both_scopes(self):
+        # Objective / code / document / decisions / blockers / built are no
+        # longer reachable, in either scope. The markup and every handler
+        # behind it stay: nothing about them is deleted, only unreached.
+        for scope in (None, "chat"):
+            out = self.patched_bundle("out;", scope=scope)
+            self.assertIn("showCtx: false,", out, scope)
+            self.assertNotIn("showCtx: !!sel && paneTab === 'context',", out,
+                             scope)
+            for kept in (">OBJECTIVE</span>", ">CODE CONTEXT</span>",
+                         ">DOCUMENT CONTEXT</span>", ">DECISIONS</span>",
+                         "{{ ctxObjectiveCh }}", "{{ codeRows }}",
+                         "{{ docRows }}"):
+                self.assertIn(kept, out, (scope, kept))
+
+    def test_the_document_is_not_an_addendum_to_something_else(self):
+        out = self.patched_bundle("out;")
+        self.assertIn(">NOTES</div>", out)
+        self.assertNotIn("ADDITIONAL NOTES", out)
+        # A rule above it said "and also…"; it is the pane now, not a footer.
+        self.assertNotIn("margin-top:20px;padding-top:14px;border-top:1px "
+                         "solid var(--bd);font:600 9.5px", out)
+
+    def test_the_editor_is_tall_enough_to_write_a_document_in(self):
+        out = self.patched_bundle("out;")
+        overlay = out[out.rindex("<div", 0, out.index("{{ notesOverlay }}")):
+                      out.index("{{ notesOverlay }}")]
+        self.assertIn("min-height:360px", overlay)
+        self.assertNotIn("min-height:96px", overlay)
+
+    def test_an_empty_goal_opens_on_the_default_headers(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("notesVal: sel ? (sel.notes || window.__hcDefaultDoc "
+                      "|| '') : '',", out)
+        self.assertIn("notesOverlay: sel ? this.md(sel.notes || "
+                      "window.__hcDefaultDoc || '') : null,", out)
+
+    def test_the_default_document_is_the_one_the_backend_writes(self):
+        # A heading the bridge shows but goals.py cannot append into would
+        # send the user's text somewhere inference never looks.
+        import re
+        import sys
+        sys.path.insert(0, str(ROOT / "hc" / "src"))
+        from human_compact.trajectory import goals as GM
+        src = BRIDGE.read_text()
+        found = re.search(r'var DEFAULT_DOC = ("(?:[^"\\]|\\.)*");', src)
+        self.assertIsNotNone(found, "bridge.js must name the default document")
+        self.assertEqual(GM.default_doc(), json.loads(found.group(1)))
+        self.assertIn("window.__hcDefaultDoc = DEFAULT_DOC;", src)
+        self.assertEqual(GM.default_doc(),
+                         self.run_js("window.__hcDefaultDoc;"))
+
+    def test_the_prompts_that_fed_the_document_read_below_it(self):
+        out = self.patched_bundle("out;")
+        self.assertLess(out.index("{{ notesOverlay }}"),
+                        out.index("RELATED PROMPTS"))
+        self.assertIn('<span class="hc-prompt-add"></span>', out)
+        self.assertIn('<sc-for list="{{ histRows }}" as="hr"', out)
+        self.assertEqual(1, out.count('<sc-for list="{{ histRows }}" as="hr"'))
+
+    def test_a_row_says_whether_a_machine_made_the_link(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("origin: p.auto ? 'automatic' : 'yours',", out)
+        self.assertIn("{{ hr.origin }}", out)
+
+    def test_the_bridge_reports_which_links_inference_made(self):
+        state = json.loads(json.dumps(STATE))
+        state["goals"][0]["auto_prompt_ids"] = ["a#1"]
+        self.assertEqual([True], [r["auto"] for r in
+                                  self.roots(state)[0]["prompts"]])
+        self.assertEqual([False], [r["auto"] for r in
+                                   self.roots()[0]["prompts"]])
+
+    def test_the_draft_is_assembled_from_the_document_sections(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertIn("const secOf = (t) =>", draft)
+        # between "# <title>" and the next H1; ## is not an H1, and neither
+        # is a "# " line the user wrote inside a fenced code block
+        self.assertIn("fence === null && line.indexOf('# ') === 0", draft)
+        for title in ("In my words", "Decisions", "Built", "Blockers",
+                      "Open questions"):
+            self.assertIn("section('%s');" % title, draft)
+
+    def test_the_draft_no_longer_reads_the_dormant_textboxes(self):
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        for gone in ("ctxGet('decided')", "ctxGet('built')", "ctxGet('hit')"):
+            self.assertNotIn(gone, draft)
+
+    def test_an_objective_the_document_does_not_carry_is_still_said(self):
+        # The description inference recorded is a real answer to "what does
+        # finishing this mean"; dropping it because the document's own
+        # Objective section is empty would lose it from the prompt.
+        out = self.patched_bundle("out;")
+        draft = out[out.index("const composeDraft"):out.index("const baseDraft")]
+        self.assertIn("secOf('Objective') || String(ctxGet('objective') "
+                      "|| '').trim()", draft)
+
+    DOC_WITH_FENCE = ("# Objective\nShip it.\n\n# Built\n```py\n"
+                      "# Decisions\nx = 1\n```\n\n# Blockers\n\n")
+
+    def sec_of(self, document, titles):
+        """Run the patched composeDraft's own secOf over a document."""
+        return json.loads(self.patched_bundle(
+            "var at = out.indexOf('const secOf = (t) =>');"
+            "var fnsrc = out.slice(at, out.indexOf('const section = (t) =>', at));"
+            "var secOf = eval('(function (sel) { ' + fnsrc + ' return secOf; })')"
+            "  (%s);"
+            "JSON.stringify(%s.map(function (t) { return secOf(t); }));"
+            % (json.dumps({"notes": document}), json.dumps(titles))))
+
+    def test_a_heading_inside_a_fenced_block_is_body_not_a_section(self):
+        # The server's split_doc is fence-aware. A client that is not tears
+        # the user's code block in half in the prompt it hands the agent --
+        # Built ends at the fence line and an invented Decisions section
+        # carries the rest, unterminated.
+        import sys
+        sys.path.insert(0, str(ROOT / "hc" / "src"))
+        from human_compact.trajectory import goals as GM
+        got = self.sec_of(self.DOC_WITH_FENCE,
+                          ["Objective", "Built", "Decisions", "Blockers"])
+        self.assertIn("x = 1", got[1])
+        self.assertEqual("```py\n# Decisions\nx = 1\n```", got[1])
+        self.assertEqual("", got[2])       # nothing is extracted from inside
+        self.assertEqual(["Ship it.", "", ""], [got[0], got[2], got[3]])
+        # and it agrees with the parser that owns the grammar
+        self.assertEqual(GM.section_body(self.DOC_WITH_FENCE, "Built"), got[1])
+        self.assertIsNone(GM.section_body(self.DOC_WITH_FENCE, "Decisions"))
+
+    def test_a_tilde_fence_hides_a_heading_the_same_way(self):
+        document = "# Built\n~~~\n# Decisions\ny = 2\n~~~\n\n# Blockers\n"
+        got = self.sec_of(document, ["Built", "Decisions"])
+        self.assertEqual("~~~\n# Decisions\ny = 2\n~~~", got[0])
+        self.assertEqual("", got[1])
+
+    def test_a_fence_only_closes_on_its_own_marker(self):
+        # A ``` inside a ~~~~ block does not close it, and a shorter run of
+        # the same character does not either.
+        document = ("# Built\n~~~~\n```\n# Decisions\nz = 3\n~~~\n~~~~\n"
+                    "\n# Blockers\nreal\n")
+        got = self.sec_of(document, ["Built", "Decisions", "Blockers"])
+        self.assertIn("# Decisions", got[0])
+        self.assertEqual("", got[1])
+        self.assertEqual("real", got[2])
+
+    def test_an_info_string_with_a_backtick_opens_nothing(self):
+        # CommonMark: a backtick fence may not carry a backtick in its info
+        # string, so this line is text and the heading after it is real.
+        document = "# Built\n```a`b\n\n# Decisions\nkept\n"
+        got = self.sec_of(document, ["Built", "Decisions"])
+        self.assertEqual("```a`b", got[0])
+        self.assertEqual("kept", got[1])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatPromptTabTests(BridgeTestCase):
+    """A chat workspace gets the PROMPT tab back, with nothing behind it
+    that this scope cannot do."""
+
+    def test_a_chat_page_offers_the_prompt_tab(self):
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertIn('sc-camel-on-click="{{ tabPrompt }}"', out)
+        self.assertIn(">PROMPT</span>", out)
+        self.assertNotIn("prompt folded into agent", out)
+
+    def test_a_global_page_still_folds_it_into_agent(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("prompt folded into agent", out)
+        self.assertNotIn('sc-camel-on-click="{{ tabPrompt }}"', out)
+
+    def test_the_pane_follows_whichever_tab_opens_it(self):
+        self.assertIn("showPrompt: !!sel && paneTab === 'prompt'",
+                      self.patched_bundle("out;", scope="chat"))
+        self.assertIn("showPrompt: !!sel && paneTab === 'agent'",
+                      self.patched_bundle("out;"))
+
+    def prompt_pane(self, scope=None):
+        out = self.patched_bundle("out;", scope=scope)
+        at = out.index('<sc-if value="{{ showPrompt }}"')
+        return out[at:out.index("</sc-if>", at)]
+
+    def test_a_chat_prompt_pane_is_the_prompt_and_a_way_to_take_it(self):
+        pane = self.prompt_pane(scope="chat")
+        self.assertIn("RECOMMENDED PROMPT", pane)
+        self.assertIn("{{ draft }}", pane)
+        self.assertIn('sc-camel-on-click="{{ copyPrompt }}"', pane)
+        self.assertIn("{{ copyPromptLabel }}", pane)
+
+    def test_a_chat_prompt_pane_is_read_only_and_says_so(self):
+        # Nothing here keeps an edit -- not across a reload, not across a
+        # tab switch -- so the box must not invite one and the copy must
+        # not promise one.
+        pane = self.prompt_pane(scope="chat")
+        self.assertIn('readonly="readonly"', pane)
+        self.assertNotIn("Edit it here", pane)
+        self.assertNotIn("{{ promptInput }}", pane)
+        self.assertIn("assembled from your goal document \u00b7 read-only",
+                      pane)
+        # And the way to take it away is still there.
+        self.assertIn('sc-camel-on-click="{{ copyPrompt }}"', pane)
+
+    def test_a_global_prompt_pane_is_still_the_agents_to_edit(self):
+        # There the draft is what `runAgent` sends, so editing it is the
+        # point; only the chat pane loses the box.
+        pane = self.prompt_pane()
+        self.assertNotIn("readonly", pane)
+        self.assertIn("{{ promptInput }}", pane)
+
+    def test_a_chat_prompt_pane_offers_no_run(self):
+        # Every op behind a run answers "global scope only" here.
+        pane = self.prompt_pane(scope="chat")
+        self.assertNotIn("{{ runAgent }}", pane)
+        self.assertNotIn("Run Claude Code on this goal", pane)
+        self.assertNotIn("{{ genTodos }}", pane)
+
+    def test_a_global_prompt_pane_is_unchanged(self):
+        pane = self.prompt_pane()
+        self.assertIn("Run Claude Code on this goal with the self-contained "
+                      "context Vault has assembled. Progress appears in "
+                      "REVIEW.", pane)
+        self.assertIn('<details class="hc-promptbox">', pane)
+        self.assertNotIn("{{ copyPrompt }}", pane)
+
+    def test_copying_says_it_copied_only_once_the_clipboard_took_it(self):
+        out = self.patched_bundle("out;", scope="chat")
+        at = out.index("copyPrompt: () =>")
+        handler = out[at:out.index("copyPromptLabel:", at)]
+        self.assertIn("navigator.clipboard.writeText(t).then(done,", handler)
+        self.assertIn("document.execCommand('copy')", handler)
+        # execCommand answers whether it copied; "copied ✓" waits on that
+        self.assertIn("if (fb()) done();", handler)
+        self.assertNotIn("{ fb(); done(); }", handler)
+        # the draft as it stands, not the draft plus a metadata footer, and
+        # nothing is recorded as a prompt the user never sent
+        self.assertNotIn("_copyMeta", handler)
+        self.assertNotIn("recordPrompt", handler)
+        self.assertIn("copyPromptLabel: copied ? 'copied ✓' : "
+                      "'Copy prompt',", out)
+
+
+    def test_the_fallback_only_claims_a_copy_the_browser_made(self):
+        # execCommand returns false when the browser refuses. Saying
+        # "copied" anyway is the copy rule's exact failure mode: the label
+        # reports an act nothing performed.
+        got = json.loads(self.patched_bundle(
+            "var at = out.indexOf('copyPrompt: () =>');"
+            "var fnsrc = out.slice(at + 'copyPrompt: '.length,"
+            "  out.indexOf('copyPromptLabel:', at)).replace(/,\\s*$/, '');"
+            "var mk = document.createElement;"
+            "document.createElement = function (t) { var el = mk(t);"
+            "  el.select = function () {};"
+            "  el.remove = function () { if (el.parentNode)"
+            "    el.parentNode.removeChild(el); }; return el; };"
+            "navigator.clipboard = undefined;"
+            "var said = [];"
+            "var fn = eval('(function () { return (' + fnsrc + '); })')"
+            "  .call({ _draftEl: { value: 'the draft' },"
+            "          setState: function (s) { said.push(s); } });"
+            "document.execCommand = function () { return false; };"
+            "fn(); var refused = said.slice(); said.length = 0;"
+            "document.execCommand = function () { return true; };"
+            "fn();"
+            "JSON.stringify([refused, said]);", scope="chat"))
+        self.assertEqual([[], [{"copied": True}, {"copied": False}]], got)
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatPromptLinkTests(BridgeTestCase):
+    """Linking a prompt to a goal has to work where the prompts live."""
+
+    CLICK = ("function click(node) { var e = { target: node,"
+             "  preventDefault: function () {}, stopPropagation: function () {} };"
+             "  listeners.filter(function (l) { return l[0] === 'click'; })"
+             "    .forEach(function (l) { l[1](e); }); }")
+
+    KEY = ("function key(name) { var e = { key: name,"
+           "  preventDefault: function () {} };"
+           "  listeners.filter(function (l) { return l[0] === 'keydown'; })"
+           "    .forEach(function (l) { l[1](e); }); }")
+
+    def chat_state(self):
+        state = json.loads(json.dumps(STATE))
+        state["scope"] = "chat"
+        state["prompts"].append(
+            {"id": "a#2", "role": "user", "text": "and record the audio",
+             "created_at": "2026-08-05"})
+        return state
+
+    def test_a_chat_can_add_a_prompt_to_a_goal(self):
+        drawn = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "var drew = window.__hcPromptUI.renderPromptAdd();"
+            "JSON.stringify([drew, slot.children.length,"
+            " slot.children[0] && slot.children[0].textContent]);"))
+        self.assertEqual([True, 1, "+ add a prompt"], drawn)
+
+    def test_the_picker_has_a_way_out_in_its_own_corner(self):
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var btn = document.createElement('button');"
+            "btn.focused = false; btn.focus = function () { btn.focused = true; };"
+            "window.__hcPromptUI.pickPrompt('g1', btn);"
+            "var x = document.querySelector('.hc-pick-close');"
+            "var open1 = !!document.querySelector('.hc-ask');"
+            "x.onclick();"
+            "JSON.stringify([open1, !!x, x.textContent,"
+            " !!document.querySelector('.hc-ask'), btn.focused]);"))
+        self.assertEqual([True, True, "×", False, True], got)
+
+    def test_escape_closes_the_picker_and_puts_the_reader_back(self):
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var btn = document.createElement('button');"
+            "btn.focused = false; btn.focus = function () { btn.focused = true; };"
+            "window.__hcPromptUI.pickPrompt('g1', btn);"
+            + self.KEY +
+            "key('Escape');"
+            "JSON.stringify([!!document.querySelector('.hc-ask'), btn.focused]);"))
+        self.assertEqual([False, True], got)
+
+    def test_a_key_that_is_not_escape_leaves_the_picker_open(self):
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "window.__hcPromptUI.pickPrompt('g1');"
+            + self.KEY +
+            "key('a');"
+            "JSON.stringify([!!document.querySelector('.hc-ask')]);"))
+        self.assertEqual([True], got)
+
+    def test_the_close_button_is_styled_by_the_dialog_sheet(self):
+        self.assertIn(".hc-pick-close{",
+                      self.run_js("window.__hcPromptUI.dialogCss();"))
+
+    def test_a_prompt_row_with_no_conversation_shows_no_separator(self):
+        # Chat prompt records carry no session_id (chat_state writes the
+        # id, ordinal, role, text and created_at, and nothing else), so a
+        # separator emitted beside the value renders with nothing after it
+        # on every row of every goal in the configuration /goals-ui opens.
+        got = json.loads(self.patched_bundle(
+            "var at = out.indexOf('conv: p.conv ?');"
+            "var expr = out.slice(at + 'conv: '.length,"
+            "  out.indexOf(',\\n', at));"
+            "var f = eval('(function (p) { return (' + expr + '); })');"
+            "JSON.stringify([f({ conv: '' }), f({ conv: '11112222' })]);",
+            scope="chat"))
+        self.assertEqual(["", " \u00b7 conversation 11112222"], got)
+
+    def test_the_row_no_longer_draws_a_separator_of_its_own(self):
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertIn("{{ hr.when }}{{ hr.conv }}", out)
+        self.assertNotIn("{{ hr.when }}<span", out)
+
+    def test_attaching_from_a_chat_reaches_the_server(self):
+        posted = json.loads(self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            + self.CLICK +
+            "click(slot.children[0]);"
+            "document.querySelector('.hc-pick-list').children[0].onclick();"
+            "Promise.resolve().then(function () {}).then(function () {})"
+            "  .then(function () { return JSON.stringify("
+            "    calls.map(function (c) { return c[1]; }).filter(Boolean)); });"))
+        self.assertEqual([{"op": "attach_prompt", "goal_id": "g1",
+                           "prompt_id": "a#2"}],
+                         [c for c in posted if c.get("op") == "attach_prompt"])
+
+
+class ChatNoticeTests(BridgeTestCase):
+    """A goals workspace is a second window on a chat running in a terminal.
+
+    The one thing it can say that the terminal cannot is that the terminal is
+    finished. These tests hold what it is allowed to say, and for how long.
+    """
+
+    SID = "7f3a1b2c-4d5e-4f60-8a9b-0c1d2e3f4a5b"
+
+    PRELUDE = (
+        "window.__hcPromptUI.acceptState("
+        "  { goals: [], prompts: [], scope: %s, session_id: %s });"
+        # The first tick of the standing 700ms sweep, which is what names the
+        # tab on a real page.
+        "window.__hcPromptUI.renderChatSurface();"
+        "var iso = function (ms) { return new Date(ms).toISOString(); };"
+        "var now = Date.now();"
+        "var fire = function (type, target, related) {"
+        "  listeners.filter(function (l) { return l[0] === type; })"
+        "    .forEach(function (l) { l[1]({ type: type, target: target,"
+        "      relatedTarget: related || null, preventDefault: function () {},"
+        "      stopPropagation: function () {} }); }); };"
+        "var stack = function () {"
+        "  var node = window.__hcPromptUI.noticeStack();"
+        "  return node ? node.children : []; };"
+        "var drawn = function () { return stack().map(function (n) {"
+        "  var d = n.querySelector('.hc-notice-detail');"
+        "  return [n.className, n.querySelector('.hc-notice-title').textContent,"
+        "          d ? d.textContent : null]; }); };"
+    )
+
+    def notices(self, tail, scope="chat", session=None, defer=True):
+        """Timers stay pending unless a test drives them.
+
+        The banner's whole subject is *when* it goes away; a harness that
+        fires every timer the moment it is set would dismiss it before the
+        assertion that it appeared.
+        """
+        return self.run_js(
+            (self.PRELUDE % (json.dumps(scope),
+                             json.dumps(self.SID if session is None else session)))
+            + tail,
+            extra_env={"HC_DEFER_TIMEOUT": "1"} if defer else None)
+
+    def test_only_what_happened_after_this_page_opened_is_shown(self):
+        # A chat that has been running for an hour has a store full of turns
+        # that finished before anyone opened this window. Replaying them
+        # would report old news as if it had just happened.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices(["
+            "  {id: 'n1', kind: 'session_stopped', at: iso(now - 60000),"
+            "   detail: 'an older turn'},"
+            "  {id: 'n2', kind: 'subagent_returned', at: iso(now + 5000),"
+            "   detail: 'Explore: found it'}]);"
+            "drawn();")
+        self.assertEqual(
+            [["hc-notice", "A subagent returned", "Explore: found it"]], out)
+
+    def test_the_same_notice_is_never_shown_twice(self):
+        # State is polled every 1.5s and the store keeps twenty rows, so the
+        # same notice arrives again on every poll for the rest of the session.
+        out = self.notices(
+            "var row = [{id: 'n1', kind: 'session_stopped',"
+            "            at: iso(now + 5000), detail: 'done'}];"
+            "window.__hcPromptUI.showNotices(row);"
+            "window.__hcPromptUI.showNotices(row);"
+            "window.__hcPromptUI.showNotices(row);"
+            "stack().length;")
+        self.assertEqual(1, out)
+
+    def test_at_most_three_stand_at_once(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([1,2,3,4,5].map(function (n) {"
+            "  return {id: 'n' + n, kind: 'session_stopped',"
+            "          at: iso(now + n * 1000), detail: 'turn ' + n}; }));"
+            "drawn().map(function (row) { return row[2]; });")
+        # The newest three: a stack that grows without bound covers the page
+        # it is reporting on.
+        self.assertEqual(["turn 3", "turn 4", "turn 5"], out)
+
+    def test_a_kind_the_banner_has_no_words_for_says_nothing(self):
+        # The copy is one of three sentences. An unknown kind would reach the
+        # reader as a blank banner or a raw enum name.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'compacted',"
+            "  at: iso(now + 5000), detail: 'whatever'}]);"
+            "stack().length;")
+        self.assertEqual(0, out)
+
+    def test_every_sentence_it_can_say_is_one_the_hook_proved(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices("
+            "  ['session_stopped', 'subagent_returned', 'session_ended']"
+            "    .map(function (kind, i) { return {id: 'n' + i, kind: kind,"
+            "      at: iso(now + 1000 + i), detail: ''}; }));"
+            "drawn();")
+        self.assertEqual(
+            [["hc-notice", "Claude finished responding", None],
+             ["hc-notice", "A subagent returned", None],
+             ["hc-notice", "Session ended", None]], out)
+
+    def test_a_notice_with_nothing_to_add_carries_no_empty_line(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_ended',"
+            "  at: iso(now + 5000), detail: ''}]);"
+            "[stack().length, !!stack()[0].querySelector('.hc-notice-detail'),"
+            " !!stack()[0].querySelector('.hc-notice-close')];")
+        self.assertEqual([1, False, True], out)
+
+    def test_a_global_vault_draws_no_banner(self):
+        # There is no one session for it to report on.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "[window.__hcPromptUI.noticeStack(), document.title];",
+            scope="global")
+        # And the sweep that names a chat tab never renames a vault's.
+        self.assertEqual([None, "Goals"], out)
+
+    def test_the_tab_carries_the_mark_only_while_a_notice_stands(self):
+        # The workspace is usually on a second screen. The tab strip is the
+        # only part of it a reader looking elsewhere can see.
+        out = self.notices(
+            "var titles = [document.title];"
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "titles.push(document.title);"
+            "window.fireTimers();"
+            "titles.push(document.title);"
+            "titles;")
+        self.assertEqual(
+            ["Engelbart · 7f3a1b2c", "● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
+
+    def test_a_notice_takes_itself_away(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var before = stack().length;"
+            "window.fireTimers();"
+            "[before, stack().length];",
+            defer=True)
+        self.assertEqual([1, 0], out)
+
+    def test_reading_it_keeps_it_on_screen(self):
+        # Eight seconds is not long enough to read a line and think about it,
+        # so the clock stops while the pointer is on it and starts again when
+        # it leaves.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var box = stack()[0];"
+            "fire('mouseover', box);"
+            "window.fireTimers();"
+            "var held = stack().length;"
+            "fire('mouseout', box, null);"
+            "window.fireTimers();"
+            "[held, stack().length];",
+            defer=True)
+        self.assertEqual([1, 0], out)
+
+    def test_moving_across_its_own_text_is_not_leaving_it(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var box = stack()[0];"
+            "fire('mouseover', box);"
+            "fire('mouseout', box.querySelector('.hc-notice-title'),"
+            "     box.querySelector('.hc-notice-detail'));"
+            "window.fireTimers();"
+            "stack().length;",
+            defer=True)
+        self.assertEqual(1, out)
+
+    def test_the_close_control_dismisses_it(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var box = stack()[0];"
+            "fire('click', box.querySelector('.hc-notice-close'));"
+            "[stack().length, document.title];")
+        self.assertEqual([0, "Engelbart · 7f3a1b2c"], out)
+
+    def test_a_dismissed_notice_does_not_come_back_on_the_next_poll(self):
+        out = self.notices(
+            "var row = [{id: 'n1', kind: 'session_stopped',"
+            "            at: iso(now + 5000), detail: 'done'}];"
+            "window.__hcPromptUI.showNotices(row);"
+            "fire('click', stack()[0].querySelector('.hc-notice-close'));"
+            "window.__hcPromptUI.showNotices(row);"
+            "stack().length;",
+            defer=True)
+        self.assertEqual(0, out)
+
+    def test_the_banner_is_small_and_drawn_from_the_page_tokens(self):
+        css = self.run_js("window.__hcPromptUI.noticeCss();")
+        self.assertIn("position:fixed", css)
+        self.assertIn("right:", css)
+        self.assertIn("bottom:", css)
+        self.assertIn("320px", css)
+        self.assertIn("11px", css)
+        self.assertIn("monospace", css)
+        for token in ("--panel", "--bd2", "--acc", "--mut", "--ink"):
+            self.assertIn("var(" + token, css)
+
+    def test_junk_in_the_notice_list_is_stepped_over(self):
+        # /api/state is a file on disk away from a process that may have been
+        # killed mid-write. A malformed row may not take the page down.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices(["
+            "  null, 'nope', {}, {id: 'n1'},"
+            "  {id: 'n2', kind: 'session_stopped', at: 'not a date'},"
+            "  {id: 'n3', kind: 'session_stopped', at: iso(now + 5000)}]);"
+            "stack().length;")
+        self.assertEqual(1, out)
+
+    def test_the_tab_is_named_after_the_conversation_it_watches(self):
+        # A day with three of these open needs the tab strip to tell them
+        # apart, and the goal tree is what they all have in common.
+        self.assertEqual(
+            "Engelbart · 7f3a1b2c",
+            self.notices("window.__hcPromptUI.pageTitle();"))
+
+    def test_a_workspace_that_was_never_told_its_session_still_has_a_name(self):
+        # /api/state answers the session id; a page that booted before it
+        # answered says what it knows rather than "undefined".
+        self.assertEqual(
+            ["Engelbart", "Engelbart"],
+            self.notices("[window.__hcPromptUI.pageTitle(), document.title];",
+                         session=""))
+
+    def test_the_tab_keeps_its_name_after_the_artifact_wipes_it(self):
+        # The artifact unpacks its template by replacing the whole
+        # documentElement, which takes the <title> with it. That is why the
+        # name is re-asserted by the standing sweep and not written once.
+        out = self.notices(
+            "var seen = [document.title];"
+            # What the unpack does to the tab.
+            "document.title = '';"
+            "window.__hcPromptUI.renderChatSurface();"
+            "seen.push(document.title);"
+            "seen;")
+        self.assertEqual(["Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
+
+    def test_a_wipe_while_a_notice_stands_comes_back_marked(self):
+        # The mark is derived from what the tab should say, not remembered
+        # from what it did say: putting back the remembered string here would
+        # restore the empty title the artifact had just left behind.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "document.title = '';"
+            "window.__hcPromptUI.renderChatSurface();"
+            "var marked = document.title;"
+            "window.fireTimers();"
+            "[marked, document.title];")
+        self.assertEqual(["● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
+
+    def test_the_banner_sits_just_above_the_prompt_picker(self):
+        # Both are fixed overlays. A banner under the picker is a banner
+        # nobody can dismiss while choosing a prompt; a banner at the top of
+        # the stacking order covers a modal the reader is working in.
+        css = self.run_js("window.__hcPromptUI.noticeCss();")
+        dialog = self.run_js("window.__hcPromptUI.dialogCss();")
+        self.assertIn("z-index:100001", css)
+        self.assertIn("z-index:100000", dialog)
+
+
+# Every class the chat-scope template patches introduce, and therefore every
+# class the stylesheet has something to dress. They are listed here rather
+# than scraped from bridge.js so that a patch quietly losing its anchor -- or
+# its class -- fails, instead of the test agreeing with whatever it finds.
+LAUNCH_CLASSES = (
+    "hc-row", "hc-rowtitle",
+    "hc-shell", "hc-main",
+    "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
+    "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
+    "hc-rail-none", "hc-inject",
+    "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
+    "hc-src-rm", "hc-src-add", "hc-tabs",
+    "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-session", "hc-updated",
+)
+
+
+def _luminance(hexcolor):
+    """WCAG relative luminance of a #rgb or #rrggbb string."""
+    digits = hexcolor.lstrip("#")
+    if len(digits) == 3:
+        digits = "".join(d * 2 for d in digits)
+    channels = []
+    for pair in (digits[0:2], digits[2:4], digits[4:6]):
+        c = int(pair, 16) / 255
+        channels.append(c / 12.92 if c <= 0.04045
+                        else ((c + 0.055) / 1.055) ** 2.4)
+    return (0.2126 * channels[0] + 0.7152 * channels[1]
+            + 0.0722 * channels[2])
+
+
+def _contrast(fg, bg):
+    """WCAG 2.1 contrast ratio between two CSS hex colours."""
+    lighter, darker = sorted((_luminance(fg), _luminance(bg)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class LaunchSkinTests(BridgeTestCase):
+    """The three-column skin: one root attribute, and only in a chat."""
+
+    def chat(self):
+        return ("window.__hcPromptUI.acceptState("
+                "{ goals: [], prompts: [], scope: 'chat',"
+                "  session_id: '7f3a1b2c-0000' });")
+
+    def patch_report(self, scope):
+        """Which anchors missed, and which classes never reached the source.
+
+        The skin is applied by patching the artifact's template *source*
+        before the runtime unpacks it, so a moved anchor is not a crash: the
+        pair no-ops and the layout silently does not apply. Every browser
+        assertion phrased as "this is hidden" or "this is styled" passes
+        vacuously in that state, which is why the anchors are asserted here,
+        against the checked-in bundle, and not only through a page.
+        """
+        return self.patched_bundle(
+            "[window.__hcPromptUI.patchMisses(),"
+            " %s.filter(function (c) {"
+            "   return out.indexOf('class=\"' + c + '\"') < 0; })];"
+            % json.dumps(list(LAUNCH_CLASSES)),
+            scope=scope)
+
+    def test_every_anchor_the_launch_shell_names_is_found_in_the_artifact(self):
+        misses, missing = self.patch_report("chat")
+        self.assertEqual([], misses)
+        self.assertEqual([], missing)
+
+    def test_a_global_vault_gets_a_source_with_none_of_those_names_in_it(self):
+        # The same reduce runs, and every pair is a no-op: nothing missed,
+        # and not one of the launch classes is in what a vault is served.
+        misses, missing = self.patch_report("global")
+        self.assertEqual([], misses)
+        self.assertEqual(sorted(LAUNCH_CLASSES), sorted(missing))
+
+    def test_the_copy_button_label_clears_aa_in_both_themes(self):
+        # 11.5px bold is not "large text", so both themes owe 4.5:1 -- and
+        # the fill is a variable each theme redefines, so the label cannot be
+        # one colour. The light fill is dark enough that only white clears
+        # it; the dark theme's fill is bright enough that only near-black
+        # does. This caught a 3.69:1 label the eye read as fine.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+
+        def first(pattern):
+            found = re.search(pattern, css)
+            self.assertIsNotNone(found, pattern)
+            return found.group(1)
+
+        dark = r"\[data-hc-launch\]\[data-hc-theme=\"dark\"\]"
+        pairs = [
+            (first(r"\[data-hc-launch\]\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
+             first(r"\[data-hc-launch\] \.hc-rail-copy\{"
+                   r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+            (first(dark + r"\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
+             first(dark + r" \.hc-rail-copy\{"
+                          r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+        ]
+        self.assertEqual(2, len({label for _, label in pairs}))
+        for fill, label in pairs:
+            self.assertGreaterEqual(round(_contrast(label, fill), 2), 4.5,
+                                    (label, fill))
+
+    def test_a_global_vault_is_never_dressed(self):
+        # Every rule in the sheet is behind [data-hc-launch], and the
+        # attribute is only ever written in a chat -- so a global vault does
+        # not so much as load the stylesheet.
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState("
+            "  { goals: [], prompts: [], scope: 'global' });"
+            "var applied = window.__hcPromptUI.applyLaunchSkin();"
+            "[applied, document.documentElement.getAttribute('data-hc-launch'),"
+            " document.getElementById('hc-launch-style') ? 1 : 0];")
+        self.assertEqual([False, None, 0], out)
+
+    def test_a_chat_is_dressed_once_and_stays_dressed(self):
+        out = self.run_js(
+            self.chat()
+            + "var first = window.__hcPromptUI.applyLaunchSkin();"
+            "var again = window.__hcPromptUI.applyLaunchSkin();"
+            "[first, again,"
+            " document.documentElement.getAttribute('data-hc-launch'),"
+            " document.getElementById('hc-launch-style').textContent"
+            "   .indexOf('[data-hc-launch]') === 0];")
+        self.assertEqual([True, False, "chat", True], out)
+
+    def test_every_rule_in_the_sheet_is_gated_on_the_root_attribute(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        rules = [rule for rule in css.split("}") if rule.strip()]
+        self.assertTrue(rules)
+        stray = [rule for rule in rules
+                 if not rule.lstrip().startswith("[data-hc-launch]")]
+        self.assertEqual([], stray)
+
+    def test_the_session_chip_names_the_conversation_the_window_watches(self):
+        out = self.run_js(
+            self.chat()
+            + "var slot = document.createElement('span');"
+            "slot.className = 'hc-session'; app.appendChild(slot);"
+            "var wrote = window.__hcPromptUI.renderSessionChip();"
+            "var again = window.__hcPromptUI.renderSessionChip();"
+            "[wrote, again, slot.textContent];")
+        self.assertEqual([True, False, "session 7f3a1b2c"], out)
+
+    def test_the_injection_card_says_only_what_the_state_proves(self):
+        # A chat nobody has opened the workspace for has been told nothing,
+        # and the card says that rather than leaving the line off.
+        self.assertEqual(
+            [["head", "context injection"],
+             ["off", "not sent to Claude yet"],
+             ["", "reads: prompt · subagent · task"],
+             ["off", "off · /goals-ui turns it back on"]],
+            self.run_js(
+                "window.__hcPromptUI.injectionLines("
+                "  { cached: false, last_delta_chars: null, last_at: null,"
+                "    active: false, reads: ['prompt', 'subagent', 'task'] });"))
+
+    def test_no_line_on_the_card_claims_the_model_read_anything(self):
+        # The snapshot behind these numbers records what the hook *rendered*
+        # into a turn; Claude Code may still drop or compact it. "sent" is
+        # what this side can prove, and it is what every line says.
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 570,"
+            "    last_at: '2026-08-17T10:49:20+00:00',"
+            "    active: true, reads: ['session start', 'prompt'] });")
+        self.assertEqual([], [row for row in rows if "read it" in row[1]])
+        self.assertIn(["", "reads: session start · prompt"], rows)
+        self.assertEqual(
+            1, len([row for row in rows if row[1].startswith("last sent ")]),
+            rows)
+
+    def test_a_pending_change_is_sized_as_an_estimate(self):
+        # Characters over four, and marked "~": the browser cannot count
+        # tokens, so it must not print a number that looks like it did.
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 570, last_at: null,"
+            "    active: true, reads: [] });")
+        self.assertIn(["on", "goal document sent ✓"], rows)
+        self.assertIn(["", "~143 tok changed since it was last sent"], rows)
+        self.assertIn(["on", "on · /goals-ui disable turns it off"], rows)
+
+    def test_a_document_the_model_is_current_on_says_so(self):
+        rows = self.run_js(
+            "window.__hcPromptUI.injectionLines("
+            "  { cached: true, last_delta_chars: 0, last_at: null,"
+            "    active: true, reads: [] });")
+        self.assertIn(["", "unchanged since it was last sent"], rows)
+        self.assertEqual(
+            [], [row for row in rows if "tok" in row[1]])
+
+    def test_a_state_with_no_injection_draws_no_card(self):
+        # `null` is what the bridge holds before the first poll lands, and an
+        # empty card is a claim about a chat nothing is known about yet.
+        self.assertEqual([], self.run_js(
+            "window.__hcPromptUI.injectionLines(null);"))
