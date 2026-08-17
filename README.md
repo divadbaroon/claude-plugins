@@ -6,7 +6,7 @@ Claude Code / Codex plugin marketplace.
 
 | | what it is |
 |---|---|
-| [`human-vault`](./human-vault) | npm installer — puts `hc` and the Claude Code integration on a machine in one step |
+| [`engelbart-cli`](./engelbart) | npm installer — puts `hc` and the Claude Code integration on a machine in one step |
 | [`hc`](./hc) | the local goal-state runtime: capture, inference, workspace server, context injection |
 | [`compact-focus`](./compact-focus) | inline, human-reviewed replacement for blind context compaction |
 
@@ -15,7 +15,7 @@ Claude Code / Codex plugin marketplace.
 macOS or Linux, Node 18+, Claude Code 2.1.175+.
 
 ```bash
-npx human-vault          # no options, no questions
+npx engelbart-cli          # no options, no questions
 ```
 
 Restart Claude Code (or `/reload-plugins`).
@@ -54,8 +54,8 @@ is what ships.
 
 ```bash
 python3 -W error::ResourceWarning -m unittest discover -s tests   # incl. real-browser tests
-cd human-vault && npm test && npm run test:pack
-cd human-vault && npm run build:vendor                            # re-vendor the wheel after hc/ changes
+cd engelbart && npm test && npm run test:pack
+cd engelbart && npm run build:vendor                            # re-vendor the wheel after hc/ changes
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and [`hc/README.md`](./hc/README.md).

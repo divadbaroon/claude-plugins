@@ -68,7 +68,7 @@ function fixturePackage(root) {
   fs.writeFileSync(path.join(root, 'vendor', wheel), body);
   fs.writeFileSync(path.join(root, 'vendor', 'manifest.json'), JSON.stringify({
     schema: 1,
-    package: 'human-vault',
+    package: 'engelbart-cli',
     version: '0.16.0',
     wheel,
     sha256: crypto.createHash('sha256').update(body).digest('hex'),

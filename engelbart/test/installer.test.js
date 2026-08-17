@@ -37,7 +37,7 @@ function writeVendor(packageRoot, body = 'wheel-a') {
   fs.writeFileSync(path.join(vendor, wheel), body);
   fs.writeFileSync(path.join(vendor, 'manifest.json'), JSON.stringify({
     schema: 1,
-    package: 'human-vault',
+    package: 'engelbart-cli',
     version: '0.16.0',
     wheel,
     sha256: crypto.createHash('sha256').update(body).digest('hex'),
@@ -123,13 +123,37 @@ test('safeChild refuses root and sibling deletion targets', () => {
   assert.throws(() => safeChild(root, `${root}-sibling`), /unsafe/);
 });
 
+test('an install made under the old package name is adopted, not refused', () => {
+  // The package was published as human-vault before it was named. That name
+  // is written into the marker of every install it made, including the ones
+  // on the machines of everybody who installed it -- so it is an on-disk
+  // contract, not a brand. Refusing those directories would turn a rename
+  // into a broken upgrade for exactly the earliest users.
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-rename-test-'));
+  try {
+    const root = path.join(fixture, 'managed');
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(path.join(root, '.owner.json'),
+      `${JSON.stringify({ owner: 'human-vault', schema: 1 }, null, 2)}\n`);
+    fs.mkdirSync(path.join(root, 'runtimes'), { recursive: true });
+
+    assert.doesNotThrow(() => establishOwnership(root));
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(root, '.owner.json'))).owner,
+      'engelbart-cli',
+      'adopting it should also bring the marker up to the current name');
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('ownership accepts legacy state but rejects unrelated unowned content', () => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-marker-test-'));
   try {
     const legacy = path.join(fixture, 'legacy');
     fs.mkdirSync(path.join(legacy, 'state'), { recursive: true });
     establishOwnership(legacy);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(legacy, '.owner.json'))).owner, 'human-vault');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(legacy, '.owner.json'))).owner, 'engelbart-cli');
 
     const unrelated = path.join(fixture, 'unrelated');
     fs.mkdirSync(unrelated);
@@ -221,7 +245,7 @@ test('installer creates stable launcher, manifest, and exact setup argv', async 
     ]);
     assert.equal(setup.options.env.HC_EXECUTABLE, path.join(managedRoot, 'bin', 'hc'));
     const manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
-    assert.equal(manifest.owner, 'human-vault');
+    assert.equal(manifest.owner, 'engelbart-cli');
     assert.equal(manifest.backendVersion, '0.16.0');
 
     let rebuilt = false;
@@ -280,7 +304,7 @@ test('failed setup keeps a usable base install and rerun repairs it', async () =
     assert.equal(fs.lstatSync(launcher).isSymbolicLink(), true);
     assert.equal(fs.existsSync(fs.realpathSync(launcher)), true);
     let manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
-    assert.equal(manifest.owner, 'human-vault');
+    assert.equal(manifest.owner, 'engelbart-cli');
     assert.equal(manifest.setupStatus, 'failed');
     assert.equal(manifest.setupExitCode, 7);
 
@@ -311,7 +335,7 @@ test('switchLauncher refuses an unmanaged existing launcher', () => {
 });
 
 test('the runtime check asks for the python distribution, not the npm package', () => {
-  // These names are deliberately different: the npm package is human-vault,
+  // These names are deliberately different: the npm package is engelbart-cli,
   // the wheel it carries is human-compact. Asking for the wrong one made a
   // published install fail its version check on the user's first command.
   const source = fs.readFileSync(path.join(__dirname, '..', 'lib', 'installer.js'), 'utf8');
@@ -356,7 +380,7 @@ test('PATH: a launcher the shell cannot find is added to the zsh profile', () =>
   assert.equal(got.profile, '/home/u/.zshrc');
   assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
   assert.equal(writes.length, 1);
-  assert.match(writes[0][1], /human-vault \(runtime on PATH\)/);
+  assert.match(writes[0][1], /engelbart-cli \(runtime on PATH\)/);
 });
 
 test('PATH: ZDOTDIR is honoured over the home directory', () => {

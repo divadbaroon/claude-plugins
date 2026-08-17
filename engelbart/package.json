@@ -1,9 +1,9 @@
 {
-  "name": "human-vault",
+  "name": "engelbart-cli",
   "version": "0.18.0",
-  "description": "One-command installer for /goals-ui: chat-scoped goals for Claude Code.",
+  "description": "Engelbart: one-command installer for /goals-ui, chat-scoped goals for Claude Code.",
   "bin": {
-    "human-vault": "bin/human-vault.js"
+    "engelbart": "bin/engelbart.js"
   },
   "files": [
     "bin",
@@ -27,12 +27,12 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/divadbaroon/claude-plugins.git",
-    "directory": "human-vault"
+    "directory": "engelbart"
   },
   "bugs": {
     "url": "https://github.com/divadbaroon/claude-plugins/issues"
   },
-  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/human-vault#readme",
+  "homepage": "https://github.com/divadbaroon/claude-plugins/tree/main/engelbart#readme",
   "publishConfig": {
     "access": "public"
   },

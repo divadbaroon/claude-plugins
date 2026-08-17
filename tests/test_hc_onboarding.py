@@ -243,7 +243,7 @@ class HcOnboardingTests(unittest.TestCase):
             )
         response = json.loads(result.stdout)
         self.assertEqual("block", response["decision"])
-        self.assertIn("npx human-vault", response["reason"])
+        self.assertIn("npx engelbart-cli", response["reason"])
 
 
 class HcCommandGateTests(unittest.TestCase):

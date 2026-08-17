@@ -56,7 +56,7 @@ function git(cwd, args) {
   return result.stdout;
 }
 
-// human-vault/ + hc/ into a tmpdir with its own git history. build-vendor.js
+// engelbart/ + hc/ into a tmpdir with its own git history. build-vendor.js
 // derives every path from __dirname, so the copy is self-contained: it reads
 // the copy's pyproject.toml, refuses on the copy's git state, and writes the
 // copy's vendor/.
@@ -66,8 +66,8 @@ function cloneWorkspace(destination) {
     const base = path.basename(source);
     return !skip.has(base) && !base.endsWith('.egg-info');
   };
-  fs.mkdirSync(path.join(destination, 'human-vault'), { recursive: true });
-  fs.cpSync(packageRoot, path.join(destination, 'human-vault'), {
+  fs.mkdirSync(path.join(destination, 'engelbart'), { recursive: true });
+  fs.cpSync(packageRoot, path.join(destination, 'engelbart'), {
     recursive: true, filter,
   });
   fs.cpSync(path.join(repoRoot, 'hc'), path.join(destination, 'hc'), {
@@ -115,15 +115,15 @@ test('a stale build tree cannot leak a deleted asset into the wheel', (t) => {
   assert.equal(fs.existsSync(stale), true, 'the stale asset must exist to be a test');
 
   const built = spawnSync(
-    'node', [path.join(workspace, 'human-vault', 'scripts', 'build-vendor.js')],
+    'node', [path.join(workspace, 'engelbart', 'scripts', 'build-vendor.js')],
     {
-      cwd: path.join(workspace, 'human-vault'),
+      cwd: path.join(workspace, 'engelbart'),
       encoding: 'utf8',
       env: { ...process.env, HUMAN_COMPACT_BUILD_UV: uv },
     });
   assert.equal(built.status, 0, built.stderr || built.stdout);
 
-  const clonedVendor = path.join(workspace, 'human-vault', 'vendor');
+  const clonedVendor = path.join(workspace, 'engelbart', 'vendor');
   const manifest = JSON.parse(
     fs.readFileSync(path.join(clonedVendor, 'manifest.json'), 'utf8'));
   const listed = spawnSync('python3', [

@@ -74,7 +74,7 @@ try {
   fs.copyFileSync(source, path.join(vendorRoot, wheels[0]));
   fs.writeFileSync(path.join(vendorRoot, 'manifest.json'), `${JSON.stringify({
     schema: 1,
-    package: 'human-vault',
+    package: 'engelbart-cli',
     version: packageJson.version,
     wheel: wheels[0],
     sha256,

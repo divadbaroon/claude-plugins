@@ -1,10 +1,10 @@
-# human-vault
+# engelbart-cli
 
 Install `/goals-ui` — chat-scoped goal workspaces for Claude Code — with one
 command:
 
 ```bash
-npx human-vault
+npx engelbart-cli
 ```
 
 The installer takes no required options and asks no questions. It installs
@@ -39,7 +39,7 @@ lifecycle scripts.
 There is nothing to answer, so a scripted install is the same command:
 
 ```bash
-npx human-vault
+npx engelbart-cli
 ```
 
 `--non-interactive` is still accepted for compatibility and changes nothing.
@@ -54,10 +54,10 @@ capture hooks are installed only when the flag is set at install time:
 
 ```bash
 # Global Vault plus global goal inference
-HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1 --goals 1
+HC_EXPERIMENTAL=1 npx engelbart-cli --non-interactive --global-vault 1 --goals 1
 
 # Global Vault without running goal inference now
-HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1 --goals 2
+HC_EXPERIMENTAL=1 npx engelbart-cli --non-interactive --global-vault 1 --goals 2
 ```
 
 Values other than `1` and `2` are rejected, and `--goals 1` is invalid when the
