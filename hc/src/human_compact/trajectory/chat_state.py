@@ -1201,9 +1201,9 @@ def _goal_context_text(
             # The goal's markdown document, whole. Squashing it to one capped
             # line used to throw away the bullets that carry the actual state;
             # only sections nobody has written in are left out.
-            written = {title: body
-                       for title, body in split_doc(goal.get("notes")).items()
-                       if body.strip()}
+            written = [(title, body)
+                       for title, body in split_doc(goal.get("notes"))
+                       if body.strip()]
             if written:
                 lines.append(f"{indent}  - USER NOTES:")
                 lines.extend(f"{indent}    {line}".rstrip()

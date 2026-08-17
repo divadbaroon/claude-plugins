@@ -251,6 +251,9 @@ def _provider(provider=None):
     return P.make(kind, "synthesize", model)
 
 
+_INITIAL_FIELDS = ("status", "parent_goal_id", "description", "priority")
+
+
 def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
     raw = data.get("goals")
     if not isinstance(raw, list):
@@ -260,22 +263,26 @@ def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
     for index, value in enumerate(raw[:60], 1):
         if not isinstance(value, dict):
             continue
-        goal = deepcopy(value)
-        gid = str(goal.get("id") or f"g{index}")[:80]
+        # Whitelisted, not copied wholesale: a model that returns "notes" or
+        # "opening" must not land text in fields the user owns. Everything the
+        # schema does allow is normalized below.
+        goal = {key: deepcopy(value[key]) for key in _INITIAL_FIELDS
+                if key in value}
+        gid = str(value.get("id") or f"g{index}")[:80]
         if gid in seen:
             gid = f"g{index}"
         seen.add(gid)
         goal["id"] = gid
-        goal["title"] = str(goal.get("title") or "Untitled goal")[:120]
+        goal["title"] = str(value.get("title") or "Untitled goal")[:120]
         goal["origin"] = "inferred"
         goal["prompt_ids"] = []
         goal["important_item_ids"] = []
         goal["evidence_ids"] = [
-            eid for eid in goal.get("evidence_ids", [])
+            eid for eid in (value.get("evidence_ids") or [])
             if isinstance(eid, str) and eid in valid_ids
         ][:40]
         todos = []
-        for todo in goal.get("todos", [])[:30]:
+        for todo in (value.get("todos") or [])[:30]:
             if not isinstance(todo, dict) or not str(todo.get("text") or "").strip():
                 continue
             todos.append({
@@ -325,14 +332,25 @@ def _apply_sections(goals: Dict[str, Any]) -> Dict[str, Any]:
             continue
         notes = str(goal.get("notes") or "")
         if not notes.strip():
-            goal["notes"] = GM.join_doc({
-                title: _section_text(sections.get(key))
+            goal["notes"] = GM.join_doc(
+                (title, _section_text(sections.get(key)))
                 for key, title in GM.SECTION_KEYS.items()
-            })
+            )
             continue
+        document = notes
         for key, title in GM.SECTION_KEYS.items():
-            notes = GM.append_to_section(notes, title, _section_text(sections.get(key)))
-        goal["notes"] = notes
+            text = _section_text(sections.get(key))
+            if not text:
+                continue
+            candidate = GM.append_to_section(document, title, text)
+            # Only a section that really gained text earns a write. Materializing
+            # an absent header is not a gain, so a run with nothing new to say
+            # leaves the user's document exactly as they left it.
+            if (GM.section_body(candidate, title) or "") != \
+                    (GM.section_body(document, title) or ""):
+                document = candidate
+        if document != notes:
+            goal["notes"] = document
     return goals
 
 

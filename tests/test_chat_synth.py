@@ -547,6 +547,35 @@ class ChatSynthesisTests(unittest.TestCase):
                          goal["sources"])
 
 
+    def test_sections_with_nothing_new_leave_the_document_untouched(self):
+        written = "# Decisions\n- keep sqlite\n"
+        proposed = {"version": 1, "goals": [{
+            "id": "g1", "title": "Ship it", "status": "active",
+            "parent_goal_id": None, "notes": written,
+            "sections": {"decisions": ["keep sqlite"], "built": []},
+        }]}
+
+        S._apply_sections(proposed)
+
+        self.assertEqual(written, proposed["goals"][0]["notes"])
+
+    def test_model_supplied_notes_never_bypass_the_section_grammar(self):
+        self.hook("UserPromptSubmit", prompt="Try to smuggle notes")
+        provider = Provider([{"goals": [{
+            "id": "g1", "title": "Smuggler", "status": "active",
+            "parent_goal_id": None, "evidence_ids": [], "todos": [],
+            "notes": "notes the model wrote by hand",
+            "opening": "and an opening it does not own",
+            "sections": {"built": ["the parser"]},
+        }]}])
+
+        S.refresh(SID, root=self.root, provider=provider)
+
+        goal = CS.load_goals(SID, self.root)[0]["goals"][0]
+        self.assertNotIn("notes the model wrote by hand", goal["notes"])
+        self.assertEqual("", goal["opening"])
+        self.assertIn("# Built\n- the parser", goal["notes"])
+
 
 if __name__ == "__main__":
     unittest.main()

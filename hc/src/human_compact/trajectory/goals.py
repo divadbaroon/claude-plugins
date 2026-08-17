@@ -50,6 +50,7 @@ SECTION_KEYS = {"objective": "Objective", "in_my_words": "In my words",
                 "decisions": "Decisions", "built": "Built",
                 "blockers": "Blockers", "open_questions": "Open questions"}
 _H1 = re.compile(r"^# (.*)$")
+_FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
 
 def default_doc() -> str:
@@ -57,57 +58,100 @@ def default_doc() -> str:
     return "\n\n".join(f"# {title}" for title in DOC_SECTIONS) + "\n"
 
 
-def split_doc(notes):
-    """Parse a notes document into ``{h1 title: body}`` in document order.
+def _scan_doc(notes):
+    """Locate each section as a line span: ``(title, start, end)``.
 
-    Only ``# `` starts a section — an ``##`` heading is body text belonging to
-    the section above it. Text written before the first header keeps the ``""``
-    key, and a header the user invented keeps its own, so nothing a person
-    typed can be silently dropped by a round trip.
+    Fence-aware on purpose. A ``# install deps`` comment at column 0 inside a
+    fenced code block is not a heading, and treating it as one would tear the
+    user's code block across two sections and leave the fence unterminated --
+    in state that is persisted and injected into later sessions.
     """
-    sections, title = {}, ""
+    lines = str(notes or "").splitlines()
+    fence, heads = None, []
+    for index, line in enumerate(lines):
+        body = line.lstrip(" ")
+        if len(line) - len(body) <= 3:
+            marker = _FENCE.match(body)
+            if marker:
+                char, run = marker.group(1)[0], len(marker.group(1))
+                rest = marker.group(2)
+                if fence is None:
+                    # An opening backtick fence may not carry a backtick in
+                    # its info string; anything else opens one.
+                    if not (char == "`" and "`" in rest):
+                        fence = (char, run)
+                elif char == fence[0] and run >= fence[1] and not rest.strip():
+                    fence = None
+                continue
+        if fence is None:
+            heading = _H1.match(line)
+            if heading:
+                heads.append((heading.group(1).strip(), index))
+    spans = []
+    first = heads[0][1] if heads else len(lines)
+    if any(line.strip() for line in lines[:first]):
+        spans.append(("", 0, first))
+    for position, (title, index) in enumerate(heads):
+        following = heads[position + 1][1] if position + 1 < len(heads) else len(lines)
+        spans.append((title, index + 1, following))
+    return lines, spans
 
-    def start(name):
-        if name not in sections:
-            sections[name] = []
 
-    for line in str(notes or "").splitlines():
-        match = _H1.match(line)
-        if match:
-            title = match.group(1).strip()
-            start(title)
-            continue
-        if title not in sections and not line.strip():
-            continue           # blank lines before any text open nothing
-        start(title)
-        sections[title].append(line)
-    return {title: "\n".join(body).strip("\n")
-            for title, body in sections.items()
-            if title or "\n".join(body).strip()}
+def split_doc(notes):
+    """Parse a notes document into ``[(h1 title, body)]`` in document order.
+
+    A list, not a mapping: a person may write the same heading twice, or write
+    them in an order of their own, and a dict would silently swallow the second
+    one. Only ``# `` at column 0 outside a code fence starts a section -- an
+    ``##`` heading is body text belonging to the section above it. Text written
+    before the first header keeps the ``""`` title.
+    """
+    lines, spans = _scan_doc(notes)
+    return [(title, "\n".join(lines[start:end]).strip("\n"))
+            for title, start, end in spans]
+
+
+def section_body(notes, section_title):
+    """The body of the first section with this title, or None if absent."""
+    for title, body in split_doc(notes):
+        if title == section_title:
+            return body
+    return None
 
 
 def join_doc(sections) -> str:
-    """Render sections back to markdown in canonical order."""
-    known = [t for t in DOC_SECTIONS if t in sections]
-    extra = [t for t in sections if t and t not in DOC_SECTIONS]
+    """Render ``[(title, body)]`` back to markdown, in the order given.
+
+    Order-preserving and duplicate-preserving, so ``join_doc(split_doc(x))``
+    returns *x* -- a document the user arranged their own way survives a round
+    trip through this module unchanged.
+    """
     blocks = []
-    preamble = str(sections.get("") or "").strip("\n")
-    if preamble.strip():
-        blocks.append(preamble)
-    for title in known + extra:
-        body = str(sections.get(title) or "").strip("\n")
+    for title, body in sections:
+        body = str(body or "").strip("\n")
+        if not title:
+            if body.strip():
+                blocks.append(body)
+            continue
         blocks.append(f"# {title}\n{body}" if body.strip() else f"# {title}")
     return "\n\n".join(blocks) + "\n" if blocks else ""
 
 
 def ensure_doc_sections(notes: str) -> str:
-    """Give a document every default header without editing what is there."""
-    if not str(notes or "").strip():
+    """Add the default headers a document lacks, at the end, changing nothing else.
+
+    Deliberately not a re-join: headings the user wrote keep their place and
+    their duplicates, and only the tail of the document is touched.
+    """
+    document = str(notes or "")
+    if not document.strip():
         return default_doc()
-    sections = split_doc(notes)
-    for title in DOC_SECTIONS:
-        sections.setdefault(title, "")
-    return join_doc(sections)
+    present = {title for title, _ in split_doc(document)}
+    missing = [title for title in DOC_SECTIONS if title not in present]
+    if not missing:
+        return document
+    tail = "\n\n".join(f"# {title}" for title in missing)
+    return document.rstrip("\n") + "\n\n" + tail + "\n"
 
 
 def append_to_section(notes: str, section_title: str, text: str) -> str:
@@ -116,23 +160,32 @@ def append_to_section(notes: str, section_title: str, text: str) -> str:
     Append-only by construction: a refresh may extend the record of a goal but
     never rewrites the human's sentences, and a line the section already holds
     is dropped, so re-running inference over the same evidence is a no-op
-    rather than a growing pile of duplicates.
+    rather than a growing pile of duplicates. Edits land as line surgery on the
+    document rather than a re-render, so untouched sections stay byte-identical
+    down to their own spacing.
     """
     document = ensure_doc_sections(notes)
     block = str(text or "").strip()
     if not block:
         return document
-    sections = split_doc(document)
-    sections.setdefault(section_title, "")
-    body = sections[section_title]
-    present = {line.strip() for line in body.splitlines() if line.strip()}
+    lines, spans = _scan_doc(document)
+    span = next((s for s in spans if s[0] == section_title), None)
+    if span is None:
+        fresh = [line for line in block.splitlines() if line.strip()]
+        return (document.rstrip("\n") + f"\n\n# {section_title}\n"
+                + "\n".join(fresh) + "\n")
+    _, start, end = span
+    present = {line.strip() for line in lines[start:end] if line.strip()}
     fresh = [line for line in block.splitlines()
              if line.strip() and line.strip() not in present]
     if not fresh:
         return document
-    addition = "\n".join(fresh)
-    sections[section_title] = f"{body}\n\n{addition}" if body.strip() else addition
-    return join_doc(sections)
+    cut = end
+    while cut > start and not lines[cut - 1].strip():
+        cut -= 1       # trailing blank lines belong after the new paragraph
+    addition = ([""] if cut > start else []) + fresh
+    return "\n".join(lines[:cut] + addition + lines[cut:]) + \
+        ("\n" if document.endswith("\n") else "")
 
 
 SOURCE_TYPES = ("github", "local", "doc")
@@ -480,7 +533,8 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
             before = str(g.get("notes") or "")
             after = append_to_section(before, title, text) if title and text \
                 else before
-            if split_doc(after).get(title) != split_doc(before).get(title):
+            if (section_body(after, title) or "") != \
+                    (section_body(before, title) or ""):
                 g["notes"] = after
                 g["updated_at"] = _now()
                 changes.append(f"notes → {g['title'][:30]} / {title}")
