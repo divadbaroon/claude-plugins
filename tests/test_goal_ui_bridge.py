@@ -2761,9 +2761,14 @@ class ChatNoticeTests(BridgeTestCase):
     finished. These tests hold what it is allowed to say, and for how long.
     """
 
+    SID = "7f3a1b2c-4d5e-4f60-8a9b-0c1d2e3f4a5b"
+
     PRELUDE = (
         "window.__hcPromptUI.acceptState("
-        "  { goals: [], prompts: [], scope: %s });"
+        "  { goals: [], prompts: [], scope: %s, session_id: %s });"
+        # The first tick of the standing 700ms sweep, which is what names the
+        # tab on a real page.
+        "window.__hcPromptUI.renderChatSurface();"
         "var iso = function (ms) { return new Date(ms).toISOString(); };"
         "var now = Date.now();"
         "var fire = function (type, target, related) {"
@@ -2780,7 +2785,7 @@ class ChatNoticeTests(BridgeTestCase):
         "          d ? d.textContent : null]; }); };"
     )
 
-    def notices(self, tail, scope="chat", defer=True):
+    def notices(self, tail, scope="chat", session=None, defer=True):
         """Timers stay pending unless a test drives them.
 
         The banner's whole subject is *when* it goes away; a harness that
@@ -2788,7 +2793,9 @@ class ChatNoticeTests(BridgeTestCase):
         assertion that it appeared.
         """
         return self.run_js(
-            (self.PRELUDE % json.dumps(scope)) + tail,
+            (self.PRELUDE % (json.dumps(scope),
+                             json.dumps(self.SID if session is None else session)))
+            + tail,
             extra_env={"HC_DEFER_TIMEOUT": "1"} if defer else None)
 
     def test_only_what_happened_after_this_page_opened_is_shown(self):
@@ -2863,6 +2870,7 @@ class ChatNoticeTests(BridgeTestCase):
             "  at: iso(now + 5000), detail: 'done'}]);"
             "[window.__hcPromptUI.noticeStack(), document.title];",
             scope="global")
+        # And the sweep that names a chat tab never renames a vault's.
         self.assertEqual([None, "Goals"], out)
 
     def test_the_tab_carries_the_mark_only_while_a_notice_stands(self):
@@ -2875,9 +2883,9 @@ class ChatNoticeTests(BridgeTestCase):
             "titles.push(document.title);"
             "window.fireTimers();"
             "titles.push(document.title);"
-            "titles;",
-            defer=True)
-        self.assertEqual(["Goals", "● Goals", "Goals"], out)
+            "titles;")
+        self.assertEqual(
+            ["goals · 7f3a1b2c", "● goals · 7f3a1b2c", "goals · 7f3a1b2c"], out)
 
     def test_a_notice_takes_itself_away(self):
         out = self.notices(
@@ -2925,9 +2933,8 @@ class ChatNoticeTests(BridgeTestCase):
             "  at: iso(now + 5000), detail: 'done'}]);"
             "var box = stack()[0];"
             "fire('click', box.querySelector('.hc-notice-close'));"
-            "[stack().length, document.title];",
-            defer=True)
-        self.assertEqual([0, "Goals"], out)
+            "[stack().length, document.title];")
+        self.assertEqual([0, "goals · 7f3a1b2c"], out)
 
     def test_a_dismissed_notice_does_not_come_back_on_the_next_poll(self):
         out = self.notices(
@@ -2961,3 +2968,54 @@ class ChatNoticeTests(BridgeTestCase):
             "  {id: 'n3', kind: 'session_stopped', at: iso(now + 5000)}]);"
             "stack().length;")
         self.assertEqual(1, out)
+
+    def test_the_tab_is_named_after_the_conversation_it_watches(self):
+        # A day with three of these open needs the tab strip to tell them
+        # apart, and the goal tree is what they all have in common.
+        self.assertEqual(
+            "goals · 7f3a1b2c",
+            self.notices("window.__hcPromptUI.pageTitle();"))
+
+    def test_a_workspace_that_was_never_told_its_session_still_has_a_name(self):
+        # /api/state answers the session id; a page that booted before it
+        # answered says what it knows rather than "undefined".
+        self.assertEqual(
+            ["goals", "goals"],
+            self.notices("[window.__hcPromptUI.pageTitle(), document.title];",
+                         session=""))
+
+    def test_the_tab_keeps_its_name_after_the_artifact_wipes_it(self):
+        # The artifact unpacks its template by replacing the whole
+        # documentElement, which takes the <title> with it. That is why the
+        # name is re-asserted by the standing sweep and not written once.
+        out = self.notices(
+            "var seen = [document.title];"
+            # What the unpack does to the tab.
+            "document.title = '';"
+            "window.__hcPromptUI.renderChatSurface();"
+            "seen.push(document.title);"
+            "seen;")
+        self.assertEqual(["goals · 7f3a1b2c", "goals · 7f3a1b2c"], out)
+
+    def test_a_wipe_while_a_notice_stands_comes_back_marked(self):
+        # The mark is derived from what the tab should say, not remembered
+        # from what it did say: putting back the remembered string here would
+        # restore the empty title the artifact had just left behind.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "document.title = '';"
+            "window.__hcPromptUI.renderChatSurface();"
+            "var marked = document.title;"
+            "window.fireTimers();"
+            "[marked, document.title];")
+        self.assertEqual(["● goals · 7f3a1b2c", "goals · 7f3a1b2c"], out)
+
+    def test_the_banner_sits_just_above_the_prompt_picker(self):
+        # Both are fixed overlays. A banner under the picker is a banner
+        # nobody can dismiss while choosing a prompt; a banner at the top of
+        # the stacking order covers a modal the reader is working in.
+        css = self.run_js("window.__hcPromptUI.noticeCss();")
+        dialog = self.run_js("window.__hcPromptUI.dialogCss();")
+        self.assertIn("z-index:100001", css)
+        self.assertIn("z-index:100000", dialog)

@@ -513,6 +513,9 @@ def _payload(trajdir=None, chat_scoped=None):
         # could report -- the field is still present, so the browser reads
         # one shape in both scopes.
         notices = []
+        # The tab needs a name, and only this side knows which conversation
+        # the window belongs to.
+        session = None
         try:
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
@@ -521,6 +524,7 @@ def _payload(trajdir=None, chat_scoped=None):
             session_id, root = _chat_identity(trajdir)
             analyzer = CS.get_analyzer_state(session_id, root)
             notices = CS.load_notices(session_id, root)
+            session = session_id
         # Agent execution state is scoped to the goal tree it was launched
         # against; chat-scoped goal ids live in a different namespace.
         runs, claim = ({}, None) if chat_scoped else (
@@ -531,6 +535,7 @@ def _payload(trajdir=None, chat_scoped=None):
                 "sessions": ana.get("sessions_analyzed"),
                 "analyzer": analyzer,
                 "notices": notices,
+                "session_id": session,
                 "agent_runs": runs,
                 "agent_claim": claim,
                 "scope": "chat" if chat_scoped else "global",

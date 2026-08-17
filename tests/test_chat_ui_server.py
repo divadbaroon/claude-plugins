@@ -1375,12 +1375,18 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertIsInstance(row["at"], str)
             # Notices are per session, like every other thing in this store.
             self.assertEqual([], get_json(url_b + "/api/state")["notices"])
+            # And the state says which session, because the browser has no
+            # other way to learn it and the tab is named after it.
+            self.assertEqual("chat-a", get_json(url_a + "/api/state")["session_id"])
+            self.assertEqual("chat-b", get_json(url_b + "/api/state")["session_id"])
 
     def test_a_global_vault_has_no_session_to_report_on(self):
         # The banner answers "is the chat I am attached to done?". A global
         # vault is attached to no chat, so the field is present and empty
         # rather than absent -- the bridge reads one shape in both scopes.
-        self.assertEqual([], ui._payload(self.a, chat_scoped=False)["notices"])
+        payload = ui._payload(self.a, chat_scoped=False)
+        self.assertEqual([], payload["notices"])
+        self.assertIsNone(payload["session_id"])
 
     def test_the_workspace_says_when_a_subagent_comes_back(self):
         try:
@@ -1408,7 +1414,11 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
-                title = page.title()
+                # The artifact unpacks its template over the whole
+                # documentElement, taking the bundle's own <title> with it.
+                # The standing chat sweep is what puts a name back.
+                title = "goals \u00b7 " + "chat-a"[:8]
+                expect(page).to_have_title(title, timeout=5_000)
                 # Two polls' worth: the state carrying the old notice has
                 # certainly landed by now.
                 page.wait_for_timeout(3_500)
@@ -1428,11 +1438,9 @@ class ChatUiServerTests(unittest.TestCase):
                     "Explore: Analysis complete. Found 3 potential issues")
                 expect(banner.locator(".hc-notice-close")).to_be_visible()
                 # A workspace on another screen has to be able to say so
-                # from the tab strip alone. The mark leads; what it leads is
-                # whatever title the page had, which the adopted artifact's
-                # runtime currently leaves empty (see the task report).
-                self.assertTrue(page.title().startswith("\u25cf"), page.title())
-                self.assertNotEqual(title, page.title())
+                # from the tab strip alone, without losing which conversation
+                # it is watching.
+                self.assertEqual("\u25cf " + title, page.title())
 
                 # It takes itself away; nothing here was clicked.
                 expect(banner).to_have_count(0, timeout=12_000)
@@ -1465,7 +1473,8 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
-                title = page.title()
+                title = "goals \u00b7 " + "chat-a"[:8]
+                expect(page).to_have_title(title, timeout=5_000)
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
@@ -1478,6 +1487,8 @@ class ChatUiServerTests(unittest.TestCase):
                 banner.hover()
                 page.wait_for_timeout(9_000)
                 expect(banner).to_have_count(1)
+
+                self.assertEqual("\u25cf " + title, page.title())
 
                 banner.locator(".hc-notice-close").click()
                 expect(banner).to_have_count(0, timeout=2_000)

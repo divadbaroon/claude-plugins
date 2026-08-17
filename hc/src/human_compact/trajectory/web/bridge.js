@@ -16,7 +16,7 @@
   // tests/test_goal_ui_bridge.py greps this line and compares the two.
   var DEFAULT_DOC = "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n# Blockers\n\n# Open questions\n";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
-                      scope: "global" };
+                      scope: "global", sessionId: "" };
   var stateFingerprint = null;
   var lastObservedGoals = null;
   var refreshPending = false;
@@ -536,7 +536,10 @@
       // open with the prompt typed, waiting on a keypress the UI cannot make.
       claim: (st.agent_claim && typeof st.agent_claim === "object")
         ? st.agent_claim : null,
-      scope: st.scope === "chat" ? "chat" : "global"
+      scope: st.scope === "chat" ? "chat" : "global",
+      // Which Claude conversation this window is a second view of. Only the
+      // server knows; it is what names the tab.
+      sessionId: str(st.session_id)
     };
     var fingerprint = JSON.stringify([
       serverState.goals.map(function (g) {
@@ -554,8 +557,12 @@
       var health = new XMLHttpRequest();
       health.open("GET", "/api/health", false);
       health.send();
-      if (JSON.parse(health.responseText).scope === "chat") {
+      var answered = JSON.parse(health.responseText);
+      if (answered.scope === "chat") {
         serverState.scope = "chat";
+        // This is the path where /api/state did not answer, so the poll has
+        // not named the tab yet and this is the only place that can.
+        serverState.sessionId = str(answered.session_id);
       }
     } catch (e) { /* nothing left to ask */ }
   }
@@ -1216,8 +1223,16 @@
     if (serverState.scope !== "chat") return false;
     // REVIEW arrives late -- it is behind an sc-if that only turns on once
     // a run exists -- so this is a standing sweep, not a one-shot.
+    //
+    // The tab's name rides along here for the same reason the sweep exists
+    // at all: the artifact unpacks its template by replacing the whole
+    // documentElement, which takes the document's <title> with it. Anything
+    // written before that is gone, so the name has to be re-asserted by
+    // something that keeps running. applyPageTitle is idempotent and lives
+    // with the banner that prefixes it.
     return (hideLabelsIn(headerNav(), ["Conversations"])
-            + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW"])) > 0;
+            + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW"])
+            + (applyPageTitle() ? 1 : 0)) > 0;
   }
 
   function watchChatSurface() {
@@ -1247,7 +1262,7 @@
   NOTICE_SAYS.session_ended = "Session ended";
 
   var NOTICE_CSS = [
-      ".hc-notice-stack{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
+      ".hc-notice-stack{position:fixed;right:16px;bottom:16px;z-index:100001;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
       ".hc-notice{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
       ".hc-notice-title{font-weight:600;color:var(--ink,#111)}",
       ".hc-notice-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -1264,7 +1279,7 @@
   var noticeSince = Date.now();
   var noticeTimers = Object.create(null);
   var noticeBox = null;
-  var noticeTitle = null;
+  var noticeMarked = false;
   var noticeBound = false;
 
   function ensureNoticeStyles() {
@@ -1291,18 +1306,39 @@
     return noticeBox;
   }
 
-  function markNoticeTitle() {
-    if (typeof document.title !== "string") return;
-    if (noticeTitle === null) noticeTitle = document.title;
-    if (document.title.indexOf(NOTICE_MARK) !== 0) {
-      document.title = NOTICE_MARK + noticeTitle;
+  function pageTitle() {
+    // Named after the session rather than the goal tree: a day with several
+    // of these open needs the tab strip to tell them apart, and the tree is
+    // what they all have in common. The same 8-character prefix the prompt
+    // rows already use for a conversation, so the two line up.
+    var sid = str(serverState.sessionId).slice(0, 8);
+    return sid ? "goals \u00b7 " + sid : "goals";
+  }
+
+  function applyPageTitle() {
+    // Chat scope only: a global vault's tab is the artifact's own business,
+    // and there is no one session it could be named after.
+    if (serverState.scope !== "chat" || typeof document.title !== "string") {
+      return false;
     }
+    // Derived, never remembered. Restoring a title by putting back the
+    // string that was there when the banner appeared restores whatever the
+    // artifact had most recently wiped it to; recomputing cannot.
+    var want = (noticeMarked ? NOTICE_MARK : "") + pageTitle();
+    if (document.title === want) return false;
+    document.title = want;
+    return true;
+  }
+
+  function markNoticeTitle() {
+    noticeMarked = true;
+    applyPageTitle();
   }
 
   function unmarkNoticeTitle() {
-    if (noticeTitle === null) return;
-    document.title = noticeTitle;
-    noticeTitle = null;
+    if (!noticeMarked) return;
+    noticeMarked = false;
+    applyPageTitle();
   }
 
   function noticeIdOf(box) {
@@ -2304,6 +2340,8 @@
     renderChatSurface: renderChatSurface,
     showNotices: showNotices,
     noticesToShow: noticesToShow,
+    pageTitle: pageTitle,
+    applyPageTitle: applyPageTitle,
     noticeStack: noticeStack,
     noticeCss: function () { return NOTICE_CSS; },
     paneTabBar: paneTabBar,
