@@ -901,6 +901,20 @@ class ChatUiServerTests(unittest.TestCase):
             thread.join(timeout=1)
             self.assertFalse(thread.is_alive())
 
+    @staticmethod
+    def chip_style(page, label):
+        """Weight and colour of one filter chip, as the reader sees them."""
+        return page.evaluate(
+            """label => {
+              const el = [...document.querySelectorAll('span')].find(
+                e => !e.children.length && e.textContent.trim() === label);
+              if (!el) return null;
+              const cs = getComputedStyle(el);
+              return { weight: cs.fontWeight, color: cs.color };
+            }""",
+            label,
+        )
+
     def test_a_chat_workspace_opens_on_its_own_tree_not_the_vault_wizard(self):
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -909,6 +923,14 @@ class ChatUiServerTests(unittest.TestCase):
         chrome = browser_executable()
         if not chrome:
             self.skipTest("Chrome/Chromium is not installed")
+
+        # A finished goal is the case the default decides: on 'active' it is
+        # filtered out of the tree, so the reader's own chat opens missing
+        # the work they just completed.
+        goals_path = self.a / "goals.json"
+        stored = json.loads(goals_path.read_text())
+        stored["goals"][1]["status"] = "completed"
+        goals_path.write_text(json.dumps(stored))
 
         # /api/setup answers for the global vault and refuses in chat scope.
         # The artifact reads one `setup` object for its wizard, its gate and
@@ -950,15 +972,66 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("Conversations", exact=True)).to_be_hidden()
                 expect(page.get_by_text("Goals", exact=True).first).to_be_visible()
 
-                saved = page.evaluate(
-                    "JSON.parse(localStorage.getItem('hc-vault-ui-v1'))"
-                )
-                self.assertEqual("all", saved["filter"])
-                self.assertEqual("goals", saved["page"])
+                # All, on the page and not only in the store: the chip is
+                # the selected one and the completed goal is in the tree.
+                selected = self.chip_style(page, "all (2)")
+                unselected = self.chip_style(page, "active (1)")
+                self.assertEqual("700", selected["weight"])
+                self.assertEqual("500", unselected["weight"])
+                self.assertNotEqual(unselected["color"], selected["color"])
                 self.assertEqual(
                     {"sv": 9, "storage": True, "analysis": "claude",
                      "done": True},
-                    saved["setup"],
+                    page.evaluate(
+                        "JSON.parse(localStorage.getItem('hc-vault-ui-v1'))"
+                        ".setup"
+                    ),
+                )
+            finally:
+                browser.close()
+
+    def test_a_filter_the_reader_picks_here_survives_their_reload(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        goals_path = self.a / "goals.json"
+        stored = json.loads(goals_path.read_text())
+        stored["goals"][1]["status"] = "completed"
+        goals_path.write_text(json.dumps(stored))
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.get_by_text("all (2)", exact=True)).to_be_visible(
+                    timeout=10_000
+                )
+                page.get_by_text("done (1)", exact=True).click()
+                self.assertEqual(
+                    "700", self.chip_style(page, "done (1)")["weight"]
+                )
+
+                page.reload(wait_until="domcontentloaded")
+                expect(page.get_by_text("done (1)", exact=True)).to_be_visible(
+                    timeout=10_000
+                )
+                # The default only applies to a page with no history. A
+                # choice the reader made is theirs to keep.
+                self.assertEqual(
+                    "700", self.chip_style(page, "done (1)")["weight"]
+                )
+                self.assertEqual(
+                    "500", self.chip_style(page, "all (2)")["weight"]
                 )
             finally:
                 browser.close()
@@ -1004,14 +1077,17 @@ class ChatUiServerTests(unittest.TestCase):
                     localStorage.setItem(key, JSON.stringify(saved));
                 }""")
                 page.reload(wait_until="domcontentloaded")
-                expect(page.get_by_text("CONTEXT", exact=True)).to_be_visible(
-                    timeout=10_000
+                context_tab = page.get_by_text("CONTEXT", exact=True)
+                expect(context_tab).to_be_visible(timeout=10_000)
+                # What the reader sees, not what the store says: CONTEXT is
+                # the tab carrying the selected underline, and the pane
+                # drawn under it is the Context pane.
+                expect(context_tab).not_to_have_css(
+                    "border-bottom-color", "rgba(0, 0, 0, 0)"
                 )
-                self.assertEqual("context", page.evaluate(
-                    "JSON.parse(localStorage.getItem('hc-vault-ui-v1')).paneTab"
-                ))
                 expect(page.get_by_text("WHERE THIS SITS", exact=True)).to_be_visible()
                 expect(page.get_by_text("AGENT", exact=True)).to_be_hidden()
+                expect(page.get_by_text("REVIEW", exact=True)).to_be_hidden()
             finally:
                 browser.close()
 

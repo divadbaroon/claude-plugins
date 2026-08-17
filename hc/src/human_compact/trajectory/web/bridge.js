@@ -533,6 +533,17 @@
     return true;
   }
 
+  function askHealthForScope() {
+    try {
+      var health = new XMLHttpRequest();
+      health.open("GET", "/api/health", false);
+      health.send();
+      if (JSON.parse(health.responseText).scope === "chat") {
+        serverState.scope = "chat";
+      }
+    } catch (e) { /* nothing left to ask */ }
+  }
+
   function seed() {
     try {
       var setup = new XMLHttpRequest();
@@ -572,7 +583,9 @@
       request.open("GET", "/api/state", false);   // sync: must beat app boot
       request.send();
       var st = JSON.parse(request.responseText);
-      if (!acceptState(st)) return;
+      // Not a return: a reply that is not a state payload is a failed fetch,
+      // and the fallback below has to see it as one.
+      if (!acceptState(st)) throw new Error("not a state payload");
       var roots = rootsFromState(st);
       var saved = null;
       try { saved = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
@@ -580,7 +593,11 @@
       lastObservedGoals = JSON.stringify(roots);
       if (typeof st.revision === "string") writeSync(st.revision, roots);
     } catch (e) {
-      // Server unreachable: let the artifact boot on whatever it already has.
+      // Server unreachable, or answering something that is not state: let
+      // the artifact boot on whatever it already has. Which scope this is
+      // is still worth asking, on the one route that is never gated -- the
+      // controls a chat must not offer do not depend on the tree loading.
+      askHealthForScope();
     }
   }
 
@@ -1104,13 +1121,31 @@
     return out;
   }
 
+  function rowHolding(name, companions) {
+    // A row is identified by two of its labels, not one. The artifact
+    // re-renders these rows from its own state, so text it has to draw is
+    // the only handle that cannot be re-rendered away -- but a goal the
+    // reader titled "CONTEXT" or "Goals" draws that same text, and hiding
+    // something inside their tree row would erase their own goal. Requiring
+    // a sibling that only the real row has is what tells them apart.
+    var found = leafSpansNamed(name);
+    for (var i = 0; i < found.length; i++) {
+      var row = found[i].parentNode;
+      var kids = (row && row.children) || [];
+      for (var k = 0; k < kids.length; k++) {
+        if (kids[k] === found[i]) continue;
+        if (companions.indexOf(str(kids[k].textContent).trim()) >= 0) return row;
+      }
+    }
+    return null;
+  }
+
   function paneTabBar() {
-    // Named by the one tab every scope keeps, for the same reason
-    // promptAddSlot is anchored on a heading: the artifact re-renders this
-    // row from its own state, so text it has to draw is the only handle
-    // that cannot be re-rendered away.
-    var anchor = leafSpansNamed("CONTEXT")[0];
-    return anchor ? anchor.parentNode : null;
+    return rowHolding("CONTEXT", ["PROMPT", "AGENT", "REVIEW"]);
+  }
+
+  function headerNav() {
+    return rowHolding("Goals", ["Conversations"]);
   }
 
   function hideNode(node) {
@@ -1119,23 +1154,21 @@
     return true;
   }
 
+  function hideLabelsIn(row, labels) {
+    var kids = (row && row.children) || [], hidden = 0;
+    for (var i = 0; i < kids.length; i++) {
+      if (labels.indexOf(str(kids[i].textContent).trim()) >= 0
+          && hideNode(kids[i])) hidden += 1;
+    }
+    return hidden;
+  }
+
   function renderChatSurface() {
     if (serverState.scope !== "chat") return false;
-    var hidden = 0;
-    leafSpansNamed("Conversations").forEach(function (span) {
-      if (hideNode(span)) hidden += 1;
-    });
-    var bar = paneTabBar();
-    var kids = (bar && bar.children) || [];
-    for (var i = 0; i < kids.length; i++) {
-      var label = str(kids[i].textContent).trim();
-      // REVIEW arrives late -- it is behind an sc-if that only turns on
-      // once a run exists -- so this is a standing sweep, not a one-shot.
-      if (label === "AGENT" || label === "REVIEW") {
-        if (hideNode(kids[i])) hidden += 1;
-      }
-    }
-    return hidden > 0;
+    // REVIEW arrives late -- it is behind an sc-if that only turns on once
+    // a run exists -- so this is a standing sweep, not a one-shot.
+    return (hideLabelsIn(headerNav(), ["Conversations"])
+            + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW"])) > 0;
   }
 
   function watchChatSurface() {
@@ -1404,6 +1437,18 @@
       // landing on Agent or Artifact for a goal that has neither.
       ["paneTab: (saved && saved.v >= 6 && ['prompt', 'agent', 'artifact'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',",
        "paneTab: (saved && saved.hcKeepPane && ['prompt', 'agent', 'artifact', 'context'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',"],
+      // The seeded filter never reached the page: the constructor read
+      // saved.selId, saved.labels and saved.paneTab, but hardcoded the
+      // filter. A chat opening on 'active' hides its finished goals, and
+      // the chip row said 'active' while the store said otherwise.
+      ["      filter: 'active',",
+       "      filter: (saved && ['active', 'inprog', 'done', 'all'].indexOf(saved.filter) >= 0) ? saved.filter : 'active',"],
+      // And the store it writes back has to declare the version the seed
+      // trusts, or the reader's own choice is discarded on the next load
+      // as if it were the artifact's default. v7 means "this origin has
+      // been seeded by the bridge", which is true the moment it saves.
+      ["localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 6, goals,",
+       "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals,"],
       // A chat workspace is not offered AGENT or REVIEW -- the ops behind
       // them answer "global scope only" here -- so the keyboard must not
       // step onto them either. It reads the scope at the moment of the
@@ -1954,6 +1999,8 @@
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
     renderChatSurface: renderChatSurface,
+    paneTabBar: paneTabBar,
+    headerNav: headerNav,
     promptAddSlot: promptAddSlot,
     openPromptPicker: openPromptPicker,
     pickPrompt: pickPrompt,

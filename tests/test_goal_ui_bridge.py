@@ -111,7 +111,9 @@ const document = {
 function XHR() {}
 XHR.prototype.open = function (method, url) { this._url = String(url || ""); };
 XHR.prototype.send = function () {
-  this.responseText = this._url.indexOf("/api/setup") >= 0
+  this.responseText = this._url.indexOf("/api/health") >= 0
+    ? (process.env.HC_HEALTH || "{}")
+    : this._url.indexOf("/api/setup") >= 0
     ? (process.env.HC_SETUP || "{}")
     : this._url.indexOf("/api/briefings") >= 0
     ? (process.env.HC_BRIEFS || '{"ok":true,"goals":{}}')
@@ -2224,6 +2226,14 @@ class ChatScopeSurfaceTests(BridgeTestCase):
                     % (i, i, json.dumps(label), i)
                     for i, label in enumerate(labels)))
 
+    def nav_bar(self):
+        """A stand-in for the artifact's header page nav."""
+        return ("var nav = document.createElement('div'); app.appendChild(nav);"
+                "var pg = document.createElement('span');"
+                "pg.textContent = 'Goals'; nav.appendChild(pg);"
+                "var pc = document.createElement('span');"
+                "pc.textContent = 'Conversations'; nav.appendChild(pc);")
+
     def chat(self):
         return ("window.__hcPromptUI.acceptState("
                 "{ goals: [], prompts: [], scope: 'chat' });")
@@ -2266,26 +2276,58 @@ class ChatScopeSurfaceTests(BridgeTestCase):
 
     def test_the_conversations_nav_comes_off_a_chat_page(self):
         out = self.run_js(
-            self.chat()
-            + "var nav = document.createElement('div'); app.appendChild(nav);"
-            "var g = document.createElement('span'); g.textContent = 'Goals';"
-            "nav.appendChild(g);"
-            "var c = document.createElement('span');"
-            "c.textContent = 'Conversations'; nav.appendChild(c);"
-            "window.__hcPromptUI.renderChatSurface();"
-            "[g.style.display || '', c.style.display || ''];")
+            self.chat() + self.nav_bar()
+            + "window.__hcPromptUI.renderChatSurface();"
+            "nav.children.map(function (n) { return n.style.display || ''; });")
         self.assertEqual(["", "none"], out)
 
     def test_a_global_page_keeps_the_conversations_nav(self):
         out = self.run_js(
             "window.__hcPromptUI.acceptState("
-            "{ goals: [], prompts: [], scope: 'global' });"
-            "var nav = document.createElement('div'); app.appendChild(nav);"
-            "var c = document.createElement('span');"
-            "c.textContent = 'Conversations'; nav.appendChild(c);"
-            "window.__hcPromptUI.renderChatSurface();"
-            "c.style.display || '';")
-        self.assertEqual("", out)
+            "{ goals: [], prompts: [], scope: 'global' });" + self.nav_bar()
+            + "window.__hcPromptUI.renderChatSurface();"
+            "nav.children.map(function (n) { return n.style.display || ''; });")
+        self.assertEqual(["", ""], out)
+
+    def test_a_goal_the_reader_titled_conversations_is_left_alone(self):
+        # The nav row is the one holding both page names. A tree row that
+        # happens to carry one of them is the reader's own goal.
+        out = self.run_js(
+            self.chat()
+            + "var row = document.createElement('div'); app.appendChild(row);"
+            "var goal = document.createElement('span');"
+            "goal.textContent = 'Conversations'; row.appendChild(goal);"
+            + self.nav_bar()
+            + "window.__hcPromptUI.renderChatSurface();"
+            "[goal.style.display || '', nav.children[1].style.display || ''];")
+        self.assertEqual(["", "none"], out)
+
+    def test_a_goal_the_reader_titled_context_cannot_re_anchor_the_tabs(self):
+        # Without the companion check the sweep would take the first
+        # CONTEXT it found -- a goal row -- and never reach the real bar.
+        out = self.run_js(
+            self.chat()
+            + "var row = document.createElement('div'); app.appendChild(row);"
+            "var goal = document.createElement('span');"
+            "goal.textContent = 'CONTEXT'; row.appendChild(goal);"
+            + self.tab_bar("CONTEXT", "AGENT", "REVIEW")
+            + "window.__hcPromptUI.renderChatSurface();"
+            "[goal.style.display || ''].concat("
+            "  bar.children.map(function (n) { return n.style.display || ''; }));")
+        self.assertEqual(["", "", "none", "none"], out)
+
+    def test_a_lone_label_with_no_companion_anchors_nothing(self):
+        self.assertEqual(
+            [None, None],
+            self.run_js(
+                self.chat()
+                + "var row = document.createElement('div'); app.appendChild(row);"
+                "var a = document.createElement('span'); a.textContent = 'CONTEXT';"
+                "row.appendChild(a);"
+                "var b = document.createElement('span'); b.textContent = 'Goals';"
+                "row.appendChild(b);"
+                "[window.__hcPromptUI.paneTabBar(),"
+                " window.__hcPromptUI.headerNav()];"))
 
     def test_the_keyboard_cycle_stops_at_the_tabs_a_chat_has(self):
         # ⌘↑/⌘↓ stepping onto AGENT would open a pane whose every control
@@ -2297,3 +2339,40 @@ class ChatScopeSurfaceTests(BridgeTestCase):
             "['context', 'prompt', 'agent', 'artifact'];", out)
         self.assertNotIn(
             "    const tabs = ['context', 'prompt', 'agent', 'artifact'];", out)
+
+    def test_the_seeded_filter_is_what_the_tree_opens_on(self):
+        # The constructor read saved.selId and saved.paneTab but hardcoded
+        # the filter, so the seed's answer never reached the chip row.
+        out = self.patched_bundle("out;")
+        self.assertIn(
+            "filter: (saved && ['active', 'inprog', 'done', 'all']"
+            ".indexOf(saved.filter) >= 0) ? saved.filter : 'active',", out)
+        self.assertNotIn("\n      filter: 'active',\n", out)
+
+    def test_the_store_it_writes_back_declares_the_seeded_version(self):
+        # saved.v >= 7 is what the seed reads as "this origin is ours", and
+        # what lets a reader's filter choice survive their next reload.
+        out = self.patched_bundle("out;")
+        self.assertIn(
+            "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7,",
+            out)
+        self.assertNotIn("JSON.stringify({ v: 6,", out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ScopeFallbackTests(BridgeTestCase):
+    """A dead state route must not make a chat page look like the vault."""
+
+    def test_health_names_the_scope_when_the_state_fetch_fails(self):
+        self.assertEqual("chat", self.run_js(
+            "window.__hcScope;", state={"broken": True},
+            extra_env={"HC_HEALTH": '{"ok": true, "scope": "chat"}'}))
+
+    def test_a_global_server_is_still_read_as_global(self):
+        self.assertEqual("global", self.run_js(
+            "window.__hcScope;", state={"broken": True},
+            extra_env={"HC_HEALTH": '{"ok": true, "scope": "global"}'}))
+
+    def test_nothing_answering_at_all_leaves_it_where_it_was(self):
+        self.assertEqual("global", self.run_js(
+            "window.__hcScope;", state={"broken": True}))
