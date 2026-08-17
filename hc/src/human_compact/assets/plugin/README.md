@@ -17,9 +17,10 @@ authenticated Claude CLI. Set `HC_CHAT_PROVIDER=ollama` for on-device
 inference. The localhost server binds to `127.0.0.1`, rejects cross-origin
 writes, and chat artifacts are owner-only.
 
-The global history layer below is inert unless it was explicitly enabled by
-the installer. Legacy selective installs can still opt in per session with
-`CLAUDE_VAULT=1` or `claude --vault`.
+The global history layer below is experimental in this release: its hooks are
+not installed and `hc setup --global-vault yes` is refused unless
+`HC_EXPERIMENTAL=1` is set. Legacy selective installs can still opt in per
+session with `CLAUDE_VAULT=1` or `claude --vault`.
 
 ## What it stores
 

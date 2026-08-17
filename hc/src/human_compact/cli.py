@@ -28,11 +28,38 @@ MANAGED_MARKER = ".human-compact-managed.json"
 _ASSET_FILES = {
     "vault": {
         ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
-        "scripts/chat-hook.sh", "scripts/vault-backfill.sh",
-        "scripts/vault-hook.sh",
+        "hooks/hooks.experimental.json", "scripts/chat-hook.sh",
+        "scripts/vault-backfill.sh", "scripts/vault-hook.sh",
     },
     "goals-ui": {"SKILL.md"},
 }
+# This release ships the chat-scoped goal UI. The global Vault layer and the
+# analysis commands built on it stay in the tree, but nothing reaches them
+# unless the operator asks for them by name.
+EXPERIMENTAL_COMMANDS = ("ui", "backup", "trajectory", "lens", "goals", "work",
+                         "mark", "status", "refresh", "analyze", "worker")
+_LAUNCH_COMMAND_HELP = (
+    ("install", "install /goals-ui for Claude Code"),
+    ("setup", "noninteractive npm onboarding"),
+    ("chat-ui", "goal tree for one Claude chat"),
+    ("chat-serve", "session-scoped goal server (internal)"),
+    ("chat-hook", "Claude Code chat-state hook (internal)"),
+    ("chat-refresh", "session-scoped goal analyzer (internal)"),
+    ("global-hook", "Vault lifecycle hook (internal)"),
+)
+_EXPERIMENTAL_COMMAND_HELP = (
+    ("goals", "your goal tree + important items"),
+    ("work", "start Claude working on one goal"),
+    ("ui", "goal tree in the browser (localhost)"),
+    ("mark", "mark something important — never lose it"),
+    ("lens", "the derived compaction lens"),
+    ("status", "vault + analysis pipeline status"),
+    ("refresh", "process pending conversations, regenerate lens"),
+    ("backup", "onboard Vault / import history"),
+    ("trajectory", "full analyze + lens (alias)"),
+    ("analyze", "analyze the vaulted history, build the goal tree"),
+    ("worker", "internal analysis worker"),
+)
 # Exact unmarked v0.15.0 assets. This permits migration of installs created by
 # this project before ownership markers existed without claiming arbitrary
 # directories that merely happen to use the same names.
@@ -42,6 +69,10 @@ _LEGACY_DIGESTS = {
     # superseded; it now only identifies a legacy ~/.claude/skills/hc-ui.
     "goals-ui": {"6ddef8b28e8df3dec16591f7658199158fd97cc02e85b854bbbd79739f398815"},
 }
+
+
+def experimental_enabled() -> bool:
+    return os.environ.get("HC_EXPERIMENTAL") == "1"
 
 
 def say(msg):
@@ -81,8 +112,14 @@ def _path_exists(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _asset_digest(root: Path, asset: str):
-    """Return an exact tree digest, or None for any unexpected path/layout."""
+def _asset_digest(root: Path, asset: str, overrides=None):
+    """Return an exact tree digest, or None for any unexpected path/layout.
+
+    `overrides` substitutes file contents for the digest only, so a staged tree
+    that intentionally differs from the package can still be validated against
+    exactly the difference we made.
+    """
+    overrides = overrides or {}
     expected_files = _ASSET_FILES[asset]
     if not root.is_dir() or root.is_symlink():
         return None
@@ -112,7 +149,8 @@ def _asset_digest(root: Path, asset: str):
     try:
         for name in sorted(expected_files):
             digest.update(name.encode() + b"\0")
-            digest.update((root / name).read_bytes())
+            digest.update(overrides[name] if name in overrides
+                          else (root / name).read_bytes())
             digest.update(b"\0")
     except OSError:
         return None
@@ -167,10 +205,23 @@ def _tighten_asset_modes(root: Path):
             os.chmod(path, 0o700 if executable else 0o600)
 
 
+def _asset_overrides(source: Path, asset: str):
+    """Packaged files this install replaces before anything is promoted."""
+    if asset != "vault" or not experimental_enabled():
+        return {}
+    return {"hooks/hooks.json":
+            (source / "hooks" / "hooks.experimental.json").read_bytes()}
+
+
 def _stage_asset(source: Path, destination: Path, asset: str) -> Path:
     stage = destination.parent / f".{destination.name}.hc-stage-{uuid.uuid4().hex}"
     try:
         shutil.copytree(source, stage, symlinks=True)
+        # Applied here so the promoted tree, its modes, and the digest that
+        # validates it all describe the same bytes.
+        overrides = _asset_overrides(source, asset)
+        for name, content in overrides.items():
+            (stage / name).write_bytes(content)
         marker = stage / MANAGED_MARKER
         marker.write_text(json.dumps({
             "owner": "human-compact", "asset": asset, "format": 1,
@@ -178,9 +229,10 @@ def _stage_asset(source: Path, destination: Path, asset: str) -> Path:
         _tighten_asset_modes(stage)
         if not _owned_asset(stage, asset):
             raise RuntimeError(f"staged {asset} ownership marker is invalid")
-        # The marker is intentionally the only difference from packaged data.
+        # Beyond the overrides above, the marker is intentionally the only
+        # difference from packaged data.
         marker.unlink()
-        source_digest = _asset_digest(source, asset)
+        source_digest = _asset_digest(source, asset, overrides)
         valid = (source_digest is not None and
                  _asset_digest(stage, asset) == source_digest)
         marker.write_text(json.dumps({
@@ -422,6 +474,9 @@ def setup_main(argv=None):
     args = ap.parse_args(argv or [])
     if args.goals == "yes" and args.global_vault != "yes":
         ap.error("--goals yes requires --global-vault yes")
+    if "yes" in (args.global_vault, args.goals) and not experimental_enabled():
+        ap.error("--global-vault yes is experimental in this release; "
+                 "set HC_EXPERIMENTAL=1")
 
     # This is deliberately first: /goals-ui remains installed even when optional
     # global-history setup fails later and the user retries the installer.
@@ -1418,25 +1473,30 @@ def chat_ui_main(argv=None):
     return 0
 
 
+def _hc_usage() -> str:
+    commands = list(_LAUNCH_COMMAND_HELP)
+    if experimental_enabled():
+        commands += list(_EXPERIMENTAL_COMMAND_HELP)
+    width = max(len(name) for name, _ in commands) + 2
+    lines = "".join(f"  {name:<{width}}{description}\n"
+                    for name, description in commands)
+    text = f"usage: hc <command>\n\n{lines}"
+    if not experimental_enabled():
+        text += "\nExperimental commands are available with HC_EXPERIMENTAL=1.\n"
+    return text
+
+
 def hc_main():
     import sys
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
-        print("usage: hc <command>\n\n"
-              "  goals       your goal tree + important items (primary)\n"
-              "  work        start Claude working on one goal\n"
-              "  ui          goal tree in the browser (localhost)\n"
-              "  chat-ui     goal tree for one Claude chat\n"
-              "  mark        mark something important — never lose it\n"
-              "  lens        the derived compaction lens\n"
-              "  status      vault + analysis pipeline status\n"
-              "  refresh     process pending conversations, regenerate lens\n"
-              "  install     install /goals-ui without enabling global Vault\n"
-              "  setup       noninteractive npm onboarding\n"
-              "  backup      onboard Vault / import history\n"
-              "  trajectory  full analyze + lens (alias)\n")
+        print(_hc_usage())
         return
     cmd, rest = args[0], args[1:]
+    if cmd in EXPERIMENTAL_COMMANDS and not experimental_enabled():
+        print(f"hc {cmd} is experimental in this release; "
+              "set HC_EXPERIMENTAL=1 to enable it", file=sys.stderr)
+        sys.exit(2)
     if cmd == "backup":
         sys.argv = ["hc-backup"] + rest
         backup_main()

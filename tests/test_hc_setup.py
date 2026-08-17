@@ -89,7 +89,8 @@ class HcSetupTests(unittest.TestCase):
                     mock.patch.object(gv, "backfill",
                                       return_value={"imported": 2, "skipped": 1}), \
                     mock.patch.object(cli, "trajectory_main") as trajectory, \
-                    mock.patch.object(cli, "goals_main", side_effect=write_goals) as goals:
+                    mock.patch.object(cli, "goals_main", side_effect=write_goals) as goals, \
+                    mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": "1"}):
                 cli.setup_main(["--global-vault", "yes", "--goals", "yes"])
 
             trajectory.assert_called_once_with([
@@ -100,6 +101,25 @@ class HcSetupTests(unittest.TestCase):
             self.assertEqual("enabled", gv.enable_file().read_text().strip())
             with mock.patch.dict(os.environ, {"CLAUDE_VAULT": "0"}):
                 self.assertTrue(gv.is_enabled())
+
+    def test_enabling_global_vault_is_gated_behind_the_experimental_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli, _ = self._modules(Path(td))
+            for argv in (["--global-vault", "yes", "--goals", "no"],
+                         ["--global-vault", "yes", "--goals", "yes"]):
+                with self.subTest(argv=argv):
+                    err = io.StringIO()
+                    with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}), \
+                            mock.patch.object(cli, "install_main") as install, \
+                            contextlib.redirect_stderr(err), \
+                            self.assertRaises(SystemExit) as raised:
+                        cli.setup_main(argv)
+                    self.assertEqual(2, raised.exception.code)
+                    # Nothing is installed or enabled by a rejected request.
+                    install.assert_not_called()
+                    self.assertIn(
+                        "--global-vault yes is experimental in this release; "
+                        "set HC_EXPERIMENTAL=1", err.getvalue())
 
     def test_missing_claude_fails_after_base_integration_is_installed(self):
         with tempfile.TemporaryDirectory() as td:

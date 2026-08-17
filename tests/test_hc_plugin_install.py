@@ -186,6 +186,50 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertIn(f"left unmanaged {legacy} in place", output)
             self.assertTrue((cli.GOALS_UI_SKILL_DIR / "SKILL.md").is_file())
 
+    def test_default_install_leaves_the_global_vault_hooks_unwired(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli = self._cli(Path(td))
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}):
+                self._install(cli)
+
+            hooks = (cli.SKILLS_DIR / "hooks" / "hooks.json").read_text()
+            self.assertNotIn("vault-hook.sh", hooks)
+            self.assertIn("chat-hook.sh", hooks)
+            # The implementation still ships; only its wiring is withheld.
+            self.assertIn("vault-hook.sh", (cli.SKILLS_DIR / "hooks" /
+                                            "hooks.experimental.json").read_text())
+            for script in ("vault-hook.sh", "vault-backfill.sh"):
+                self.assertTrue((cli.SKILLS_DIR / "scripts" / script).is_file())
+            self.assertEqual([], self._leftovers(cli))
+
+    def test_experimental_install_wires_the_global_vault_hooks(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli = self._cli(Path(td))
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": "1"}):
+                self._install(cli)
+
+            hooks = cli.SKILLS_DIR / "hooks" / "hooks.json"
+            experimental = cli.SKILLS_DIR / "hooks" / "hooks.experimental.json"
+            self.assertIn("vault-hook.sh", hooks.read_text())
+            self.assertEqual(experimental.read_text(), hooks.read_text())
+            # The swapped tree must still be one this installer owns, with the
+            # same modes the packaged files get.
+            self.assertTrue(cli._owned_asset(cli.SKILLS_DIR, "vault"))
+            self.assertEqual(0o600, stat.S_IMODE(hooks.stat().st_mode))
+            self.assertEqual([], self._leftovers(cli))
+
+    def test_reinstall_without_the_flag_unwires_the_global_vault_hooks(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli = self._cli(Path(td))
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": "1"}):
+                self._install(cli)
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}):
+                self._install(cli)
+
+            self.assertNotIn("vault-hook.sh",
+                             (cli.SKILLS_DIR / "hooks" / "hooks.json").read_text())
+            self.assertEqual([], self._leftovers(cli))
+
     def test_installed_assets_are_owner_only_with_scripts_executable(self):
         with tempfile.TemporaryDirectory() as td:
             cli = self._cli(Path(td))

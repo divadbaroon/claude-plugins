@@ -41,13 +41,19 @@ class HcOnboardingTests(unittest.TestCase):
             self.assertFalse((home / ".zshrc").exists())
 
     def test_chat_hooks_are_always_on_and_global_hook_remains_opt_in(self):
-        hooks = json.loads((
-            HC_SRC / "human_compact" / "assets" / "plugin" / "hooks" /
-            "hooks.json").read_text())["hooks"]
+        hooks_dir = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
+        default = (hooks_dir / "hooks.json").read_text()
+        experimental = (hooks_dir / "hooks.experimental.json").read_text()
+        hooks = json.loads(default)["hooks"]
         for event in ("SessionStart", "UserPromptSubmit", "PostToolBatch", "Stop"):
             commands = [h["command"] for group in hooks[event]
                         for h in group["hooks"]]
             self.assertTrue(any("chat-hook.sh" in c for c in commands), event)
+        # The global layer is a separate, experimental hook set: shipped, but
+        # never wired up by a default install.
+        self.assertNotIn("vault-hook.sh", default)
+        self.assertIn("vault-hook.sh", experimental)
+        self.assertIn("chat-hook.sh", experimental)
         vault_script = (HC_SRC / "human_compact" / "assets" / "plugin" /
                         "scripts" / "vault-hook.sh").read_text()
         chat_script = (HC_SRC / "human_compact" / "assets" / "plugin" /
@@ -82,6 +88,92 @@ class HcOnboardingTests(unittest.TestCase):
         response = json.loads(result.stdout)
         self.assertEqual("block", response["decision"])
         self.assertIn("npx human-vault", response["reason"])
+
+
+class HcCommandGateTests(unittest.TestCase):
+    """Only the launch surface is reachable without HC_EXPERIMENTAL=1."""
+
+    LAUNCH_COMMANDS = {"install", "setup", "chat-ui", "chat-serve", "chat-hook",
+                       "chat-refresh", "global-hook"}
+
+    def _cli(self):
+        if str(HC_SRC) not in sys.path:
+            sys.path.insert(0, str(HC_SRC))
+        import human_compact.cli as cli
+        return cli
+
+    def _run(self, argv, experimental=""):
+        """Run hc_main and return (exit code, stdout, stderr)."""
+        cli = self._cli()
+        out, err = io.StringIO(), io.StringIO()
+        code = 0
+        with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": experimental}), \
+                mock.patch.object(sys, "argv", ["hc"] + argv), \
+                contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            try:
+                cli.hc_main()
+            except SystemExit as exit_status:
+                code = exit_status.code
+        return code, out.getvalue(), err.getvalue()
+
+    def _listed(self, help_text):
+        return {line.split()[0] for line in help_text.splitlines()
+                if line.startswith("  ") and line.strip()}
+
+    def test_help_lists_the_launch_surface_and_points_at_the_flag(self):
+        code, out, err = self._run([])
+        self.assertEqual(0, code)
+        self.assertEqual("", err)
+        self.assertEqual(self.LAUNCH_COMMANDS, self._listed(out))
+        self.assertIn(
+            "Experimental commands are available with HC_EXPERIMENTAL=1.", out)
+
+    def test_help_documents_experimental_commands_only_when_enabled(self):
+        cli = self._cli()
+        _, out, _ = self._run(["--help"], experimental="1")
+        self.assertEqual(self.LAUNCH_COMMANDS | set(cli.EXPERIMENTAL_COMMANDS),
+                         self._listed(out))
+
+    def test_experimental_commands_refuse_to_run_without_the_flag(self):
+        cli = self._cli()
+        with contextlib.ExitStack() as stack:
+            # Every gated implementation is stubbed, so a regression that lets
+            # one through fails here instead of touching the real Vault.
+            entrypoints = {
+                command: stack.enter_context(
+                    mock.patch.object(cli, f"{command}_main"))
+                for command in cli.EXPERIMENTAL_COMMANDS
+            }
+            for command in cli.EXPERIMENTAL_COMMANDS:
+                with self.subTest(command=command):
+                    code, out, err = self._run([command])
+                    self.assertEqual(2, code)
+                    self.assertEqual("", out)
+                    self.assertEqual(
+                        f"hc {command} is experimental in this release; "
+                        "set HC_EXPERIMENTAL=1 to enable it\n", err)
+            for command, entrypoint in entrypoints.items():
+                self.assertFalse(entrypoint.called, command)
+
+    def test_an_enabled_experimental_command_reaches_its_implementation(self):
+        cli = self._cli()
+        with mock.patch.object(cli, "ui_main") as ui:
+            code, _, err = self._run(["ui", "--port", "9999"], experimental="1")
+        ui.assert_called_once_with(["--port", "9999"])
+        self.assertEqual(0, code)
+        self.assertEqual("", err)
+
+    def test_launch_commands_and_unknown_commands_are_unchanged(self):
+        cli = self._cli()
+        with mock.patch.object(cli, "install_main") as install:
+            code, _, _ = self._run(["install"])
+        install.assert_called_once_with([])
+        self.assertEqual(0, code)
+
+        code, out, _ = self._run(["surprise"])
+        self.assertEqual(2, code)
+        self.assertIn("unknown command: surprise", out)
 
 
 if __name__ == "__main__":
