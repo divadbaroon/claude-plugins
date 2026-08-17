@@ -24,6 +24,41 @@ DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
 SERVER_REGISTRY = "server.json"
 
+# This release ships one surface: the per-chat goal workspace. The rest of the
+# goal system is built and tested but not exposed, so its entry points are
+# disconnected here rather than deleted — the implementations stay reachable to
+# anyone who opts in, and to the tests that hold their contracts.
+EXPERIMENTAL_OPS = frozenset({
+    "set_opening", "start_agent_run", "cancel_agent_run", "launch_agent_run",
+    "resume_agent_run", "enable_capture", "start_analysis",
+})
+EXPERIMENTAL_ROUTES = ("/api/briefing", "/api/briefings", "/api/plan",
+                       "/api/review", "/api/setup", "/api/conversation")
+EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
+
+
+def _experimental_enabled():
+    """One flag, one spelling, shared with the CLI's command gate.
+
+    Imported inside the call rather than at module load: ``cli`` reaches these
+    trajectory modules from inside its own functions, so a module-level import
+    back into ``cli`` would close that loop and break the day someone hoists
+    one of those imports.
+    """
+    from ..cli import experimental_enabled
+    return experimental_enabled()
+
+
+def _experimental_route(path):
+    """True for any GET the router would hand to a disconnected handler.
+
+    The router reaches several of these by prefix (``/api/plan`` matches
+    ``/api/plan?goal=x`` and anything after it), so the gate matches by prefix
+    too: a route that is off is off for every path that reaches it.
+    """
+    base = path.split("?", 1)[0]
+    return any(base.startswith(route) for route in EXPERIMENTAL_ROUTES)
+
 
 def _version():
     try:
@@ -503,6 +538,10 @@ def _apply(op, trajdir=None, chat_scoped=None):
         goals, important = _load_goals(trajdir, chat_scoped)
         GM.sanitize(goals)
         kind = op.get("op")
+        # Checked before any scope or goal reasoning: a disconnected op gives
+        # the same answer everywhere, and never half-applies on the way out.
+        if kind in EXPERIMENTAL_OPS and not _experimental_enabled():
+            return {"ok": False, "error": EXPERIMENTAL_ERROR}
         g = GM.by_id(goals, op.get("goal_id", ""))
         # Execution-state ops touch the agent-run store only: choosing to work
         # on a goal must not rewrite the goal itself.
@@ -718,7 +757,11 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
-            if self.path in ("/", "/index.html"):
+            # Before the scope logic: whether this build exposes the route at
+            # all is a question that comes ahead of which vault it would read.
+            if _experimental_route(self.path) and not _experimental_enabled():
+                self._send(200, {"ok": False, "error": EXPERIMENTAL_ERROR})
+            elif self.path in ("/", "/index.html"):
                 html = resources.files("human_compact.trajectory").joinpath(
                     "web/goals_bundle.html").read_text(encoding="utf-8")
                 # Parse the artifact's template island before running the
