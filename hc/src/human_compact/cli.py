@@ -332,6 +332,10 @@ def install_plugin():
         if spec["ownership"] == "legacy":
             say(f"migrated legacy {spec['asset']} install")
     say(f"plugin installed -> {SKILLS_DIR}")
+    say("hooks: chat-scoped + global Vault (HC_EXPERIMENTAL=1)"
+        if experimental_enabled() else
+        "hooks: chat-scoped only (set HC_EXPERIMENTAL=1 at install to wire "
+        "global Vault hooks)")
     say(f"/goals-ui installed -> {GOALS_UI_SKILL_DIR}")
     # Only after promotion: a stale /hc-ui skill would otherwise still claim a
     # workspace URL that nothing supplies.
@@ -463,6 +467,19 @@ def _validate_claude_cli():
     return executable
 
 
+def _say_global_vault_state():
+    """Describe the capture the install actually leaves running."""
+    from . import global_vault
+    if not global_vault.is_enabled():
+        say("global Vault not enabled; nothing is captured")
+    elif experimental_enabled():
+        say("global Vault stays enabled; its capture hooks are installed")
+    else:
+        say("global Vault stays enabled on disk, but its capture hooks are "
+            "not installed in this release; reinstall with HC_EXPERIMENTAL=1 "
+            "to wire them")
+
+
 def setup_main(argv=None):
     """One noninteractive orchestration seam for the npm installer."""
     ap = argparse.ArgumentParser(
@@ -474,25 +491,22 @@ def setup_main(argv=None):
     args = ap.parse_args(argv or [])
     if args.goals == "yes" and args.global_vault != "yes":
         ap.error("--goals yes requires --global-vault yes")
-    if "yes" in (args.global_vault, args.goals) and not experimental_enabled():
+    if args.global_vault == "yes" and not experimental_enabled():
         ap.error("--global-vault yes is experimental in this release; "
                  "set HC_EXPERIMENTAL=1")
 
     # This is deliberately first: /goals-ui remains installed even when optional
     # global-history setup fails later and the user retries the installer.
     install_main([])
-    if args.global_vault == "keep":
-        # The installer has no opinion: onboarding happens in the UI. Saying
-        # "no" here would silently stop capturing a vault the user already
-        # turned on, and they would lose history without being told.
-        say("global Vault unchanged by this install")
+    if args.global_vault in ("keep", "no"):
+        if args.global_vault == "no":
+            from . import global_vault
+            global_vault.disable_always_on()
+        # "keep" leaves the recorded choice alone, but the install just rewrote
+        # hooks.json. Report what is on disk now, not what was requested: a
+        # vault that stays enabled is no longer being captured.
+        _say_global_vault_state()
         _validate_claude_cli()
-        return
-    if args.global_vault == "no":
-        from . import global_vault
-        global_vault.disable_always_on()
-    _validate_claude_cli()
-    if args.global_vault == "no":
         return
 
     from . import global_vault
@@ -1490,7 +1504,7 @@ def hc_main():
     import sys
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help"):
-        print(_hc_usage())
+        print(_hc_usage(), end="")
         return
     cmd, rest = args[0], args[1:]
     if cmd in EXPERIMENTAL_COMMANDS and not experimental_enabled():

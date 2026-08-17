@@ -13,6 +13,30 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 HC_SRC = ROOT / "hc" / "src"
+PLUGIN_HOOKS = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
+# The only events the global layer is allowed to add itself to.
+VAULT_HOOK_EVENTS = {"SessionStart", "PreCompact", "PostCompact", "SessionEnd"}
+
+
+def chat_only(hooks):
+    """The same hook map with every vault-hook.sh entry removed."""
+    kept = {}
+    for event, groups in hooks.items():
+        remaining = []
+        for group in groups:
+            entries = [entry for entry in group["hooks"]
+                       if not entry["command"].endswith("vault-hook.sh")]
+            if entries:
+                remaining.append({**group, "hooks": entries})
+        if remaining:
+            kept[event] = remaining
+    return kept
+
+
+def vault_hook_events(hooks):
+    return {event for event, groups in hooks.items() for group in groups
+            for entry in group["hooks"]
+            if entry["command"].endswith("vault-hook.sh")}
 
 
 class HcOnboardingTests(unittest.TestCase):
@@ -41,9 +65,8 @@ class HcOnboardingTests(unittest.TestCase):
             self.assertFalse((home / ".zshrc").exists())
 
     def test_chat_hooks_are_always_on_and_global_hook_remains_opt_in(self):
-        hooks_dir = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
-        default = (hooks_dir / "hooks.json").read_text()
-        experimental = (hooks_dir / "hooks.experimental.json").read_text()
+        default = (PLUGIN_HOOKS / "hooks.json").read_text()
+        experimental = (PLUGIN_HOOKS / "hooks.experimental.json").read_text()
         hooks = json.loads(default)["hooks"]
         for event in ("SessionStart", "UserPromptSubmit", "PostToolBatch", "Stop"):
             commands = [h["command"] for group in hooks[event]
@@ -60,6 +83,17 @@ class HcOnboardingTests(unittest.TestCase):
                        "scripts" / "chat-hook.sh").read_text()
         self.assertIn('CLAUDE_VAULT:-', vault_script)
         self.assertNotIn('CLAUDE_VAULT:-', chat_script)
+
+    def test_the_experimental_hooks_are_the_default_set_plus_vault_entries(self):
+        # One file is the other plus vault-hook.sh. Nothing else may drift.
+        default = json.loads((PLUGIN_HOOKS / "hooks.json").read_text())
+        experimental = json.loads(
+            (PLUGIN_HOOKS / "hooks.experimental.json").read_text())
+
+        self.assertEqual(default["hooks"], chat_only(experimental["hooks"]))
+        self.assertEqual(VAULT_HOOK_EVENTS,
+                         vault_hook_events(experimental["hooks"]))
+        self.assertEqual(set(), vault_hook_events(default["hooks"]))
 
     def test_ui_expansion_reports_missing_cli_instead_of_claiming_success(self):
         script = (

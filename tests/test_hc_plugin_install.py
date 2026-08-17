@@ -186,6 +186,60 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertIn(f"left unmanaged {legacy} in place", output)
             self.assertTrue((cli.GOALS_UI_SKILL_DIR / "SKILL.md").is_file())
 
+    # Every event the chat layer must stay registered on for /goals-ui to work.
+    CHAT_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolBatch",
+                        "Stop", "TaskCreated", "TaskCompleted", "PostCompact",
+                        "SessionEnd")
+
+    def test_installed_default_hooks_register_the_whole_goals_ui_surface(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli = self._cli(Path(td))
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}):
+                self._install(cli)
+
+            installed = json.loads(
+                (cli.SKILLS_DIR / "hooks" / "hooks.json").read_text())
+            source = json.loads(
+                (cli.asset_root() / "plugin" / "hooks" / "hooks.json").read_text())
+            # Flags the launch depends on (async, timeout, matcher) are the
+            # checked-in ones, not whatever survived the swap.
+            self.assertEqual(source, installed)
+
+            expansion = installed["hooks"]["UserPromptExpansion"]
+            self.assertEqual(1, len(expansion))
+            self.assertEqual("goals-ui", expansion[0]["matcher"])
+            self.assertEqual(1, len(expansion[0]["hooks"]))
+            self.assertTrue(
+                expansion[0]["hooks"][0]["command"].endswith("chat-hook.sh"))
+            self.assertEqual(45, expansion[0]["hooks"][0]["timeout"])
+
+            for event in self.CHAT_HOOK_EVENTS:
+                commands = [entry["command"]
+                            for group in installed["hooks"][event]
+                            for entry in group["hooks"]]
+                self.assertTrue(
+                    any(c.endswith("chat-hook.sh") for c in commands), event)
+            every_command = [entry["command"]
+                             for groups in installed["hooks"].values()
+                             for group in groups for entry in group["hooks"]]
+            self.assertEqual([], [c for c in every_command
+                                  if c.endswith("vault-hook.sh")])
+
+    def test_install_says_which_hook_set_it_wired(self):
+        with tempfile.TemporaryDirectory() as td:
+            cli = self._cli(Path(td))
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}):
+                default = self._install(cli)
+            with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": "1"}):
+                experimental = self._install(cli)
+
+        self.assertIn("hooks: chat-scoped only (set HC_EXPERIMENTAL=1 at "
+                      "install to wire global Vault hooks)", default)
+        self.assertNotIn("global Vault (HC_EXPERIMENTAL=1)", default)
+        self.assertIn("hooks: chat-scoped + global Vault (HC_EXPERIMENTAL=1)",
+                      experimental)
+        self.assertNotIn("chat-scoped only", experimental)
+
     def test_default_install_leaves_the_global_vault_hooks_unwired(self):
         with tempfile.TemporaryDirectory() as td:
             cli = self._cli(Path(td))
