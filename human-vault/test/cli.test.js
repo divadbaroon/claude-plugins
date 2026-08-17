@@ -198,15 +198,22 @@ test('help does not document a prompt the installer never shows', () => {
     /^ {2}--non-interactive {5}accepted for compatibility; the installer never prompts$/m);
 });
 
-test('the closing line does not claim silence once the Vault hooks are wired', async () => {
+test('the closing line says what is recorded and what waits for /goals-ui', async () => {
+  // The hooks record from install; only analysis and injection wait. Claiming
+  // "nothing is captured" was false the moment the plugin was on disk.
   const quiet = await withExperimentalAsync(undefined,
     () => installOutput({ onPath: true, added: false }));
-  assert.match(quiet, /Installed\. Nothing is captured or analyzed yet\./);
+  assert.match(quiet,
+    /Installed\. Chats are recorded locally; nothing is analyzed or injected until you run \/goals-ui in a chat\./);
+  assert.doesNotMatch(quiet, /Nothing is captured or analyzed yet/);
+  assert.doesNotMatch(quiet, /Global Vault hooks are wired/);
+
   const wired = await withExperimentalAsync('1',
     () => installOutput({ onPath: true, added: false }));
-  assert.doesNotMatch(wired, /Nothing is captured or analyzed yet/);
   assert.match(wired,
-    /Installed\. Global Vault hooks are wired \(HC_EXPERIMENTAL=1\); capture follows your global Vault setting\./);
+    /Installed\. Chats are recorded locally; nothing is analyzed or injected until you run \/goals-ui in a chat\./);
+  assert.match(wired,
+    /Global Vault hooks are wired \(HC_EXPERIMENTAL=1\); capture follows your global Vault setting\./);
 });
 
 test('a reachable launcher gets no PATH advice', async () => {
@@ -225,14 +232,19 @@ test('an unreachable launcher says what to run now, before the next step', async
   // The order is the point: an instruction the user cannot yet follow must
   // not come before the one that makes it work.
   assert.match(text, /Then: Open any Claude Code chat and type \/goals-ui\./);
-  assert.ok(text.indexOf('export PATH') < text.indexOf('/goals-ui'));
+  // The order is what matters, so pin it to the instruction itself: the
+  // recording line above also names /goals-ui, and a bare indexOf would find
+  // that one and pass no matter where the instruction ended up.
+  assert.ok(text.indexOf('export PATH')
+    < text.indexOf('Then: Open any Claude Code chat'));
 });
 
 test('a profile that could not be edited tells the user what to add', async () => {
   const text = await installOutput({ onPath: false, added: false });
   assert.match(text, /Add this to your shell profile/);
   assert.match(text, /export PATH="\$HOME\/\.human-compact\/bin:\$PATH"/);
-  assert.ok(text.indexOf('export PATH') < text.indexOf('/goals-ui'));
+  assert.ok(text.indexOf('export PATH')
+    < text.indexOf('Then: Open any Claude Code chat'));
 });
 
 test('a profile that is already correct says the shell is stale, not the config', async () => {

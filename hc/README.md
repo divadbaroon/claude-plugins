@@ -14,9 +14,16 @@ npx human-vault
 ```
 
 It installs a managed `hc` runtime plus the Claude Code hooks and the
-`/goals-ui` command, and nothing else. The installer asks nothing and enables
-nothing: no history is captured and nothing is analyzed until you run
-`/goals-ui` inside a chat.
+`/goals-ui` command, and nothing else. The installer takes no required options
+and asks no questions.
+
+From install, the hooks record each chat's own prompts and events to a local,
+owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
+same conversation Claude Code already keeps in `~/.claude/projects/`. That
+recording is what lets `/goals-ui`, run in the middle of a chat, still see the
+chat from its beginning. Nothing is analyzed or injected until you run
+`/goals-ui` in that chat, and nothing leaves your machine except the model
+calls your own `claude` CLI makes.
 
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 
@@ -47,8 +54,9 @@ id>.md`, and the injected header names that file.
 
 `/goals-ui disable` stops the injection and the inference for that chat and
 forgets the diff baseline; running `/goals-ui` again turns both back on and
-re-sends the whole document. Chats that never ran `/goals-ui` are never
-injected into and are never analyzed.
+re-sends the whole document. A chat that never ran `/goals-ui` — or one that
+disabled it — keeps being recorded, but is never analyzed and never injected
+into.
 
 ## Chat goal model
 
@@ -79,14 +87,9 @@ trigger `hc` hooks recursively. Inference may include `AGENTS.md`, `CLAUDE.md`,
 and text files explicitly referenced in the conversation. Symlinks and files
 outside the project are rejected.
 
-To keep chat inference on-device, configure Ollama before starting Claude Code:
-
-```bash
-export HC_CHAT_PROVIDER=ollama
-export HC_CHAT_MODEL=llama3.1
-```
-
-Providers never silently fall back. `HC_CHAT_STATE_DIR` relocates chat state;
+The on-device provider is experimental in this release (see below). Providers
+never silently fall back: an unavailable or gated provider raises rather than
+quietly answering through a different one. `HC_CHAT_STATE_DIR` relocates chat state;
 `HC_CHAT_UI_IDLE_SECONDS` changes the scoped server's idle timeout.
 
 ## Experimental (HC_EXPERIMENTAL=1)
@@ -100,6 +103,17 @@ with `HC_EXPERIMENTAL=1 npx human-vault` additionally wires the global capture
 hooks — a plain reinstall un-wires them, so a vault that was already enabled
 stops capturing until it is reinstalled with the flag.
 [`STASHED.md`](../STASHED.md) is the full inventory.
+
+**On-device inference.** Ollama is stashed for this release, as a chat
+provider too. `HC_CHAT_PROVIDER=ollama` raises `ollama is experimental in this
+release; set HC_EXPERIMENTAL=1` unless that flag is set; with it, chat
+inference runs on-device:
+
+```bash
+export HC_EXPERIMENTAL=1
+export HC_CHAT_PROVIDER=ollama
+export HC_CHAT_MODEL=llama3.1
+```
 
 **Global context layer.** The global layer is separate and opt-in:
 `HC_EXPERIMENTAL=1 hc setup --global-vault yes` imports the Claude Code

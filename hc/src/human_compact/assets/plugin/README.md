@@ -11,18 +11,24 @@ stable session ID and stored at `~/.claude-vault/chat-sessions/<session-id>/`.
 User prompts can be linked many-to-many with goals. Inference also observes
 assistant plans/progress, tool activity, task events, and completion evidence.
 
+From install, the hooks record each chat's own prompts and events into that
+directory — the same conversation Claude Code already keeps in
+`~/.claude/projects/` — so that `/goals-ui`, run mid-chat, still sees the chat
+from its beginning. Nothing is analyzed or injected until it is run.
+
 From the moment `/goals-ui` runs in a chat, that chat's goals document is
 injected back into it as context — whole the first time, then as a diff
 against what the chat was last shown — and subagents and tool batches receive
-it too. `/goals-ui disable` turns that off for the chat; `/goals-ui` turns it
-back on. A chat that never ran `/goals-ui` is never injected into and never
-analyzed.
+it too. `/goals-ui disable` turns analysis and injection off again for the
+chat; `/goals-ui` turns them back on. A chat that never ran `/goals-ui` is
+still recorded, but is never analyzed and never injected into.
 
 This chat-scoped layer does not require the shim or `CLAUDE_VAULT=1`.
 Its default goal analyzer sends a bounded chat/context digest through your
-authenticated Claude CLI. Set `HC_CHAT_PROVIDER=ollama` for on-device
-inference. The localhost server binds to `127.0.0.1`, rejects cross-origin
-writes, and chat artifacts are owner-only.
+authenticated Claude CLI. On-device inference via `HC_CHAT_PROVIDER=ollama` is
+experimental in this release and additionally needs `HC_EXPERIMENTAL=1`; it
+fails closed rather than falling back off-device. The localhost server binds to
+`127.0.0.1`, rejects cross-origin writes, and chat artifacts are owner-only.
 
 ## Install
 
@@ -31,8 +37,9 @@ Install the managed Python runtime and Claude Code integration together:
 
     npx human-vault
 
-The installer takes no options and asks no questions: it installs the runtime,
-the hooks, and `/goals-ui`, and captures and analyzes nothing on its own.
+The installer takes no required options and asks no questions: it installs the
+runtime, the hooks, and `/goals-ui`. Nothing is analyzed or injected until
+`/goals-ui` runs in a chat.
 Start a new Claude Code session (or run `/reload-plugins`) and use `/goals-ui`.
 No Homebrew, pipx, jq, shell-profile edit, or manual `hc` command is required.
 
@@ -51,9 +58,13 @@ selective installs can still opt in per session with `CLAUDE_VAULT=1` or
 first started; resumes on later days stay in the original folder): a
 write-once `metadata.json`; `conversation.jsonl`, the most complete transcript
 available from Claude Code, refreshed at session start, before every
-compaction, and at session end; immutable pre-compaction copies under
-`snapshots/`; the platform's compact summary under `compactions/` when
-PostCompact delivers one; and one line per session-end event in `ends.jsonl`.
+compaction, and at session end; an immutable copy of the transcript as it
+stood before compaction N at
+`snapshots/pre-compact-NNN-<utc>-<trigger>.jsonl`, never overwritten; the
+compact summary the platform produced for compaction N at
+`compactions/summary-NNN-<utc>.json` when PostCompact delivers one (Vault
+never depends on that file existing); and one line per session-end event
+(reason + time) in `ends.jsonl`.
 The original Claude transcript is only ever read, never modified.
 
 **Backfill and use.** Enabling the global Vault imports all transcripts Claude

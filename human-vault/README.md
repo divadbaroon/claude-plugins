@@ -7,9 +7,14 @@ command:
 npx human-vault
 ```
 
-The installer takes no options and asks no questions. It installs the `hc`
-runtime, the Claude Code hooks, and the `/goals-ui` command, and nothing is
-captured or analyzed until you run `/goals-ui` in a chat.
+The installer takes no required options and asks no questions. It installs
+the `hc` runtime, the Claude Code hooks, and the `/goals-ui` command.
+
+From then on the hooks record each chat's own prompts and events to a local,
+owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
+same conversation Claude Code already keeps in `~/.claude/projects/`. Nothing
+is analyzed or injected until you run `/goals-ui` in that chat, and nothing
+leaves your machine except the model calls your own `claude` CLI makes.
 
 Start a new Claude Code session (or run `/reload-plugins`), then run:
 
@@ -21,8 +26,8 @@ That opens the goal workspace for the current chat. From then on that chat's
 goals are inferred with your own authenticated Claude CLI and injected back
 into the chat as context — the whole goals document first, then only what
 changed since your last message. Subagents and tool batches receive it too.
-`/goals-ui disable` turns the injection off for that chat; `/goals-ui` turns it
-back on.
+`/goals-ui disable` turns analysis and injection off again for that chat;
+`/goals-ui` turns them back on.
 
 The Python backend is an exact wheel bundled in the npm release. It is
 installed into a managed private runtime under `~/.human-compact/`; the npm

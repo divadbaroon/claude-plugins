@@ -1,8 +1,9 @@
 # Stashed for the /goals-ui launch
 
 This release ships one thing: `/goals-ui`, chat-scoped goals for Claude Code.
-Everything else the codebase can do is still here — no implementation file was
-deleted — it is only unreachable by default. Set `HC_EXPERIMENTAL=1` to
+Everything else the codebase can do is still here — no implementation was
+deleted; the legacy `/hc-ui` skill asset was renamed to `goals-ui-skill` — it
+is only unreachable by default. Set `HC_EXPERIMENTAL=1` to
 re-enable the `hc` subcommands and the HTTP operations and routes behind them;
 reinstall with `HC_EXPERIMENTAL=1 npx human-vault` to wire the global Vault
 capture hooks, which a plain install leaves out. The full pre-launch build,
@@ -22,7 +23,7 @@ security boundary.
 | Capability | Where the code lives | How it was disconnected (commit) | How to re-enable | Notes |
 | --- | --- | --- | --- | --- |
 | Global Vault capture | `hc/src/human_compact/global_vault.py`; `hc/src/human_compact/assets/plugin/scripts/vault-hook.sh`, `vault-backfill.sh`; `cli.py` `backup_main`/`setup_main`/`global_hook_main`; `trajectory/ui.py` op `enable_capture` | `84898f2` drops the four `vault-hook.sh` entries from `hooks/hooks.json` and gates `hc backup` + `hc setup --global-vault yes`; `f0fb986` refuses the npm `--global-vault 1`/`--goals 1` flags; `73c7dcc` gates the `enable_capture` op; `c6af80f` makes the installer say which hook set it wired | `HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1`, or install with the flag and then `HC_EXPERIMENTAL=1 hc setup --global-vault yes` | `global-hook` itself stays dispatchable — only the hooks that call it are unwired. `hc setup --global-vault no` is *not* gated, so turning capture off never needs the flag. |
-| Ollama / on-device global analysis | `trajectory/providers.py` (`Ollama`), `trajectory/extract.py`, `trajectory/synthesize.py` | `84898f2` — reachable only through `hc trajectory` / `analyze` / `refresh` / `worker`, all gated | `HC_EXPERIMENTAL=1 hc trajectory --provider ollama` (the choice is remembered in `~/.claude-vault/trajectory/config.json`) | Only the *global* pipeline is stashed. Chat-scope inference still honours `HC_CHAT_PROVIDER=ollama` / `HC_CHAT_MODEL` with no flag — that path is part of the launch surface. |
+| Ollama / on-device inference | `trajectory/providers.py` (`Ollama`); `trajectory/chat_synth.py` `_provider`; `trajectory/extract.py`, `trajectory/synthesize.py` | Global pipeline: `84898f2` — reachable only through `hc trajectory` / `analyze` / `refresh` / `worker`, all gated. Chat provider: `_provider` raises `ollama is experimental in this release; set HC_EXPERIMENTAL=1` unless the flag is set | `HC_EXPERIMENTAL=1` plus `HC_CHAT_PROVIDER=ollama` for chat inference; `HC_EXPERIMENTAL=1 hc trajectory --provider ollama` for the global pipeline (that choice is remembered in `~/.claude-vault/trajectory/config.json`) | The chat gate **fails closed**: it raises rather than silently answering through the `claude` provider, because a quiet fallback would send off-device the one digest the user asked to keep on-device. `mock` is unaffected, so tests are untouched. |
 | Parallel extraction | `trajectory/worker.py`, `trajectory/extract.py` | `84898f2` gates `hc worker` | `HC_EXPERIMENTAL=1 hc worker`, or `hc trajectory --workers N` under the flag | The in-product spawn at `global_vault.py:299` (`python -m human_compact.cli worker`) inherits the shell's environment, not the flag used at install time, so under an experimental install the vault hooks fire and the worker still exits 2 unless `HC_EXPERIMENTAL=1` is exported in the user's shell. `hooks.experimental.json` prefixes the four `vault-hook.sh` commands with `HC_EXPERIMENTAL=1 ` (`f75d96a`), which covers the hook itself but not a hand-run `hc`. |
 | Global Claude analysis | `cli.py` `trajectory_main`, `analyze_main`, `refresh_main`, `worker_main`; `trajectory/discover.py`, `goal_synth.py`, `synthesize.py`, `graph_build.py`; `trajectory/ui.py` op `start_analysis` | `84898f2` gates the four commands; `73c7dcc` gates the op | `HC_EXPERIMENTAL=1 hc analyze` / `hc refresh` / `hc trajectory`; the op needs the flag on the process running the server | Sends conversation-derived digests to Anthropic through the user's own `claude` CLI, which is why it is opt-in twice over. |
 | Analysis progress banner | `GET /api/setup` in `trajectory/ui.py`; `seed()` / `refreshSetup()` and the banner block in `trajectory/web/bridge.js` | `73c7dcc` gates the route; `860fd32` stops the chat workspace from seeding the global onboarding at all | Flag on the server process; the banner reappears in global scope | Both JS callers already guarded on `body.ok`, so the gated route degrades to "no banner" rather than an error. |
@@ -32,7 +33,7 @@ security boundary.
 | Model-generated plans | `GET /api/plan` in `trajectory/ui.py`; `loadPlan()` in `bridge.js` | `73c7dcc` | Flag on the server process | `loadPlan()` also early-returns in chat scope, so it is doubly unreachable at launch. |
 | Review pane | `GET /api/review` in `trajectory/ui.py`; REVIEW tab in `bridge.js` | `73c7dcc` gates the route; `860fd32` hides the tab in chat scope | Flag on the server process, in global scope | Branch `feature/review-workflow` has the fuller version. |
 | Briefing payload | `GET /api/briefing`, `GET /api/briefings` in `trajectory/ui.py`; `seed()` in `bridge.js`; `agent_exec.py` briefing builder | `73c7dcc` | Flag on the server process | `hc work`'s own briefing prepend is unchanged; this is the browser's read of it. |
-| Opening override | op `set_opening` in `trajectory/ui.py` | `73c7dcc` | Flag on the server process | This is the one gated op the chat workspace could otherwise reach from ordinary goal editing; no launch UI offers it, so nothing claims a write that would now be refused. |
+| Opening override | op `set_opening` in `trajectory/ui.py` | `73c7dcc` | Flag on the server process | No caller in `bridge.js`, in either scope — the op is reachable only by posting to `/api/op` by hand. |
 | Important items | `cli.py` `mark_main`; `trajectory/goals.py` important-item store | `84898f2` gates `hc mark` | `HC_EXPERIMENTAL=1 hc mark …` | No browser surface existed for this either way. See "Not stashed, but noted" below — chat inference can still write `important.items` internally. |
 | Natural-language correction + evidence inspection | `cli.py` `goals_main` | `84898f2` gates `hc goals` | `HC_EXPERIMENTAL=1 hc goals` | CLI-only; the browser never exposed it. |
 | Lens | `cli.py` `lens_main`; `trajectory/lens.py` | `84898f2` gates `hc lens` | `HC_EXPERIMENTAL=1 hc lens` | The derived compaction lens, including its `--browser` view. |
@@ -46,6 +47,24 @@ security boundary.
 These are live on this branch. They are limits or leftovers, not disconnected
 capabilities, and they are listed here because they can still surprise a user.
 
+- **Chat ingestion is unconditional, and by design.** From the moment the
+  hooks are installed, every chat's own prompts and events are recorded to
+  `~/.claude-vault/chat-sessions/<session-id>/` — `cli.py:1176` calls
+  `CS.ingest_hook(payload)` on every non-`--inject-only` event, and
+  `ingest_hook` has no opt-in gate. This is deliberate (Task 2's ruling): it is
+  what lets `/goals-ui`, run in the middle of a chat, see that chat from its
+  beginning. Only **inference and injection** wait for `/goals-ui`, and only
+  those are what `/goals-ui disable` turns off. The store is owner-only (`0700`
+  directory, `0600` files), it is local, and it duplicates a conversation
+  Claude Code already keeps in `~/.claude/projects/` — but a user who reads
+  "nothing is captured" would be misled, so no document says that.
+- **The mirror's `cwd` fallback needs a directory Claude already made.** When a
+  hook payload carries `cwd` but no `transcript_path`, `mirror_goal_context`
+  writes to `~/.claude/projects/<project-key>/goals-ui/<sid>.md` **only if**
+  that project directory already exists; otherwise it returns `None` and the
+  injected header falls back to the internal `goal_context.md` path. Deliberate
+  (Task 12's deviation): without the guard, any such payload — including one
+  from a unit test — mints a directory tree under the real `$HOME`.
 - **`merge_goals` drops sources on the global tree.** `goals.apply_ops` merges
   a goal's evidence, important items, prompt links and children into the
   destination, but not its `sources` and not its markdown document — both are
@@ -62,10 +81,11 @@ capabilities, and they are listed here because they can still surprise a user.
 - **Every tool batch spawns two hook processes.** `PostToolBatch` carries an
   async ingest entry and a synchronous `--inject-only` entry. Both fire in
   every session with the plugin installed, including chats that never ran
-  `/goals-ui` — the opt-in check happens *inside* the process. The check is one
-  small JSON read; the process spawn is not free. If tool-batch latency
-  regresses, the cheapest fix is a marker file the shell script can stat before
-  exec'ing Python.
+  `/goals-ui`: the async entry ingests unconditionally (see the entry above),
+  and the sync one checks the opt-in *inside* the process before deciding to
+  say nothing. The check is one small JSON read; the process spawn is not free.
+  If tool-batch latency regresses, the cheapest fix is a marker file the shell
+  script can stat before exec'ing Python.
 - **Global scope lost its source-attach UI and `WHERE THIS SITS`.** Making the
   Context pane a single markdown document set `showCtx: false` in *both*
   scopes, which took the only controls for attaching a repo, a local folder or

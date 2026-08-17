@@ -17,9 +17,15 @@ Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
 npx human-vault
 ```
 
-The installer takes no options and asks no questions. It installs the `hc`
-runtime, the Claude Code hooks, and the `/goals-ui` command. It captures
-nothing and analyzes nothing on its own.
+The installer takes no required options and asks no questions. It installs
+the `hc` runtime, the Claude Code hooks, and the `/goals-ui` command.
+
+From that point the hooks record each chat's own prompts and events to a
+local, owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` —
+the same conversation Claude Code already keeps in `~/.claude/projects/`.
+Nothing is analyzed or injected until you run `/goals-ui` in that chat, and
+nothing leaves your machine except the model calls your own `claude` CLI
+makes.
 
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 
@@ -31,11 +37,12 @@ That opens the goal workspace for the current chat in your browser. From then
 on, that chat's goals are inferred with your own authenticated Claude CLI and
 injected back into the chat as context: the whole goals document the first
 time, then only what changed since the last message. Subagents and tool
-batches receive it too. `/goals-ui disable` turns the injection off for that
-chat; running `/goals-ui` again turns it back on and re-sends the whole
-document.
+batches receive it too. `/goals-ui disable` turns analysis and injection off
+again for that chat; running `/goals-ui` turns them back on and re-sends the
+whole document.
 
-Chats where `/goals-ui` has never run are left alone.
+Chats where `/goals-ui` has never run are still recorded, but they are never
+analyzed and never injected into.
 
 See the [hc documentation](./hc/README.md) for persistence, event ingestion,
 the inference data boundary, and the separation between chat-scoped and global

@@ -147,13 +147,16 @@ async function run(deps = {}) {
     } else if (reach) {
       output.write(`  hc           needs one more step (below)\n`);
     }
-    // Two different truths. Without the flag the install wires chat hooks only,
-    // and they stay inert until /goals-ui runs in a chat. With it, the global
-    // Vault hooks are on disk, so promising silence would be a lie.
+    // The chat hooks record from the moment they are installed -- that is what
+    // lets /goals-ui, run mid-chat, see the chat from its beginning. Only
+    // analysis and injection wait for it, so those are what this line promises.
     output.write(experimentalEnabled()
-      ? '\nInstalled. Global Vault hooks are wired (HC_EXPERIMENTAL=1); '
-        + 'capture follows your global Vault setting.\n'
-      : '\nInstalled. Nothing is captured or analyzed yet.\n');
+      ? '\nInstalled. Chats are recorded locally; nothing is analyzed or '
+        + 'injected until you run /goals-ui in a chat.\n'
+        + 'Global Vault hooks are wired (HC_EXPERIMENTAL=1); capture follows '
+        + 'your global Vault setting.\n'
+      : '\nInstalled. Chats are recorded locally; nothing is analyzed or '
+        + 'injected until you run /goals-ui in a chat.\n');
     if (reach && !reach.onPath) {
       output.write(reach.added
         ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`
