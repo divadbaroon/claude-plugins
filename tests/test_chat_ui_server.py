@@ -439,10 +439,14 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
-                expect(page.locator("#hc-prompt-links")).to_be_visible(
-                    timeout=10_000
-                )
-                expect(page.locator("#hc-prompt-links .hc-pa-card")).to_have_count(1)
+                expect(
+                    page.get_by_text("goal in chat a", exact=True).first
+                ).to_be_visible(timeout=10_000)
+                # The attached prompt is on the goal before the analyzer
+                # writes, and has to still be on it afterwards.
+                expect(
+                    page.get_by_text("new human prompt", exact=True)
+                ).to_have_count(1)
 
                 # Exact localStorage representation written by the bundled
                 # app, deliberately left unsent when analysis wins the race.
@@ -468,7 +472,9 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("analyzer-added todo", exact=True).first).to_be_visible(
                     timeout=10_000
                 )
-                expect(page.locator("#hc-prompt-links .hc-pa-card")).to_have_count(1)
+                expect(
+                    page.get_by_text("new human prompt", exact=True)
+                ).to_have_count(1)
                 current = {
                     g["id"]: g
                     for g in chat_state.load_goals("chat-a", self.root)[0]["goals"]
@@ -476,9 +482,14 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertEqual("in_progress", current["a1"]["status"])
                 self.assertEqual("high", current["a1"]["priority"])
                 self.assertEqual(["p-new"], current["a1"]["prompt_ids"])
-                self.assertEqual(
-                    ["analyzer-added todo"],
-                    [t["text"] for t in current["a1"]["todos"]],
+                # Inference still emits todos; the model promotes each one
+                # into a child goal on load, so surviving the round trip
+                # means surviving as a child of a1, not as a nested dict.
+                self.assertEqual([], current["a1"]["todos"])
+                self.assertIn(
+                    "analyzer-added todo",
+                    [g["title"] for g in current.values()
+                     if g["parent_goal_id"] == "a1"],
                 )
                 self.assertIn("a3", current)
             finally:
@@ -504,8 +515,15 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
+                # The bridge replaces the artifact's own empty-tree line: a
+                # vault with nothing in it is not a dead end, so the copy
+                # says where goals come from as well as offering the button.
                 expect(
-                    page.get_by_text("No goals yet — add one below.", exact=True)
+                    page.get_by_text(
+                        "No goals yet — they are inferred from your analyzed "
+                        "conversations, or add one below.",
+                        exact=True,
+                    )
                 ).to_be_visible(timeout=10_000)
                 expect(page.get_by_text("Add goal", exact=True)).to_have_count(1)
                 expect(
@@ -882,6 +900,120 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertEqual("a1", result["goals"][0]["id"])
             thread.join(timeout=1)
             self.assertFalse(thread.is_alive())
+
+    def test_a_chat_workspace_opens_on_its_own_tree_not_the_vault_wizard(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        # /api/setup answers for the global vault and refuses in chat scope.
+        # The artifact reads one `setup` object for its wizard, its gate and
+        # its main pane, so a chat page that inherits that refusal paints
+        # onboarding over a tree it already has.
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            self.assertFalse(get_json(url + "/api/setup")["ok"])
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(
+                    page.get_by_text("goal in chat a", exact=True).first
+                ).to_be_visible(timeout=10_000)
+                expect(
+                    page.get_by_text("another a goal", exact=True).first
+                ).to_be_visible()
+
+                # Nothing that asks a chat to set up a vault, and no way back
+                # into the wizard: the gate button is what re-opens it.
+                for wizard in (
+                    "Keep your Claude Code history",
+                    "Enable local Vault",
+                    "Build your Goals",
+                    "No Goals yet",
+                    "1 of 2",
+                    "2 of 2",
+                ):
+                    expect(page.get_by_text(wizard, exact=True)).to_have_count(
+                        0, timeout=5_000
+                    )
+
+                # The Conversations page lists a vault's whole history; this
+                # scope has one conversation and no route that serves the list.
+                expect(page.get_by_text("Conversations", exact=True)).to_be_hidden()
+                expect(page.get_by_text("Goals", exact=True).first).to_be_visible()
+
+                saved = page.evaluate(
+                    "JSON.parse(localStorage.getItem('hc-vault-ui-v1'))"
+                )
+                self.assertEqual("all", saved["filter"])
+                self.assertEqual("goals", saved["page"])
+                self.assertEqual(
+                    {"sv": 9, "storage": True, "analysis": "claude",
+                     "done": True},
+                    saved["setup"],
+                )
+            finally:
+                browser.close()
+
+    def test_a_chat_inspector_offers_only_the_pane_it_can_serve(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            # Every op behind AGENT and REVIEW refuses in this scope, so a
+            # tab that opens either is a control with nothing behind it.
+            self.assertFalse(get_json(url + "/api/review?goal=a1")["ok"])
+            self.assertFalse(post_json(
+                url + "/api/op",
+                {"op": "launch_agent_run", "goal_id": "a1"},
+                {"Origin": url},
+            )["ok"])
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.get_by_text("CONTEXT", exact=True)).to_be_visible(
+                    timeout=10_000
+                )
+                for tab in ("AGENT", "REVIEW", "PROMPT"):
+                    expect(page.get_by_text(tab, exact=True)).to_be_hidden()
+
+                # A pane saved from a build that still offered them must not
+                # restore an inspector this scope cannot draw.
+                page.evaluate("""() => {
+                    const key = "hc-vault-ui-v1";
+                    const saved = JSON.parse(localStorage.getItem(key));
+                    saved.paneTab = "agent";
+                    localStorage.setItem(key, JSON.stringify(saved));
+                }""")
+                page.reload(wait_until="domcontentloaded")
+                expect(page.get_by_text("CONTEXT", exact=True)).to_be_visible(
+                    timeout=10_000
+                )
+                self.assertEqual("context", page.evaluate(
+                    "JSON.parse(localStorage.getItem('hc-vault-ui-v1')).paneTab"
+                ))
+                expect(page.get_by_text("WHERE THIS SITS", exact=True)).to_be_visible()
+                expect(page.get_by_text("AGENT", exact=True)).to_be_hidden()
+            finally:
+                browser.close()
 
 
 if __name__ == "__main__":

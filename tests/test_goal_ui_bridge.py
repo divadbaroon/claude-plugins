@@ -2126,3 +2126,174 @@ class AnalysisBannerTests(BridgeTestCase):
         self.assertIn("inferred once your conversations have all been analyzed",
                       out)
         self.assertIn("__hcAnalysisPending", out)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatScopeSeedTests(BridgeTestCase):
+    """A chat workspace boots into its own tree, not the vault's wizard."""
+
+    CHAT = {"scope": "chat", "generated_at": "2026-08-16T00:00:00+00:00",
+            "revision": "r1", "goals": [], "prompts": []}
+
+    def payload(self, state=None, saved="null"):
+        return self.run_js(
+            "window.__hcPromptUI.seedPayload(%s, [], %s);"
+            % (json.dumps(state or self.CHAT), saved))
+
+    def test_the_wizard_is_answered_from_what_a_chat_actually_does(self):
+        # mainDisp/gateShow/obShow in the artifact all read this one object.
+        # Chat inference runs through the Claude CLI over a transcript the
+        # chat is already keeping, so every field here is a report.
+        setup = self.payload()["setup"]
+        self.assertEqual({"sv": 9, "storage": True, "analysis": "claude",
+                          "done": True}, setup)
+
+    def test_a_dead_setup_route_cannot_drag_a_chat_into_onboarding(self):
+        # /api/setup speaks for the global vault and answers ok:false here.
+        # The chat seed must not be built from its silence.
+        setup = self.run_js(
+            "window.__hcPromptUI.setSetupForTest(null);"
+            "window.__hcPromptUI.seedPayload(%s, [], null).setup;"
+            % json.dumps(self.CHAT))
+        self.assertTrue(setup["done"])
+        self.assertTrue(setup["storage"])
+
+    def test_a_global_vault_still_reports_its_own_answers(self):
+        fresh = self.run_js(
+            "window.__hcPromptUI.setSetupForTest(null);"
+            "window.__hcPromptUI.seedPayload({ scope: 'global' }, [], null)"
+            ".setup;")
+        self.assertFalse(fresh["done"])
+        self.assertFalse(fresh["storage"])
+        self.assertIsNone(fresh["analysis"])
+
+    def test_a_fresh_chat_page_lands_on_all(self):
+        # A chat's tree is small and often finished; opening it filtered to
+        # active reads as an empty workspace.
+        self.assertEqual("all", self.payload()["filter"])
+        self.assertEqual("all", self.payload(saved="{}")["filter"])
+
+    def test_a_filter_the_reader_chose_here_survives(self):
+        # v7 marks a store this bridge wrote, which is the only evidence
+        # that the saved filter is a choice rather than the artifact's own
+        # default of 'active'.
+        self.assertEqual("done",
+                         self.payload(saved="{ v: 7, filter: 'done' }")["filter"])
+
+    def test_the_artifacts_own_default_is_not_read_as_a_choice(self):
+        self.assertEqual(
+            "all", self.payload(saved="{ v: 6, filter: 'active' }")["filter"])
+
+    def test_a_global_page_still_opens_on_active(self):
+        glob = {"scope": "global", "goals": [], "prompts": []}
+        self.assertEqual("active", self.payload(glob)["filter"])
+        self.assertEqual(
+            "done", self.payload(glob, saved="{ filter: 'done' }")["filter"])
+
+    def test_a_chat_has_nowhere_for_the_conversations_page_to_land(self):
+        self.assertEqual(
+            "goals", self.payload(saved="{ v: 7, page: 'convos' }")["page"])
+
+    def test_a_global_page_keeps_the_conversations_page(self):
+        glob = {"scope": "global", "goals": [], "prompts": []}
+        self.assertEqual(
+            "convos", self.payload(glob, saved="{ page: 'convos' }")["page"])
+
+    def test_a_saved_agent_or_review_pane_resolves_to_context(self):
+        for pane in ("agent", "artifact"):
+            self.assertEqual("context", self.payload(
+                saved="{ v: 7, paneTab: '%s' }" % pane)["paneTab"])
+
+    def test_a_global_page_still_restores_those_panes(self):
+        glob = {"scope": "global", "goals": [], "prompts": []}
+        self.assertEqual("agent", self.payload(
+            glob, saved="{ paneTab: 'agent' }")["paneTab"])
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ChatScopeSurfaceTests(BridgeTestCase):
+    """Controls whose only backend answers 'global scope only' come off."""
+
+    def tab_bar(self, *labels):
+        """A stand-in for the artifact's re-rendered pane tab row."""
+        return ("var bar = document.createElement('div');"
+                "app.appendChild(bar);"
+                + "".join(
+                    "var t%d = document.createElement('span');"
+                    "t%d.textContent = %s; bar.appendChild(t%d);"
+                    % (i, i, json.dumps(label), i)
+                    for i, label in enumerate(labels)))
+
+    def chat(self):
+        return ("window.__hcPromptUI.acceptState("
+                "{ goals: [], prompts: [], scope: 'chat' });")
+
+    def displays(self, scope_js, labels):
+        return self.run_js(
+            scope_js + self.tab_bar(*labels)
+            + "window.__hcPromptUI.renderChatSurface();"
+            + "bar.children.map(function (n) { return n.style.display || ''; });")
+
+    def test_the_agent_and_review_tabs_are_taken_off_a_chat_page(self):
+        self.assertEqual(
+            ["", "none", "none"],
+            self.displays(self.chat(), ["CONTEXT", "AGENT", "REVIEW"]))
+
+    def test_a_review_tab_that_appears_later_is_swept_too(self):
+        # REVIEW sits behind an sc-if that only turns on once a run exists,
+        # so it is not on the page when the first sweep runs.
+        self.assertEqual(
+            ["", "none"], self.displays(self.chat(), ["CONTEXT", "REVIEW"]))
+
+    def test_a_global_page_keeps_every_tab(self):
+        state = ("window.__hcPromptUI.acceptState("
+                 "{ goals: [], prompts: [], scope: 'global' });")
+        self.assertEqual(
+            ["", "", ""],
+            self.displays(state, ["CONTEXT", "AGENT", "REVIEW"]))
+
+    def test_headings_that_share_a_tabs_name_are_left_alone(self):
+        # 'AGENT' is also a heading inside the pane. Only the row holding
+        # CONTEXT is the tab bar.
+        out = self.run_js(
+            self.chat()
+            + "var head = document.createElement('span');"
+            "head.textContent = 'AGENT'; app.appendChild(head);"
+            + self.tab_bar("CONTEXT", "AGENT")
+            + "window.__hcPromptUI.renderChatSurface();"
+            "[head.style.display || '', bar.children[1].style.display || ''];")
+        self.assertEqual(["", "none"], out)
+
+    def test_the_conversations_nav_comes_off_a_chat_page(self):
+        out = self.run_js(
+            self.chat()
+            + "var nav = document.createElement('div'); app.appendChild(nav);"
+            "var g = document.createElement('span'); g.textContent = 'Goals';"
+            "nav.appendChild(g);"
+            "var c = document.createElement('span');"
+            "c.textContent = 'Conversations'; nav.appendChild(c);"
+            "window.__hcPromptUI.renderChatSurface();"
+            "[g.style.display || '', c.style.display || ''];")
+        self.assertEqual(["", "none"], out)
+
+    def test_a_global_page_keeps_the_conversations_nav(self):
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState("
+            "{ goals: [], prompts: [], scope: 'global' });"
+            "var nav = document.createElement('div'); app.appendChild(nav);"
+            "var c = document.createElement('span');"
+            "c.textContent = 'Conversations'; nav.appendChild(c);"
+            "window.__hcPromptUI.renderChatSurface();"
+            "c.style.display || '';")
+        self.assertEqual("", out)
+
+    def test_the_keyboard_cycle_stops_at_the_tabs_a_chat_has(self):
+        # ⌘↑/⌘↓ stepping onto AGENT would open a pane whose every control
+        # errors here, and onto PROMPT a pane the bridge folded away.
+        out = self.patched_bundle("out;")
+        self.assertIn(
+            "const tabs = (typeof window !== 'undefined' && "
+            "window.__hcScope === 'chat') ? ['context'] : "
+            "['context', 'prompt', 'agent', 'artifact'];", out)
+        self.assertNotIn(
+            "    const tabs = ['context', 'prompt', 'agent', 'artifact'];", out)

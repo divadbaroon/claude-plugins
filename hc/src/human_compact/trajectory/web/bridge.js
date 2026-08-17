@@ -464,21 +464,44 @@
     var tabs = { context: true, prompt: true, agent: true, artifact: true };
     var selection = typeof saved.selId === "string" && flat[saved.selId] ?
       saved.selId : (roots.length ? roots[0].id : null);
+    var chat = !!(st && st.scope === "chat");
+    // Only a store we wrote carries a filter the reader actually chose. A
+    // page opened for the first time in a chat has no such history, and a
+    // chat's tree is small enough that hiding most of it behind "active"
+    // reads as an empty workspace.
+    var mine = saved.v >= 7;
+    var filter = filters[saved.filter] ? saved.filter : null;
+    var paneTab = tabs[saved.paneTab] ? saved.paneTab : "context";
+    // The panes those two tabs open are driven by ops this scope refuses,
+    // so a saved value pointing at one would restore an empty inspector.
+    if (chat && (paneTab === "agent" || paneTab === "artifact")) {
+      paneTab = "context";
+    }
     return {
       v: 7,
       goals: roots,
       selId: selection,
-      filter: filters[saved.filter] ? saved.filter : "active",
+      filter: chat ? ((filter && mine) ? filter : "all")
+                   : (filter || "active"),
       updatedAt: st.generated_at ? Date.parse(st.generated_at) : Date.now(),
       labels: array(saved.labels),
-      paneTab: tabs[saved.paneTab] ? saved.paneTab : "context",
+      paneTab: paneTab,
       themeMode: saved.themeMode === "light" || saved.themeMode === "dark" ?
         saved.themeMode : null,
       view: saved.view === "tree" || saved.view === "inspect" ? saved.view : "split",
-      page: saved.page === "convos" ? "convos" : "goals",
+      // A chat workspace has one conversation -- its own -- and no page to
+      // list them on, so there is nowhere for 'convos' to land.
+      page: (saved.page === "convos" && !chat) ? "convos" : "goals",
       // Onboarding is the artifact's, and these are the real answers: what the
       // vault has actually been told, not an assumption that it is set up.
-      setup: setupState || { sv: 9, storage: false, analysis: null, done: false }
+      // A chat workspace was never asked any of it: its goals are inferred
+      // from this chat by the Claude CLI, and the transcript it reads is the
+      // one the chat is already keeping. Answering the wizard's questions
+      // here is reporting that, not assuming it -- and /api/setup speaks for
+      // the global vault only, so it is not consulted.
+      setup: chat ? { sv: 9, storage: true, analysis: "claude", done: true }
+                  : (setupState ||
+                     { sv: 9, storage: false, analysis: null, done: false })
     };
   }
 
@@ -1060,6 +1083,66 @@
     setInterval(renderPromptAdd, 700);
   }
 
+  // --- controls a chat workspace has no backend for ------------------------
+  // The artifact was drawn for the global vault. Three of its controls lead
+  // somewhere this scope cannot go. The Conversations page lists a vault's
+  // whole history, which arrives on /api/setup and /api/conversation -- both
+  // refuse here, and the artifact answers a refusal by falling back to its
+  // own sample list, so the page would read as a history nobody has. The
+  // AGENT and REVIEW tabs open panes whose every op -- /api/plan,
+  // launch_agent_run, resume_agent_run, /api/review -- refuses too. All
+  // three are taken off the page rather than left to fail on click.
+
+  function leafSpansNamed(name) {
+    var out = [], nodes = document.querySelectorAll("span");
+    for (var i = 0; i < nodes.length; i++) {
+      // Leaf nodes only: an ancestor's textContent contains its children's,
+      // so a wrapper would match the name its child carries.
+      if (nodes[i].children && nodes[i].children.length) continue;
+      if (str(nodes[i].textContent).trim() === name) out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  function paneTabBar() {
+    // Named by the one tab every scope keeps, for the same reason
+    // promptAddSlot is anchored on a heading: the artifact re-renders this
+    // row from its own state, so text it has to draw is the only handle
+    // that cannot be re-rendered away.
+    var anchor = leafSpansNamed("CONTEXT")[0];
+    return anchor ? anchor.parentNode : null;
+  }
+
+  function hideNode(node) {
+    if (!node || !node.style || node.style.display === "none") return false;
+    node.style.display = "none";
+    return true;
+  }
+
+  function renderChatSurface() {
+    if (serverState.scope !== "chat") return false;
+    var hidden = 0;
+    leafSpansNamed("Conversations").forEach(function (span) {
+      if (hideNode(span)) hidden += 1;
+    });
+    var bar = paneTabBar();
+    var kids = (bar && bar.children) || [];
+    for (var i = 0; i < kids.length; i++) {
+      var label = str(kids[i].textContent).trim();
+      // REVIEW arrives late -- it is behind an sc-if that only turns on
+      // once a run exists -- so this is a standing sweep, not a one-shot.
+      if (label === "AGENT" || label === "REVIEW") {
+        if (hideNode(kids[i])) hidden += 1;
+      }
+    }
+    return hidden > 0;
+  }
+
+  function watchChatSurface() {
+    renderChatSurface();
+    setInterval(renderChatSurface, 700);
+  }
+
   function watchRunFeed() {
     // The artifact reads its state at boot, so a live feed cannot travel
     // through it. Poll and draw straight into the pane instead.
@@ -1321,6 +1404,13 @@
       // landing on Agent or Artifact for a goal that has neither.
       ["paneTab: (saved && saved.v >= 6 && ['prompt', 'agent', 'artifact'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',",
        "paneTab: (saved && saved.hcKeepPane && ['prompt', 'agent', 'artifact', 'context'].indexOf(saved.paneTab) >= 0) ? saved.paneTab : 'context',"],
+      // A chat workspace is not offered AGENT or REVIEW -- the ops behind
+      // them answer "global scope only" here -- so the keyboard must not
+      // step onto them either. It reads the scope at the moment of the
+      // keypress rather than at patch time, which keeps this one string
+      // true for whichever server the artifact is served from.
+      ["const tabs = ['context', 'prompt', 'agent', 'artifact'];",
+       "const tabs = (typeof window !== 'undefined' && window.__hcScope === 'chat') ? ['context'] : ['context', 'prompt', 'agent', 'artifact'];"],
       // A bare "Goal:" with nothing after it reads as missing data. The line
       // now states the link or its absence, and is computed from which goals
       // actually cite this conversation.
@@ -1863,6 +1953,7 @@
     liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
+    renderChatSurface: renderChatSurface,
     promptAddSlot: promptAddSlot,
     openPromptPicker: openPromptPicker,
     pickPrompt: pickPrompt,
@@ -1876,6 +1967,10 @@
   };
 
   seed();
+  // Published before the template is patched and before the artifact boots,
+  // because both read it: the patched source asks it which tabs exist, and
+  // the watcher below asks it which controls to take off the page.
+  window.__hcScope = serverState.scope;
   // Placed after the template island and before the closing body tag: the
   // artifact's DOMContentLoaded listener is registered but has not unpacked
   // the template yet, so patching here is safe.
@@ -1886,6 +1981,7 @@
     // whatever pane happened to be open when a run last finished.
     clearKeepPane();
     watchPromptAdd();
+    watchChatSurface();
     watchGoals();
     watchAnalysis();
     watchSelection();
