@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "package": "human-vault",
+  "package": "engelbart-cli",
   "version": "0.18.0",
   "wheel": "human_compact-0.18.0-py3-none-any.whl",
-  "sha256": "77d041151a2d9e89de75dcc01b29a276420e5f3b86976dab561f854085ffe525",
-  "sourceRevision": "07139e98bd46ac60c099fe4157e902e1148d8acf"
+  "sha256": "9f947bf1281e5c5f3c8195983332702d750c6e876dc8447d9e429a31d305e0d0",
+  "sourceRevision": "59f4d301d2bead453e8774cf441694a6bf3e187e"
 }
