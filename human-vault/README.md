@@ -30,16 +30,23 @@ Use numeric flags in automation:
 ```bash
 # Chat-scoped /goals-ui only
 npx human-vault --non-interactive --global-vault 2
-
-# Global Vault plus global goal inference
-npx human-vault --non-interactive --global-vault 1 --goals 1
-
-# Global Vault without running goal inference now
-npx human-vault --non-interactive --global-vault 1 --goals 2
 ```
 
-Values other than `1` and `2` are rejected. `--goals 1` is invalid when the
-global Vault is disabled.
+Values other than `1` and `2` are rejected.
+
+The global Vault and the global goal inference built on it are experimental in
+this release: `--global-vault 1` and `--goals 1` are refused unless
+`HC_EXPERIMENTAL=1` is set.
+
+```bash
+# Global Vault plus global goal inference
+HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1 --goals 1
+
+# Global Vault without running goal inference now
+HC_EXPERIMENTAL=1 npx human-vault --non-interactive --global-vault 1 --goals 2
+```
+
+`--goals 1` is invalid when the global Vault is disabled.
 
 ## Requirements and state
 

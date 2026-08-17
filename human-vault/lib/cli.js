@@ -17,12 +17,16 @@ function usage() {
   return `Usage: npx human-vault [options]
 
 Options:
-  --global-vault <1|2>  1 enables global Vault; 2 installs /goals-ui only
-  --goals <1|2>         1 builds global goals now; 2 skips (Vault only)
   --non-interactive     require every applicable choice as a flag
   --dry-run             verify the bundled release and show the plan only
   -h, --help            show this help
+
+Global Vault features are experimental; set HC_EXPERIMENTAL=1 to use --global-vault/--goals.
 `;
+}
+
+function experimentalEnabled() {
+  return process.env.HC_EXPERIMENTAL === '1';
 }
 
 function numericChoice(flag, value) {
@@ -56,6 +60,12 @@ function parseArgs(argv) {
   }
   if (result.globalVault === '2' && result.goals === '1') {
     throw new UsageError('--goals 1 requires --global-vault 1');
+  }
+  // The flags still parse, so scripted installs keep their inert '2'; only
+  // turning the global layer on is withheld from this release.
+  if ((result.globalVault === '1' || result.goals === '1') && !experimentalEnabled()) {
+    throw new UsageError(
+      '--global-vault and --goals are experimental in this release; set HC_EXPERIMENTAL=1');
   }
   if (result.globalVault === '2' && result.goals === null) result.goals = '2';
   return result;
@@ -120,7 +130,7 @@ async function run(deps = {}) {
         errorOutput,
         deps: deps.installerDeps || {},
       });
-      // Only claim `hc ui` works once the shell can actually find `hc`.
+      // Only promise `hc` in this terminal once the shell can actually find it.
       const launcher = installed && installed.launcher;
       if (launcher) {
         reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
@@ -146,8 +156,8 @@ async function run(deps = {}) {
         : `\nAdd this to your shell profile, then run it here:\n\n    ${reach.line}\n`);
     }
     const needsPathStep = !!(reach && !reach.onPath);
-    output.write(`\n${needsPathStep ? 'Then set up' : 'Next \u2014 set up'} your Vault and build your goals:\n\n    hc ui\n`);
-    output.write('\nIt walks you through the rest.\n');
+    const next = 'Open any Claude Code chat and type /goals-ui.';
+    output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
     return 0;
   } catch (error) {
     if (error instanceof InputCancelled) {

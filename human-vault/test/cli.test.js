@@ -12,8 +12,22 @@ const {
   parseArgs,
   resolveChoices,
   run,
+  usage,
 } = require('../lib/cli');
 const { PassThrough } = require('stream');
+
+// The gate reads the environment at parse time, so each test states it.
+function withExperimental(value, body) {
+  const previous = process.env.HC_EXPERIMENTAL;
+  if (value === undefined) delete process.env.HC_EXPERIMENTAL;
+  else process.env.HC_EXPERIMENTAL = value;
+  try {
+    return body();
+  } finally {
+    if (previous === undefined) delete process.env.HC_EXPERIMENTAL;
+    else process.env.HC_EXPERIMENTAL = previous;
+  }
+}
 
 function capture() {
   let value = '';
@@ -49,13 +63,43 @@ function fixturePackage(root) {
 }
 
 test('parseArgs accepts only numeric choices and enforces goal dependency', () => {
-  assert.deepEqual(parseArgs(['--non-interactive', '--global-vault', '1', '--goals', '2']), {
-    globalVault: '1', goals: '2', nonInteractive: true, dryRun: false, help: false,
+  withExperimental('1', () => {
+    assert.deepEqual(parseArgs(['--non-interactive', '--global-vault', '1', '--goals', '2']), {
+      globalVault: '1', goals: '2', nonInteractive: true, dryRun: false, help: false,
+    });
   });
   assert.equal(parseArgs(['--global-vault', '2']).goals, '2');
   assert.throws(() => parseArgs(['--global-vault', 'yes']), UsageError);
   assert.throws(() => parseArgs(['--global-vault', '2', '--goals', '1']), /requires/);
   assert.throws(() => parseArgs(['surprise']), /unknown option/);
+});
+
+test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
+  withExperimental(undefined, () => {
+    for (const argv of [['--global-vault', '1'], ['--global-vault', '1', '--goals', '1']]) {
+      assert.throws(() => parseArgs(argv), UsageError);
+      assert.throws(() => parseArgs(argv),
+        /--global-vault and --goals are experimental in this release; set HC_EXPERIMENTAL=1/);
+    }
+    // The inert choice keeps working, so scripted installs do not break.
+    assert.deepEqual(parseArgs(['--global-vault', '2', '--goals', '2']), {
+      globalVault: '2', goals: '2', nonInteractive: false, dryRun: false, help: false,
+    });
+  });
+  withExperimental('0', () => {
+    assert.throws(() => parseArgs(['--goals', '1', '--global-vault', '1']), UsageError);
+  });
+  withExperimental('1', () => {
+    assert.equal(parseArgs(['--global-vault', '1', '--goals', '1']).goals, '1');
+  });
+});
+
+test('help documents the launch surface, not the experimental flags', () => {
+  const text = usage();
+  assert.doesNotMatch(text, /^ *--global-vault <1\|2>/m);
+  assert.doesNotMatch(text, /^ *--goals <1\|2>/m);
+  assert.match(text,
+    /Global Vault features are experimental; set HC_EXPERIMENTAL=1 to use --global-vault\/--goals\./);
 });
 
 
@@ -81,7 +125,7 @@ test('dry-run verifies the package and never invokes installer', async () => {
     assert.equal(code, 0);
     assert.equal(invoked, false);
     assert.match(output.read(), /Verified bundled backend 0\.16\.0/);
-    assert.match(output.read(), /hc ui/);
+    assert.match(output.read(), /Open any Claude Code chat and type \/goals-ui\./);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -95,15 +139,17 @@ test('the installer asks nothing and enables nothing by default', async () => {
 });
 
 test('explicit flags are still honoured for scripted installs', async () => {
-  assert.deepEqual(await resolveChoices(parseArgs(['--global-vault', '1', '--goals', '1'])),
+  assert.deepEqual(
+    await resolveChoices(withExperimental('1',
+      () => parseArgs(['--global-vault', '1', '--goals', '1']))),
     { globalVault: '1', goals: '1' });
   // The contradiction is caught while parsing, before anything is installed.
   assert.throws(() => parseArgs(['--global-vault', '2', '--goals', '1']),
     /requires --global-vault 1/);
 });
 
-// The install ends by telling the user to run `hc ui`. If their shell cannot
-// find `hc`, that instruction is wrong and the install has not landed.
+// The install ends by telling the user to open /goals-ui, and says so only
+// after any step their shell still needs to reach `hc`.
 async function installOutput({ onPath, added, present, linked }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-path-'));
   try {
@@ -132,9 +178,10 @@ async function installOutput({ onPath, added, present, linked }) {
 test('a reachable launcher gets no PATH advice', async () => {
   const text = await installOutput({ onPath: true, added: false });
   assert.match(text, /hc {11}ready in this terminal/);
-  assert.match(text, /Next — set up your Vault/);
+  assert.match(text, /Next: Open any Claude Code chat and type \/goals-ui\./);
   assert.doesNotMatch(text, /export PATH/);
-  assert.doesNotMatch(text, /Then set up/);
+  assert.doesNotMatch(text, /Then:/);
+  assert.doesNotMatch(text, /hc ui/);
 });
 
 test('an unreachable launcher says what to run now, before the next step', async () => {
@@ -143,14 +190,15 @@ test('an unreachable launcher says what to run now, before the next step', async
   assert.match(text, /new terminals get it from \/home\/u\/\.zshrc/);
   // The order is the point: an instruction the user cannot yet follow must
   // not come before the one that makes it work.
-  assert.ok(text.indexOf('export PATH') < text.indexOf('hc ui'));
+  assert.match(text, /Then: Open any Claude Code chat and type \/goals-ui\./);
+  assert.ok(text.indexOf('export PATH') < text.indexOf('/goals-ui'));
 });
 
 test('a profile that could not be edited tells the user what to add', async () => {
   const text = await installOutput({ onPath: false, added: false });
   assert.match(text, /Add this to your shell profile/);
   assert.match(text, /export PATH="\$HOME\/\.human-compact\/bin:\$PATH"/);
-  assert.ok(text.indexOf('export PATH') < text.indexOf('hc ui'));
+  assert.ok(text.indexOf('export PATH') < text.indexOf('/goals-ui'));
 });
 
 test('a profile that is already correct says the shell is stale, not the config', async () => {
