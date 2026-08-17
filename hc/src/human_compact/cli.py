@@ -1067,9 +1067,11 @@ def _chat_context_active(session_id):
         if not CS.goals_ui_invoked(session_id):
             return False
         record = _read_server_registry(CS.paths(session_id).session_dir)
-    except (OSError, ValueError, TypeError):
+        return bool(_healthy_chat_server(record, session_id))
+    except Exception:  # noqa: BLE001 - a hook may never block Claude
+        # Corrupt session state must cost the user their goal context, never
+        # their prompt: a malformed registry url alone raises out of urlparse.
         return False
-    return bool(_healthy_chat_server(record, session_id))
 
 
 def chat_hook_main(argv=None, stdin=None, stdout=None):

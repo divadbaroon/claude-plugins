@@ -3,6 +3,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -22,6 +23,20 @@ from human_compact.trajectory.ui import ThreadingHTTPServer  # noqa: E402
 
 
 SID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+
+def one_goal_tree():
+    return {
+        "version": 1,
+        "goals": [{
+            "id": "g1",
+            "title": "Connect this chat to goals",
+            "status": "in_progress",
+            "parent_goal_id": None,
+            "todos": [],
+            "prompt_ids": [],
+        }],
+    }
 
 
 class ChatCliTests(unittest.TestCase):
@@ -63,11 +78,11 @@ class ChatCliTests(unittest.TestCase):
         self.env.stop()
         self.temp.cleanup()
 
-    def _register_server(self, url="http://127.0.0.1:9012/"):
+    def _register_server(self, url="http://127.0.0.1:9012/", pid=None):
         self.cli._write_server_registry(CS.paths(SID).session_dir, {
             "schema_version": 1,
             "session_id": SID,
-            "pid": os.getpid(),
+            "pid": os.getpid() if pid is None else pid,
             "url": url,
             "started_at": 0,
         })
@@ -173,17 +188,7 @@ class ChatCliTests(unittest.TestCase):
         spawn.assert_called_once_with(SID)
 
     def test_prompt_hook_withholds_goal_context_without_a_live_workspace(self):
-        CS.save_goals(SID, {
-            "version": 1,
-            "goals": [{
-                "id": "g1",
-                "title": "Connect this chat to goals",
-                "status": "in_progress",
-                "parent_goal_id": None,
-                "todos": [],
-                "prompt_ids": [],
-            }],
-        }, {"items": []})
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
         CS.mark_goals_ui_invoked(SID)
         self.assertTrue(CS.paths(SID).goal_context.exists())
         payload = {
@@ -201,6 +206,39 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", output.getvalue())
 
+    def test_prompt_hook_survives_a_corrupt_server_registry(self):
+        CS.save_goals(SID, one_goal_tree(), {"items": []})
+        CS.mark_goals_ui_invoked(SID)
+        # A malformed IPv6 url raises out of urlparse, above the health
+        # probe's own guard; the live pid gets the record that far.
+        self._register_server(url="http://[::1")
+        payload = {
+            "session_id": SID,
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Continue from the plan",
+            "cwd": "/repo",
+        }
+        output = io.StringIO()
+
+        code = self.cli.chat_hook_main(
+            [], stdin=io.StringIO(json.dumps(payload)), stdout=output
+        )
+
+        self.assertEqual(0, code)
+        self.assertEqual("", output.getvalue())
+
+    def test_chat_context_active_requires_opt_in_and_a_live_workspace(self):
+        dead = subprocess.Popen([sys.executable, "-c", ""])
+        dead.wait()
+        self.assertFalse(self.cli._chat_context_active(SID))
+        CS.mark_goals_ui_invoked(SID)
+        self.assertFalse(self.cli._chat_context_active(SID))
+        self._register_server(pid=dead.pid)
+        self.assertFalse(self.cli._chat_context_active(SID))
+        self._register_server()
+        with mock.patch.object(self.cli, "_healthy_chat_server", return_value=True):
+            self.assertTrue(self.cli._chat_context_active(SID))
+
     def test_chat_ui_marks_the_session_as_goals_ui_invoked(self):
         self._register_server()
         with (mock.patch.object(self.cli, "_healthy_chat_server", return_value=True),
@@ -216,8 +254,15 @@ class ChatCliTests(unittest.TestCase):
         self.assertTrue(first)
         self.assertTrue(CS.goals_ui_invoked(SID))
 
+        # _now() has one-second granularity, so back-date the stamp: only a
+        # real first-write-wins guard leaves an older timestamp standing.
+        earlier = "2020-01-01T00:00:00+00:00"
+        seeded = CS.load_manifest(SID)
+        seeded["goals_ui_invoked_at"] = earlier
+        CS._atomic_json(CS.paths(SID).manifest, seeded)
+
         CS.mark_goals_ui_invoked(SID)
-        self.assertEqual(first, CS.load_manifest(SID).get("goals_ui_invoked_at"))
+        self.assertEqual(earlier, CS.load_manifest(SID).get("goals_ui_invoked_at"))
 
     def test_ui_expansion_hook_launches_without_skill_shell_execution(self):
         payload = {
