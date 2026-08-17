@@ -509,3 +509,39 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertIn("# Decisions\n- keep sqlite\n\n- use WAL", out)
         self.assertIn("# Decisions\n- a later thought", out)
         self.assertEqual(2, out.count("# Decisions"))
+
+    def test_a_fence_the_user_has_not_closed_freezes_the_document(self):
+        doc = "# Decisions\n- keep sqlite\n\n```bash\nnpm i\n"
+
+        self.assertEqual(doc, GM.ensure_doc_sections(doc))
+        self.assertEqual(doc, GM.append_to_section(doc, "Decisions", "- use WAL"))
+        self.assertEqual(doc, GM.append_to_section(doc, "Built", "- the thing"))
+        self.assertEqual(doc, GM.join_doc(GM.split_doc(doc)))
+
+    def test_repeated_appends_into_an_open_fence_never_grow_the_document(self):
+        doc = "# Decisions\n- keep sqlite\n\n```bash\nnpm i\n"
+        goals = {"version": 1, "goals": [dict(goal("g1"), notes=doc)]}
+        op = {"op": "append_section", "goal_id": "g1", "section": "decisions",
+              "text": "- use WAL"}
+
+        for _ in range(4):
+            self.assertEqual([], GM.apply_ops(goals, {"items": []}, [op]))
+            self.assertEqual(doc, goals["goals"][0]["notes"])
+
+    def test_closing_the_fence_lets_the_next_append_land_exactly_once(self):
+        goals = {"version": 1, "goals": [dict(
+            goal("g1"), notes="# Decisions\n- keep sqlite\n\n```bash\nnpm i\n")]}
+        op = {"op": "append_section", "goal_id": "g1", "section": "decisions",
+              "text": "- use WAL"}
+        GM.apply_ops(goals, {"items": []}, [op])
+
+        goals["goals"][0]["notes"] += "```\n"       # the user closes it
+        changes = GM.apply_ops(goals, {"items": []}, [op])
+
+        notes = goals["goals"][0]["notes"]
+        self.assertEqual(1, len(changes))
+        self.assertEqual(1, notes.count("- use WAL"))
+        self.assertIn("```bash\nnpm i\n```\n\n- use WAL", notes)
+        self.assertEqual("- keep sqlite\n\n```bash\nnpm i\n```\n\n- use WAL",
+                         GM.section_body(notes, "Decisions"))
+        self.assertEqual([], GM.apply_ops(goals, {"items": []}, [op]))

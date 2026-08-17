@@ -59,12 +59,16 @@ def default_doc() -> str:
 
 
 def _scan_doc(notes):
-    """Locate each section as a line span: ``(title, start, end)``.
+    """Locate each section as a line span, and report an unterminated fence.
 
-    Fence-aware on purpose. A ``# install deps`` comment at column 0 inside a
-    fenced code block is not a heading, and treating it as one would tear the
-    user's code block across two sections and leave the fence unterminated --
-    in state that is persisted and injected into later sessions.
+    Returns ``(lines, spans, open_fence)`` where each span is
+    ``(title, start, end)``. Fence-aware on purpose: a ``# install deps``
+    comment at column 0 inside a fenced code block is not a heading, and
+    treating it as one would tear the user's code block across two sections
+    and leave the fence unterminated -- in state that is persisted and
+    injected into later sessions. ``open_fence`` is the same scan's answer to
+    "does this document end inside a code block", so callers never have to
+    parse it a second time to find out.
     """
     lines = str(notes or "").splitlines()
     fence, heads = None, []
@@ -94,7 +98,7 @@ def _scan_doc(notes):
     for position, (title, index) in enumerate(heads):
         following = heads[position + 1][1] if position + 1 < len(heads) else len(lines)
         spans.append((title, index + 1, following))
-    return lines, spans
+    return lines, spans, fence is not None
 
 
 def split_doc(notes):
@@ -106,7 +110,7 @@ def split_doc(notes):
     ``##`` heading is body text belonging to the section above it. Text written
     before the first header keeps the ``""`` title.
     """
-    lines, spans = _scan_doc(notes)
+    lines, spans, _ = _scan_doc(notes)
     return [(title, "\n".join(lines[start:end]).strip("\n"))
             for title, start, end in spans]
 
@@ -146,7 +150,14 @@ def ensure_doc_sections(notes: str) -> str:
     document = str(notes or "")
     if not document.strip():
         return default_doc()
-    present = {title for title, _ in split_doc(document)}
+    _, spans, open_fence = _scan_doc(document)
+    if open_fence:
+        # A fence the user has not closed yet runs to the end of the document,
+        # so headers spliced at EOF would land inside their code block, where
+        # the next scan cannot see them -- and every refresh would append them
+        # again. Their unfinished text is theirs to finish; wait for it.
+        return document
+    present = {span[0] for span in spans}
     missing = [title for title in DOC_SECTIONS if title not in present]
     if not missing:
         return document
@@ -162,13 +173,17 @@ def append_to_section(notes: str, section_title: str, text: str) -> str:
     is dropped, so re-running inference over the same evidence is a no-op
     rather than a growing pile of duplicates. Edits land as line surgery on the
     document rather than a re-render, so untouched sections stay byte-identical
-    down to their own spacing.
+    down to their own spacing. A document ending inside an unterminated code
+    fence is left exactly as it is: there is no position in it that is provably
+    outside the user's code block.
     """
     document = ensure_doc_sections(notes)
     block = str(text or "").strip()
     if not block:
         return document
-    lines, spans = _scan_doc(document)
+    lines, spans, open_fence = _scan_doc(document)
+    if open_fence:
+        return document          # never write inside an unterminated fence
     span = next((s for s in spans if s[0] == section_title), None)
     if span is None:
         fresh = [line for line in block.splitlines() if line.strip()]
