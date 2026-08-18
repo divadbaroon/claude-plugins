@@ -1725,7 +1725,9 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-left")).to_be_visible(
                     timeout=10_000)
-                chips_before = page.locator(".hc-chip").first.bounding_box()
+                # The pills live in the header now, so the line the banner
+                # takes is measured against the columns under it.
+                rail_before = page.locator(".hc-rail-left").bounding_box()
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
@@ -1742,17 +1744,17 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertLess(box["x"], 20, "a bar starts at the edge")
                 self.assertGreater(box["width"], 1_000, "a bar spans the page")
                 self.assertLess(box["y"], 80, "and sits under the header")
-                # It has its own line: the chips move down for it rather
+                # It has its own line: the columns move down for it rather
                 # than being painted over.
-                moved = page.locator(".hc-chip").first.bounding_box()
-                self.assertGreater(moved["y"], chips_before["y"] + 20)
+                moved = page.locator(".hc-rail-left").bounding_box()
+                self.assertGreater(moved["y"], rail_before["y"] + 20)
                 self.assertGreater(moved["y"], box["y"] + box["height"] - 2)
 
                 # And the columns give the line back when it goes.
                 banner.locator(".hc-notice-close").click()
                 expect(banner).to_have_count(0, timeout=2_000)
-                back = page.locator(".hc-chip").first.bounding_box()
-                self.assertAlmostEqual(chips_before["y"], back["y"], delta=2)
+                back = page.locator(".hc-rail-left").bounding_box()
+                self.assertAlmostEqual(rail_before["y"], back["y"], delta=2)
             finally:
                 browser.close()
 
@@ -2553,6 +2555,87 @@ class DeletedGoalBrowserTests(unittest.TestCase):
         kept = [g for g in state["goals"] if g["id"] == "g2"]
         self.assertEqual(1, len(kept), "the record itself is kept, not erased")
         self.assertEqual("abandoned", kept[0]["status"])
+
+
+class FullBleedWorkspaceBrowserTests(unittest.TestCase):
+    """Three columns fill the window; the reader sizes or hides the rails."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "one goal")], [])
+
+    GEO = """() => {
+        const r = (s) => { const e = document.querySelector(s);
+                           return e ? e.getBoundingClientRect().toJSON() : null; };
+        return { hdr: r('.hc>div:first-child'), l: r('.hc-rail-left'),
+                 m: r('.hc-main'), rt: r('.hc-rail-right'),
+                 pills: r('.hc-titlerow'), brand: r('.hc-brand'),
+                 brandFont: getComputedStyle(document.querySelector('.hc-brand')).fontFamily };
+    }"""
+
+    def test_the_columns_fill_the_window_and_the_pills_ride_in_the_header(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=chrome, headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector("text=one goal", timeout=10000)
+                page.wait_for_timeout(1500)
+                g = page.evaluate(self.GEO)
+                # Header, then columns from its bottom edge to the window's.
+                self.assertEqual((0, 0, 1440, 37), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
+                for col in ("l", "m", "rt"):
+                    self.assertEqual(37, round(g[col]["y"]), col)
+                    self.assertEqual(900, round(g[col]["bottom"]), col)
+                # Flush: left rail at 0, main starts where it ends, right
+                # rail ends at the window.
+                self.assertEqual(0, round(g["l"]["x"]))
+                self.assertEqual(round(g["l"]["right"]), round(g["m"]["x"]))
+                self.assertEqual(round(g["m"]["right"]), round(g["rt"]["x"]))
+                self.assertEqual(1440, round(g["rt"]["right"]))
+                # The pills sit inside the header, after the brand; the brand
+                # is set in a serif.
+                self.assertLess(g["pills"]["y"], 37)
+                self.assertGreater(g["pills"]["x"], g["brand"]["right"])
+                self.assertIn("Georgia", g["brandFont"])
+
+                # Drag the goals divider 80px right; the rail follows.
+                edge = g["l"]["right"]
+                page.mouse.move(edge, 400); page.mouse.down()
+                page.mouse.move(edge + 40, 400); page.mouse.move(edge + 80, 400)
+                page.mouse.up()
+                self.assertEqual(round(edge) + 80, round(page.evaluate(self.GEO)["l"]["width"]))
+                # Double-click the prompt divider hides that rail; the
+                # document takes the space.
+                g = page.evaluate(self.GEO)
+                page.mouse.dblclick(g["rt"]["x"], 400)
+                g = page.evaluate(self.GEO)
+                self.assertEqual(0, g["rt"]["width"])
+                self.assertEqual(1440, round(g["m"]["right"]))
+                # The header toggle brings it back.
+                page.click('[data-hc-panel="right"]')
+                self.assertEqual(330, round(page.evaluate(self.GEO)["rt"]["width"]))
+                # And the layout is the reader's own: it survives a reload.
+                page.click('[data-hc-panel="left"]')
+                page.reload(wait_until="domcontentloaded")
+                # The goals rail is hidden now, so wait on the header.
+                page.wait_for_selector(".hc-brand", timeout=10000)
+                page.wait_for_timeout(1500)
+                g = page.evaluate(self.GEO)
+                self.assertEqual(0, g["l"]["width"])
+                self.assertEqual(0, round(g["m"]["x"]))
+                self.assertEqual(330, round(g["rt"]["width"]))
+            finally:
+                browser.close()
 
 
 class ConversationGoalAttributionTests(unittest.TestCase):

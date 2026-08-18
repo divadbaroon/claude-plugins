@@ -1670,26 +1670,41 @@
       // On the root, not on .hc: the banner is parented on <body>, outside
       // the artifact's subtree, so anything declared inside .hc never
       // reaches it. The theme is mirrored onto the root for the same reason.
-      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-top:116px}",
+      // --hc-top is the header's height: the columns take every pixel under
+      // it. --hc-left/--hc-right are the rail widths; the bridge writes them
+      // on the root when the reader drags a divider, and the defaults here
+      // are the widths the shell shipped with.
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-top:37px;--hc-left:300px;--hc-right:330px}",
       "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922;--hc-noticetxt:#8aa495}",
       // A banner is not an overlay: it takes its own line, and the columns
       // give it back when it goes.
-      "[data-hc-launch][data-hc-notice]{--hc-top:150px}",
+      "[data-hc-launch][data-hc-notice]{--hc-top:71px}",
       "[data-hc-launch][data-hc-notice] .hc>div:nth-child(2){padding-top:34px!important}",
       // The page is the workspace: it fills the window and does not scroll
       // as a whole -- each column scrolls in its own right, the way the
       // screenshots read.
-      "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0 14px 12px!important}",
-      // Header bar: brand, chips, session.
-      "[data-hc-launch] .hc>div:first-child{padding:9px 16px!important;border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch] .hc-brand{font:700 13px 'Source Code Pro',ui-monospace,monospace!important;letter-spacing:.2px}",
-      "[data-hc-launch] .hc-brand::before{content:'\\25ae';color:var(--acc);margin-right:7px}",
+      // Full bleed: no outer padding, so the columns meet the window on
+      // every side and each other on a shared 1px line.
+      "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0!important}",
+      // Header bar: brand, status pills, panel toggles, session. A fixed
+      // height, so the columns can be sized against it exactly.
+      "[data-hc-launch] .hc>div:first-child{height:var(--hc-top);box-sizing:border-box;padding:0 16px!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch][data-hc-notice] .hc>div:first-child{height:37px}",
+      // The product name is the one serif on the page; the marker before
+      // it and everything after it stay in the workspace's monospace.
+      "[data-hc-launch] .hc-brand{font:600 15px Georgia,'Iowan Old Style','Times New Roman',serif!important;letter-spacing:.1px;line-height:1}",
+      "[data-hc-launch] .hc-brand::before{content:'\\25ae';color:var(--acc);margin-right:7px;font:700 13px 'Source Code Pro',ui-monospace,monospace;vertical-align:1px}",
       "[data-hc-launch] .hc-session{font:11px 'Source Code Pro',monospace;color:var(--mut)}",
       "[data-hc-launch] .hc-session:not(:empty)::before{content:'\\25cf';color:var(--hc-ok);margin-right:6px;font-size:9px;vertical-align:1px}",
       "[data-hc-launch] .hc-updated{color:var(--fnt)}",
-      // The title row keeps the chips and loses the page heading: a chat
-      // workspace has one page, and it is already named in the header.
-      "[data-hc-launch] .hc-titlerow{margin-top:0;padding:9px 4px 8px!important;align-items:center!important}",
+      // The title row loses the page heading -- a chat workspace has one
+      // page, already named in the header -- and its status pills move up
+      // INTO the header, so the row itself takes no height. The row is not
+      // a child of the header (the artifact renders it in the body), and
+      // moving the node would be undone by the next render, so it is lifted
+      // by position instead: fixed at the top, just after the brand. The
+      // bridge measures the brand and writes --hc-pills-left.
+      "[data-hc-launch] .hc-titlerow{position:fixed;top:0;left:var(--hc-pills-left,120px);height:37px;margin:0;padding:0!important;align-items:center!important;z-index:20}",
       "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
       "[data-hc-launch] .hc-chiprow{gap:6px!important}",
       "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
@@ -1700,10 +1715,28 @@
       // Three columns. The artifact's own flex row becomes the shell; the
       // prompt rail is emitted before the inspector and ordered after it,
       // so nothing has to be re-parented after a render.
-      "[data-hc-launch] .hc-shell{gap:12px!important;align-items:stretch!important;margin-top:0!important}",
-      "[data-hc-launch] .hc-rail-left{flex:0 0 300px!important;height:calc(100vh - var(--hc-top))!important;padding:0 0 6px!important;border-radius:6px}",
-      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border-radius:6px;padding:14px 20px 18px!important}",
-      "[data-hc-launch] .hc-rail-right{order:3;flex:0 0 330px;display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:1px solid var(--bd);border-radius:6px;background:transparent;padding:0 0 12px}",
+      // No gap between columns and no border radius: each rail keeps one
+      // border, the one it shares with the document, and the document
+      // itself has none -- so between any two columns there is exactly one
+      // 1px line, and none against the window.
+      "[data-hc-launch] .hc-shell{gap:0!important;align-items:stretch!important;margin-top:0!important}",
+      "[data-hc-launch] .hc-rail-left{position:relative;flex:0 0 var(--hc-left)!important;height:calc(100vh - var(--hc-top))!important;padding:0 0 6px!important;border-width:0 1px 0 0!important;border-radius:0!important}",
+      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border:0!important;border-radius:0!important;padding:14px 20px 18px!important}",
+      "[data-hc-launch] .hc-rail-right{position:relative;order:3;flex:0 0 var(--hc-right);display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:solid var(--bd);border-width:0 0 0 1px;border-radius:0;background:transparent;padding:0 0 12px}",
+      // Either rail can be hidden -- from the header toggles, or by
+      // double-clicking its divider -- and the document takes the space.
+      "[data-hc-launch][data-hc-hide-left] .hc-rail-left{display:none!important}",
+      "[data-hc-launch][data-hc-hide-right] .hc-rail-right{display:none!important}",
+      // The dividers are drag handles: an 8px strip astride each shared
+      // line. Pseudo-elements, so no node is added for a render to drop;
+      // the bridge hit-tests the pointer against the rail's edge.
+      "[data-hc-launch] .hc-rail-left::after{content:'';position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}",
+      "[data-hc-launch] .hc-rail-right::before{content:'';position:absolute;top:0;left:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}",
+      "[data-hc-launch][data-hc-dragging]{cursor:col-resize;user-select:none}",
+      // The two panel toggles in the header, before the theme switch.
+      "[data-hc-launch] .hc-panels{order:-1;display:inline-flex;align-items:center;gap:8px;padding-right:8px;border-right:1px solid var(--bd);align-self:center}",
+      "[data-hc-launch] .hc-panel{display:inline-flex;cursor:pointer;color:var(--fnt);user-select:none}",
+      "[data-hc-launch] .hc-panel:hover,[data-hc-launch] .hc-panel-on{color:var(--ink)}",
       // Rail headings, shared by both rails.
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
@@ -1755,7 +1788,7 @@
       // The session banner. Same nodes, same timers, same close button as
       // the toast it replaces -- a bar under the header rather than a card
       // in the corner, because it reports on the whole workspace.
-      "[data-hc-launch] .hc-notice-stack{position:fixed;top:40px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
+      "[data-hc-launch] .hc-notice-stack{position:fixed;top:37px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
       "[data-hc-launch] .hc-notice{width:auto;max-width:none;border:none;border-bottom:1px solid var(--hc-okbd);border-left:none;border-radius:0;background:var(--hc-okbg);box-shadow:none;display:flex;align-items:baseline;gap:10px;padding:7px 34px 7px 16px}",
       "[data-hc-launch] .hc-notice-title{color:var(--hc-ok);flex:none}",
       "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
@@ -2542,11 +2575,194 @@
 
   var injectionState = null;
 
+  // --- the two rails: how wide, and whether shown ---------------------------
+  // The reader's own layout, kept per origin like the theme is. Widths are
+  // CSS variables on the root and hidden-ness is a root attribute, so the
+  // stylesheet above does the drawing and a re-render of the artifact's
+  // tree cannot lose either. Nothing here touches the artifact's nodes.
+  var LAYOUT_KEY = "hc-launch-layout";
+  var RAIL_MIN = { left: 200, right: 240 };
+  var RAIL_MAX = { left: 480, right: 520 };
+  var RAIL_DEFAULT = { left: 300, right: 330 };
+  var layout = null;
+
+  function clampWidth(side, px) {
+    var n = Number(px);
+    if (!isFinite(n)) return RAIL_DEFAULT[side];
+    return Math.round(Math.min(RAIL_MAX[side], Math.max(RAIL_MIN[side], n)));
+  }
+
+  function loadLayout() {
+    if (layout) return layout;
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}") || {}; }
+    catch (e) { saved = {}; }
+    layout = {
+      left: clampWidth("left", saved.left != null ? saved.left : RAIL_DEFAULT.left),
+      right: clampWidth("right", saved.right != null ? saved.right : RAIL_DEFAULT.right),
+      hideLeft: saved.hideLeft === true,
+      hideRight: saved.hideRight === true,
+    };
+    return layout;
+  }
+
+  function saveLayout() {
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(loadLayout())); }
+    catch (e) { /* private mode: the layout lasts for the page */ }
+  }
+
+  function applyLayout() {
+    var root = document.documentElement;
+    if (!root || !root.style || typeof root.style.setProperty !== "function"
+        || !root.setAttribute) return false;
+    var l = loadLayout();
+    root.style.setProperty("--hc-left", l.left + "px");
+    root.style.setProperty("--hc-right", l.right + "px");
+    if (l.hideLeft) root.setAttribute("data-hc-hide-left", "");
+    else root.removeAttribute("data-hc-hide-left");
+    if (l.hideRight) root.setAttribute("data-hc-hide-right", "");
+    else root.removeAttribute("data-hc-hide-right");
+    return true;
+  }
+
+  function setRailWidth(side, px) {
+    var l = loadLayout();
+    l[side] = clampWidth(side, px);
+    saveLayout();
+    applyLayout();
+    return l[side];
+  }
+
+  function setRailHidden(side, hidden) {
+    var l = loadLayout();
+    l[side === "left" ? "hideLeft" : "hideRight"] = !!hidden;
+    saveLayout();
+    applyLayout();
+    renderPanelToggles();
+    return !!hidden;
+  }
+
+  function toggleRail(side) {
+    var l = loadLayout();
+    return setRailHidden(side, !(side === "left" ? l.hideLeft : l.hideRight));
+  }
+
+  var PANEL_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"2\"></rect><path d=\"M{X} 4v16\"></path></svg>";
+
+  // Two toggles in the header, one per rail. Built into the slot the
+  // header patch leaves; only their on/off class changes after that. The
+  // click is handled at the document, not on the node: the artifact
+  // re-materializes its subtree on render, which drops listeners but keeps
+  // attributes -- the same reason the drag below is document-level.
+  function renderPanelToggles() {
+    var slot = document.querySelector(".hc-panels");
+    if (!slot) return false;
+    var l = loadLayout();
+    if (!slot.children || !slot.children.length) {
+      [["left", "9", "goals rail"], ["right", "15", "prompt rail"]].forEach(function (spec) {
+        var btn = document.createElement("span");
+        btn.className = "hc-panel";
+        btn.setAttribute("data-hc-panel", spec[0]);
+        btn.title = "Show or hide the " + spec[2];
+        btn.innerHTML = PANEL_ICON.replace("{X}", spec[1]);
+        slot.appendChild(btn);
+      });
+    }
+    var kids = slot.children || [];
+    for (var i = 0; i < kids.length; i++) {
+      var side = kids[i].getAttribute("data-hc-panel");
+      var on = side === "left" ? !l.hideLeft : !l.hideRight;
+      kids[i].className = "hc-panel" + (on ? " hc-panel-on" : "");
+    }
+    return true;
+  }
+
+  // The status pills sit in the header just after the brand. The row they
+  // live in is fixed-positioned by the stylesheet; this measures where the
+  // brand ends so the offset follows the font rather than a guess.
+  function placePills() {
+    var root = document.documentElement;
+    var brand = document.querySelector(".hc-brand");
+    if (!root || !root.style || typeof root.style.setProperty !== "function"
+        || !brand || !brand.getBoundingClientRect) return false;
+    var box = brand.getBoundingClientRect();
+    if (!box || !box.width) return false;
+    var left = Math.round(box.right + 18);
+    var want = left + "px";
+    if (root.style.getPropertyValue("--hc-pills-left") === want) return false;
+    root.style.setProperty("--hc-pills-left", want);
+    return true;
+  }
+
+  // Which divider, if any, the pointer is on: within 4px of the goals
+  // rail's right edge or the prompt rail's left edge. The handles are the
+  // rails' own pseudo-elements, so the event target is the rail itself.
+  function dividerAt(x, y) {
+    var pairs = [[".hc-rail-left", "left"], [".hc-rail-right", "right"]];
+    for (var i = 0; i < pairs.length; i++) {
+      var el = document.querySelector(pairs[i][0]);
+      if (!el || !el.getBoundingClientRect) continue;
+      var r = el.getBoundingClientRect();
+      if (!r.width || y < r.top || y > r.bottom) continue;
+      var edge = pairs[i][1] === "left" ? r.right : r.left;
+      if (Math.abs(x - edge) <= 4) return { side: pairs[i][1], rect: r };
+    }
+    return null;
+  }
+
+  var dragInstalled = false;
+
+  function installRailDrag() {
+    if (dragInstalled || !document.addEventListener) return false;
+    dragInstalled = true;
+    var drag = null;
+    document.addEventListener("click", function (e) {
+      var node = e.target;
+      while (node && node !== document && !(node.getAttribute && node.getAttribute("data-hc-panel"))) {
+        node = node.parentNode;
+      }
+      if (!node || node === document) return;
+      e.preventDefault();
+      toggleRail(node.getAttribute("data-hc-panel"));
+    });
+    document.addEventListener("mousedown", function (e) {
+      if (e.button !== 0) return;
+      var hit = dividerAt(e.clientX, e.clientY);
+      if (!hit) return;
+      drag = { side: hit.side, rect: hit.rect, moved: false };
+      document.documentElement.setAttribute("data-hc-dragging", "");
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", function (e) {
+      if (!drag) return;
+      drag.moved = true;
+      var px = drag.side === "left" ? e.clientX - drag.rect.left
+                                    : drag.rect.right - e.clientX;
+      setRailWidth(drag.side, px);
+    });
+    document.addEventListener("mouseup", function () {
+      if (!drag) return;
+      drag = null;
+      document.documentElement.removeAttribute("data-hc-dragging");
+    });
+    document.addEventListener("dblclick", function (e) {
+      var hit = dividerAt(e.clientX, e.clientY);
+      if (!hit) return;
+      e.preventDefault();
+      setRailHidden(hit.side, true);
+    });
+    return true;
+  }
+
   function watchLaunchSurface() {
     function sweep() {
       if (serverState.scope !== "chat") return;
       applyLaunchSkin();
       mirrorRootState();
+      applyLayout();
+      placePills();
+      renderPanelToggles();
+      installRailDrag();
       renderSessionChip();
       renderInjection(injectionState);
     }
@@ -2799,7 +3015,7 @@
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-session\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -3508,6 +3724,12 @@
     loadDetailForTest: loadDetail,
     applyLaunchSkin: applyLaunchSkin,
     launchCss: function () { return LAUNCH_CSS; },
+    railLayout: function () { return loadLayout(); },
+    setRailWidth: setRailWidth,
+    setRailHidden: setRailHidden,
+    toggleRail: toggleRail,
+    applyLayout: applyLayout,
+    renderPanelToggles: renderPanelToggles,
     injectionLines: injectionLines,
     renderInjection: renderInjection,
     renderSessionChip: renderSessionChip,
