@@ -271,6 +271,212 @@ class LaunchDressedTests(BridgeTestCase):
         self.assertFalse(self.ask("chat", True, ""))
 
 
+class TodoListModelTests(BridgeTestCase):
+    """The nested list the workspace rail edits, as text on both sides.
+
+    The list is a section of the goal's markdown document, so every operation
+    has to survive the round trip through those lines -- four spaces to the
+    level, "- " to the bullet.
+    """
+
+    def model(self, expression, body="", **rest):
+        return self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var items = L.parse(%s);"
+            "out = (%s);" % (json.dumps(body), expression), **rest)
+
+    # --- text in, text out -------------------------------------------------
+
+    def test_indentation_becomes_depth_and_survives_the_round_trip(self):
+        body = "- one\n- two\n    - two a\n        - deep\n- three\n"
+        self.assertEqual(
+            [["one", 0], ["two", 0], ["two a", 1], ["deep", 2], ["three", 0]],
+            self.model("items.map(function (i) { return [i.text, i.depth]; })",
+                       body))
+        self.assertEqual(body, self.model("L.serialize(items)", body))
+
+    def test_a_line_that_is_not_a_bullet_is_read_as_one(self):
+        # Inference and hand edits both reach this section. A stray prose line
+        # must not vanish, and must not become a second kind of row.
+        self.assertEqual([["loose note", 0]],
+                         self.model("items.map(function (i) "
+                                    "{ return [i.text, i.depth]; })",
+                                    "loose note\n"))
+
+    def test_a_depth_jump_in_the_text_is_pulled_back_to_one_level(self):
+        # Nothing can be two levels below its parent; a hand-typed eight-space
+        # line under a top-level bullet is a child, not a grandchild.
+        self.assertEqual([["one", 0], ["under", 1]],
+                         self.model("items.map(function (i) "
+                                    "{ return [i.text, i.depth]; })",
+                                    "- one\n        - under\n"))
+
+    def test_an_empty_section_is_one_empty_row_to_type_into(self):
+        self.assertEqual([["", 0]],
+                         self.model("items.map(function (i) "
+                                    "{ return [i.text, i.depth]; })", ""))
+
+    def test_a_list_of_one_empty_row_serializes_to_nothing(self):
+        # Otherwise opening a goal would write "- " into the document of every
+        # goal the reader merely looked at.
+        self.assertEqual("", self.model("L.serialize(items)", ""))
+
+    # --- enter -------------------------------------------------------------
+
+    def test_enter_on_a_written_row_opens_a_sibling_below_it(self):
+        self.assertEqual(
+            [[["one", 0], ["", 0], ["two", 0]], 1],
+            self.model("(function () { var r = L.enter(items, 0);"
+                       "  return [r.items.map(function (i) "
+                       "    { return [i.text, i.depth]; }), r.index]; })()",
+                       "- one\n- two\n"))
+
+    def test_enter_in_the_middle_of_a_row_carries_the_tail_down(self):
+        self.assertEqual(
+            [["one", 0], ["two", 0]],
+            self.model("L.enter(items, 0, 3).items.map(function (i) "
+                       "{ return [i.text, i.depth]; })", "- onetwo\n"))
+
+    def test_enter_on_an_empty_nested_row_outdents_it_instead(self):
+        # Hudson's rule: hit enter twice and you are back out a level.
+        self.assertEqual(
+            [[["one", 0], ["", 0]], 1],
+            self.model("(function () { var r = L.enter(items, 1);"
+                       "  return [r.items.map(function (i) "
+                       "    { return [i.text, i.depth]; }), r.index]; })()",
+                       "- one\n    - \n"))
+
+    def test_enter_on_an_empty_top_level_row_does_nothing_at_all(self):
+        # No bullet without text may make another bullet without text.
+        self.assertEqual(
+            [[["one", 0], ["", 0]], 1],
+            self.model("(function () { var r = L.enter(items, 1);"
+                       "  return [r.items.map(function (i) "
+                       "    { return [i.text, i.depth]; }), r.index]; })()",
+                       "- one\n- \n"))
+
+    # --- tab and shift-tab -------------------------------------------------
+
+    def test_tab_indents_under_the_row_above(self):
+        self.assertEqual(
+            [["one", 0], ["two", 1]],
+            self.model("L.indent(items, 1).items.map(function (i) "
+                       "{ return [i.text, i.depth]; })", "- one\n- two\n"))
+
+    def test_the_first_row_can_never_be_indented(self):
+        self.assertEqual(
+            [["one", 0]],
+            self.model("L.indent(items, 0).items.map(function (i) "
+                       "{ return [i.text, i.depth]; })", "- one\n"))
+
+    def test_tab_cannot_skip_a_level(self):
+        self.assertEqual(
+            [["one", 0], ["two", 1]],
+            self.model("L.indent(L.indent(items, 1).items, 1).items"
+                       ".map(function (i) { return [i.text, i.depth]; })",
+                       "- one\n- two\n"))
+
+    def test_indenting_a_row_takes_its_children_with_it(self):
+        self.assertEqual(
+            [["one", 0], ["two", 1], ["two a", 2]],
+            self.model("L.indent(items, 1).items.map(function (i) "
+                       "{ return [i.text, i.depth]; })",
+                       "- one\n- two\n    - two a\n"))
+
+    def test_shift_tab_outdents_and_stops_at_the_left_margin(self):
+        self.assertEqual(
+            [["one", 0], ["two", 0]],
+            self.model("L.outdent(L.outdent(items, 1).items, 1).items"
+                       ".map(function (i) { return [i.text, i.depth]; })",
+                       "- one\n    - two\n"))
+
+    # --- backspace ---------------------------------------------------------
+
+    def test_backspace_at_the_start_of_a_written_row_joins_it_upward(self):
+        self.assertEqual(
+            [[["onetwo", 0]], 0, 3],
+            self.model("(function () { var r = L.backspace(items, 1, 0);"
+                       "  return [r.items.map(function (i) "
+                       "    { return [i.text, i.depth]; }), r.index,"
+                       "    r.caret]; })()", "- one\n- two\n"))
+
+    def test_backspace_on_an_empty_nested_row_outdents_before_deleting(self):
+        self.assertEqual(
+            [["one", 0], ["", 0]],
+            self.model("L.backspace(items, 1, 0).items.map(function (i) "
+                       "{ return [i.text, i.depth]; })", "- one\n    - \n"))
+
+    def test_backspace_on_an_empty_last_row_removes_it(self):
+        self.assertEqual(
+            [[["one", 0]], 0],
+            self.model("(function () { var r = L.backspace(items, 1, 0);"
+                       "  return [r.items.map(function (i) "
+                       "    { return [i.text, i.depth]; }), r.index]; })()",
+                       "- one\n- \n"))
+
+    def test_backspace_inside_a_row_is_left_to_the_browser(self):
+        self.assertEqual(
+            None,
+            self.model("L.backspace(items, 1, 2)", "- one\n- two\n"))
+
+    def test_the_only_row_is_never_removed(self):
+        self.assertEqual(
+            [["", 0]],
+            self.model("L.backspace(items, 0, 0).items.map(function (i) "
+                       "{ return [i.text, i.depth]; })", ""))
+
+
+class TodoSectionTests(BridgeTestCase):
+    """Reading and replacing one section of the goal document, in the browser.
+
+    The rail owns the TODOs section and nothing else: every other heading the
+    reader or inference wrote has to come back byte for byte.
+    """
+
+    DOC = ("# Objective\nShip it\n\n# TODOs\n- one\n    - one a\n\n"
+           "# Decisions\n- keep sqlite\n")
+
+    def read(self, doc=None):
+        return self.run_js(
+            "out = window.__hcPromptUI.todoDoc.read(%s);"
+            % json.dumps(self.DOC if doc is None else doc))
+
+    def write(self, body, doc=None):
+        return self.run_js(
+            "out = window.__hcPromptUI.todoDoc.write(%s, %s);"
+            % (json.dumps(self.DOC if doc is None else doc), json.dumps(body)))
+
+    def test_it_reads_only_the_todos_section(self):
+        self.assertEqual("- one\n    - one a\n", self.read())
+
+    def test_a_document_without_the_section_reads_empty(self):
+        self.assertEqual("", self.read("# Objective\nShip it\n"))
+
+    def test_writing_leaves_every_other_section_byte_for_byte(self):
+        out = self.write("- two\n")
+        self.assertIn("# Objective\nShip it\n", out)
+        self.assertIn("# Decisions\n- keep sqlite\n", out)
+        self.assertEqual("- two\n", self.read(out))
+
+    def test_writing_into_a_document_that_has_no_section_adds_it(self):
+        out = self.write("- two\n", "# Objective\nShip it\n")
+        self.assertEqual("- two\n", self.read(out))
+        self.assertIn("# Objective\nShip it\n", out)
+
+    def test_a_heading_inside_a_fence_is_not_a_heading(self):
+        # The reader may paste a shell snippet under TODOs. Splitting on a
+        # "# comment" at column 0 would tear their fence in half, in state
+        # that is persisted and injected into later sessions.
+        doc = ("# TODOs\n- run it\n```sh\n# install deps\nnpm i\n```\n\n"
+               "# Decisions\n- keep sqlite\n")
+        self.assertEqual("- run it\n```sh\n# install deps\nnpm i\n```\n",
+                         self.run_js("out = window.__hcPromptUI.todoDoc.read(%s);"
+                                     % json.dumps(doc)))
+
+    def test_the_round_trip_of_an_untouched_section_changes_nothing(self):
+        self.assertEqual(self.DOC, self.write(self.read()))
+
+
 class HoldGroundTests(BridgeTestCase):
     """What the viewport is painted while the workspace is held back.
 

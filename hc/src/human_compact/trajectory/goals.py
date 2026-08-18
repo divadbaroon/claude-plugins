@@ -44,9 +44,14 @@ def _machine_authored(text: str) -> bool:
 # headers below are its spine: inference writes under them and the human writes
 # beside that, so both halves live in one editable place instead of a row of
 # machine-owned textboxes the user may not overwrite.
-DOC_SECTIONS = ("Objective", "In my words", "Decisions", "Built", "Blockers",
-                "Open questions")
-SECTION_KEYS = {"objective": "Objective", "in_my_words": "In my words",
+# TODOs sits directly under Objective because it is what the reader does about
+# the objective, and because the workspace rail edits that one section on its
+# own: a nested bullet list, four spaces to the level. The rest of the document
+# stays prose, and inference appends to all of them the same way.
+DOC_SECTIONS = ("Objective", "TODOs", "In my words", "Decisions", "Built",
+                "Blockers", "Open questions")
+SECTION_KEYS = {"objective": "Objective", "todos": "TODOs",
+                "in_my_words": "In my words",
                 "decisions": "Decisions", "built": "Built",
                 "blockers": "Blockers", "open_questions": "Open questions"}
 _H1 = re.compile(r"^# (.*)$")

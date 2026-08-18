@@ -359,13 +359,18 @@ class InferredProjectDirectoryTests(unittest.TestCase):
 class GoalDocumentTests(unittest.TestCase):
     """A goal's notes field is one markdown document with H1 sections."""
 
-    def test_default_doc_is_the_six_h1_sections_in_order(self):
+    def test_default_doc_is_the_seven_h1_sections_in_order(self):
+        # TODOs sits directly under Objective: it is what the reader does
+        # about the objective, and the rail edits only that section.
         self.assertEqual(
-            "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n"
-            "# Blockers\n\n# Open questions\n",
+            "# Objective\n\n# TODOs\n\n# In my words\n\n# Decisions\n\n"
+            "# Built\n\n# Blockers\n\n# Open questions\n",
             GM.default_doc(),
         )
         self.assertEqual(list(GM.DOC_SECTIONS), list(GM.SECTION_KEYS.values()))
+
+    def test_the_todos_section_is_reachable_by_the_key_inference_emits(self):
+        self.assertEqual("TODOs", GM.SECTION_KEYS["todos"])
 
     def test_split_and_join_round_trip_preamble_and_unknown_sections(self):
         doc = ("scratch line\n\n# Objective\nShip it\n\n"
@@ -491,8 +496,8 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertEqual(doc, GM.join_doc(GM.split_doc(doc)))
         self.assertTrue(out.startswith(doc.rstrip("\n")))
         self.assertEqual(
-            ["Blockers", "Objective", "Scratch", "In my words", "Decisions",
-             "Built", "Open questions"],
+            ["Blockers", "Objective", "Scratch", "TODOs", "In my words",
+             "Decisions", "Built", "Open questions"],
             [title for title, _ in GM.split_doc(out)])
         self.assertEqual(out, GM.ensure_doc_sections(out))
 

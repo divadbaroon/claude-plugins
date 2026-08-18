@@ -40,6 +40,12 @@ def goal(goal_id, title, prompt_ids=None):
     }
 
 
+def open_prompt_tab(page):
+    """The rail opens on TODOs; the assembled prompt is the other tab."""
+    page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+    page.wait_for_selector("textarea.hc-rail-code", state="visible", timeout=10_000)
+
+
 def write_scope(path, goals, prompts):
     path.mkdir(parents=True, exist_ok=True)
     (path / "goals.json").write_text(json.dumps({"version": 1, "goals": goals}))
@@ -609,6 +615,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("real goal 2", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
+                open_prompt_tab(page)
                 expect(page.locator(".hc-rail-code")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
@@ -656,11 +663,14 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("brand new goal", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
+                open_prompt_tab(page)
                 code = page.locator(".hc-rail-code")
                 expect(code).to_be_visible()
-                expect(code).to_contain_text("brand new goal")
-
-                draft = code.inner_text()
+                # The rename has to reach the assembled prompt before it can
+                # be read; the rail redraws on the artifact's own sweep.
+                expect(code).to_have_value(
+                    __import__("re").compile("brand new goal"), timeout=10_000)
+                draft = code.input_value()
                 self.assertIn("brand new goal", draft)
                 self.assertNotIn("Get the drawable frame", draft)
                 self.assertNotIn("divadbaroon/claude-plugins", draft)
@@ -1148,8 +1158,10 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(".hc-tabs")).to_have_count(1)
                 expect(page.locator(".hc-tabs").get_by_text(
                     "PROMPT", exact=True)).to_be_hidden()
-                expect(page.locator(".hc-rail-right").get_by_text(
-                    "PROMPT", exact=True)).to_be_visible()
+                expect(page.locator(".hc-rail-tabs").get_by_text(
+                    "Prompt", exact=True)).to_be_visible()
+                expect(page.locator(".hc-rail-tabs").get_by_text(
+                    "TODOs", exact=True)).to_be_visible()
 
                 # A pane saved from a build that still offered one must not
                 # restore an inspector this scope no longer draws.
@@ -1185,7 +1197,7 @@ class ChatUiServerTests(unittest.TestCase):
                 browser.close()
 
 
-    DEFAULT_DOC = ("# Objective\n\n# In my words\n\n# Decisions\n\n"
+    DEFAULT_DOC = ("# Objective\n\n# TODOs\n\n# In my words\n\n# Decisions\n\n"
                    "# Built\n\n# Blockers\n\n# Open questions\n")
 
     EDITOR = '[placeholder^="Write in markdown"]'
@@ -1226,7 +1238,7 @@ class ChatUiServerTests(unittest.TestCase):
                 # The shape of the document is the invitation to fill it in.
                 self.assertEqual(self.DEFAULT_DOC, editor.input_value())
                 rendered = self.overlay_text(page)
-                for head in ("# Objective", "# In my words", "# Decisions",
+                for head in ("# Objective", "# TODOs", "# In my words", "# Decisions",
                              "# Built", "# Blockers", "# Open questions"):
                     self.assertIn(head, rendered)
 
@@ -1520,17 +1532,14 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(rail).to_be_visible()
                 expect(page.locator(self.EDITOR)).to_have_count(1)
 
-                draft = rail.locator(".hc-rail-code").inner_text()
+                open_prompt_tab(page)
+                draft = rail.locator(".hc-rail-code").input_value()
                 self.assertIn("Objective:\nShip the document pane.", draft)
                 self.assertIn("Decisions:\n- we chose sqlite", draft)
 
-                # Assembled, not authored: there is nothing to type into.
-                expect(rail.locator("textarea")).to_have_count(0)
-                expect(rail.locator("input")).to_have_count(0)
-
-                # The size it will cost, marked as the estimate it is.
-                expect(rail.locator(".hc-rail-count")).to_have_text(
-                    "~" + str(-(-len(draft) // 4)) + " tok")
+                # Assembled to begin with, and the reader's to change: the
+                # prompt is a field, seeded from the document beside it.
+                expect(rail.locator("textarea.hc-rail-code")).to_have_count(1)
 
                 # Nothing here starts a run; every op behind one refuses.
                 expect(page.get_by_text("run agent", exact=True)
@@ -1556,7 +1565,7 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_the_assembled_prompt_survives_a_reload_and_writes_nothing(self):
+    def test_an_edited_prompt_is_kept_in_the_document_and_copied(self):
         """It is assembled, not authored, and reading it changes nothing.
 
         The old box kept no edit -- not across a reload, not across a
@@ -1592,31 +1601,41 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
+                open_prompt_tab(page)
                 code = page.locator(".hc-rail-code")
-                before = code.inner_text()
+                before = code.input_value()
                 self.assertIn("Objective:\nShip the document pane.", before)
 
-                # Clicking into it and typing is a no-op: it is not a field.
+                # An edit is the reader's, and it is kept where the rest of
+                # their writing is kept: a section of the goal's document.
+                # Browser storage would not do -- every /goals-ui opens a new
+                # port, and a new port is a new origin with nothing saved.
                 code.click()
                 page.keyboard.type("EDITED BY HAND")
-                page.wait_for_timeout(1_500)
-                self.assertEqual(before, code.inner_text())
-                unchanged = [g for g in get_json(url + "/api/state")["goals"]
-                             if g["id"] == "a1"][0]
-                self.assertEqual("# Objective\nShip the document pane.\n",
-                                 unchanged["notes"])
-                self.assertEqual("", unchanged["description"])
-                self.assertNotIn("EDITED BY HAND", goals_path.read_text())
+                page.wait_for_timeout(2_500)
+                stored_goal = [g for g in get_json(url + "/api/state")["goals"]
+                               if g["id"] == "a1"][0]
+                self.assertIn("EDITED BY HAND", stored_goal["notes"])
+                self.assertIn("# Prompt", stored_goal["notes"])
+                # The objective it was assembled from is untouched by the edit.
+                self.assertIn("# Objective\nShip the document pane.",
+                              stored_goal["notes"])
+                self.assertEqual("", stored_goal["description"])
 
                 page.reload(wait_until="domcontentloaded")
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
-                expect(page.locator(".hc-rail-code")).to_have_text(before)
+                open_prompt_tab(page)
+                expect(page.locator(".hc-rail-code")).to_have_value(
+                    __import__("re").compile("EDITED BY HAND"))
 
+                # Copy takes away the prompt on screen, not the one it was
+                # assembled from -- an edit the reader cannot copy is an edit
+                # the button silently discards.
                 copy = page.get_by_text("Copy prompt", exact=True)
                 copy.click()
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
-                self.assertEqual(before, page.evaluate(
+                self.assertIn("EDITED BY HAND", page.evaluate(
                     "() => navigator.clipboard.readText()"))
                 context.close()
             finally:
@@ -2294,6 +2313,123 @@ class PreHydrationMaskTests(unittest.TestCase):
             [], wrong,
             "every frame of the hold must be the workspace's own ground, "
             "not the browser's default: %r" % (wrong,))
+
+
+class TodoRailBrowserTests(unittest.TestCase):
+    """The rail's list under real keystrokes, in a real browser.
+
+    The model is unit-tested without a DOM; this is the other half -- that the
+    keys actually reach it, that the caret lands where it said, and that what
+    the reader typed becomes lines in the goal's document.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "the only goal")], [])
+
+    def open_rail(self, page, url):
+        page.goto(url)
+        page.wait_for_selector("text=the only goal", timeout=15000)
+        page.wait_for_selector(".hc-todo-text", timeout=15000)
+
+    def rows(self, page):
+        return page.evaluate(
+            "() => [...document.querySelectorAll('.hc-todo-row')].map("
+            "  r => [parseInt(r.style.paddingLeft) || 0,"
+            "        r.querySelector('input').value])")
+
+    def test_typing_and_the_google_docs_keys_build_a_nested_list(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page()
+            self.open_rail(page, url)
+            page.click(".hc-todo-text")
+            page.keyboard.type("one")
+            page.keyboard.press("Enter")
+            page.keyboard.type("two")
+            page.keyboard.press("Tab")
+            page.keyboard.type(" a")
+            page.keyboard.press("Enter")
+            page.keyboard.type("two b")
+            page.keyboard.press("Shift+Tab")
+            page.keyboard.type("!")
+            seen = self.rows(page)
+            browser.close()
+        self.assertEqual(
+            [[0, "one"], [20, "two a"], [0, "two b!"]], seen,
+            "tab indents the row being typed, shift-tab brings it back")
+
+    def test_enter_twice_leaves_the_nesting_and_never_adds_a_blank_bullet(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page()
+            self.open_rail(page, url)
+            page.click(".hc-todo-text")
+            page.keyboard.type("parent")
+            page.keyboard.press("Enter")
+            page.keyboard.press("Tab")
+            page.keyboard.type("child")
+            page.keyboard.press("Enter")
+            nested = self.rows(page)
+            page.keyboard.press("Enter")       # empty + nested -> outdent
+            outdented = self.rows(page)
+            page.keyboard.press("Enter")       # empty + margin -> nothing
+            page.keyboard.press("Enter")
+            stuck = self.rows(page)
+            browser.close()
+        self.assertEqual([[0, "parent"], [20, "child"], [20, ""]], nested)
+        self.assertEqual([[0, "parent"], [20, "child"], [0, ""]], outdented,
+                         "the second enter should outdent, not add a row")
+        self.assertEqual(outdented, stuck,
+                         "an empty row at the margin must never make another")
+
+    def test_backspace_joins_a_row_upward_and_the_list_reaches_the_document(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page()
+            self.open_rail(page, url)
+            page.click(".hc-todo-text")
+            page.keyboard.type("ship")
+            page.keyboard.press("Enter")
+            page.keyboard.type("it")
+            page.keyboard.press("Home")
+            page.keyboard.press("Backspace")
+            joined = self.rows(page)
+            # The merge leaves the caret at the join, which is where a split
+            # would happen -- go to the end before opening the next row.
+            page.keyboard.press("End")
+            page.keyboard.press("Enter")
+            page.keyboard.type("and test")
+            page.keyboard.press("Tab")
+            # Let the debounce fire and the import land.
+            page.wait_for_timeout(2500)
+            browser.close()
+        self.assertEqual([[0, "shipit"]], joined,
+                         "backspace at the start of a row merges it upward")
+        stored = json.loads((self.a / "goals.json").read_text())
+        notes = stored["goals"][0]["notes"]
+        self.assertIn("# TODOs\n- shipit\n    - and test", notes,
+                      "the list is written back as the document's TODOs "
+                      "section: %r" % (notes,))
+        self.assertIn("# Decisions", notes,
+                      "every other heading has to survive the write")
 
 
 class DeletedGoalBrowserTests(unittest.TestCase):

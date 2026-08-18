@@ -14,7 +14,7 @@
   // inference appends into these exact headings: a heading only the browser
   // knows about is a section the analyzer can never add to. A test in
   // tests/test_goal_ui_bridge.py greps this line and compares the two.
-  var DEFAULT_DOC = "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n# Blockers\n\n# Open questions\n";
+  var DEFAULT_DOC = "# Objective\n\n# TODOs\n\n# In my words\n\n# Decisions\n\n# Built\n\n# Blockers\n\n# Open questions\n";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
                       scope: "global", sessionId: "" };
   var stateFingerprint = null;
@@ -1255,6 +1255,7 @@
     // with the banner that prefixes it.
     return (hideLabelsIn(headerNav(), ["Conversations"])
             + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
+            + (renderTodoRail(false) ? 1 : 0)
             + (applyPageTitle() ? 1 : 0)) > 0;
   }
 
@@ -1706,6 +1707,19 @@
       // Rail headings, shared by both rails.
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
+      // Two tabs and a save stamp, in place of the old single label.
+      "[data-hc-launch] .hc-rail-tabs{display:inline-flex;gap:14px;align-items:baseline}",
+      "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
+      "[data-hc-launch] .hc-rail-tab-on{color:var(--ink)}",
+      "[data-hc-launch] .hc-rail-saved{font:10px 'Source Code Pro',monospace;letter-spacing:.4px;color:var(--fnt)}",
+      // The list itself: a dash gutter, and rows that are inputs so the
+      // caret is something this code can place.
+      "[data-hc-launch] .hc-todos{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 12px 4px}",
+      "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px}",
+      "[data-hc-launch] .hc-todo-dash{flex:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--fnt);user-select:none}",
+      "[data-hc-launch] .hc-todo-text{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;font:12px/1.9 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
       "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-left>div:nth-child(2){padding:6px 6px 0}",
       "[data-hc-launch] .hc-rail-left>div:last-child{padding:8px 12px 6px!important;border-top:1px solid var(--bd);font-size:9.5px!important;line-height:1.6}",
@@ -1714,7 +1728,7 @@
       "[data-hc-launch] .hc-row{white-space:nowrap}",
       "[data-hc-launch] .hc-rowtitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}",
       // The prompt itself: a code block, not a box to type in.
-      "[data-hc-launch] .hc-rail-code{flex:0 1 auto;min-height:0;overflow:auto;margin:11px 12px 0;padding:10px 12px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-rail-code{flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;overflow:auto;resize:none;margin:0;padding:10px 16px 12px;border:none;border-radius:0;background:transparent;outline:none;font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
       "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-actions{flex:none;padding:10px 12px 0}",
       "[data-hc-launch] .hc-rail-copy{display:block;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
@@ -1765,6 +1779,562 @@
     try { text = (document.body && document.body.textContent) || ""; }
     catch (e) { return false; }
     return text.length > 0 && text.indexOf("{{") < 0;
+  }
+
+  // The rail owns one heading of the goal's document and must hand every
+  // other line back untouched -- including a "# comment" inside a fenced
+  // block, which is not a heading however much it looks like one. This is
+  // goals._scan_doc's rule, kept in the browser because the rail writes the
+  // whole document back through the same import path the notes editor uses.
+  var TODO_SECTION = "TODOs";
+  // The reader's own edit of the assembled prompt. Deliberately NOT one of
+  // goals.DOC_SECTIONS: the spine is what inference may append to, and this
+  // section is the reader's alone. ensure_doc_sections leaves headings it
+  // does not know about exactly where they are.
+  var PROMPT_SECTION = "Prompt";
+
+  function docScan(document_) {
+    var lines = str(document_).split("\n");
+    var spans = [], open = null, fence = null;
+    lines.forEach(function (line, at) {
+      var mark = /^(`{3,}|~{3,})/.exec(line);
+      if (mark) {
+        if (fence === null) fence = mark[1][0];
+        else if (mark[1][0] === fence) fence = null;
+        return;
+      }
+      if (fence !== null) return;
+      var head = /^# (.*)$/.exec(line);
+      if (!head) return;
+      if (open) { open.end = at; spans.push(open); }
+      open = { title: head[1].trim(), start: at + 1, end: lines.length };
+    });
+    if (open) spans.push(open);
+    return { lines: lines, spans: spans };
+  }
+
+  function docSectionRead(document_, title) {
+    var scan = docScan(document_);
+    for (var i = 0; i < scan.spans.length; i++) {
+      var span = scan.spans[i];
+      if (span.title !== title) continue;
+      var body = scan.lines.slice(span.start, span.end).join("\n");
+      body = body.replace(/^\n+/, "").replace(/\n+$/, "");
+      return body ? body + "\n" : "";
+    }
+    return "";
+  }
+
+  function todoDocRead(document_) {
+    return docSectionRead(document_, TODO_SECTION);
+  }
+
+  function docSectionWrite(document_, title, body) {
+    var scan = docScan(document_);
+    var text = str(body).replace(/\n+$/, "");
+    for (var i = 0; i < scan.spans.length; i++) {
+      var span = scan.spans[i];
+      if (span.title !== title) continue;
+      var head = scan.lines.slice(0, span.start);
+      var tail = scan.lines.slice(span.end);
+      var middle = text ? text.split("\n") : [];
+      // One blank line before the next heading, and none if this section
+      // ends the document: the same shape join_doc writes on the server.
+      if (tail.length) middle = middle.concat([""]);
+      return head.concat(middle, tail).join("\n");
+    }
+    var out = str(document_).replace(/\n+$/, "");
+    return (out ? out + "\n\n" : "") + "# " + title + "\n"
+      + (text ? text + "\n" : "");
+  }
+
+  function todoDocWrite(document_, body) {
+    return docSectionWrite(document_, TODO_SECTION, body);
+  }
+
+  // --- the nested list the rail edits ---------------------------------------
+  //
+  // One section of the goal's markdown document, held as {text, depth} rows.
+  // Every operation returns a new list plus where the caret should land, so
+  // the renderer never has to reason about what a key meant -- and so all of
+  // it is testable without a DOM.
+
+  var TODO_INDENT = "    ";
+
+  function todoParse(body) {
+    var rows = [];
+    str(body).split("\n").forEach(function (line) {
+      if (!line.trim()) return;
+      var lead = /^[ \t]*/.exec(line)[0].replace(/\t/g, TODO_INDENT);
+      var text = line.slice(/^[ \t]*/.exec(line)[0].length);
+      // A line that never became a bullet -- inference's or the reader's --
+      // is still one of the reader's lines. Keep it, as a row.
+      text = text.replace(/^[-*]\s+/, "");
+      rows.push({ text: text, depth: Math.floor(lead.length / 4) });
+    });
+    // Nothing sits two levels below its parent, however the text was typed.
+    var ceiling = 0;
+    rows.forEach(function (row) {
+      row.depth = Math.max(0, Math.min(row.depth, ceiling));
+      ceiling = row.depth + 1;
+    });
+    // An empty section is still somewhere to type.
+    return rows.length ? rows : [{ text: "", depth: 0 }];
+  }
+
+  function todoSerialize(items) {
+    var rows = (items || []).filter(function (row) {
+      return str(row && row.text).trim() !== "";
+    });
+    // A goal the reader only looked at must not gain a "- " in its document.
+    if (!rows.length) return "";
+    return rows.map(function (row) {
+      return repeat(TODO_INDENT, row.depth) + "- " + row.text;
+    }).join("\n") + "\n";
+  }
+
+  function repeat(unit, times) {
+    var out = "";
+    for (var i = 0; i < times; i++) out += unit;
+    return out;
+  }
+
+  function todoCopy(items) {
+    return (items || []).map(function (row) {
+      return { text: str(row.text), depth: row.depth | 0 };
+    });
+  }
+
+  function todoSpan(items, index) {
+    // A row and everything nested under it move together.
+    var end = index + 1;
+    while (end < items.length && items[end].depth > items[index].depth) end++;
+    return end;
+  }
+
+  function todoEnter(items, index, caret) {
+    var rows = todoCopy(items);
+    var row = rows[index];
+    if (!row) return null;
+    var text = row.text;
+    var at = (typeof caret === "number") ? caret : text.length;
+    if (!text.trim()) {
+      // An empty row never makes another empty row. Nested, the key spends
+      // itself outdenting; at the margin it does nothing at all.
+      if (row.depth > 0) {
+        row.depth -= 1;
+        return { items: rows, index: index, caret: 0 };
+      }
+      return { items: rows, index: index, caret: 0 };
+    }
+    row.text = text.slice(0, at);
+    rows.splice(index + 1, 0, { text: text.slice(at), depth: row.depth });
+    return { items: rows, index: index + 1, caret: 0 };
+  }
+
+  function todoIndent(items, index) {
+    var rows = todoCopy(items);
+    if (index <= 0 || !rows[index]) return { items: rows, index: index };
+    // Only ever one level below the row above: the first child of a parent
+    // cannot be a grandchild of it.
+    var ceiling = rows[index - 1].depth + 1;
+    if (rows[index].depth >= ceiling) return { items: rows, index: index };
+    var end = todoSpan(rows, index);
+    for (var i = index; i < end; i++) rows[i].depth += 1;
+    return { items: rows, index: index };
+  }
+
+  function todoOutdent(items, index) {
+    var rows = todoCopy(items);
+    if (!rows[index] || rows[index].depth === 0) return { items: rows, index: index };
+    var end = todoSpan(rows, index);
+    for (var i = index; i < end; i++) rows[i].depth -= 1;
+    return { items: rows, index: index };
+  }
+
+  function todoBackspace(items, index, caret) {
+    // Only the start of a row is ours; anywhere else is ordinary typing.
+    if (caret !== 0) return null;
+    var rows = todoCopy(items);
+    var row = rows[index];
+    if (!row) return null;
+    if (!row.text) {
+      if (row.depth > 0) return todoOutdent(rows, index);
+      if (rows.length === 1) return { items: rows, index: 0, caret: 0 };
+      rows.splice(index, 1);
+      var back = Math.max(0, index - 1);
+      return { items: rows, index: back, caret: rows[back].text.length };
+    }
+    if (index === 0) return null;
+    var previous = rows[index - 1];
+    var caretAt = previous.text.length;
+    previous.text += row.text;
+    rows.splice(index, 1);
+    return { items: rows, index: index - 1, caret: caretAt };
+  }
+
+  // --- the rail: two tabs, one of them an editable nested list --------------
+  //
+  // The list is drawn by the bridge rather than the artifact, the way the
+  // injection card is, because it needs key semantics the artifact has no
+  // notion of. Rows are inputs: one line each, and a caret this code can put
+  // where the key said it should go.
+
+  var railTab = "todos";
+  var todoItems = null;
+  var todoGoalId = null;
+  var todoShape = null;
+  var todoSavedLabel = "";
+  var todoSaveTimer = null;
+  var todoFocusAt = null;
+
+  function todoShapeOf(goalId, items) {
+    return goalId + " " + (items || []).map(function (row) {
+      return row.depth;
+    }).join(",") + " " + (items || []).length;
+  }
+
+  function todoTyping() {
+    var active = document.activeElement;
+    return !!(active && active.className === "hc-todo-text");
+  }
+
+  function todoFind(nodes, id) {
+    // The live node, not flattenTree's copy: this is the object the rail
+    // writes its section back into, and a clone would swallow every save.
+    var found = null;
+    array(nodes).some(function (node) {
+      if (!node || typeof node.id !== "string") return false;
+      if (node.id === id) { found = node; return true; }
+      found = todoFind(node.children, id);
+      return !!found;
+    });
+    return found;
+  }
+
+  function todoSelectedGoal() {
+    var id = selectedGoalId();
+    if (!id) return null;
+    var node = todoFind(readLocalGoals(), id);
+    return node ? { id: id, notes: str(node.notes) } : null;
+  }
+
+  function todoLoad(goal) {
+    todoGoalId = goal.id;
+    todoItems = todoParse(todoDocRead(goal.notes));
+    todoShape = todoShapeOf(goal.id, todoItems);
+  }
+
+  function todoStamp(now) {
+    var when = now || new Date();
+    var hour = when.getHours();
+    var suffix = hour < 12 ? "AM" : "PM";
+    hour = hour % 12;
+    if (!hour) hour = 12;
+    var minute = when.getMinutes();
+    return "saved " + hour + ":" + (minute < 10 ? "0" : "") + minute
+      + " " + suffix;
+  }
+
+  function todoSaveNow() {
+    if (todoSaveTimer) { clearTimeout(todoSaveTimer); todoSaveTimer = null; }
+    if (!todoGoalId || !todoItems) return false;
+    var goals = readLocalGoals();
+    var node = todoFind(goals, todoGoalId);
+    if (!node) return false;
+    var before = str(node.notes);
+    // A goal nobody has written to yet still shows the whole spine in the
+    // notes editor, which reads `notes || DEFAULT_DOC`. Writing from the rail
+    // against "" would collapse the document to a single heading and take
+    // the other six away from the reader who was looking at them.
+    var after = todoDocWrite(before || DEFAULT_DOC, todoSerialize(todoItems));
+    if (after === before) return false;
+    // Written through the same tree import the notes editor uses, so one
+    // document keeps one writer and the server sees one kind of change.
+    node.notes = after;
+    var roots = goals;
+    var saved;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { saved = {}; }
+    saved.goals = roots;
+    saved.updatedAt = Date.now();
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    lastObservedGoals = JSON.stringify(roots);
+    todoSavedLabel = todoStamp();
+    importGoals(roots);
+    return true;
+  }
+
+  function todoSaveSoon() {
+    if (todoSaveTimer) clearTimeout(todoSaveTimer);
+    todoSaveTimer = setTimeout(todoSaveNow, 600);
+  }
+
+  function todoApply(result) {
+    if (!result) return false;
+    todoItems = result.items;
+    todoShape = null;
+    todoFocusAt = { index: result.index, caret: result.caret };
+    todoSaveSoon();
+    return true;
+  }
+
+  function todoKey(event, index) {
+    var input = event.target;
+    if (!todoItems || !todoItems[index]) return;
+    var caret = (input && typeof input.selectionStart === "number")
+      ? input.selectionStart : 0;
+    if (input) todoItems[index].text = input.value;
+    var handled = false;
+    if (event.key === "Enter") {
+      // Always ours. An empty row at the left margin spends the key and
+      // draws nothing new -- which is the point: no bullet without text may
+      // make another bullet without text.
+      todoApply(todoEnter(todoItems, index, caret));
+      handled = true;
+    } else if (event.key === "Tab") {
+      if (!todoApply(event.shiftKey ? todoOutdent(todoItems, index)
+                                    : todoIndent(todoItems, index))) {
+        todoFocusAt = { index: index, caret: caret };
+      }
+      handled = true;
+    } else if (event.key === "Backspace") {
+      handled = todoApply(todoBackspace(todoItems, index, caret));
+    } else if (event.key === "ArrowUp" && index > 0) {
+      todoFocusAt = { index: index - 1, caret: null };
+      handled = true;
+    } else if (event.key === "ArrowDown" && index < todoItems.length - 1) {
+      todoFocusAt = { index: index + 1, caret: null };
+      handled = true;
+    }
+    if (!handled) return;
+    event.preventDefault();
+    renderTodoRail(true);
+  }
+
+  function todoRow(item, index) {
+    var row = document.createElement("div");
+    row.className = "hc-todo-row";
+    row.style.paddingLeft = (item.depth * 20) + "px";
+    var dash = document.createElement("span");
+    dash.className = "hc-todo-dash";
+    dash.textContent = "-";
+    row.appendChild(dash);
+    var input = document.createElement("input");
+    input.className = "hc-todo-text";
+    input.type = "text";
+    input.spellcheck = false;
+    input.value = item.text;
+    // Which row this is, as an attribute rather than a closure: the artifact
+    // re-creates the subtree it owns, and a clone keeps attributes while
+    // dropping every listener and property bound to the original node.
+    input.setAttribute("data-hc-todo", String(index));
+    row.appendChild(input);
+    return row;
+  }
+
+  var todoDelegated = false;
+
+  function todoIndexOf(node) {
+    if (!node || !node.getAttribute) return -1;
+    var at = node.getAttribute("data-hc-todo");
+    return at === null ? -1 : parseInt(at, 10);
+  }
+
+  function todoDelegate() {
+    // Listeners live on the document, which nothing re-creates. Binding them
+    // to the rows themselves worked exactly until the artifact next redrew
+    // its own rail, after which every key went to a node with no handlers --
+    // typing still landed, so the list looked alive while nothing it did was
+    // being recorded.
+    if (todoDelegated || !document.addEventListener) return;
+    todoDelegated = true;
+    document.addEventListener("keydown", function (event) {
+      var index = todoIndexOf(event.target);
+      if (index >= 0) todoKey(event, index);
+    }, true);
+    document.addEventListener("input", function (event) {
+      var index = todoIndexOf(event.target);
+      if (index < 0 || !todoItems || !todoItems[index]) return;
+      // Text alone never redraws: the row the reader is typing in is the one
+      // thing on screen that must not be replaced underneath them.
+      todoItems[index].text = event.target.value;
+      todoSaveSoon();
+    }, true);
+    document.addEventListener("blur", function (event) {
+      if (todoIndexOf(event.target) >= 0) todoSaveNow();
+    }, true);
+    document.addEventListener("click", function (event) {
+      var node = event.target;
+      var name = node && node.getAttribute
+        ? node.getAttribute("data-hc-rail-tab") : null;
+      if (name !== "todos" && name !== "prompt") return;
+      railTab = name;
+      renderTodoRail(true);
+    }, true);
+  }
+
+  function todoTabSpan(name, label) {
+    var tab = document.createElement("span");
+    tab.className = "hc-rail-tab" + (railTab === name ? " hc-rail-tab-on" : "");
+    tab.textContent = label;
+    // Named by attribute and handled on the document, for the same reason
+    // the rows are: a cloned tab keeps its label and loses its listener,
+    // which reads as a tab that simply does not switch.
+    tab.setAttribute("data-hc-rail-tab", name);
+    return tab;
+  }
+
+  function renderTodoRail(force) {
+    if (serverState.scope !== "chat") return false;
+    todoDelegate();
+    var host = document.querySelector(".hc-todos");
+    var tabs = document.querySelector(".hc-rail-tabs");
+    var stamp = document.querySelector(".hc-rail-saved");
+    var promptBox = document.querySelector(".hc-rail-prompt");
+    if (!host || !tabs) return false;
+
+    var goal = todoSelectedGoal();
+    if (!goal) {
+      todoGoalId = null;
+      todoItems = null;
+    } else if (goal.id !== todoGoalId) {
+      todoLoad(goal);
+      force = true;
+    } else if (!todoTyping() && !todoSaveTimer) {
+      // Inference appends to this section too, so the document can change
+      // under the rail -- but only ever while the reader is not mid-edit.
+      var incoming = todoParse(todoDocRead(goal.notes));
+      if (todoSerialize(incoming) !== todoSerialize(todoItems)) {
+        todoItems = incoming;
+        force = true;
+      }
+    }
+
+    if (tabs.children.length !== 2 || force) {
+      while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
+      tabs.appendChild(todoTabSpan("todos", "TODOs"));
+      tabs.appendChild(todoTabSpan("prompt", "Prompt"));
+    }
+    if (stamp) stamp.textContent = todoSavedLabel;
+    host.style.display = railTab === "todos" ? "block" : "none";
+    if (promptBox) {
+      promptBox.style.display = railTab === "prompt" ? "block" : "none";
+    }
+    if (goal && railTab === "prompt") renderPromptTab(goal);
+    if (railTab !== "todos" || !todoItems) return true;
+
+    var shape = todoShapeOf(todoGoalId, todoItems);
+    if (!force && shape === todoShape && host.children.length) return true;
+    todoShape = shape;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    todoItems.forEach(function (item, index) {
+      host.appendChild(todoRow(item, index));
+    });
+    var focus = todoFocusAt;
+    todoFocusAt = null;
+    if (focus) {
+      var at = Math.max(0, Math.min(focus.index, host.children.length - 1));
+      var input = host.children[at] && host.children[at].querySelector("input");
+      if (input) {
+        input.focus();
+        var caret = (focus.caret === null || focus.caret === undefined)
+          ? input.value.length : focus.caret;
+        try { input.setSelectionRange(caret, caret); } catch (e) {}
+      }
+    }
+    return true;
+  }
+
+  // --- the reader's own prompt ---------------------------------------------
+  //
+  // The rail's Prompt tab is seeded from the assembled context and is then
+  // theirs to edit. Edits land in the goal document's own "# Prompt" section
+  // rather than in browser storage: every /goals-ui opens a fresh port, which
+  // is a fresh origin with empty localStorage, so anything kept only there is
+  // gone the next time the workspace opens.
+
+  var promptGoalId = null;
+  var promptSaveTimer = null;
+  var promptSeeded = null;
+
+  function promptField() {
+    var node = document.querySelector("textarea.hc-rail-code");
+    return (node && typeof node.value === "string") ? node : null;
+  }
+
+  function promptSaveNow() {
+    if (promptSaveTimer) { clearTimeout(promptSaveTimer); promptSaveTimer = null; }
+    var field = promptField();
+    if (!field || !promptGoalId) return false;
+    var goals = readLocalGoals();
+    var node = todoFind(goals, promptGoalId);
+    if (!node) return false;
+    var before = str(node.notes);
+    // An untouched prompt is the assembled one, and assembling it again costs
+    // nothing -- so it is not written. Only a real divergence is the reader's.
+    var text = field.value === promptSeeded ? "" : field.value;
+    var after = docSectionWrite(before || DEFAULT_DOC, PROMPT_SECTION, text);
+    if (after === before) return false;
+    node.notes = after;
+    var saved;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { saved = {}; }
+    saved.goals = goals;
+    saved.updatedAt = Date.now();
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    lastObservedGoals = JSON.stringify(goals);
+    todoSavedLabel = todoStamp();
+    importGoals(goals);
+    return true;
+  }
+
+  function promptSaveSoon() {
+    if (promptSaveTimer) clearTimeout(promptSaveTimer);
+    promptSaveTimer = setTimeout(promptSaveNow, 600);
+  }
+
+  var promptDelegated = false;
+
+  function promptDelegate() {
+    // On the document for the same reason the list's keys are: the artifact
+    // re-creates the rail it owns, and a clone keeps the value while dropping
+    // every listener bound to the node it was cloned from.
+    if (promptDelegated || !document.addEventListener) return;
+    promptDelegated = true;
+    document.addEventListener("input", function (event) {
+      var node = event.target;
+      if (!node || node.className !== "hc-rail-code") return;
+      promptSaveSoon();
+    }, true);
+    document.addEventListener("blur", function (event) {
+      var node = event.target;
+      if (node && node.className === "hc-rail-code") promptSaveNow();
+    }, true);
+  }
+
+  function renderPromptTab(goal) {
+    promptDelegate();
+    var field = promptField();
+    if (!field) return;
+    if (goal.id !== promptGoalId) {
+      promptGoalId = goal.id;
+      promptSeeded = null;
+    }
+    var own = docSectionRead(goal.notes, PROMPT_SECTION).replace(/\n+$/, "");
+    // What the artifact would show: it binds the assembled prompt as the
+    // field's DEFAULT value, which a textarea applies once, at creation. So
+    // after a rename the field keeps the first draft it was ever given
+    // unless the current one is put back by hand.
+    var assembled = str(field.defaultValue || field.textContent);
+    // Never over the top of what they are typing right now.
+    if (document.activeElement === field) {
+      if (promptSeeded === null) promptSeeded = assembled;
+      return;
+    }
+    promptSeeded = assembled;
+    var want = own || assembled;
+    if (field.value !== want) field.value = want;
   }
 
   // Kept in step with ui.CHAT_GROUND, which paints the same colour into the
@@ -2183,7 +2753,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-name\">PROMPT</span><span class=\"hc-rail-count\">{{ draftTok }}</span></div><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-code\">{{ draft }}</div><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt it assembles from that goal\u2019s document.</div></sc-if><div class=\"hc-inject\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><textarea class=\"hc-rail-code\" key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\"></textarea><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt it assembles from that goal\u2019s document.</div></sc-if></div><div class=\"hc-inject\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's
@@ -2462,7 +3032,7 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = false, fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
+       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = false, fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      section('TODOs');\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
       // A prompt without its conversation is a quote without a source. The
       // separator belongs to the source, not to the line: chat prompt
       // records carry no session_id (chat_state writes id, ordinal, role,
@@ -2872,6 +3442,23 @@
     revealWhenDressed: revealWhenDressed,
     launchDressed: launchDressed,
     groundColor: groundColor,
+    todoDoc: { read: todoDocRead, write: todoDocWrite,
+               readSection: docSectionRead,
+               writeSection: docSectionWrite },
+    renderTodoRail: renderTodoRail,
+    todoState: function () {
+      return { goalId: todoGoalId, tab: railTab,
+               items: todoItems && todoItems.slice(),
+               saving: !!todoSaveTimer };
+    },
+    todoList: {
+      parse: todoParse,
+      serialize: todoSerialize,
+      enter: todoEnter,
+      indent: todoIndent,
+      outdent: todoOutdent,
+      backspace: todoBackspace,
+    },
     holdRoot: holdRoot,
     releaseRoot: releaseRoot,
     patchMisses: function () { return patchMisses.slice(); },
