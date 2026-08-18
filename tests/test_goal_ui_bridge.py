@@ -3297,7 +3297,7 @@ LAUNCH_CLASSES = (
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
-    "hc-session", "hc-updated",
+    "hc-panels", "hc-session", "hc-updated",
 )
 
 
@@ -3416,6 +3416,95 @@ class LaunchSkinTests(BridgeTestCase):
         stray = [rule for rule in rules
                  if not rule.lstrip().startswith("[data-hc-launch]")]
         self.assertEqual([], stray)
+
+    def test_the_workspace_is_full_bleed(self):
+        # The columns meet the window on every side and each other on one
+        # shared line: no outer padding, no gap, no radius, and every rail
+        # keeps only the border it shares with the document.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc>div:nth-child(2){max-width:none!important;"
+                      "padding:0!important}", css)
+        self.assertIn(".hc-shell{gap:0!important", css)
+        self.assertIn(".hc-rail-left{position:relative;flex:0 0 var(--hc-left)"
+                      "!important;height:calc(100vh - var(--hc-top))!important;"
+                      "padding:0 0 6px!important;border-width:0 1px 0 0!important;"
+                      "border-radius:0!important}", css)
+        self.assertIn(".hc-main{flex:1 1 auto!important;order:2;"
+                      "height:calc(100vh - var(--hc-top))!important;top:0!important;"
+                      "border:0!important;border-radius:0!important", css)
+        self.assertRegex(css, r"\.hc-rail-right\{[^}]*border-width:0 0 0 1px;"
+                              r"border-radius:0;")
+        # The header is a fixed height and --hc-top is exactly that height,
+        # so the columns are sized against it, not against a guess.
+        self.assertIn("--hc-top:37px", css)
+        self.assertIn(".hc>div:first-child{height:var(--hc-top);", css)
+
+    def test_the_brand_is_the_one_serif_and_the_pills_ride_in_the_header(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertRegex(css, r"\.hc-brand\{font:600 15px Georgia,[^}]*serif!important")
+        # The marker before the name keeps the workspace's monospace.
+        self.assertRegex(css, r"\.hc-brand::before\{[^}]*'Source Code Pro'")
+        # The status pills' row is lifted into the header by position, and
+        # takes no height where the artifact renders it: the middle bar
+        # is gone.
+        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;top:0;"
+                              r"left:var\(--hc-pills-left,\d+px\);height:37px;"
+                              r"margin:0;padding:0!important")
+
+    def layout(self, tail):
+        # The harness's root has a bare style object; the bridge writes the
+        # rail widths as CSS variables, so give it the two calls it uses.
+        return self.run_js(
+            self.chat()
+            + "var props = {};"
+            "document.documentElement.style.setProperty ="
+            "  function (k, v) { props[k] = v; };"
+            "document.documentElement.style.getPropertyValue ="
+            "  function (k) { return props[k] || ''; };"
+            + tail)
+
+    def test_the_rails_start_at_the_widths_the_shell_shipped_with(self):
+        self.assertEqual(
+            {"left": 300, "right": 330, "hideLeft": False, "hideRight": False},
+            self.layout("window.__hcPromptUI.railLayout();"))
+
+    def test_a_dragged_width_is_clamped_kept_and_drawn(self):
+        out = self.layout(
+            "var ui = window.__hcPromptUI;"
+            "var a = ui.setRailWidth('left', 380);"
+            "var b = ui.setRailWidth('left', 40);"
+            "var c = ui.setRailWidth('right', 9000);"
+            "var d = ui.setRailWidth('right', 'nonsense');"
+            "[a, b, c, d, props['--hc-left'], props['--hc-right'],"
+            " JSON.parse(localStorage.getItem('hc-launch-layout'))];")
+        self.assertEqual([380, 200, 520, 330, "200px", "330px",
+                          {"left": 200, "right": 330,
+                           "hideLeft": False, "hideRight": False}], out)
+
+    def test_hiding_a_rail_is_a_root_attribute_and_survives_the_page(self):
+        out = self.layout(
+            "var ui = window.__hcPromptUI; var root = document.documentElement;"
+            "var h = ui.setRailHidden('right', true);"
+            "var on = root.getAttribute('data-hc-hide-right') !== null;"
+            "var t = ui.toggleRail('right');"
+            "var off = root.getAttribute('data-hc-hide-right') !== null;"
+            "ui.toggleRail('left');"
+            "[h, on, t, off, root.getAttribute('data-hc-hide-left') !== null,"
+            " JSON.parse(localStorage.getItem('hc-launch-layout')).hideLeft];")
+        self.assertEqual([True, True, False, False, True, True], out)
+
+    def test_the_header_gets_one_toggle_per_rail_that_reads_the_layout(self):
+        out = self.layout(
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-panels'; app.appendChild(slot);"
+            "var ui = window.__hcPromptUI;"
+            "ui.renderPanelToggles(); ui.renderPanelToggles();"
+            "ui.setRailHidden('left', true);"
+            "[slot.children.length,"
+            " slot.children.map(function (b) {"
+            "   return [b.getAttribute('data-hc-panel'), b.className]; })];")
+        self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel hc-panel-on"]]],
+                         out)
 
     def test_the_session_chip_names_the_conversation_the_window_watches(self):
         out = self.run_js(
