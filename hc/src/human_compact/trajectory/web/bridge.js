@@ -2219,7 +2219,10 @@
     if (stamp) stamp.textContent = todoSavedLabel;
     host.style.display = railTab === "todos" ? "block" : "none";
     if (promptBox) {
-      promptBox.style.display = railTab === "prompt" ? "block" : "none";
+      // "flex", not "block": this is the column the prompt stretches inside,
+      // and an inline display beats the stylesheet that made it one -- which
+      // left the field exactly one line tall.
+      promptBox.style.display = railTab === "prompt" ? "flex" : "none";
     }
     if (goal && railTab === "prompt") renderPromptTab(goal);
     if (railTab !== "todos" || !todoItems) return true;

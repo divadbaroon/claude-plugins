@@ -2395,6 +2395,40 @@ class TodoRailBrowserTests(unittest.TestCase):
         self.assertEqual(outdented, stuck,
                          "an empty row at the margin must never make another")
 
+    def test_the_prompt_fills_the_panel_it_is_shown_in(self):
+        """A field the size of one line is not a field you can write in.
+
+        The rail is a flex column and the prompt is its stretchy member, but
+        showing the tab writes an inline display on the container -- and an
+        inline style beats the stylesheet, so the column that was supposed to
+        stretch it stopped being a column at all.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            self.open_rail(page, url)
+            page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+            page.wait_for_selector("textarea.hc-rail-code", state="visible",
+                                   timeout=10_000)
+            page.wait_for_timeout(400)
+            sizes = page.evaluate(
+                "() => {"
+                "  const f = document.querySelector('textarea.hc-rail-code');"
+                "  const r = document.querySelector('.hc-rail-right');"
+                "  return [Math.round(f.getBoundingClientRect().height),"
+                "          Math.round(r.getBoundingClientRect().height)]; }")
+            browser.close()
+        field, rail = sizes
+        self.assertGreater(
+            field, rail * 0.5,
+            "the prompt should take the panel it is given, not one line: "
+            "%dpx of %dpx" % (field, rail))
+
     def test_backspace_joins_a_row_upward_and_the_list_reaches_the_document(self):
         try:
             from playwright.sync_api import sync_playwright
@@ -2430,6 +2464,53 @@ class TodoRailBrowserTests(unittest.TestCase):
                       "section: %r" % (notes,))
         self.assertIn("# Decisions", notes,
                       "every other heading has to survive the write")
+
+
+class RailFillsItsPanelTests(unittest.TestCase):
+    """Both tabs use the whole rail, not one line of it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "the only goal")], [])
+
+    def test_the_prompt_grows_to_the_height_of_the_rail(self):
+        """A textarea that does not grow shows one line of a long prompt.
+
+        The rail is a flex column; a child that is told `display:block` by an
+        inline style stops being a flex item, and every unit of the height it
+        was supposed to claim goes to whatever sits under it -- which is why
+        the copy button ended up filling the panel.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        browser_path = browser_executable()
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=browser_path)
+            page = browser.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(url)
+            page.wait_for_selector("text=the only goal", timeout=15000)
+            open_prompt_tab(page)
+            page.wait_for_timeout(600)
+            sizes = page.evaluate(
+                "() => {"
+                "  const f = document.querySelector('textarea.hc-rail-code');"
+                "  const rail = document.querySelector('.hc-rail-right');"
+                "  const box = document.querySelector('.hc-rail-prompt');"
+                "  return [Math.round(f.getBoundingClientRect().height),"
+                "          Math.round(rail.getBoundingClientRect().height),"
+                "          getComputedStyle(box).display];"
+                "}")
+            browser.close()
+        field, rail, display = sizes
+        self.assertNotEqual("block", display,
+                            "the prompt box must stay a flex column")
+        self.assertGreater(
+            field, rail * 0.5,
+            "the prompt field is %dpx inside a %dpx rail" % (field, rail))
 
 
 class DeletedGoalBrowserTests(unittest.TestCase):
