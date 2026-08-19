@@ -1422,6 +1422,11 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
             status = ("abandoned" if done and prev.get("status") == "abandoned" else
                       "completed" if done else
                       "in_progress" if node.get("status") == "inprog" else "active")
+            # A tombstone is sticky: nothing restores a deleted goal today,
+            # so a posted tree that carries one as active is a stale echo --
+            # an in-flight merge computed before the delete -- not a restore.
+            if prev.get("status") == "abandoned":
+                status = "abandoned"
             out.append({"id": nid, "title": title, "status": status,
                         "parent_goal_id": parent_gid,
                         "evidence_ids": prev.get("evidence_ids", []),

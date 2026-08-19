@@ -1015,6 +1015,60 @@ class MergeTests(BridgeTestCase):
         self.assertEqual({"g1", "g-lost"},
                          set(goal["id"] for goal in result))
 
+    def test_a_deleted_goal_a_stale_writer_resurrected_stays_deleted(self):
+        # The mirror image: after the delete, base and local both lack the
+        # goal, and a stale writer puts it back in the payload as active.
+        # Without memory that looks like a goal somebody else just made; the
+        # tombstone set says otherwise, and the merge drops it.
+        result = self.run_js(
+            """(() => {
+              const node = (id, title) => ({
+                id, title, prio: "normal", done: false, open: true,
+                status: "todo", notes: "", desc: "", labels: [],
+                children: []
+              });
+              const base = [node("g1", "Shared")];
+              const local = [node("g1", "Shared")];
+              const remote = [node("g1", "Shared"),
+                              node("g-back", "Resurrected")];
+              return window.__hcPromptUI.mergeTrees(
+                base, local, remote, { "g-back": true });
+            })()""")
+        self.assertEqual(["g1"], [goal["id"] for goal in result])
+
+    def test_a_child_rerooted_by_a_stale_writer_keeps_its_parent(self):
+        # Losing the parent record makes the server re-root the child; the
+        # local tree still holds the link and did not change it, so the
+        # merge keeps it -- alongside the re-imported parent.
+        result = self.run_js(
+            """(() => {
+              const node = (id, title, children) => ({
+                id, title, prio: "normal", done: false, open: true,
+                status: "todo", notes: "", desc: "", labels: [],
+                children: children || []
+              });
+              const base = [node("g1", "Root", [node("g2", "Child")])];
+              const local = [node("g1", "Root", [node("g2", "Child")])];
+              const remote = [node("g2", "Child")];   // g1 lost, g2 re-rooted
+              return window.__hcPromptUI.mergeTrees(base, local, remote, {});
+            })()""")
+        self.assertEqual(["g1"], [g["id"] for g in result])
+        self.assertEqual(["g2"], [c["id"] for c in result[0]["children"]])
+
+    def test_reconcile_remembers_a_local_deletion_as_a_tombstone(self):
+        got = self.run_js(
+            "localStorage.setItem('hc-vault-ui-sync-v1', JSON.stringify({"
+            "  revision: 'r1', goals: [{ id: 'g1', title: 'kept', children: [] },"
+            "                          { id: 'g2', title: 'deleted', children: [] }] }));"
+            "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({"
+            "  goals: [{ id: 'g1', title: 'kept', children: [] }] }));"
+            "window.location = window.location || {};"
+            "window.location.reload = function () {};"
+            "window.__hcPromptUI.reconcileState({ revision: 'r2', goals: ["
+            "  { id: 'g1', title: 'kept', status: 'active' } ] });"
+            "JSON.parse(localStorage.getItem('hc-deleted-goals-v1') || '{}');")
+        self.assertIn("g2", got)
+
 
 if __name__ == "__main__":
     unittest.main()

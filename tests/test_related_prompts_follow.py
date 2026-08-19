@@ -181,6 +181,19 @@ class InProgressOnWorkTests(unittest.TestCase):
         self.assertTrue(out["ok"], out)
         self.assertEqual("completed", self.status("g2"), "a finished goal stays finished")
 
+    def test_a_tombstoned_goal_cannot_be_resurrected_by_an_import(self):
+        # Delete g2's tombstone case: an in-flight merge computed before a
+        # delete posts the goal back as active. The tombstone wins.
+        goals, important = chat_state.load_goals(self.session, self.root)
+        GM.by_id(goals, "g2")["status"] = "abandoned"
+        chat_state.save_goals(self.session, goals, important, self.root)
+        out = ui._import([
+            {"id": "g1", "title": "Ship it", "children": []},
+            {"id": "g2", "title": "Already done", "children": []},
+        ], self.trajdir, True)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual("abandoned", self.status("g2"))
+
     def test_building_rows_begins_the_goal(self):
         out = ui._apply({"op": "build_todos", "goal_id": "g1", "ids": ["taaaa0001"]},
                         self.trajdir, True)

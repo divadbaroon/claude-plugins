@@ -97,6 +97,7 @@
     order.forEach(function (id) {
       var b = base.map[id], l = local.map[id], r = remote.map[id];
       if (r && b && !l) return; // an explicit local deletion
+      if (r && !l && deleted[id]) return; // deleted here; a stale writer's copy
       if (!r) {
         if (!l) return;
         // Absent from the remote tree with a local copy in hand. The server
@@ -123,6 +124,12 @@
       });
       var parent = r.parent;
       if (!b || l.parent !== b.parent) parent = l.parent;
+      else if (!r.parent && l.parent) {
+        // The remote lost the parent (a stale writer dropped it and the
+        // server re-rooted the child); we never moved it. Keep our link --
+        // the parent itself is being kept or re-imported by the same merge.
+        parent = l.parent;
+      }
       selected[id] = { value: value, parent: parent };
     });
 
@@ -208,6 +215,34 @@
     }).join(",");
   }
 
+  // What the reader deleted, remembered on this side. The server's
+  // tombstones cover most of it, but a stale writer can flip one back to
+  // active -- and to the merge that then looks exactly like a goal somebody
+  // else just made. Only this memory can tell those apart.
+  var TOMB_KEY = "hc-deleted-goals-v1";
+  var TOMB_MAX = 200;
+
+  function readTombs() {
+    try {
+      var value = JSON.parse(localStorage.getItem(TOMB_KEY) || "{}");
+      return (value && typeof value === "object") ? value : {};
+    } catch (e) { return {}; }
+  }
+
+  function noteTombs(ids) {
+    if (!ids.length) return;
+    var tombs = readTombs();
+    ids.forEach(function (id) { tombs[id] = Date.now(); });
+    var keys = Object.keys(tombs);
+    if (keys.length > TOMB_MAX) {
+      keys.sort(function (a, b) { return tombs[a] - tombs[b]; });
+      keys.slice(0, keys.length - TOMB_MAX).forEach(function (id) {
+        delete tombs[id];
+      });
+    }
+    try { localStorage.setItem(TOMB_KEY, JSON.stringify(tombs)); } catch (e) {}
+  }
+
   function deletedIdsOf(st) {
     // The tombstones: goals the server remembers as deleted. These are the
     // only absences mergeTrees may honour.
@@ -217,6 +252,8 @@
         gone[goal.id] = true;
       }
     });
+    var tombs = readTombs();
+    Object.keys(tombs).forEach(function (id) { gone[id] = true; });
     return gone;
   }
 
@@ -244,6 +281,12 @@
       return;
     }
     var local = readLocalGoals();
+    // Ids in the synced base that the local tree no longer holds are the
+    // reader's deletions; remember them before they leave the base too.
+    var localFlat = flattenTree(local);
+    noteTombs(flattenTree(synced.goals).order.filter(function (id) {
+      return !localFlat.map[id];
+    }));
     var merged = mergeTrees(synced.goals, local, remote, deletedIdsOf(st));
     if (same(merged, remote)) {
       writeSync(st.revision, remote);
@@ -736,6 +779,15 @@
       refreshState();
       return;
     }
+    // Ids the last synced base holds that this import no longer does are
+    // the reader's deletions, recorded HERE -- the import is about to
+    // rewrite that base, after which nothing else can tell a deletion from
+    // a goal that never existed. reconcileState's own recording only sees
+    // deletions made while a refresh was already in flight.
+    var posted = flattenTree(goals);
+    noteTombs(flattenTree(synced.goals).order.filter(function (id) {
+      return !posted.map[id];
+    }));
     syncBusy = true;
     postImport(goals, synced.revision).then(function (result) {
       writeSync(result.revision, goals);
