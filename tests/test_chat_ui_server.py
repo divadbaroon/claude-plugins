@@ -40,6 +40,12 @@ def goal(goal_id, title, prompt_ids=None):
     }
 
 
+def open_prompt_tab(page):
+    """The rail opens on TODOs; the assembled prompt is the other tab."""
+    page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+    page.wait_for_selector("textarea.hc-rail-code", state="visible", timeout=10_000)
+
+
 def write_scope(path, goals, prompts):
     path.mkdir(parents=True, exist_ok=True)
     (path / "goals.json").write_text(json.dumps({"version": 1, "goals": goals}))
@@ -609,6 +615,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("real goal 2", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
+                open_prompt_tab(page)
                 expect(page.locator(".hc-rail-code")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
@@ -656,11 +663,19 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("brand new goal", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
+                open_prompt_tab(page)
                 code = page.locator(".hc-rail-code")
                 expect(code).to_be_visible()
-                expect(code).to_contain_text("brand new goal")
-
-                draft = code.inner_text()
+                # The field holds only the reader's words -- none yet -- and
+                # the assembled context rides along on copy. Read the copy.
+                context = page.context
+                context.grant_permissions(["clipboard-read",
+                                           "clipboard-write"])
+                page.wait_for_timeout(1_200)
+                page.get_by_text("Copy prompt", exact=True).click()
+                expect(page.get_by_text("copied \u2713", exact=True)
+                       ).to_be_visible()
+                draft = page.evaluate("() => navigator.clipboard.readText()")
                 self.assertIn("brand new goal", draft)
                 self.assertNotIn("Get the drawable frame", draft)
                 self.assertNotIn("divadbaroon/claude-plugins", draft)
@@ -1148,8 +1163,10 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(".hc-tabs")).to_have_count(1)
                 expect(page.locator(".hc-tabs").get_by_text(
                     "PROMPT", exact=True)).to_be_hidden()
-                expect(page.locator(".hc-rail-right").get_by_text(
-                    "PROMPT", exact=True)).to_be_visible()
+                expect(page.locator(".hc-rail-tabs").get_by_text(
+                    "Prompt", exact=True)).to_be_visible()
+                expect(page.locator(".hc-rail-tabs").get_by_text(
+                    "TODOs", exact=True)).to_be_visible()
 
                 # A pane saved from a build that still offered one must not
                 # restore an inspector this scope no longer draws.
@@ -1163,11 +1180,16 @@ class ChatUiServerTests(unittest.TestCase):
                 context_tab = page.get_by_text("CONTEXT", exact=True)
                 expect(context_tab).to_be_visible(timeout=10_000)
                 # What the reader sees, not what the store says: CONTEXT is
-                # the tab carrying the selected underline, and the pane
-                # drawn under it is the Context pane.
-                expect(context_tab).not_to_have_css(
+                # the tab drawn selected -- in ink, with no accent underline
+                # (a lone tab has nothing to be underlined against) -- and
+                # the pane drawn under it is the Context pane.
+                expect(context_tab).to_have_css(
                     "border-bottom-color", "rgba(0, 0, 0, 0)"
                 )
+                ink = page.evaluate(
+                    "() => getComputedStyle(document.querySelector('.hc'))"
+                    ".getPropertyValue('--ink').trim()")
+                self.assertTrue(ink)
                 # The Context pane is the goal's document, and the prompts
                 # it was written from. The textbox pane it replaced is
                 # dormant, so none of its labels are on the page at all.
@@ -1185,8 +1207,11 @@ class ChatUiServerTests(unittest.TestCase):
                 browser.close()
 
 
-    DEFAULT_DOC = ("# Objective\n\n# In my words\n\n# Decisions\n\n"
-                   "# Built\n\n# Blockers\n\n# Open questions\n")
+    # A goal opens as an empty document: no spine of headings. What the
+    # reader writes is rendered Obsidian-fashion under their own caret --
+    # the marks (#, **, -) are drawn transparent so the text stays aligned
+    # with the caret, headings bold, bullets as dots.
+    DEFAULT_DOC = ""
 
     EDITOR = '[placeholder^="Write in markdown"]'
 
@@ -1198,7 +1223,7 @@ class ChatUiServerTests(unittest.TestCase):
                  return ta.parentElement.firstElementChild.textContent;
                }""", self.EDITOR)
 
-    def test_a_goal_with_no_notes_opens_on_the_documents_own_headings(self):
+    def test_a_goal_with_no_notes_opens_empty_and_renders_marks_hidden(self):
         try:
             from playwright.sync_api import expect, sync_playwright
         except ImportError:
@@ -1223,23 +1248,29 @@ class ChatUiServerTests(unittest.TestCase):
                 editor = page.locator(self.EDITOR)
                 expect(editor).to_be_visible(timeout=10_000)
 
-                # The shape of the document is the invitation to fill it in.
-                self.assertEqual(self.DEFAULT_DOC, editor.input_value())
-                rendered = self.overlay_text(page)
-                for head in ("# Objective", "# In my words", "# Decisions",
-                             "# Built", "# Blockers", "# Open questions"):
-                    self.assertIn(head, rendered)
+                # Empty: no headings are put in the reader's way.
+                self.assertEqual("", editor.input_value())
+                for head in ("# Objective", "# TODOs", "# Decisions", "# Prompt"):
+                    self.assertNotIn(head, self.overlay_text(page))
 
-                # Rendered, not just held: the heading is drawn bold with its
-                # marker kept, which is the whole point of an inline editor.
-                self.assertEqual("700", page.evaluate(
+                # Type a heading and a bullet: the heading text is drawn
+                # bold, its "# " transparent (present, so the caret stays
+                # aligned, but not seen); the "- " is drawn as a dot.
+                editor.fill("# Objective\nShip it\n- first")
+                page.wait_for_timeout(300)
+                self.assertEqual(["700", "rgba(0, 0, 0, 0)", "\u2022 "], page.evaluate(
                     """sel => {
                          const ta = document.querySelector(sel);
-                         const span = [...ta.parentElement.firstElementChild
-                           .querySelectorAll('span')]
-                           .find(s => s.textContent === 'Objective');
-                         return span && getComputedStyle(span).fontWeight;
+                         const spans = [...ta.parentElement.firstElementChild
+                           .querySelectorAll('span')];
+                         const head = spans.find(s => s.textContent === 'Objective');
+                         const mark = spans.find(s => s.textContent === '# ');
+                         const dot = spans.find(s => s.textContent.endsWith('\u2022 '));
+                         return [head && getComputedStyle(head).fontWeight,
+                                 mark && getComputedStyle(mark).color,
+                                 dot && dot.textContent];
                        }""", self.EDITOR))
+                editor.fill("")
 
                 # Showing it is not writing it: nothing is stored until the
                 # reader types.
@@ -1265,8 +1296,7 @@ class ChatUiServerTests(unittest.TestCase):
         if not chrome:
             self.skipTest("Chrome/Chromium is not installed")
 
-        written = self.DEFAULT_DOC.replace(
-            "# Decisions\n", "# Decisions\n- we chose sqlite\n")
+        written = "# Decisions\n- we chose sqlite\n"
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 executable_path=chrome,
@@ -1291,7 +1321,8 @@ class ChatUiServerTests(unittest.TestCase):
                             break
                         time.sleep(0.1)
                     self.assertEqual(written, notes)
-                    self.assertIn("- we chose sqlite", self.overlay_text(page))
+                    # rendered under the caret with the bullet drawn as a dot
+                    self.assertIn("\u2022 we chose sqlite", self.overlay_text(page))
 
                     page.reload(wait_until="domcontentloaded")
                     expect(page.locator(self.EDITOR)).to_be_visible(
@@ -1520,17 +1551,13 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(rail).to_be_visible()
                 expect(page.locator(self.EDITOR)).to_have_count(1)
 
-                draft = rail.locator(".hc-rail-code").inner_text()
-                self.assertIn("Objective:\nShip the document pane.", draft)
-                self.assertIn("Decisions:\n- we chose sqlite", draft)
-
-                # Assembled, not authored: there is nothing to type into.
-                expect(rail.locator("textarea")).to_have_count(0)
-                expect(rail.locator("input")).to_have_count(0)
-
-                # The size it will cost, marked as the estimate it is.
-                expect(rail.locator(".hc-rail-count")).to_have_text(
-                    "~" + str(-(-len(draft) // 4)) + " tok")
+                open_prompt_tab(page)
+                # The field is for the reader's own words: the context the
+                # goal assembles is not printed in it (it is prepended on
+                # copy), so a goal with nothing written shows an empty field.
+                expect(rail.locator("textarea.hc-rail-code")).to_have_count(1)
+                draft = rail.locator(".hc-rail-code").input_value()
+                self.assertEqual("", draft)
 
                 # Nothing here starts a run; every op behind one refuses.
                 expect(page.get_by_text("run agent", exact=True)
@@ -1550,13 +1577,16 @@ class ChatUiServerTests(unittest.TestCase):
                 # The label only changes once the clipboard has it.
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
-                self.assertEqual(draft, page.evaluate(
-                    "() => navigator.clipboard.readText()"))
+                # With nothing written, what leaves is the assembled prompt
+                # itself -- the field being empty does not empty the copy.
+                copied = page.evaluate("() => navigator.clipboard.readText()")
+                self.assertIn("Objective:\nShip the document pane.", copied)
+                self.assertIn("Decisions:\n- we chose sqlite", copied)
                 context.close()
             finally:
                 browser.close()
 
-    def test_the_assembled_prompt_survives_a_reload_and_writes_nothing(self):
+    def test_an_edited_prompt_is_kept_in_the_document_and_copied(self):
         """It is assembled, not authored, and reading it changes nothing.
 
         The old box kept no edit -- not across a reload, not across a
@@ -1592,32 +1622,45 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
+                open_prompt_tab(page)
                 code = page.locator(".hc-rail-code")
-                before = code.inner_text()
-                self.assertIn("Objective:\nShip the document pane.", before)
+                self.assertEqual("", code.input_value())
 
-                # Clicking into it and typing is a no-op: it is not a field.
+                # An edit is the reader's, and it is kept where the rest of
+                # their writing is kept: a section of the goal's document.
+                # Browser storage would not do -- every /goals-ui opens a new
+                # port, and a new port is a new origin with nothing saved.
                 code.click()
                 page.keyboard.type("EDITED BY HAND")
-                page.wait_for_timeout(1_500)
-                self.assertEqual(before, code.inner_text())
-                unchanged = [g for g in get_json(url + "/api/state")["goals"]
-                             if g["id"] == "a1"][0]
-                self.assertEqual("# Objective\nShip the document pane.\n",
-                                 unchanged["notes"])
-                self.assertEqual("", unchanged["description"])
-                self.assertNotIn("EDITED BY HAND", goals_path.read_text())
+                page.wait_for_timeout(2_500)
+                stored_goal = [g for g in get_json(url + "/api/state")["goals"]
+                               if g["id"] == "a1"][0]
+                # Its own field, beside the document -- never in it.
+                self.assertIn("EDITED BY HAND", stored_goal["prompt_md"])
+                self.assertNotIn("EDITED BY HAND", stored_goal["notes"])
+                self.assertNotIn("# Prompt", stored_goal["notes"])
+                # The objective it was assembled from is untouched by the edit.
+                self.assertIn("# Objective\nShip the document pane.",
+                              stored_goal["notes"])
+                self.assertEqual("", stored_goal["description"])
 
                 page.reload(wait_until="domcontentloaded")
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
-                expect(page.locator(".hc-rail-code")).to_have_text(before)
+                open_prompt_tab(page)
+                expect(page.locator(".hc-rail-code")).to_have_value(
+                    __import__("re").compile("EDITED BY HAND"))
 
+                # Copy takes the assembled context AND the reader's words:
+                # what is on screen is theirs alone, what leaves is whole.
                 copy = page.get_by_text("Copy prompt", exact=True)
                 copy.click()
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
-                self.assertEqual(before, page.evaluate(
-                    "() => navigator.clipboard.readText()"))
+                copied = page.evaluate("() => navigator.clipboard.readText()")
+                self.assertIn("Objective:\nShip the document pane.", copied)
+                self.assertTrue(copied.rstrip().endswith("EDITED BY HAND"),
+                                copied)
+                self.assertNotIn("Implement this goal for me.", copied)
                 context.close()
             finally:
                 browser.close()
@@ -1706,7 +1749,9 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-left")).to_be_visible(
                     timeout=10_000)
-                chips_before = page.locator(".hc-chip").first.bounding_box()
+                # The pills live in the header now, so the line the banner
+                # takes is measured against the columns under it.
+                rail_before = page.locator(".hc-rail-left").bounding_box()
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
@@ -1723,17 +1768,17 @@ class ChatUiServerTests(unittest.TestCase):
                 self.assertLess(box["x"], 20, "a bar starts at the edge")
                 self.assertGreater(box["width"], 1_000, "a bar spans the page")
                 self.assertLess(box["y"], 80, "and sits under the header")
-                # It has its own line: the chips move down for it rather
+                # It has its own line: the columns move down for it rather
                 # than being painted over.
-                moved = page.locator(".hc-chip").first.bounding_box()
-                self.assertGreater(moved["y"], chips_before["y"] + 20)
+                moved = page.locator(".hc-rail-left").bounding_box()
+                self.assertGreater(moved["y"], rail_before["y"] + 20)
                 self.assertGreater(moved["y"], box["y"] + box["height"] - 2)
 
                 # And the columns give the line back when it goes.
                 banner.locator(".hc-notice-close").click()
                 expect(banner).to_have_count(0, timeout=2_000)
-                back = page.locator(".hc-chip").first.bounding_box()
-                self.assertAlmostEqual(chips_before["y"], back["y"], delta=2)
+                back = page.locator(".hc-rail-left").bounding_box()
+                self.assertAlmostEqual(rail_before["y"], back["y"], delta=2)
             finally:
                 browser.close()
 
@@ -1917,7 +1962,10 @@ class ChatUiServerTests(unittest.TestCase):
         self.assertEqual(["session start", "prompt", "subagent", "task"],
                          unlocked["injection"]["reads"])
 
-    def test_the_injection_card_prints_what_the_state_reports(self):
+    def test_the_injection_card_is_not_drawn(self):
+        """The rail carries the TODOs and the prompt; the injection status
+        card that used to sit under them is gone. The state it printed is
+        still on the payload (the test above) -- it just has no card."""
         try:
             from playwright.sync_api import expect, sync_playwright
         except ImportError:
@@ -1940,26 +1988,10 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
-                card = page.locator(".hc-inject")
-                expect(card).to_be_visible(timeout=10_000)
-                expect(card).to_contain_text("context injection")
-                expect(card).to_contain_text("goal document sent")
-                # "sent", not "read": the snapshot these lines are
-                # derived from records what the hook rendered into a turn,
-                # which Claude Code may still drop or compact.
-                expect(card).to_contain_text("unchanged since it was last sent")
-                expect(card).to_contain_text(
-                    "reads: session start · prompt · subagent · task")
-                expect(card).to_contain_text("/goals-ui disable turns it off")
-                # No control: turning it off is a slash command in the
-                # terminal, and the card says so rather than offering one.
-                expect(card.locator("button")).to_have_count(0)
-
-                # It follows the state rather than the page's own memory.
-                chat_state.disable_goals_ui("chat-a", self.root)
-                expect(card).to_contain_text("not sent to Claude yet",
-                                             timeout=6_000)
-                expect(card).to_contain_text("/goals-ui turns it back on")
+                expect(page.locator(".hc-rail-right")).to_be_visible(
+                    timeout=10_000)
+                expect(page.locator(".hc-inject")).to_have_count(0)
+                expect(page.get_by_text("context injection")).to_have_count(0)
             finally:
                 browser.close()
 
@@ -2336,6 +2368,88 @@ class DeletedGoalBrowserTests(unittest.TestCase):
         kept = [g for g in state["goals"] if g["id"] == "g2"]
         self.assertEqual(1, len(kept), "the record itself is kept, not erased")
         self.assertEqual("abandoned", kept[0]["status"])
+
+
+class FullBleedWorkspaceBrowserTests(unittest.TestCase):
+    """Three columns fill the window; the reader sizes or hides the rails."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "one goal")], [])
+
+    GEO = """() => {
+        const r = (s) => { const e = document.querySelector(s);
+                           return e ? e.getBoundingClientRect().toJSON() : null; };
+        return { hdr: r('.hc>div:first-child'), l: r('.hc-rail-left'),
+                 m: r('.hc-main'), rt: r('.hc-rail-right'),
+                 pills: r('.hc-titlerow'), brand: r('.hc-brand'),
+                 brandFont: getComputedStyle(document.querySelector('.hc-brand')).fontFamily };
+    }"""
+
+    def test_the_columns_fill_the_window_and_the_pills_ride_in_the_header(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=chrome, headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector("text=one goal", timeout=10000)
+                page.wait_for_timeout(1500)
+                g = page.evaluate(self.GEO)
+                # Header, then columns from its bottom edge to the window's.
+                self.assertEqual((0, 0, 1440, 37), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
+                for col in ("l", "m", "rt"):
+                    self.assertEqual(37, round(g[col]["y"]), col)
+                    self.assertEqual(900, round(g[col]["bottom"]), col)
+                # Flush: left rail at 0, main starts where it ends, right
+                # rail ends at the window.
+                self.assertEqual(0, round(g["l"]["x"]))
+                self.assertEqual(round(g["l"]["right"]), round(g["m"]["x"]))
+                self.assertEqual(round(g["m"]["right"]), round(g["rt"]["x"]))
+                self.assertEqual(1440, round(g["rt"]["right"]))
+                # The pills sit inside the header, after the brand; the brand
+                # is set in a serif.
+                self.assertLess(g["pills"]["y"], 37)
+                self.assertGreater(g["pills"]["x"], g["brand"]["right"])
+                self.assertIn("Georgia", g["brandFont"])
+
+                # Drag the goals divider 80px right; the rail follows.
+                edge = g["l"]["right"]
+                page.mouse.move(edge, 400); page.mouse.down()
+                page.mouse.move(edge + 40, 400); page.mouse.move(edge + 80, 400)
+                page.mouse.up()
+                self.assertEqual(round(edge) + 80, round(page.evaluate(self.GEO)["l"]["width"]))
+                # Double-click the prompt divider hides that rail; the
+                # document takes the space.
+                g = page.evaluate(self.GEO)
+                page.mouse.dblclick(g["rt"]["x"], 400)
+                g = page.evaluate(self.GEO)
+                self.assertEqual(0, g["rt"]["width"])
+                self.assertEqual(1440, round(g["m"]["right"]))
+                # The header toggle brings it back, at a quarter of the
+                # window -- the width the rails open at.
+                page.click('[data-hc-panel="right"]')
+                self.assertEqual(360, round(page.evaluate(self.GEO)["rt"]["width"]))
+                # And the layout is the reader's own: it survives a reload.
+                page.click('[data-hc-panel="left"]')
+                page.reload(wait_until="domcontentloaded")
+                # The goals rail is hidden now, so wait on the header.
+                page.wait_for_selector(".hc-brand", timeout=10000)
+                page.wait_for_timeout(1500)
+                g = page.evaluate(self.GEO)
+                self.assertEqual(0, g["l"]["width"])
+                self.assertEqual(0, round(g["m"]["x"]))
+                self.assertEqual(360, round(g["rt"]["width"]))
+            finally:
+                browser.close()
 
 
 class ConversationGoalAttributionTests(unittest.TestCase):

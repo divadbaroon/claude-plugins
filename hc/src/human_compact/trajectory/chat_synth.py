@@ -45,8 +45,10 @@ Never use private assistant thinking. Copy only supplied event ids.
 Each goal also has "sections": the goal's own markdown document, which the
 user reads and edits by hand. objective and in_my_words are plain sentences;
 decisions, built, blockers and open_questions are lists of short bullet
-strings. Write only what THIS chat's evidence supports and leave a section
-empty when it supports nothing. Never invent, pad, or restate the title.
+strings. The workspace's TODO list is not part of the document: never write
+todos into a section. Write only what THIS chat's evidence supports and leave
+a section empty when it supports nothing. Never invent, pad, or restate the
+title.
 
 Return ONLY minified JSON:
 {"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}

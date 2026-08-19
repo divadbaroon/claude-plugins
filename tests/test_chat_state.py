@@ -567,6 +567,43 @@ class ChatStateTests(unittest.TestCase):
         CS.ingest_transcript(SID, self.transcript, root=self.base)
         return [p["id"] for p in CS.load_prompts(SID, self.base)]
 
+    def test_todo_rows_persist_in_their_own_json_file_apart_from_the_notes(self):
+        # The rail's rows go to todos.json; goals.json (where the notes
+        # live) carries none of them. A TODO is never stored in, derived
+        # from, or parsed out of the notes document.
+        rows = [{"id": "t0000000a", "text": "ship it", "depth": 0,
+                 "status": "building", "question": ""},
+                {"id": "t0000000b", "text": "and test", "depth": 1,
+                 "status": "", "question": ""}]
+        CS.save_goals(SID, {"version": 1, "goals": [
+            {"id": "g1", "title": "Ship the router", "todos": [],
+             "notes": "# Decisions\n- keep sqlite\n",
+             "todo_items": [dict(r) for r in rows]}]},
+            {"items": []}, self.base)
+        p = CS.paths(SID, self.base)
+        stored = json.loads(p.goals.read_text(encoding="utf-8"))
+        self.assertEqual([], stored["goals"][0]["todo_items"])
+        held = json.loads(p.todos.read_text(encoding="utf-8"))
+        self.assertEqual({"g1": rows}, held["todos"])
+        # And the load joins them back, rows over the same goal.
+        goal = CS.load_goals(SID, self.base)[0]["goals"][0]
+        self.assertEqual(rows, goal["todo_items"])
+        self.assertEqual("# Decisions\n- keep sqlite\n", goal["notes"])
+
+    def test_a_store_from_before_the_split_still_loads_its_rows(self):
+        # goals.json written by an older build carries the rows inline and
+        # no todos.json exists; the load takes them as they are.
+        rows = [{"id": "t0000000a", "text": "ship it", "depth": 0,
+                 "status": "", "question": ""}]
+        p = CS.paths(SID, self.base)
+        p.session_dir.mkdir(parents=True, exist_ok=True)
+        p.goals.write_text(json.dumps({"version": 1, "goals": [
+            {"id": "g1", "title": "Ship the router",
+             "todo_items": [dict(r) for r in rows]}]}), encoding="utf-8")
+        self.assertFalse(p.todos.exists())
+        goal = CS.load_goals(SID, self.base)[0]["goals"][0]
+        self.assertEqual(rows, goal["todo_items"])
+
     def test_prompts_cited_as_evidence_attach_to_their_goal(self):
         first, second = self._chat_with_prompts()
         CS.save_goals(SID, {"version": 1, "goals": [

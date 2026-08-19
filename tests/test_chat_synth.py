@@ -17,6 +17,7 @@ if str(HC_SRC) not in sys.path:
 
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import chat_synth as S  # noqa: E402
+from human_compact.trajectory import goals as GM  # noqa: E402
 
 
 SID = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
@@ -660,6 +661,47 @@ class ChatProviderGateTests(unittest.TestCase):
         self._kind({"HC_CHAT_PROVIDER": "ollama"})
         sentinel = Provider([{"goals": []}])
         self.assertIs(sentinel, S._provider(sentinel))
+
+
+
+
+class SectionContractTests(unittest.TestCase):
+    """Inference is told about every section the document actually has.
+
+    A section the prompt never names is a section inference can never fill,
+    so the reader would see a heading the analyzer silently skips.
+    """
+
+    def _sections_schema(self, text):
+        # Look inside the "sections" object only. "todos" also names the flat
+        # legacy array elsewhere in both prompts, so a bare substring search
+        # would pass whether or not the section exists.
+        start = text.index('"sections":{')
+        return text[start:text.index("}", start)]
+
+    def test_the_initial_prompt_declares_every_section_key(self):
+        schema = self._sections_schema(S.INITIAL_PROMPT)
+        missing = [key for key in GM.SECTION_KEYS if '"%s":' % key not in schema]
+        self.assertEqual([], missing, "sections schema: %s" % schema)
+
+    def test_the_incremental_prompt_accepts_appends_to_every_section(self):
+        # append_section enumerates what it will accept; a key left out of
+        # that list is a heading inference can never write to.
+        line = next(row for row in S.INCREMENTAL_PROMPT.splitlines()
+                    if '"op":"append_section"' in row)
+        missing = [key for key in GM.SECTION_KEYS if key not in line]
+        self.assertEqual([], missing, "append_section: %s" % line)
+
+    def test_todos_is_not_a_section_either_prompt_writes_to(self):
+        # The rail's list is its own store, decoupled from the notes: the
+        # sections schema must not name it, append_section must not accept
+        # it, and the prompt says so in words the model reads.
+        self.assertNotIn('"todos"', self._sections_schema(S.INITIAL_PROMPT))
+        line = next(row for row in S.INCREMENTAL_PROMPT.splitlines()
+                    if '"op":"append_section"' in row)
+        self.assertNotIn("todos", line)
+        self.assertIn("never write", S.INITIAL_PROMPT)
+        self.assertIn("todos into a section", S.INITIAL_PROMPT)
 
 
 if __name__ == "__main__":

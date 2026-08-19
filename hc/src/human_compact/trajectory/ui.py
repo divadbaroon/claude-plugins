@@ -611,10 +611,73 @@ def _payload(trajdir=None, chat_scoped=None):
                    "revision": _goal_revision(goals, important)}
     if identity is not None:
         payload["injection"] = _injection_state(*identity)
+        try:
+            from . import build as BUILD
+            payload["build_session"] = BUILD.session_state(*identity)
+        except Exception:  # noqa: BLE001 - the rail can do without it
+            payload["build_session"] = None
     return payload
 
 
 def _apply(op, trajdir=None, chat_scoped=None):
+    result = _apply_locked(op, trajdir, chat_scoped)
+    deferred = result.get("__deferred__") if isinstance(result, dict) else None
+    if not deferred:
+        return result
+    from . import build as BUILD
+    kind, session_id, root, goal_id, op = deferred
+    if kind == "reopen_session":
+        return BUILD.reopen(session_id, root)
+    if kind == "build_todos":
+        ids = op.get("ids")
+        return BUILD.start(session_id, root, goal_id,
+                           ids if isinstance(ids, list) else [])
+    return BUILD.answer(session_id, root, goal_id,
+                        str(op.get("id") or ""), str(op.get("answer") or ""))
+
+
+def _generate_prompt(session_id, root, goals, important, goal):
+    """Ask Claude for a prompt for this goal, from the tree the plugin holds.
+
+    Synchronous and bounded by the provider's own timeout: the rail shows
+    "Generating…" until it lands. Empty on any failure -- the caller says so.
+    """
+    from . import providers as PROVIDERS
+    tree = CS._goal_context_text(session_id, goals, important,
+                                 CS.load_prompts(session_id, root))
+    title = " ".join(str(goal.get("title") or "Untitled").split())
+    todos = str(goal.get("todos_md") or "").strip()
+    notes = str(goal.get("notes") or "").strip()
+    ask = [
+        "You write prompts for a coding agent (Claude Code) working in the",
+        "user's repository. Below is the user's whole goal tree for this",
+        "chat, then the ONE goal to write a prompt for.",
+        "",
+        "Write the prompt the user would send to have this goal (and only",
+        "this goal) implemented. Be concrete: name the outcome, the",
+        "constraints that follow from the rest of the tree, what to leave",
+        "alone, and how to verify. Second person, addressed to the agent.",
+        "No preamble, no headings about yourself, no quotation marks",
+        "around the whole thing. Under 250 words. Output the prompt only.",
+        "",
+        "# Goal tree", "", tree.rstrip(), "",
+        "# The goal to write the prompt for", "",
+        f"{goal.get('id')} · {title}",
+    ]
+    if todos:
+        ask += ["", "Its TODOs:", todos]
+    if notes:
+        ask += ["", "The user's notes on it:", notes[:3000]]
+    try:
+        provider = PROVIDERS.make(
+            os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize")
+        text = provider.generate("\n".join(ask) + "\n")
+    except Exception:  # noqa: BLE001 - any provider failure is "no prompt"
+        return ""
+    return str(text or "").strip()
+
+
+def _apply_locked(op, trajdir=None, chat_scoped=None):
     chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
     trajdir = _scope(trajdir)
     with _state_access(trajdir, chat_scoped):
@@ -716,6 +779,31 @@ def _apply(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
+        if kind in ("build_todos", "answer_todo", "generate_prompt",
+                    "reopen_session"):
+            # The rail's build and generate: chat scope only, since both run
+            # against the chat's own project and goal tree. The build ops are
+            # handed back to _apply to run OUTSIDE this lock -- build.py takes
+            # the same lock for its own writes, and a child process must
+            # never be spawned while a request still holds it.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            if kind == "reopen_session":
+                return {"__deferred__": (kind, session_id, root, None, op)}
+            if not g:
+                return {"ok": False, "error": "goal not found in this chat"}
+            if kind == "generate_prompt":
+                text = _generate_prompt(session_id, root, goals, important, g)
+                if not text:
+                    return {"ok": False, "error":
+                            "the prompt could not be generated (is the claude "
+                            "CLI on PATH?)"}
+                g["prompt_md"] = text
+                g["updated_at"] = GM._now()
+                _save_goals(trajdir, goals, important, chat_scoped)
+                return {"ok": True, "prompt": text}
+            return {"__deferred__": (kind, session_id, root, g["id"], op)}
         if kind == "rename_goal" and g and op.get("title", "").strip():
             g["title"] = op["title"].strip()[:120]
         elif kind == "set_status" and g and op.get("status") in ("active", "in_progress", "completed", "abandoned"):
@@ -769,6 +857,9 @@ def _apply(op, trajdir=None, chat_scoped=None):
                     links.append(prompt_id)
                 g["detached_prompt_ids"] = [pid for pid in removed
                                             if pid != prompt_id]
+                # A prompt of theirs tied to the goal is work begun on it.
+                if g.get("status") == "active":
+                    g["status"] = "in_progress"
             else:
                 g["prompt_ids"] = [pid for pid in links if pid != prompt_id]
                 if prompt_id not in removed:
@@ -1062,7 +1153,7 @@ class H(BaseHTTPRequestHandler):
             self._finish_request()
 
 
-def _configure_server(server, trajdir, chat_scoped):
+def _configure_server(server, trajdir, chat_scoped, follow=True):
     server.trajdir = trajdir
     server.chat_scoped = chat_scoped
     server.state_lock = threading.RLock()
@@ -1071,6 +1162,75 @@ def _configure_server(server, trajdir, chat_scoped):
     server.last_activity = time.monotonic()
     server.active_requests = 0
     server.idle_expired = False
+    server.follow_stop = threading.Event()
+    server.follow_thread = None
+    if chat_scoped and follow:
+        # The prompts this workspace offers are the chat's own turns. They
+        # used to arrive only through the hooks -- which go quiet the moment
+        # a plugin path moves or a session is resumed under a stale hook
+        # config, and the list then froze at wherever the last hook left it.
+        # The server can read the transcript itself: follow it.
+        server.follow_thread = threading.Thread(
+            target=_follow_transcript, args=(server, server.follow_stop),
+            daemon=True, name="hc-follow-transcript")
+        server.follow_thread.start()
+
+
+def _find_transcript(session_id, manifest):
+    """Where the chat's transcript is now.
+
+    The manifest remembers the path the hooks last reported; a session that
+    was closed and reopened keeps its id and its file, but if that file is
+    gone (moved project, cleared history), look it up by id under Claude's
+    own projects directory and take the newest.
+    """
+    recorded = str((manifest or {}).get("transcript_path") or "")
+    if recorded and Path(recorded).is_file():
+        return Path(recorded)
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    candidates = sorted(
+        (home / "projects").glob(f"*/{session_id}.jsonl"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _follow_transcript(server, stop, interval=None):
+    """Ingest the chat's transcript as it grows, without waiting for a hook.
+
+    Cheap when nothing changed: one stat per tick. Ingestion is the same
+    incremental, cursor-and-fingerprint read the hooks use, so a rewritten or
+    truncated file is replayed from the top, never misread.
+    """
+    interval = float(interval if interval is not None else
+                     os.environ.get("HC_CHAT_FOLLOW_SECONDS", "2"))
+    seen = None
+    while not stop.wait(interval if seen is not None else 0.2):
+        try:
+            session_id, root = _chat_identity(server.trajdir)
+            manifest = CS.load_manifest(session_id, root)
+            transcript = _find_transcript(session_id, manifest)
+            if transcript is None:
+                seen = ("", 0, 0)
+                continue
+            stat = transcript.stat()
+            mark = (str(transcript), stat.st_size, stat.st_mtime_ns)
+            if mark == seen:
+                continue
+            source = manifest.get("source") or {}
+            if (str(source.get("path") or "") == str(transcript)
+                    and int(source.get("cursor") or 0) == stat.st_size
+                    and int(source.get("mtime_ns") or 0) == stat.st_mtime_ns):
+                seen = mark       # a hook already took this much
+                continue
+            CS.ingest_transcript(session_id, transcript, root=root)
+            seen = mark
+        except (OSError, ValueError, TypeError, TimeoutError):
+            # The lock was busy, or the file moved between stat and read:
+            # the next tick tries again from the manifest's cursor.
+            continue
+        except Exception:  # noqa: BLE001 - a follower may never take the server down
+            continue
 
 
 def _resolved_idle_timeout(value, chat_scoped):
@@ -1166,6 +1326,7 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
         print("\n  stopped")
     finally:
         idle_stop.set()
+        srv.follow_stop.set()
         if previous_term is not None:
             import signal
             try:
@@ -1179,6 +1340,31 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
                 _registry_path(trajdir).unlink(missing_ok=True)
         if idle_thread is not None and idle_thread is not threading.current_thread():
             idle_thread.join(timeout=1)
+
+
+def _merge_todo_items(posted, previous):
+    """The browser's rows with the server's build state laid back over them.
+
+    A row is matched by id. Text, depth and order are whatever the browser
+    sent (that is the edit); status and question are whatever the server had
+    for that id (that is the run). A row the browser no longer sends is gone;
+    a row it sends that the server never saw starts blank. A browser that
+    posted no list at all (an older cached page) keeps the server's rows.
+    """
+    if not isinstance(posted, list):
+        return GM.normalize_todo_items(previous)
+    held = {row.get("id"): row for row in GM.normalize_todo_items(previous)}
+    out = []
+    for row in GM.normalize_todo_items(posted):
+        was = held.get(row["id"])
+        if was is not None:
+            row["status"] = was.get("status", "")
+            row["question"] = was.get("question", "")
+        else:
+            row["status"] = ""
+            row["question"] = ""
+        out.append(row)
+    return out
 
 
 def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
@@ -1249,6 +1435,15 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "priority": node.get("prio") if node.get("prio") in
                             ("urgent", "high", "normal") else "normal",
                         "notes": str(node.get("notes") or ""),
+                        # Rows come from the browser -- text, depth, order --
+                        # but their build state is the server's: a run that
+                        # marked a row done or asking must not be undone by a
+                        # tree the browser posted from an older copy.
+                        "todo_items": _merge_todo_items(
+                            node.get("todo_items"), prev.get("todo_items")),
+                        "todos_md": "",
+                        "prompt_md": str(node["prompt_md"] if node.get("prompt_md")
+                                         is not None else prev.get("prompt_md") or ""),
                         "description": str(node.get("desc") or "")[:600],
                         "origin": prev.get("origin", "ui"),
                         "updated_at": prev.get("updated_at", GM._now())}
@@ -1264,9 +1459,11 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                 g["updated_at"] = GM._now()
                 continue
             if (g["title"], g["status"], g["parent_goal_id"], g["priority"],
-                g["notes"], g["description"]) != \
+                g["notes"], GM.render_todos(g["todo_items"]), g["prompt_md"],
+                g["description"]) != \
                (prev.get("title"), prev.get("status"), prev.get("parent_goal_id"),
                 prev.get("priority", "normal"), prev.get("notes", ""),
+                GM.render_todos(prev.get("todo_items")), prev.get("prompt_md", ""),
                 prev.get("description", "")):
                 g["updated_at"] = GM._now()
         # anything the app deleted -> abandoned, kept

@@ -26,8 +26,11 @@ from .goals import (  # noqa: F401
     join_doc,
     link_evidence_prompts,
     normalize_sources,
+    overlay_todo_store,
     promote_todos,
     split_doc,
+    split_todo_store,
+    strip_todo_items,
 )
 from .secure_io import secure_dir
 
@@ -62,6 +65,7 @@ class ChatPaths:
     events: Path
     prompts: Path
     goals: Path
+    todos: Path
     important: Path
     goal_context: Path
     context_snapshot: Path
@@ -130,6 +134,7 @@ def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
         events=session_dir / "events.jsonl",
         prompts=session_dir / "prompts.json",
         goals=session_dir / "goals.json",
+        todos=session_dir / "todos.json",
         important=session_dir / "important.json",
         goal_context=session_dir / "goal_context.md",
         context_snapshot=session_dir / "context_snapshot.json",
@@ -1300,6 +1305,12 @@ def load_goals(
         important = {"items": []}
     goals.setdefault("goals", [])
     important.setdefault("items", [])
+    # The rail's rows live in their own file, apart from everything the notes
+    # travel in; a store from before the split still carries them inline and
+    # is read as it is, to be rewritten split on its next save.
+    todos = _read_json(p.todos, {})
+    overlay_todo_store(goals, todos.get("todos")
+                       if isinstance(todos, dict) else {})
     return _ensure_prompt_ids(goals), important
 
 
@@ -1357,6 +1368,13 @@ def _goal_context_text(
                 lines.append(f"{indent}  - USER NOTES:")
                 lines.extend(f"{indent}    {line}".rstrip()
                              for line in join_doc(written).splitlines())
+            # The rail's list, kept apart from the notes so an edit to one
+            # never touches the other -- and injected the same way, whole.
+            todos_md = str(goal.get("todos_md") or "").strip("\n")
+            if todos_md.strip():
+                lines.append(f"{indent}  - TODOS:")
+                lines.extend(f"{indent}    {line}".rstrip()
+                             for line in todos_md.splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
             # What the user attached as background for this goal, named by
@@ -1448,7 +1466,10 @@ def save_goals(
         prompts = load_prompts(session_id, root)
         goals = link_evidence_prompts(_ensure_prompt_ids(goals), prompts)
         goals["generated_at"] = _now()
-        _atomic_json(p.goals, goals)
+        # goals.json is the tree and its notes; the rows go to todos.json --
+        # a TODO is never stored in, derived from, or parsed out of the notes.
+        _atomic_json(p.goals, strip_todo_items(goals))
+        _atomic_json(p.todos, {"version": 1, "todos": split_todo_store(goals)})
         _atomic_json(p.important, important)
         text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))

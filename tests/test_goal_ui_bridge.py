@@ -271,6 +271,333 @@ class LaunchDressedTests(BridgeTestCase):
         self.assertFalse(self.ask("chat", True, ""))
 
 
+class TodoListModelTests(BridgeTestCase):
+    """The list the workspace rail edits: rows of {id, text, depth, status}.
+
+    Every key the list is about is a pure operation on the rows -- returning
+    the rows and where the caret should land, or null when the browser should
+    have the key -- so all of it is testable without a DOM. Rows carry ids the
+    reader never sees; the markdown is derived, four spaces to the level.
+    """
+
+    def rows(self, spec):
+        return [{"id": "t%08d" % i, "text": text, "depth": depth,
+                 "status": "", "question": ""}
+                for i, (text, depth) in enumerate(spec)]
+
+    def model(self, expression, spec=(), **rest):
+        return self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var items = %s;"
+            "out = (%s);" % (json.dumps(self.rows(spec)), expression), **rest)
+
+    def shape(self, result):
+        return [[r["text"], r["depth"]] for r in result["items"]], \
+            result.get("index"), result.get("caret")
+
+    # --- text out ------------------------------------------------------------
+
+    def test_rows_serialize_to_bullets_four_spaces_to_the_level(self):
+        self.assertEqual(
+            "- one\n- two\n    - two a\n        - deep\n- three\n",
+            self.model("L.serialize(items)",
+                       [("one", 0), ("two", 0), ("two a", 1), ("deep", 2),
+                        ("three", 0)]))
+
+    def test_blank_rows_serialize_to_nothing(self):
+        self.assertEqual("", self.model("L.serialize(items)", [("", 0)]))
+        self.assertEqual("- a\n", self.model("L.serialize(items)",
+                                             [("a", 0), ("  ", 1)]))
+
+    def test_rows_serialize_with_their_states_for_a_prompt_body(self):
+        # The copy a session receives names every row's state -- "active"
+        # for a row not yet sent, its status word otherwise.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.serializeStates(["
+            "  {id: 't00000001', text: 'one', depth: 0, status: ''},"
+            "  {id: 't00000002', text: 'two', depth: 1, status: 'building'},"
+            "  {id: 't00000003', text: 'three', depth: 0, status: 'done'},"
+            "  {id: 't00000004', text: '  ', depth: 0, status: 'queued'}]);")
+        self.assertEqual(
+            "- [active] one\n    - [building] two\n- [done] three\n", out)
+
+    def test_the_todo_copy_carries_the_notes_as_context_only(self):
+        # The Copy TODOs body: rows with states first, then the goal's notes
+        # under a CONTEXT header that says not to act on them.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.copyText("
+            "  [{id: 't00000001', text: 'ship it', depth: 0, status: ''}],"
+            "  '# Decisions\\n- keep sqlite\\n');")
+        self.assertEqual(
+            "TODOs (each with its current state):\n- [active] ship it\n"
+            "\nCONTEXT — the goal's notes, for background only. Do NOT make"
+            " any changes specified in these notes; act only on the TODOs"
+            " above:\n# Decisions\n- keep sqlite\n", out)
+
+    def test_the_todo_copy_without_notes_is_the_bare_state_list(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.copyText("
+            "  [{id: 't00000001', text: 'ship it', depth: 0, status: ''}], '');")
+        self.assertEqual("- [active] ship it\n", out)
+
+    def test_the_copied_prompt_includes_todo_states(self):
+        # The chat scope's recommended-prompt builder reads the rows, not the
+        # bare markdown, so the states travel with the copied prompt body.
+        out = self.patched_bundle(
+            "out = [out.indexOf(\"'TODOs (each with its current state):\") >= 0,"
+            "       out.indexOf('sel.todo_items') >= 0];", scope="chat")
+        self.assertEqual([True, True], out)
+
+    def test_a_depth_jump_is_pulled_back_to_one_level(self):
+        out = self.model("L.normalize(items).map(function (r) { return r.depth; })",
+                         [("one", 0), ("deep", 3), ("deeper", 5)])
+        self.assertEqual([0, 1, 2], out)
+
+    def test_every_row_keeps_or_gets_an_id(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.normalize([{text: 'a', depth: 0}, {id: 't0000000a', text: 'b'}])"
+            "  .map(function (r) { return [typeof r.id, r.id.length > 4, r.id]; });")
+        self.assertEqual(["string", True], out[0][:2])
+        self.assertEqual(["string", True, "t0000000a"], out[1])
+
+    # --- the family one pick covers -----------------------------------------
+
+    def test_a_parent_pick_covers_the_rows_nested_under_it(self):
+        # Marking a parent to-build marks its children: the family is the
+        # row and everything deeper, up to the next row at its own depth.
+        out = self.model("L.family(items, 0)",
+                         [("parent", 0), ("child", 1), ("grandchild", 2),
+                          ("sibling", 0)])
+        self.assertEqual([0, 1, 2], out)
+
+    def test_a_leaf_is_a_family_of_one(self):
+        out = self.model("L.family(items, 1)",
+                         [("parent", 0), ("child", 1), ("sibling", 0)])
+        self.assertEqual([1], out)
+
+    def test_a_family_ends_at_a_shallower_row(self):
+        out = self.model("L.family(items, 1)",
+                         [("one", 0), ("two", 1), ("two a", 2), ("three", 0)])
+        self.assertEqual([1, 2], out)
+
+    def test_a_family_out_of_range_is_empty(self):
+        self.assertEqual([], self.model("L.family(items, 5)", [("one", 0)]))
+
+    # --- the bands the list is drawn in ---------------------------------------
+    #
+    # Rows not yet sent sit on top, rows out with the builder in the middle,
+    # rows that came back done at the bottom -- with a rule between bands.
+
+    def banded(self, spec):
+        return [{"id": "t%08d" % i, "text": text, "depth": depth,
+                 "status": status, "question": ""}
+                for i, (text, depth, status) in enumerate(spec)]
+
+    def band_model(self, expression, spec):
+        return self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var items = %s;"
+            "out = (%s);" % (json.dumps(self.banded(spec)), expression))
+
+    def test_rows_without_a_status_are_all_one_band(self):
+        out = self.band_model("L.bands(items)",
+                              [("one", 0, ""), ("two", 0, ""), ("three", 1, "")])
+        self.assertEqual([0, 0, 0], out)
+
+    def test_done_sinks_and_building_sits_between(self):
+        out = self.band_model(
+            "L.sectioned(items).map(function (r) { return r.text; })",
+            [("done", 0, "done"), ("building", 0, "building"),
+             ("active", 0, "")])
+        self.assertEqual(["active", "building", "done"], out)
+
+    def test_queued_asking_and_failed_all_ride_the_middle_band(self):
+        out = self.band_model("L.bands(items)",
+                              [("q", 0, "queued"), ("a", 0, "asking"),
+                               ("f", 0, "failed"), ("d", 0, "done")])
+        self.assertEqual([1, 1, 1, 2], out)
+
+    def test_a_family_is_banded_whole(self):
+        # A parent out with the builder keeps its done child beside it: the
+        # family is done only when every row in it is.
+        out = self.band_model("L.bands(items)",
+                              [("parent", 0, "building"), ("child", 1, "done"),
+                               ("sibling", 0, "")])
+        self.assertEqual([1, 1, 0], out)
+
+    def test_a_done_parent_with_an_unsent_child_is_still_out(self):
+        out = self.band_model("L.bands(items)",
+                              [("parent", 0, "done"), ("child", 1, "")])
+        self.assertEqual([1, 1], out)
+
+    def test_a_band_keeps_the_order_its_rows_were_in(self):
+        out = self.band_model(
+            "L.sectioned(items).map(function (r) { return r.text; })",
+            [("d1", 0, "done"), ("a1", 0, ""), ("b1", 0, "building"),
+             ("a2", 0, ""), ("d2", 0, "done")])
+        self.assertEqual(["a1", "a2", "b1", "d1", "d2"], out)
+
+    def test_sectioning_moves_the_rows_themselves_not_copies(self):
+        out = self.band_model(
+            "L.sectioned(items)[2] === items[0]",
+            [("done", 0, "done"), ("active", 0, ""), ("building", 0, "building")])
+        self.assertTrue(out)
+
+    # --- enter -------------------------------------------------------------
+
+    def test_enter_on_a_written_row_opens_a_sibling_below_it(self):
+        out = self.model("L.enter(items, 0, 3)", [("one", 0)])
+        self.assertEqual(([["one", 0], ["", 0]], 1, 0), self.shape(out))
+        self.assertNotEqual(out["items"][0]["id"], out["items"][1]["id"])
+
+    def test_enter_in_the_middle_of_a_row_carries_the_tail_down(self):
+        out = self.model("L.enter(items, 0, 3)", [("one two", 0)])
+        self.assertEqual(([["one", 0], ["two", 0]], 1, 0), self.shape(out))
+
+    def test_enter_keeps_the_depth_of_the_row_it_leaves(self):
+        out = self.model("L.enter(items, 1, 3)", [("one", 0), ("two", 1)])
+        self.assertEqual(([["one", 0], ["two", 1], ["", 1]], 2, 0),
+                         self.shape(out))
+
+    def test_enter_on_an_empty_nested_row_outdents_it_instead(self):
+        out = self.model("L.enter(items, 1, 0)", [("one", 0), ("", 1)])
+        self.assertEqual(([["one", 0], ["", 0]], 1, 0), self.shape(out))
+
+    def test_enter_on_an_empty_top_level_row_does_nothing_at_all(self):
+        out = self.model("L.enter(items, 1, 0)", [("one", 0), ("", 0)])
+        self.assertEqual(([["one", 0], ["", 0]], 1, 0), self.shape(out))
+
+    # --- tab / shift-tab -----------------------------------------------------
+
+    def test_tab_indents_under_the_row_above(self):
+        out = self.model("L.indent(items, 1)", [("one", 0), ("two", 0)])
+        self.assertEqual([["one", 0], ["two", 1]], self.shape(out)[0])
+
+    def test_the_first_row_can_never_be_indented(self):
+        out = self.model("L.indent(items, 0)", [("one", 0), ("two", 0)])
+        self.assertEqual([["one", 0], ["two", 0]], self.shape(out)[0])
+
+    def test_tab_cannot_skip_a_level(self):
+        out = self.model("L.indent(items, 2)",
+                         [("one", 0), ("two", 1), ("three", 1)])
+        self.assertEqual([["one", 0], ["two", 1], ["three", 2]], self.shape(out)[0])
+        out = self.model("L.indent(L.indent(items, 2).items, 2)",
+                         [("one", 0), ("two", 1), ("three", 1)])
+        self.assertEqual([["one", 0], ["two", 1], ["three", 2]], self.shape(out)[0],
+                         "two levels under the row above is not a level")
+
+    def test_indenting_a_row_takes_its_children_with_it(self):
+        out = self.model("L.indent(items, 1)",
+                         [("one", 0), ("two", 0), ("two a", 1), ("three", 0)])
+        self.assertEqual([["one", 0], ["two", 1], ["two a", 2], ["three", 0]],
+                         self.shape(out)[0])
+
+    def test_shift_tab_outdents_and_stops_at_the_left_margin(self):
+        out = self.model("L.outdent(items, 1)", [("one", 0), ("two", 1)])
+        self.assertEqual([["one", 0], ["two", 0]], self.shape(out)[0])
+        out = self.model("L.outdent(L.outdent(items, 1).items, 1)",
+                         [("one", 0), ("two", 1)])
+        self.assertEqual([["one", 0], ["two", 0]], self.shape(out)[0])
+
+    # --- backspace and delete -------------------------------------------------
+
+    def test_backspace_at_the_start_of_a_written_row_joins_it_upward(self):
+        out = self.model("L.backspace(items, 1, 0)", [("one", 0), ("two", 0)])
+        self.assertEqual(([["onetwo", 0]], 0, 3), self.shape(out))
+
+    def test_backspace_on_an_empty_nested_row_outdents_before_deleting(self):
+        out = self.model("L.backspace(items, 1, 0)", [("one", 0), ("", 1)])
+        self.assertEqual([["one", 0], ["", 0]], self.shape(out)[0])
+
+    def test_backspace_on_an_empty_last_row_removes_it(self):
+        out = self.model("L.backspace(items, 1, 0)", [("one", 0), ("", 0)])
+        self.assertEqual(([["one", 0]], 0, 3), self.shape(out))
+
+    def test_backspace_inside_a_row_is_left_to_the_browser(self):
+        self.assertIsNone(self.model("L.backspace(items, 0, 2)", [("one", 0)]))
+
+    def test_the_only_row_is_never_removed_by_backspace(self):
+        self.assertIsNone(self.model("L.backspace(items, 0, 0)", [("", 0)]))
+        self.assertIsNone(self.model("L.backspace(items, 0, 0)", [("one", 0)]))
+
+    def test_cmd_backspace_removes_the_row_and_leaves_one_to_type_in(self):
+        out = self.model("L.remove(items, 1)", [("one", 0), ("two", 0), ("three", 0)])
+        self.assertEqual(([["one", 0], ["three", 0]], 1, 5), self.shape(out))
+        out = self.model("L.remove(items, 0)", [("one", 0)])
+        self.assertEqual([["", 0]], self.shape(out)[0])
+
+    # --- a selection across rows -----------------------------------------------
+
+    def test_a_selection_across_rows_cuts_to_one_row_and_takes_the_typed_key(self):
+        out = self.model("L.cut(items, 0, 2, 2, 3, '')",
+                         [("one", 0), ("two", 1), ("three", 0)])
+        self.assertEqual(([["onee", 0]], 0, 2), self.shape(out))
+        out = self.model("L.cut(items, 2, 3, 0, 2, 'X')",
+                         [("one", 0), ("two", 1), ("three", 0)])
+        self.assertEqual(([["onXee", 0]], 0, 3), self.shape(out),
+                         "backwards selections read the same as forwards")
+
+    def test_copying_a_selection_across_rows_gives_the_rows_as_markdown(self):
+        out = self.model("L.selectionText(items, 0, 1, 2, 2)",
+                         [("one", 0), ("two", 1), ("three", 0)])
+        self.assertEqual("- ne\n    - two\n- th", out)
+
+
+class TodoSectionTests(BridgeTestCase):
+    """Reading and replacing one section of the goal document, in the browser.
+
+    The rail owns the TODOs section and nothing else: every other heading the
+    reader or inference wrote has to come back byte for byte.
+    """
+
+    DOC = ("# Objective\nShip it\n\n# TODOs\n- one\n    - one a\n\n"
+           "# Decisions\n- keep sqlite\n")
+
+    def read(self, doc=None):
+        return self.run_js(
+            "out = window.__hcPromptUI.todoDoc.read(%s);"
+            % json.dumps(self.DOC if doc is None else doc))
+
+    def write(self, body, doc=None):
+        return self.run_js(
+            "out = window.__hcPromptUI.todoDoc.write(%s, %s);"
+            % (json.dumps(self.DOC if doc is None else doc), json.dumps(body)))
+
+    def test_it_reads_only_the_todos_section(self):
+        self.assertEqual("- one\n    - one a\n", self.read())
+
+    def test_a_document_without_the_section_reads_empty(self):
+        self.assertEqual("", self.read("# Objective\nShip it\n"))
+
+    def test_writing_leaves_every_other_section_byte_for_byte(self):
+        out = self.write("- two\n")
+        self.assertIn("# Objective\nShip it\n", out)
+        self.assertIn("# Decisions\n- keep sqlite\n", out)
+        self.assertEqual("- two\n", self.read(out))
+
+    def test_writing_into_a_document_that_has_no_section_adds_it(self):
+        out = self.write("- two\n", "# Objective\nShip it\n")
+        self.assertEqual("- two\n", self.read(out))
+        self.assertIn("# Objective\nShip it\n", out)
+
+    def test_a_heading_inside_a_fence_is_not_a_heading(self):
+        # The reader may paste a shell snippet under TODOs. Splitting on a
+        # "# comment" at column 0 would tear their fence in half, in state
+        # that is persisted and injected into later sessions.
+        doc = ("# TODOs\n- run it\n```sh\n# install deps\nnpm i\n```\n\n"
+               "# Decisions\n- keep sqlite\n")
+        self.assertEqual("- run it\n```sh\n# install deps\nnpm i\n```\n",
+                         self.run_js("out = window.__hcPromptUI.todoDoc.read(%s);"
+                                     % json.dumps(doc)))
+
+    def test_the_round_trip_of_an_untouched_section_changes_nothing(self):
+        self.assertEqual(self.DOC, self.write(self.read()))
+
+
 class HoldGroundTests(BridgeTestCase):
     """What the viewport is painted while the workspace is held back.
 
@@ -1133,10 +1460,37 @@ class LiveFeedTests(BridgeTestCase):
     def test_the_subgoal_breadcrumb_is_gone(self):
         out = self.patched_bundle("out;")
         self.assertNotIn("{{ crumb }}", out)
-        # the title, its status and the description stay
-        self.assertIn("{{ selTitle }}", out)
+        # the title (as the header input) and its status stay
+        self.assertIn("{{ titleRaw }}", out)
         self.assertIn("{{ stBadge }}", out)
-        self.assertIn("{{ descVal }}", out)
+
+    def test_the_title_is_edited_in_the_header(self):
+        # The heading div gave way to an input bound to the same goal: blur
+        # and keydown handlers reach the state map, and no second binding of
+        # the read-only heading survives in the markup.
+        out = self.patched_bundle("out;")
+        self.assertIn('sc-camel-on-blur="{{ titleBlur }}"', out)
+        self.assertIn('sc-camel-on-key-down="{{ titleKey }}"', out)
+        self.assertIn('ref="{{ titleRef }}"', out)
+        self.assertNotIn("{{ selTitle }}", out)
+
+    def test_the_description_box_is_gone(self):
+        # The notes document is the description; the textarea under the
+        # title no longer renders, while its handlers stay dormant.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("{{ descVal }}", out)
+        self.assertNotIn("Add a description", out)
+
+    def test_a_new_top_level_goal_is_added_at_the_top(self):
+        # addUnder(null) prepends; a subgoal still appends under its parent,
+        # whose add control sits below the children it joins. The cursor is
+        # sent to the header input rather than a sidebar row: editId stays
+        # null and the focus flag carries the new goal's id.
+        out = self.patched_bundle("out;")
+        self.assertIn("[n].concat(s.goals)", out)
+        self.assertNotIn("s.goals.concat([n])", out)
+        self.assertIn("children: (x.children || []).concat([n])", out)
+        self.assertIn("this._focusTitle = n.id", out)
 
     def test_running_the_agent_is_the_only_way_to_get_a_plan(self):
         out = self.patched_bundle("out;")
@@ -1798,6 +2152,21 @@ class LiveFeedTests(BridgeTestCase):
             "click(second);"
             "JSON.stringify([first !== second, !!document.querySelector('.hc-ask')]);")
         self.assertEqual([True, True], json.loads(opened))
+
+    def test_the_picker_is_mounted_inside_the_workspace_so_it_takes_its_theme(self):
+        # The theme's variables (--panel, --ink, --bd …) live on `.hc`. A
+        # picker hung on <body> sat outside them and fell back to the light
+        # defaults on a dark page.
+        where = self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "var hc = document.createElement('div'); hc.className = 'hc';"
+            "document.body.appendChild(hc);"
+            "window.__hcPromptUI.pickPrompt('g1', null);"
+            "var ask = document.querySelector('.hc-ask');"
+            "JSON.stringify(!!ask && ask.parentNode && ask.parentNode.className);")
+        self.assertEqual("hc", json.loads(where))
 
     def test_a_second_click_does_not_stack_a_second_picker(self):
         count = self.run_js(
@@ -2898,6 +3267,8 @@ class ChatPromptTabTests(BridgeTestCase):
             "    el.parentNode.removeChild(el); }; return el; };"
             "navigator.clipboard = undefined;"
             "var said = [];"
+            # the handler closes over the assembled draft in the bundle
+            "var draft = 'the context';"
             "var fn = eval('(function () { return (' + fnsrc + '); })')"
             "  .call({ _draftEl: { value: 'the draft' },"
             "          setState: function (s) { said.push(s); } });"
@@ -3293,11 +3664,11 @@ LAUNCH_CLASSES = (
     "hc-shell", "hc-main",
     "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
     "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
-    "hc-rail-none", "hc-inject",
+    "hc-rail-none",
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
-    "hc-session", "hc-updated",
+    "hc-panels", "hc-session", "hc-updated",
 )
 
 
@@ -3416,6 +3787,100 @@ class LaunchSkinTests(BridgeTestCase):
         stray = [rule for rule in rules
                  if not rule.lstrip().startswith("[data-hc-launch]")]
         self.assertEqual([], stray)
+
+    def test_the_workspace_is_full_bleed(self):
+        # The columns meet the window on every side and each other on one
+        # shared line: no outer padding, no gap, no radius, and every rail
+        # keeps only the border it shares with the document.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc>div:nth-child(2){max-width:none!important;"
+                      "padding:0!important}", css)
+        self.assertIn(".hc-shell{gap:0!important", css)
+        self.assertIn(".hc-rail-left{position:relative;flex:0 0 var(--hc-left)"
+                      "!important;height:calc(100vh - var(--hc-top))!important;"
+                      "padding:0 0 6px!important;border-width:0 1px 0 0!important;"
+                      "border-radius:0!important}", css)
+        self.assertIn(".hc-main{flex:1 1 auto!important;order:2;"
+                      "height:calc(100vh - var(--hc-top))!important;top:0!important;"
+                      "border:0!important;border-radius:0!important", css)
+        self.assertRegex(css, r"\.hc-rail-right\{[^}]*border-width:0 0 0 1px;"
+                              r"border-radius:0;")
+        # The header is a fixed height and --hc-top is exactly that height,
+        # so the columns are sized against it, not against a guess.
+        self.assertIn("--hc-top:37px", css)
+        # Sticky: the pills are pinned to the viewport, so the bar they sit
+        # in must not scroll away from under them.
+        self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
+                      "background:var(--bg);height:var(--hc-top);", css)
+
+    def test_the_brand_is_the_one_serif_and_the_pills_ride_in_the_header(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertRegex(css, r"\.hc-brand\{font:600 15px Georgia,[^}]*serif!important")
+        # No marker before the name: the brand is the word alone.
+        self.assertNotIn(".hc-brand::before", css)
+        # The status pills' row is lifted into the header by position, and
+        # takes no height where the artifact renders it: the middle bar
+        # is gone.
+        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;top:0;"
+                              r"left:var\(--hc-pills-left,\d+px\);height:37px;"
+                              r"margin:0;padding:0!important")
+
+    def layout(self, tail):
+        # The harness's root has a bare style object; the bridge writes the
+        # rail widths as CSS variables, so give it the two calls it uses.
+        return self.run_js(
+            self.chat()
+            + "var props = {};"
+            "document.documentElement.style.setProperty ="
+            "  function (k, v) { props[k] = v; };"
+            "document.documentElement.style.getPropertyValue ="
+            "  function (k) { return props[k] || ''; };"
+            + tail)
+
+    def test_the_rails_start_at_a_quarter_of_the_window_each(self):
+        # 1 : 2 : 1 -- the harness has no window width, so the default falls
+        # back to 1440 and a quarter of that.
+        self.assertEqual(
+            {"left": 360, "right": 360, "hideLeft": False, "hideRight": False},
+            self.layout("window.__hcPromptUI.railLayout();"))
+
+    def test_a_dragged_width_is_clamped_kept_and_drawn(self):
+        out = self.layout(
+            "var ui = window.__hcPromptUI;"
+            "var a = ui.setRailWidth('left', 380);"
+            "var b = ui.setRailWidth('left', 40);"
+            "var c = ui.setRailWidth('right', 9000);"
+            "var d = ui.setRailWidth('right', 'nonsense');"
+            "[a, b, c, d, props['--hc-left'], props['--hc-right'],"
+            " JSON.parse(localStorage.getItem('hc-launch-layout-v2'))];")
+        self.assertEqual([380, 200, 720, 360, "200px", "360px",
+                          {"left": 200, "right": 360,
+                           "hideLeft": False, "hideRight": False}], out)
+
+    def test_hiding_a_rail_is_a_root_attribute_and_survives_the_page(self):
+        out = self.layout(
+            "var ui = window.__hcPromptUI; var root = document.documentElement;"
+            "var h = ui.setRailHidden('right', true);"
+            "var on = root.getAttribute('data-hc-hide-right') !== null;"
+            "var t = ui.toggleRail('right');"
+            "var off = root.getAttribute('data-hc-hide-right') !== null;"
+            "ui.toggleRail('left');"
+            "[h, on, t, off, root.getAttribute('data-hc-hide-left') !== null,"
+            " JSON.parse(localStorage.getItem('hc-launch-layout-v2')).hideLeft];")
+        self.assertEqual([True, True, False, False, True, True], out)
+
+    def test_the_header_gets_one_toggle_per_rail_that_reads_the_layout(self):
+        out = self.layout(
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-panels'; app.appendChild(slot);"
+            "var ui = window.__hcPromptUI;"
+            "ui.renderPanelToggles(); ui.renderPanelToggles();"
+            "ui.setRailHidden('left', true);"
+            "[slot.children.length,"
+            " slot.children.map(function (b) {"
+            "   return [b.getAttribute('data-hc-panel'), b.className]; })];")
+        self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel hc-panel-on"]]],
+                         out)
 
     def test_the_session_chip_names_the_conversation_the_window_watches(self):
         out = self.run_js(

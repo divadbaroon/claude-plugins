@@ -199,6 +199,33 @@ class GlobalPromptTaggingTests(unittest.TestCase):
         self.GM.save(self.trajdir, self._tree(), {"items": []})
         self.assertEqual([], self.GM.load(self.trajdir)[0]["goals"][0]["prompt_ids"])
 
+    def test_todo_rows_persist_in_todos_json_not_in_goals_json(self):
+        # The rail's rows have their own file in the global scope too:
+        # goals.json (where the notes live) is written without them, and the
+        # load lays them back over the same goal.
+        rows = [{"id": "t0000000a", "text": "ship it", "depth": 0,
+                 "status": "done", "question": ""}]
+        self.GM.save(self.trajdir,
+                     self._tree(todo_items=[dict(r) for r in rows]),
+                     {"items": []})
+        stored = json.loads((self.trajdir / "goals.json").read_text())
+        self.assertEqual([], stored["goals"][0]["todo_items"])
+        held = json.loads((self.trajdir / "todos.json").read_text())
+        self.assertEqual({"g1": rows}, held["todos"])
+        self.assertEqual(rows, self.GM.load(self.trajdir)[0]["goals"][0]
+                         ["todo_items"])
+
+    def test_inline_rows_from_before_the_split_still_load(self):
+        (self.trajdir / "goals.json").write_text(json.dumps(
+            {"version": 1, "goals": [{"id": "g1", "title": "Old store",
+                                      "todo_items": [{"id": "t0000000a",
+                                                      "text": "ship it",
+                                                      "depth": 0,
+                                                      "status": "",
+                                                      "question": ""}]}]}))
+        goal = self.GM.load(self.trajdir)[0]["goals"][0]
+        self.assertEqual("ship it", goal["todo_items"][0]["text"])
+
 
 class PromotionTests(unittest.TestCase):
     """Todos are goals: one node type at every depth."""
@@ -359,13 +386,49 @@ class InferredProjectDirectoryTests(unittest.TestCase):
 class GoalDocumentTests(unittest.TestCase):
     """A goal's notes field is one markdown document with H1 sections."""
 
-    def test_default_doc_is_the_six_h1_sections_in_order(self):
-        self.assertEqual(
-            "# Objective\n\n# In my words\n\n# Decisions\n\n# Built\n\n"
-            "# Blockers\n\n# Open questions\n",
-            GM.default_doc(),
-        )
+    def test_default_doc_is_empty_and_the_sections_are_still_named(self):
+        # No spine of empty headings: a goal opens as a blank document, and a
+        # heading appears with the first thing written under it. The section
+        # names remain the ones inference addresses.
+        self.assertEqual("", GM.default_doc())
         self.assertEqual(list(GM.DOC_SECTIONS), list(GM.SECTION_KEYS.values()))
+
+    def test_sanitize_lifts_the_prompt_but_never_touches_todos_in_the_notes(self):
+        # The prompt still moves to its own field once. A "# TODOs" heading
+        # in the notes is the reader's own writing now: it is never read as
+        # the rail's list and never deleted for it -- the list is its own
+        # store, decoupled from the document entirely.
+        notes = ("# Objective\n\n# TODOs\n- one\n    - two\n\n# In my words\n\n"
+                 "# Decisions\n- keep sqlite\n\n# Prompt\nmy words\n")
+        goals = {"version": 1, "goals": [dict(goal("g1"), notes=notes)]}
+        GM.sanitize(goals)
+        g = goals["goals"][0]
+        self.assertEqual("", g["todos_md"])
+        self.assertEqual([], g["todo_items"])
+        self.assertEqual("my words\n", g["prompt_md"])
+        self.assertEqual("# TODOs\n- one\n    - two\n\n"
+                         "# Decisions\n- keep sqlite\n", g["notes"])
+        # And a second pass changes nothing.
+        GM.sanitize(goals)
+        self.assertEqual("", goals["goals"][0]["todos_md"])
+        self.assertEqual("# TODOs\n- one\n    - two\n\n"
+                         "# Decisions\n- keep sqlite\n",
+                         goals["goals"][0]["notes"])
+
+    def test_deleting_in_the_notes_never_deletes_a_todo(self):
+        goals = {"version": 1, "goals": [dict(
+            goal("g1"), notes="# Decisions\n- keep sqlite\n",
+            todos_md="- ship it\n")]}
+        GM.sanitize(goals)
+        goals["goals"][0]["notes"] = ""
+        GM.sanitize(goals)
+        self.assertEqual("- ship it\n", goals["goals"][0]["todos_md"])
+
+    def test_todos_is_not_a_section_inference_can_write_to(self):
+        # The rail's list is its own store; if "todos" ever re-enters the
+        # section map, inference regains a path into the notes document.
+        self.assertNotIn("todos", GM.SECTION_KEYS)
+        self.assertNotIn("TODOs", GM.DOC_SECTIONS)
 
     def test_split_and_join_round_trip_preamble_and_unknown_sections(self):
         doc = ("scratch line\n\n# Objective\nShip it\n\n"
@@ -385,14 +448,12 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertEqual(["Built"], [title for title, _ in parts])
         self.assertEqual("## Done\n- a", parts[0][1])
 
-    def test_ensure_doc_sections_is_idempotent_and_keeps_written_text(self):
+    def test_ensure_doc_sections_adds_nothing(self):
         once = GM.ensure_doc_sections("# Decisions\n- keep sqlite\n")
 
+        self.assertEqual("# Decisions\n- keep sqlite\n", once)
         self.assertEqual(once, GM.ensure_doc_sections(once))
-        self.assertIn("# Decisions\n- keep sqlite", once)
-        for title in GM.DOC_SECTIONS:
-            self.assertIn(f"# {title}", once)
-        self.assertEqual(GM.default_doc(), GM.ensure_doc_sections(""))
+        self.assertEqual("", GM.ensure_doc_sections(""))
 
     def test_append_to_section_lands_at_the_end_and_spares_its_neighbours(self):
         start = GM.ensure_doc_sections(
@@ -416,8 +477,8 @@ class GoalDocumentTests(unittest.TestCase):
     def test_append_to_section_creates_the_section_it_needs(self):
         out = GM.append_to_section("", "Open questions", "- who owns the cap?")
 
-        self.assertIn("# Open questions\n- who owns the cap?", out)
-        self.assertIn("# Objective", out)
+        self.assertEqual("# Open questions\n- who owns the cap?\n", out)
+        self.assertNotIn("# Objective", out)
 
     def test_sanitize_leaves_a_long_document_uncut(self):
         document = "# Decisions\n" + "\n".join(f"- decision {n}" for n in range(900))
@@ -483,18 +544,18 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertIn("# not a header", GM.section_body(doc, "Built"))
         self.assertEqual(doc, GM.join_doc(parts))
 
-    def test_ensure_doc_sections_appends_what_is_missing_and_moves_nothing(self):
-        doc = "# Blockers\n- no ci\n\n# Objective\nShip it\n\n# Scratch\nkeep me\n"
+    def test_strip_empty_spine_keeps_written_and_foreign_headings(self):
+        doc = ("# Blockers\n\n# Objective\nShip it\n\n# Scratch\n\n"
+               "# Built\n")
 
-        out = GM.ensure_doc_sections(doc)
+        out = GM.strip_empty_spine(doc)
 
-        self.assertEqual(doc, GM.join_doc(GM.split_doc(doc)))
-        self.assertTrue(out.startswith(doc.rstrip("\n")))
-        self.assertEqual(
-            ["Blockers", "Objective", "Scratch", "In my words", "Decisions",
-             "Built", "Open questions"],
-            [title for title, _ in GM.split_doc(out)])
-        self.assertEqual(out, GM.ensure_doc_sections(out))
+        # Blockers and Built were empty spine headings; Scratch is not the
+        # spine's and stays however empty; Objective has text.
+        self.assertEqual(["Objective", "Scratch"],
+                         [title for title, _ in GM.split_doc(out)])
+        self.assertEqual(out, GM.strip_empty_spine(out))
+        self.assertEqual("", GM.strip_empty_spine("# Objective\n\n# Built\n"))
 
     def test_a_repeated_heading_survives_and_the_first_takes_the_append(self):
         doc = ("# Decisions\n- keep sqlite\n\n# Built\n- the parser\n\n"
