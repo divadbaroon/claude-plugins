@@ -546,6 +546,74 @@ class TodoListModelTests(BridgeTestCase):
                          [("one", 0), ("two", 1), ("three", 0)])
         self.assertEqual("- ne\n    - two\n- th", out)
 
+    # --- paste -----------------------------------------------------------------
+    #
+    # A pasted list becomes one row per bullet, never one row holding the
+    # whole body -- whether the bullets arrive as lines or run together on
+    # one line, the shape a list takes when its newlines are lost.
+
+    def paste(self, spec, index, caret, text):
+        return self.model("L.paste(items, %d, %d, %s)"
+                          % (index, caret, json.dumps(text)), spec)
+
+    def test_pasting_bullet_lines_makes_one_row_per_bullet(self):
+        out = self.paste([("", 0)], 0, 0, "- one\n- two\n- three")
+        self.assertEqual(([["one", 0], ["two", 0], ["three", 0]], 2, 5),
+                         self.shape(out))
+
+    def test_pasted_rows_get_ids_of_their_own(self):
+        out = self.paste([("", 0)], 0, 0, "- one\n- two")
+        ids = [r["id"] for r in out["items"]]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertTrue(all(ids))
+
+    def test_run_together_bullets_split_where_a_dash_glues_to_a_word(self):
+        out = self.paste([("", 0)], 0, 0,
+                         "- Create projects- Global vault- Explore options")
+        self.assertEqual([["Create projects", 0], ["Global vault", 0],
+                          ["Explore options", 0]], self.shape(out)[0])
+
+    def test_a_spaced_dash_is_prose_and_never_splits(self):
+        out = self.paste([("", 0)], 0, 0, "- read foo - the good one\n- two")
+        self.assertEqual([["read foo - the good one", 0], ["two", 0]],
+                         self.shape(out)[0])
+
+    def test_a_body_that_does_not_open_with_a_bullet_keeps_its_dashes(self):
+        out = self.paste([("", 0)], 0, 0, "use the built-in x- y flag")
+        self.assertEqual(([["use the built-in x- y flag", 0]], 0, 26),
+                         self.shape(out))
+
+    def test_pasted_indentation_nests_from_the_caret_rows_depth(self):
+        out = self.paste([("x", 1)], 0, 1,
+                         "- parent\n    - child\n        - grandchild")
+        self.assertEqual([["xparent", 1], ["child", 2], ["grandchild", 3]],
+                         self.shape(out)[0])
+
+    def test_a_subtree_copied_mid_list_rebases_to_the_shallowest_line(self):
+        out = self.paste([("", 0)], 0, 0, "    - child\n        - grand")
+        self.assertEqual([["child", 0], ["grand", 1]], self.shape(out)[0])
+
+    def test_state_markers_from_a_copied_todo_body_are_dropped(self):
+        out = self.paste([("", 0)], 0, 0, "- [active] one\n    - [done] two")
+        self.assertEqual([["one", 0], ["two", 1]], self.shape(out)[0])
+
+    def test_plain_lines_land_one_row_each(self):
+        out = self.paste([("", 0)], 0, 0, "one\r\ntwo")
+        self.assertEqual(([["one", 0], ["two", 0]], 1, 3), self.shape(out))
+
+    def test_a_single_plain_fragment_pastes_inline(self):
+        out = self.paste([("abcd", 0)], 0, 2, "foo")
+        self.assertEqual(([["abfoocd", 0]], 0, 5), self.shape(out))
+
+    def test_what_stood_after_the_caret_follows_the_last_fragment(self):
+        out = self.paste([("headtail", 0)], 0, 4, "- one\n- two")
+        self.assertEqual(([["headone", 0], ["twotail", 0]], 1, 3),
+                         self.shape(out))
+
+    def test_pasting_nothing_is_no_edit_at_all(self):
+        self.assertIsNone(self.paste([("one", 0)], 0, 0, ""))
+        self.assertIsNone(self.paste([("one", 0)], 0, 0, "  \n "))
+
 
 class TodoSectionTests(BridgeTestCase):
     """Reading and replacing one section of the goal document, in the browser.
