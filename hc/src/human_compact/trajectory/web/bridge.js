@@ -2089,6 +2089,61 @@
     return { items: rows, index: index + 1, caret: 0 };
   }
 
+  function todoParsePaste(text) {
+    // What a pasted body means in rows. Bullet lines land one row each, at
+    // their indent (four spaces or a tab to the level, "- ", "* " or "• "
+    // all bullets, a "[state]" from a Copy TODOs body dropped) -- and so
+    // does a bulleted list whose newlines were lost ("- a- b- c"), where a
+    // dash glued to the word before it opens the next bullet. A spaced
+    // dash (" - ") is prose and stays. Plain lines land one row each too.
+    var body = str(text).replace(/\r\n?/g, "\n");
+    if (/^\s*[-*•]\s/.test(body)) body = body.replace(/(\S)- /g, "$1\n- ");
+    var parts = [];
+    body.split("\n").forEach(function (line) {
+      if (!line.trim()) return;
+      var lead = /^[ \t]*/.exec(line)[0];
+      var depth = Math.floor(lead.replace(/\t/g, TODO_INDENT).length
+                             / TODO_INDENT.length);
+      var rest = line.slice(lead.length);
+      if (/^[-*•]\s/.test(rest)) {
+        rest = rest.replace(/^[-*•]\s+/, "").replace(/^\[[a-z]+\]\s+/, "");
+      }
+      parts.push({ text: rest.replace(/\s+$/, ""), depth: depth });
+    });
+    if (!parts.length) return parts;
+    // Depths are relative to the shallowest line: a subtree copied from the
+    // middle of a list nests under the caret's row, not at its old depth.
+    var floor = parts[0].depth;
+    parts.forEach(function (part) { floor = Math.min(floor, part.depth); });
+    parts.forEach(function (part) { part.depth -= floor; });
+    return parts;
+  }
+
+  function todoPaste(items, index, caret, text) {
+    // A paste lands like typing the parsed rows in: the first fragment joins
+    // the caret's row, every further fragment becomes a row of its own under
+    // it (nested as the body nested it, from the row's own depth), and what
+    // stood after the caret ends up after the last fragment, caret between
+    // the two.
+    var parts = todoParsePaste(text);
+    if (!parts.length) return null;
+    var rows = todoCopyRows(items);
+    var row = rows[index];
+    if (!row) return null;
+    var at = (typeof caret === "number")
+      ? Math.max(0, Math.min(caret, row.text.length)) : row.text.length;
+    var tail = row.text.slice(at);
+    row.text = row.text.slice(0, at) + parts[0].text;
+    var base = row.depth | 0;
+    for (var i = 1; i < parts.length; i++) {
+      rows.splice(index + i, 0, todoRow(parts[i].text, base + parts[i].depth));
+    }
+    var last = rows[index + parts.length - 1];
+    var caretAt = last.text.length;
+    last.text += tail;
+    return { items: rows, index: index + parts.length - 1, caret: caretAt };
+  }
+
   function todoIndent(items, index) {
     var rows = todoCopyRows(items);
     if (index <= 0 || !rows[index]) return { items: rows, index: index };
@@ -2440,17 +2495,32 @@
   }
 
   function todoBeforeInput(event) {
-    // Typing or pasting over a selection that runs across rows -- and any
+    // Every paste, typing over a selection that runs across rows -- and any
     // edit the browser would make outside a row's text (between rows, over
     // a gutter), which is nowhere the model has a place for.
     var where = todoSelection();
     if (!where) { event.preventDefault(); return; }
+    if (event.inputType === "insertFromPaste") {
+      // Every paste is ours, wherever the selection sits: a pasted list --
+      // bullet lines, or bullets whose newlines were lost -- must land as
+      // one row per bullet, where the browser's own insertion would mash
+      // the whole body into the row holding the caret.
+      event.preventDefault();
+      var body = event.dataTransfer
+        ? str(event.dataTransfer.getData("text/plain")) : "";
+      var ground = where.collapsed
+        ? { items: todoItems, index: where.b, caret: where.bCaret }
+        : todoCut(todoItems, where.a, where.aCaret, where.b, where.bCaret, "");
+      if (ground
+          && todoApply(todoPaste(ground.items, ground.index, ground.caret, body))) {
+        renderTodoRail(true);
+      }
+      return;
+    }
     if (where.collapsed || where.a === where.b) return;
     var put = "";
     if (event.inputType === "insertText") put = str(event.data);
-    else if (event.inputType === "insertFromPaste" && event.dataTransfer) {
-      put = str(event.dataTransfer.getData("text/plain")).replace(/\s*\n\s*/g, " ");
-    } else if (!/^delete/.test(str(event.inputType))) return;
+    else if (!/^delete/.test(str(event.inputType))) return;
     event.preventDefault();
     if (todoApply(todoCut(todoItems, where.a, where.aCaret, where.b, where.bCaret, put))) {
       renderTodoRail(true);
@@ -4349,6 +4419,8 @@
       backspace: todoBackspace,
       remove: todoRemove,
       cut: todoCut,
+      paste: todoPaste,
+      parsePaste: todoParsePaste,
       selectionText: todoSelectionText,
       family: todoFamily,
       bands: todoBandOf,
