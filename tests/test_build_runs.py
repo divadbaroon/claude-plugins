@@ -86,6 +86,7 @@ class BuildRunTests(unittest.TestCase):
         self.old_env = dict(os.environ)
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
         os.environ["STUB_LOG"] = str(self.log)
+        os.environ["HC_BUILD_MODE"] = "headless"
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
 
@@ -185,6 +186,126 @@ class BuildRunTests(unittest.TestCase):
         goals, _ = chat_state.load_goals(self.session, self.root)
         self.assertEqual("Update the docs, please",
                          GM.by_id(goals, "g1")["todo_items"][0]["text"])
+
+
+class SessionBuildTests(unittest.TestCase):
+    """The default: the build is handed to the connected session by the hooks."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.session = "chat-hand"
+        p = chat_state.paths(self.session, self.root)
+        p.session_dir.mkdir(parents=True)
+        goals = {"version": 1, "goals": [goal(
+            "g1", "Ship the router",
+            todo_items=[
+                {"id": "taaaa0001", "text": "Add the route", "depth": 0},
+                {"id": "taaaa0003", "text": "Update the docs", "depth": 0},
+            ])]}
+        GM.sanitize(goals)
+        p.goals.write_text(json.dumps(goals))
+        p.important.write_text(json.dumps({"items": []}))
+        p.prompts.write_text(json.dumps({"prompts": []}))
+        p.manifest.write_text(json.dumps({"cwd": str(self.root)}))
+        self.old_env = dict(os.environ)
+        os.environ.pop("HC_BUILD_MODE", None)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
+        self.transcript = self.root / "transcript.jsonl"
+        self.transcript.write_text("")
+
+    def rows(self):
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        return {r["id"]: (r["status"], r["question"])
+                for r in GM.by_id(goals, "g1")["todo_items"]}
+
+    def say(self, text):
+        with self.transcript.open("a") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": text}]}}) + "\n")
+
+    def test_build_queues_and_the_stop_hook_hands_it_to_the_session(self):
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out["ok"] and out["queued"], out)
+        self.assertEqual("queued", self.rows()["taaaa0001"][0])
+        self.assertEqual(1, len(BUILD.pending(self.session, self.root)))
+        self.assertEqual(1, BUILD.session_state(self.session, self.root)["queued"])
+        # Nothing was spawned: no run record, no process.
+        self.assertIsNone(BUILD.load_run(self.session, self.root, "g1"))
+
+        text = BUILD.deliver(self.session, self.root, "Stop")
+        self.assertIn("The user pressed Build", text)
+        self.assertIn("- Add the route [taaaa0001]", text)
+        self.assertIn('{"id": "<row id>", "state": "DONE"}', text)
+        self.assertNotIn("Update the docs", text.split("# The work")[1])
+        # Taken: building now, and the queue is empty, so the next Stop
+        # says nothing.
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        self.assertEqual("", BUILD.deliver(self.session, self.root, "Stop"))
+
+    def test_the_transcript_moves_the_rows_and_an_answer_queues_again(self):
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        BUILD.deliver(self.session, self.root, "Stop")
+        self.say("Looking at it.")
+        self.say('{"id": "taaaa0001", "question": "src/a.ts or src/b.ts?"}')
+        applied = BUILD.scan_transcript(self.session, self.root, str(self.transcript))
+        self.assertEqual(1, applied)
+        self.assertEqual(("asking", "src/a.ts or src/b.ts?"), self.rows()["taaaa0001"])
+        self.assertEqual(("building", ""), self.rows()["taaaa0003"])
+        # Already read: a second scan applies nothing new.
+        self.assertEqual(0, BUILD.scan_transcript(self.session, self.root, str(self.transcript)))
+
+        out = BUILD.answer(self.session, self.root, "g1", "taaaa0001", "src/a.ts")
+        self.assertTrue(out["ok"] and out["queued"], out)
+        self.assertEqual("queued", self.rows()["taaaa0001"][0])
+        text = BUILD.deliver(self.session, self.root, "UserPromptSubmit")
+        self.assertIn("after answering their message", text)
+        self.assertIn('{"id": "taaaa0001", "answer": "src/a.ts"}', text)
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+
+        self.say('done {"id": "taaaa0001", "state": "DONE"} and {"id": "taaaa0003", "state": "DONE"}')
+        self.assertEqual(2, BUILD.scan_transcript(self.session, self.root, str(self.transcript)))
+        self.assertEqual({"taaaa0001": ("done", ""), "taaaa0003": ("done", "")}, self.rows())
+
+    def test_the_hook_blocks_stop_with_the_build_and_rides_along_on_a_prompt(self):
+        import io
+        from human_compact import cli
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+
+        def hook(event, **extra):
+            payload = {"hook_event_name": event, "session_id": self.session,
+                       "transcript_path": str(self.transcript), "cwd": str(self.root)}
+            payload.update(extra)
+            out = io.StringIO()
+            with unittest.mock.patch.dict(os.environ, {"HC_CHAT_STATE_DIR": str(self.root)}):
+                cli.chat_hook_main([], stdin=io.StringIO(json.dumps(payload)), stdout=out)
+            return out.getvalue()
+
+        import unittest.mock
+        stopped = hook("Stop", stop_hook_active=False)
+        self.assertTrue(stopped.strip(), "the Stop hook must answer")
+        answer = json.loads(stopped)
+        self.assertEqual("block", answer["decision"])
+        self.assertIn("- Add the route [taaaa0001]", answer["reason"])
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        # Nothing left: the next Stop lets Claude stop.
+        self.assertEqual("", hook("Stop", stop_hook_active=True).strip())
+
+        # Idle session, second build: it rides along with the next prompt.
+        BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        prompted = hook("UserPromptSubmit", prompt="unrelated")
+        self.assertTrue(prompted.strip())
+        context = json.loads(prompted)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("after answering their message", context)
+        self.assertIn("- Update the docs [taaaa0003]", context)
+        self.assertEqual("building", self.rows()["taaaa0003"][0])
+
+        # SessionEnd marks the session gone; a later hook brings it back.
+        hook("SessionEnd")
+        self.assertTrue(BUILD.session_state(self.session, self.root)["ended_at"])
+        hook("SessionStart", source="resume")
+        self.assertFalse(BUILD.session_state(self.session, self.root)["ended_at"])
 
 
 if __name__ == "__main__":

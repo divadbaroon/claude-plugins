@@ -94,6 +94,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
         self.old_env = dict(os.environ)
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
+        os.environ["HC_BUILD_MODE"] = "headless"
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
 
@@ -232,6 +233,68 @@ class TodoPanelBrowserTests(unittest.TestCase):
                     "Keep diffs small."))
             finally:
                 browser.close()
+
+
+class SessionBuildBrowserTests(TodoPanelBrowserTests):
+    """Default mode: the build waits for the connected session's next turn."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop("HC_BUILD_MODE", None)
+        self.transcript = self.root / "transcript.jsonl"
+        self.transcript.write_text("")
+
+    def say(self, text):
+        with self.transcript.open("a") as fh:
+            fh.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": text}]}}) + "\n")
+
+    def test_rows_are_queued_then_building_then_asking_and_the_session_can_close(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                # Queued, and the rail says what that means.
+                expect(page.locator(".hc-todo-status").first).to_have_text("queued", timeout=10_000)
+                expect(page.locator(".hc-todo-error")).to_contain_text(
+                    "queued — Claude picks it up when its turn ends or on your next message")
+                self.assertEqual(1, len(BUILD.pending(self.session, self.root)))
+                # The Stop hook takes it: building.
+                text = BUILD.deliver(self.session, self.root, "Stop")
+                self.assertIn("Add the route", text)
+                expect(page.locator(".hc-todo-status").first).to_have_text("building", timeout=10_000)
+                expect(page.locator(".hc-todo-error")).to_be_hidden()
+                # Claude asks, in the transcript; the rail shows it.
+                goals, _ = chat_state.load_goals(self.session, self.root)
+                row_id = GM.by_id(goals, "g1")["todo_items"][0]["id"]
+                self.say('{"id": "%s", "question": "Which router file?"}' % row_id)
+                BUILD.scan_transcript(self.session, self.root, str(self.transcript))
+                expect(page.locator(".hc-todo-status").first).to_have_text("needs you", timeout=10_000)
+                page.locator(".hc-todo-answer").click()
+                page.keyboard.type("src/a.ts")
+                page.keyboard.press("Enter")
+                expect(page.locator(".hc-todo-status").first).to_have_text("queued", timeout=10_000)
+                self.assertEqual("answer", BUILD.pending(self.session, self.root)[0]["kind"])
+                # The session ends: the rail offers to reopen it.
+                BUILD.note_hook(self.session, self.root, "SessionEnd")
+                expect(page.locator(".hc-todo-reopen")).to_be_visible(timeout=10_000)
+                expect(page.locator(".hc-todo-error")).to_contain_text("session closed")
+                BUILD.note_hook(self.session, self.root, "SessionStart")
+                expect(page.locator(".hc-todo-reopen")).to_have_count(0, timeout=10_000)
+            finally:
+                browser.close()
+
+    # the inherited headless tests run again here in session mode only where
+    # they do not build; skip the build one.
+    def test_picked_rows_build_ask_and_finish_on_the_answer(self):
+        self.skipTest("headless-only")
 
 
 if __name__ == "__main__":

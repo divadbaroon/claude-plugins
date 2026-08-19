@@ -1192,6 +1192,24 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
         except Exception:  # noqa: BLE001 - a hook may never block Claude
             run = None
 
+    # The workspace's Build: every hook is proof the connected session is
+    # alive, and the ones that see the transcript read Claude's protocol lines
+    # back out of it so the rail's rows move. Stop and UserPromptSubmit are
+    # also where a queued build is handed over, below.
+    build_text = ""
+    try:
+        from .trajectory import build as BUILD
+        if session_id:
+            BUILD.note_hook(session_id, None, event)
+            if event in ("Stop", "SubagentStop", "PostToolBatch",
+                         "TaskCompleted") and not args.inject_only:
+                BUILD.scan_transcript(session_id, None,
+                                      payload.get("transcript_path"))
+            if event in ("Stop", "UserPromptSubmit"):
+                build_text = BUILD.deliver(session_id, None, event)
+    except Exception:  # noqa: BLE001 - a hook may never block Claude
+        build_text = ""
+
     if event == "UserPromptExpansion":
         if str(payload.get("command_args") or "").strip().lower() == "disable":
             try:
@@ -1257,6 +1275,13 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
                                            payload.get("cwd"))
         except Exception:  # noqa: BLE001 - a hook may never block Claude
             pass
+    if event == "Stop" and build_text:
+        # Claude Code reads a blocked Stop's reason as the next thing to do,
+        # in this same session: the build reaches Claude the moment its turn
+        # ends, with everything the conversation already holds.
+        json.dump({"decision": "block", "reason": build_text}, stdout)
+        stdout.write("\n")
+        return 0
 
     # A subagent begins with an empty context and a tool batch may have just
     # created tasks, so both are injection points -- but only the synchronous
@@ -1286,6 +1311,10 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
                 )
             except Exception:  # noqa: BLE001 - a hook may never block Claude
                 context = ""
+        if build_text and event == "UserPromptSubmit":
+            # The session was idle when Build was pressed; it rides along
+            # with the user's next message.
+            context = (context + "\n\n" if context.strip() else "") + build_text
         if run is not None and event == "SessionStart":
             try:
                 from .trajectory import goals as GM, state as ST

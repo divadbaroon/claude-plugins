@@ -228,7 +228,7 @@ def append_to_section(notes: str, section_title: str, text: str) -> str:
 # copied prompt, and anything else that reads the list as text.
 
 TODO_INDENT = "    "
-TODO_STATUSES = ("", "building", "asking", "done", "failed")
+TODO_STATUSES = ("", "queued", "building", "asking", "done", "failed")
 _TODO_ID = re.compile(r"^t[0-9a-z]{4,24}$")
 
 

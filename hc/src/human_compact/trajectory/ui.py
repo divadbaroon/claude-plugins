@@ -611,6 +611,11 @@ def _payload(trajdir=None, chat_scoped=None):
                    "revision": _goal_revision(goals, important)}
     if identity is not None:
         payload["injection"] = _injection_state(*identity)
+        try:
+            from . import build as BUILD
+            payload["build_session"] = BUILD.session_state(*identity)
+        except Exception:  # noqa: BLE001 - the rail can do without it
+            payload["build_session"] = None
     return payload
 
 
@@ -621,6 +626,8 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return result
     from . import build as BUILD
     kind, session_id, root, goal_id, op = deferred
+    if kind == "reopen_session":
+        return BUILD.reopen(session_id, root)
     if kind == "build_todos":
         ids = op.get("ids")
         return BUILD.start(session_id, root, goal_id,
@@ -772,7 +779,8 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
-        if kind in ("build_todos", "answer_todo", "generate_prompt"):
+        if kind in ("build_todos", "answer_todo", "generate_prompt",
+                    "reopen_session"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -780,9 +788,11 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             # never be spawned while a request still holds it.
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            if kind == "reopen_session":
+                return {"__deferred__": (kind, session_id, root, None, op)}
             if not g:
                 return {"ok": False, "error": "goal not found in this chat"}
-            session_id, root = _chat_identity(trajdir)
             if kind == "generate_prompt":
                 text = _generate_prompt(session_id, root, goals, important, g)
                 if not text:

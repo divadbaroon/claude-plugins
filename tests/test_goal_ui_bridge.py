@@ -322,6 +322,29 @@ class TodoListModelTests(BridgeTestCase):
         self.assertEqual(["string", True], out[0][:2])
         self.assertEqual(["string", True, "t0000000a"], out[1])
 
+    # --- the family one pick covers -----------------------------------------
+
+    def test_a_parent_pick_covers_the_rows_nested_under_it(self):
+        # Marking a parent to-build marks its children: the family is the
+        # row and everything deeper, up to the next row at its own depth.
+        out = self.model("L.family(items, 0)",
+                         [("parent", 0), ("child", 1), ("grandchild", 2),
+                          ("sibling", 0)])
+        self.assertEqual([0, 1, 2], out)
+
+    def test_a_leaf_is_a_family_of_one(self):
+        out = self.model("L.family(items, 1)",
+                         [("parent", 0), ("child", 1), ("sibling", 0)])
+        self.assertEqual([1], out)
+
+    def test_a_family_ends_at_a_shallower_row(self):
+        out = self.model("L.family(items, 1)",
+                         [("one", 0), ("two", 1), ("two a", 2), ("three", 0)])
+        self.assertEqual([1, 2], out)
+
+    def test_a_family_out_of_range_is_empty(self):
+        self.assertEqual([], self.model("L.family(items, 5)", [("one", 0)]))
+
     # --- enter -------------------------------------------------------------
 
     def test_enter_on_a_written_row_opens_a_sibling_below_it(self):
@@ -1335,10 +1358,37 @@ class LiveFeedTests(BridgeTestCase):
     def test_the_subgoal_breadcrumb_is_gone(self):
         out = self.patched_bundle("out;")
         self.assertNotIn("{{ crumb }}", out)
-        # the title, its status and the description stay
-        self.assertIn("{{ selTitle }}", out)
+        # the title (as the header input) and its status stay
+        self.assertIn("{{ titleRaw }}", out)
         self.assertIn("{{ stBadge }}", out)
-        self.assertIn("{{ descVal }}", out)
+
+    def test_the_title_is_edited_in_the_header(self):
+        # The heading div gave way to an input bound to the same goal: blur
+        # and keydown handlers reach the state map, and no second binding of
+        # the read-only heading survives in the markup.
+        out = self.patched_bundle("out;")
+        self.assertIn('sc-camel-on-blur="{{ titleBlur }}"', out)
+        self.assertIn('sc-camel-on-key-down="{{ titleKey }}"', out)
+        self.assertIn('ref="{{ titleRef }}"', out)
+        self.assertNotIn("{{ selTitle }}", out)
+
+    def test_the_description_box_is_gone(self):
+        # The notes document is the description; the textarea under the
+        # title no longer renders, while its handlers stay dormant.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("{{ descVal }}", out)
+        self.assertNotIn("Add a description", out)
+
+    def test_a_new_top_level_goal_is_added_at_the_top(self):
+        # addUnder(null) prepends; a subgoal still appends under its parent,
+        # whose add control sits below the children it joins. The cursor is
+        # sent to the header input rather than a sidebar row: editId stays
+        # null and the focus flag carries the new goal's id.
+        out = self.patched_bundle("out;")
+        self.assertIn("[n].concat(s.goals)", out)
+        self.assertNotIn("s.goals.concat([n])", out)
+        self.assertIn("children: (x.children || []).concat([n])", out)
+        self.assertIn("this._focusTitle = n.id", out)
 
     def test_running_the_agent_is_the_only_way_to_get_a_plan(self):
         out = self.patched_bundle("out;")

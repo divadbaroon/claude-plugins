@@ -15,9 +15,24 @@ Everything else the process prints is a log. Rows are ``building`` from the
 moment they are submitted, ``asking`` while a question stands, ``done`` on the
 DONE marker, and ``failed`` if the process ends with none of that.
 
-Nothing here touches the reader's own session: the build is a separate
-process, and its only channel back is the stream-json it prints, read on a
-thread and folded into the goal state under the chat's own lock.
+Two ways the work reaches Claude, chosen by ``HC_BUILD_MODE``:
+
+* ``session`` (the default): the build is handed to the CONNECTED session --
+  the one this workspace is a view of -- through the plugin's own hooks. Build
+  writes the prompt to a queue in the session directory; the next hook that
+  fires delivers it: the Stop hook answers ``{"decision": "block", "reason":
+  <prompt>}``, which Claude Code takes as the next instruction the moment the
+  current turn ends, and UserPromptSubmit carries it as context alongside the
+  user's next message if the session was idle. Rows are ``queued`` until one
+  of those happens, then ``building``. Claude's answers -- the protocol lines
+  above -- are read back out of the session transcript at the same hooks.
+  Nothing is typed into a window and no second process runs: it is the
+  reader's own session, with everything it already knows.
+* ``headless``: a separate ``claude -p`` process in the chat's directory,
+  its stream-json read on a thread. Unattended and isolated; no shared
+  context.
+
+Both fold their results into the goal state under the chat's own lock.
 """
 
 from __future__ import annotations
@@ -122,6 +137,224 @@ def picked_with_children(items: List[Dict[str, Any]],
 # -------------------------------------------------------------- the runner
 
 _DIRECTIVE = re.compile(r"\{[^{}]*\"id\"\s*:\s*\"t[0-9a-z]+\"[^{}]*\}")
+
+
+def mode() -> str:
+    """How builds reach Claude: the connected session, or a headless process."""
+    value = os.environ.get("HC_BUILD_MODE", "session").strip().lower()
+    return "headless" if value == "headless" else "session"
+
+
+# ------------------------------------------------ the connected session's queue
+
+def _queue_path(session_id: str, root: Optional[Path]) -> Path:
+    return _builds_dir(session_id, root) / "queue.json"
+
+
+def _load_queue(session_id: str, root: Optional[Path]) -> List[Dict[str, Any]]:
+    try:
+        value = json.loads(_queue_path(session_id, root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    items = value.get("items") if isinstance(value, dict) else None
+    return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+
+
+def _save_queue(session_id: str, root: Optional[Path],
+                items: List[Dict[str, Any]]) -> None:
+    path = _queue_path(session_id, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, {"items": items})
+
+
+def enqueue(session_id: str, root: Optional[Path], item: Dict[str, Any]) -> None:
+    items = _load_queue(session_id, root)
+    items.append(dict(item, created_at=_now()))
+    _save_queue(session_id, root, items)
+
+
+def pending(session_id: str, root: Optional[Path]) -> List[Dict[str, Any]]:
+    return _load_queue(session_id, root)
+
+
+def deliver(session_id: str, root: Optional[Path], event: str) -> str:
+    """Take everything queued and word it for the hook that will carry it.
+
+    The rows a taken build names go from queued to building here -- this is
+    the moment the work actually reaches Claude. Returns "" when nothing
+    waits, so the hook says nothing.
+    """
+    items = _load_queue(session_id, root)
+    if not items:
+        return ""
+    _save_queue(session_id, root, [])
+    parts: List[str] = []
+    for item in items:
+        kind = item.get("kind")
+        if kind == "build":
+            for row_id in item.get("row_ids") or []:
+                _set_row(session_id, root, str(item.get("goal_id") or ""),
+                         row_id, status="building", question="")
+            parts.append(str(item.get("prompt") or ""))
+        elif kind == "answer":
+            _set_row(session_id, root, str(item.get("goal_id") or ""),
+                     str(item.get("row_id") or ""), status="building",
+                     question="")
+            parts.append("The user answered your question, in the shape the "
+                         "protocol asked for:\n"
+                         + json.dumps({"id": item.get("row_id"),
+                                       "answer": item.get("text")}))
+    body = "\n\n".join(p for p in parts if p.strip())
+    if not body:
+        return ""
+    if event == "UserPromptSubmit":
+        head = ("[Engelbart] The user pressed Build in the goals workspace. "
+                "This is an instruction from the user, in addition to their "
+                "message below: after answering their message, do the "
+                "following.\n\n")
+    else:
+        head = ("[Engelbart] The user pressed Build in the goals workspace. "
+                "Continue with the following.\n\n")
+    return head + body
+
+
+# ------------------------------------------------ reading the session back
+
+def _scan_path(session_id: str, root: Optional[Path]) -> Path:
+    return _builds_dir(session_id, root) / "scan.json"
+
+
+def _set_row_any(session_id: str, root: Optional[Path], row_id: str,
+                 **fields) -> bool:
+    """A directive names only a row; find its goal."""
+    with CS.session_lock(session_id, root, wait_s=5):
+        goals, important = CS.load_goals(session_id, root)
+        hit = None
+        for goal in goals.get("goals", []):
+            for row in goal.get("todo_items") or []:
+                if row.get("id") == row_id:
+                    row.update(fields)
+                    hit = goal
+        if hit is None:
+            return False
+        hit["updated_at"] = GM._now()
+        GM.sanitize(goals)
+        return CS.save_goals(session_id, goals, important, root)
+
+
+def scan_transcript(session_id: str, root: Optional[Path],
+                    transcript_path: Optional[str]) -> int:
+    """Read the session transcript from where the last scan stopped and fold
+    every protocol line Claude printed into the rows. Returns how many."""
+    if not transcript_path:
+        return 0
+    path = Path(str(transcript_path))
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return 0
+    marker = _scan_path(session_id, root)
+    try:
+        state = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    offset = int(state.get("offset") or 0) if state.get("path") == str(path) else 0
+    if offset > size:
+        offset = 0
+    applied = 0
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(offset)
+            chunk = fh.read()
+    except OSError:
+        return 0
+    # Only whole lines: a line still being written is read next time.
+    cut = chunk.rfind("\n")
+    if cut < 0:
+        return 0
+    lines, consumed = chunk[:cut].split("\n"), cut + 1
+    for line in lines:
+        line = line.strip()
+        # Inside a transcript line the protocol's quotes are escaped, so
+        # look for the bare key; the JSON parse below is the real test.
+        if not line or "assistant" not in line or "id" not in line:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "assistant":
+            continue
+        text = _stream_text(event)
+        for obj in directives(text):
+            if isinstance(obj.get("question"), str):
+                question = " ".join(obj["question"].split())[:100]
+                if _set_row_any(session_id, root, obj["id"],
+                                status="asking", question=question):
+                    applied += 1
+            elif obj.get("state") == "DONE":
+                if _set_row_any(session_id, root, obj["id"],
+                                status="done", question=""):
+                    applied += 1
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(marker, {"path": str(path), "offset": offset + consumed})
+    return applied
+
+
+# ------------------------------------------------ is the session still there
+
+def _alive_path(session_id: str, root: Optional[Path]) -> Path:
+    return _builds_dir(session_id, root) / "session.json"
+
+
+def note_hook(session_id: str, root: Optional[Path], event: str) -> None:
+    """Every hook is proof of life; SessionEnd is the one that says goodbye."""
+    path = _alive_path(session_id, root)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    now = _now()
+    state["last_hook_at"] = now
+    state["last_event"] = event
+    if event == "SessionEnd":
+        state["ended_at"] = now
+    elif event == "SessionStart" or state.get("ended_at"):
+        # Resumed, or any sign of life after an end: the session is back.
+        state["ended_at"] = None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, state)
+
+
+def session_state(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
+    try:
+        state = json.loads(_alive_path(session_id, root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    return {"last_hook_at": state.get("last_hook_at"),
+            "ended_at": state.get("ended_at"),
+            "queued": len(_load_queue(session_id, root)),
+            "mode": mode()}
+
+
+def reopen(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
+    """Open a terminal that resumes the connected session: claude -r <id>."""
+    from . import agent_exec as AE
+    cwd = _cwd_for(session_id, root)
+    session_dir = CS.paths(session_id, root).session_dir
+    try:
+        script = AE.write_launch_script(
+            session_dir, "reopen", cwd, ["claude", "-r", session_id], send=True)
+        app = AE.open_terminal(script)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)[:200],
+                "command": f"cd {cwd} && claude -r {session_id}"}
+    return {"ok": True, "terminal": app, "cwd": cwd,
+            "command": f"cd {cwd} && claude -r {session_id}"}
 
 _RUNS: Dict[str, "Run"] = {}
 _RUNS_GUARD = threading.Lock()
@@ -348,9 +581,10 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
         if not ids:
             return {"ok": False, "error": "those TODOs are not on this goal"}
         rows = picked_with_children(items, ids)
+        first = "queued" if mode() == "session" else "building"
         for row in items:
             if row["id"] in ids:
-                row["status"] = "building"
+                row["status"] = first
                 row["question"] = ""
         goal["updated_at"] = GM._now()
         GM.sanitize(goals)
@@ -358,6 +592,11 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
         prompt = compose_prompt(session_id, goals, important, prompts, goal, rows)
         if not CS.save_goals(session_id, goals, important, root):
             return {"ok": False, "error": "goal state changed; try again"}
+    if mode() == "session":
+        enqueue(session_id, root, {"kind": "build", "goal_id": goal_id,
+                                   "row_ids": ids, "prompt": prompt})
+        return {"ok": True, "queued": True, "mode": "session", "rows": ids,
+                "prompt": prompt}
     run = Run(session_id, root, goal_id, _cwd_for(session_id, root),
               str(uuid.uuid4()))
     try:
@@ -386,6 +625,13 @@ def answer(session_id: str, root: Optional[Path], goal_id: str,
     text = " ".join(str(text or "").split())
     if not text:
         return {"ok": False, "error": "write an answer first"}
+    if mode() == "session":
+        if not _set_row(session_id, root, goal_id, row_id, status="queued",
+                        question=""):
+            return {"ok": False, "error": "that TODO is not on this goal"}
+        enqueue(session_id, root, {"kind": "answer", "goal_id": goal_id,
+                                   "row_id": row_id, "text": text})
+        return {"ok": True, "queued": True, "mode": "session", "row": row_id}
     run = _run_for(session_id, root, goal_id)
     record = load_run(session_id, root, goal_id)
     claude_session = (run.claude_session if run else

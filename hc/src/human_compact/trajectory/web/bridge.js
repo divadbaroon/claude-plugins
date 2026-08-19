@@ -16,7 +16,7 @@
   // and compares the two.
   var DEFAULT_DOC = "";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
-                      scope: "global", sessionId: "" };
+                      scope: "global", sessionId: "", buildSession: null };
   var stateFingerprint = null;
   var lastObservedGoals = null;
   var refreshPending = false;
@@ -554,7 +554,11 @@
       scope: st.scope === "chat" ? "chat" : "global",
       // Which Claude conversation this window is a second view of. Only the
       // server knows; it is what names the tab.
-      sessionId: str(st.session_id)
+      sessionId: str(st.session_id),
+      // Whether that conversation is still there to build in, and how many
+      // builds wait for its next turn.
+      buildSession: (st.build_session && typeof st.build_session === "object")
+        ? st.build_session : null
     };
     var fingerprint = JSON.stringify([
       serverState.goals.map(function (g) {
@@ -1776,7 +1780,9 @@
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-copy:hover{color:var(--ink);border-color:var(--ink)}",
-      "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 'Source Code Pro',monospace;color:var(--del);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-todo-note-bad{color:var(--del)}",
+      "[data-hc-launch] .hc-todo-reopen{color:var(--ink);cursor:pointer;text-decoration:underline;text-underline-offset:2px}",
       "[data-hc-launch] .hc-todo-build{margin-left:auto;padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
       "[data-hc-launch] .hc-todo-build[data-hc-todo-build=\"on\"]{color:#fff;background:#1f6feb;border-color:#1f6feb;cursor:pointer}",
       "[data-hc-launch] .hc-rail-select{margin-left:auto;font:500 10px 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--fnt);cursor:pointer;user-select:none}",
@@ -2095,6 +2101,7 @@
   // --- the rows on screen ---------------------------------------------------
 
   var TODO_STATUS = {
+    queued: ["queued", "var(--fnt)"],
     building: ["building", "var(--hc-blue, #58a6ff)"],
     asking: ["needs you", "var(--hc-warn)"],
     done: ["done", "var(--hc-ok)"],
@@ -2397,10 +2404,32 @@
     event.preventDefault();
   }
 
+  function todoFamily(items, index) {
+    // The rows one pick covers: the row itself and everything nested under
+    // it, ending at the next row back at its own depth or above.
+    var rows = array(items);
+    if (!rows[index]) return [];
+    var head = rows[index].depth || 0;
+    var out = [index];
+    for (var i = index + 1; i < rows.length; i++) {
+      if ((rows[i].depth || 0) <= head) break;
+      out.push(i);
+    }
+    return out;
+  }
+
   function todoTogglePick(id) {
-    var row = todoItems && todoItems[todoIndexOfId(id)];
+    var at = todoIndexOfId(id);
+    var row = todoItems && todoItems[at];
     if (!row || (row.status && row.status !== "failed")) return;
-    if (todoPicked[id]) delete todoPicked[id]; else todoPicked[id] = true;
+    var on = !todoPicked[id];
+    // A parent stands for the rows under it: picking it picks its children,
+    // and unpicking releases them. Rows already building keep their state.
+    todoFamily(todoItems, at).forEach(function (i) {
+      var member = todoItems[i];
+      if (member.status && member.status !== "failed") return;
+      if (on) todoPicked[member.id] = true; else delete todoPicked[member.id];
+    });
   }
 
   function todoPickable() {
@@ -2439,6 +2468,13 @@
     var goalId = todoGoalId;
     post({ op: "build_todos", goal_id: goalId, ids: ids }).then(function (res) {
       todoBuilding = false;
+      if (res && res.ok && res.queued && todoGoalId === goalId && todoItems) {
+        // Handed to the connected session: it is queued until that
+        // session's next turn boundary takes it.
+        todoItems.forEach(function (row) {
+          if (ids.indexOf(row.id) >= 0 && row.status === "building") row.status = "queued";
+        });
+      }
       if (!res || !res.ok) {
         todoBuildError = (res && res.error) || "the build could not start";
         if (todoGoalId === goalId && todoItems) {
@@ -2460,6 +2496,10 @@
     renderTodoRail(true);
     post({ op: "answer_todo", goal_id: goalId, id: id, answer: text })
       .then(function (res) {
+        if (res && res.ok && res.queued && todoGoalId === goalId && row
+            && row.status === "building") {
+          row.status = "queued";
+        }
         if ((!res || !res.ok) && todoGoalId === goalId) {
           todoBuildError = (res && res.error) || "the answer could not be sent";
         }
@@ -2549,6 +2589,16 @@
       if (node.className === "hc-rail-select") {
         todoToggleAll();
         renderTodoRail(true);
+        return;
+      }
+      if (node.className === "hc-todo-reopen") {
+        node.textContent = "opening…";
+        post({ op: "reopen_session" }).then(function (res) {
+          todoBuildError = (res && res.ok) ? ""
+            : ((res && res.error) || "could not reopen the session");
+          refreshState();
+          renderTodoRail(true);
+        });
         return;
       }
       if (node.className === "hc-rail-generate") { promptGenerate(); return; }
@@ -2710,8 +2760,29 @@
       }
       var note = actions.querySelector(".hc-todo-error");
       if (note) {
-        note.textContent = todoBuildError;
-        note.style.display = todoBuildError ? "" : "none";
+        while (note.firstChild) note.removeChild(note.firstChild);
+        var session = serverState.buildSession;
+        var queued = array(todoItems).some(function (row) {
+          return row.status === "queued";
+        });
+        if (todoBuildError) {
+          note.textContent = todoBuildError;
+          note.className = "hc-todo-error hc-todo-note-bad";
+        } else if (session && session.ended_at) {
+          // The session this workspace belongs to has ended: nothing will
+          // take a build until it is back. Offer to bring it back.
+          note.className = "hc-todo-error hc-todo-note";
+          note.appendChild(document.createTextNode("session closed · "));
+          var reopen = document.createElement("span");
+          reopen.className = "hc-todo-reopen";
+          reopen.textContent = "Reopen";
+          note.appendChild(reopen);
+        } else if (queued) {
+          note.className = "hc-todo-error hc-todo-note";
+          note.textContent = "queued — Claude picks it up when its turn ends"
+            + " or on your next message";
+        }
+        note.style.display = note.firstChild ? "" : "none";
       }
     }
     if (!goal || !todoItems) {
@@ -3812,7 +3883,31 @@
        + "else { if (fb()) done(); } },\n"
        + "      copyPromptLabel: copied ? 'copied \u2713' : 'Copy prompt',\n"],
       ["docAdd: () => setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: 'notes.md' }]))",
-       "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"]
+       "docAdd: () => window.__hcAsk('doc').then(function (v) { if (v) setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v }])); })"],
+      // The title is edited where it is largest: the inspector header. The
+      // heading div becomes an input in the same clothes; Enter or blur
+      // commits, Escape puts back what was there. The sidebar's double-click
+      // edit stays, but is no longer the only door.
+      ["<div style=\"flex:1;min-width:0;font-size:13.5px;font-weight:700;line-height:1.4;color:var(--ink)\">{{ selTitle }}</div>",
+       "<input key=\"{{ selKey }}\" sc-camel-default-value=\"{{ titleRaw }}\" ref=\"{{ titleRef }}\" sc-camel-on-key-down=\"{{ titleKey }}\" sc-camel-on-blur=\"{{ titleBlur }}\" placeholder=\"Untitled\" spellcheck=\"false\" style=\"flex:1;min-width:0;font-size:13.5px;font-weight:700;line-height:1.4;color:var(--ink);font-family:inherit;border:none;outline:none;background:transparent;padding:0;margin:0\">"],
+      ["      selTitle: sel ? (sel.title || 'Untitled') : '',",
+       "      selTitle: sel ? (sel.title || 'Untitled') : '',\n"
+       + "      titleRaw: sel ? (sel.title || '') : '',\n"
+       + "      titleKey: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } else if (e.key === 'Escape') { e.target.value = sel ? (sel.title || '') : ''; e.target.blur(); } },\n"
+       + "      titleBlur: (e) => { const v = (e.target.value || '').trim(); this._new = null; if (sel && v !== (sel.title || '')) this.set(s => ({ goals: this.up(s.goals, sel.id, x => ({ ...x, title: v })) }), true); },\n"
+       + "      titleRef: (el) => { if (el && sel && this._focusTitle === sel.id) { this._focusTitle = null; el.focus(); el.select(); } },"],
+      // The description box under the title is gone: the notes document is
+      // the description. descChange and its siblings stay dormant behind
+      // this one line, like the textbox pane before them.
+      ["<textarea value=\"{{ descVal }}\" sc-camel-on-change=\"{{ descChange }}\" sc-camel-on-input=\"{{ descInput }}\" ref=\"{{ descRef }}\" rows=\"1\" placeholder=\"Add a description…\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;margin-top:6px;border:none;outline:none;resize:none;overflow:hidden;background:transparent;padding:0;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--mut)\"></textarea>",
+       "<!--description removed: the notes document is the description-->"],
+      // A new top-level goal lands at the top of the list, where the eye
+      // already is, and the cursor lands in the header input, where the
+      // title is largest -- so editId stays null and no row input opens.
+      // A subgoal keeps appending: its add control sits under the children
+      // it joins.
+      ["addUnder(pid) {\n    const n = this.node(); this._new = n.id;\n    this.set(s => ({\n      goals: pid ? this.up(s.goals, pid, x => ({ ...x, open: true, children: (x.children || []).concat([n]) })) : s.goals.concat([n]),\n      selId: n.id, editId: n.id\n    }), true);\n  }",
+       "addUnder(pid) {\n    const n = this.node(); this._new = n.id; this._focusTitle = n.id;\n    this.set(s => ({\n      goals: pid ? this.up(s.goals, pid, x => ({ ...x, open: true, children: (x.children || []).concat([n]) })) : [n].concat(s.goals),\n      selId: n.id, editId: null\n    }), true);\n  }"]
     ];
     // Every pair is a string match against a checked-in artifact, so a
     // re-vendored bundle degrades to "the layout silently did not apply".
@@ -4172,6 +4267,7 @@
       remove: todoRemove,
       cut: todoCut,
       selectionText: todoSelectionText,
+      family: todoFamily,
     },
     holdRoot: holdRoot,
     releaseRoot: releaseRoot,
