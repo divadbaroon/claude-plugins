@@ -33,7 +33,8 @@ resume = "--resume" in args
 log = os.environ["STUB_LOG"]
 with open(log, "a") as fh:
     fh.write(json.dumps({"args": args, "prompt": prompt, "cwd": os.getcwd(),
-                         "resume": resume}) + "\n")
+                         "resume": resume,
+                         "api_key": os.environ.get("ANTHROPIC_API_KEY")}) + "\n")
 def say(text):
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": text}]}}), flush=True)
@@ -87,6 +88,10 @@ class BuildRunTests(unittest.TestCase):
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
         os.environ["STUB_LOG"] = str(self.log)
         os.environ["HC_BUILD_MODE"] = "headless"
+        # An API key in the server's shell must not reach the build: the
+        # reader's subscription pays for the reader's button.
+        os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-should-not-leak"
+        os.environ.pop("HC_USE_API_KEY", None)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
 
@@ -160,6 +165,9 @@ class BuildRunTests(unittest.TestCase):
         self.assertEqual({"id": "taaaa0001", "answer": "src/a.ts"},
                          json.loads(second["prompt"]))
         self.assertIn("--permission-mode", first["args"])
+        # Subscription, not the key the server inherited.
+        self.assertIsNone(first["api_key"])
+        self.assertIsNone(second["api_key"])
 
     def test_the_op_route_reaches_the_runner_and_refuses_bad_picks(self):
         trajdir = chat_state.paths(self.session, self.root).session_dir

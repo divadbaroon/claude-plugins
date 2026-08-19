@@ -67,6 +67,23 @@ class Base:
         raise ProviderError(f"{self.identity()} did not return parseable JSON")
 
 
+# Which credentials a claude subprocess runs on. The server inherits whatever
+# shell started it, and an ANTHROPIC_API_KEY there makes the CLI bill the key
+# and drop the claude.ai login (and its connectors) -- for work the reader
+# pressed a button for in their own workspace, that is the wrong account.
+# Stripped by default; HC_USE_API_KEY=1 keeps it for anyone who means it.
+API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def subscription_env(base=None):
+    """A copy of the environment that lets `claude` use the claude.ai login."""
+    env = dict(os.environ if base is None else base)
+    if os.environ.get("HC_USE_API_KEY") != "1":
+        for name in API_KEY_VARS:
+            env.pop(name, None)
+    return env
+
+
 class ClaudeCLI(Base):
     kind = "claude"
     def _run(self, prompt, *, structured=False):
@@ -81,7 +98,7 @@ class ClaudeCLI(Base):
             # Provider subprocesses are implementation details, not user chats.
             # Mark them so the always-on chat hook cannot recursively launch
             # another analyzer, and suppress the opt-in global Vault hook too.
-            child_env = os.environ.copy()
+            child_env = subscription_env()
             child_env["HC_CHAT_INFERENCE"] = "1"
             child_env.pop("CLAUDE_VAULT", None)
             r = subprocess.run(

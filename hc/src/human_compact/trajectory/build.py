@@ -488,7 +488,10 @@ class Run:
         return command
 
     def spawn(self, message: str, resume: bool) -> None:
-        env = os.environ.copy()
+        from .providers import subscription_env
+        # On the reader's subscription, not an API key the server happened
+        # to inherit (see providers.subscription_env).
+        env = subscription_env()
         # A build is not the reader's chat: keep the always-on hooks from
         # treating it as one, and from nesting another analyzer inside it.
         env["HC_CHAT_INFERENCE"] = "1"
