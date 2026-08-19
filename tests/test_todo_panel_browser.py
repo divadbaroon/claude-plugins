@@ -240,7 +240,7 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
 
     def setUp(self):
         super().setUp()
-        os.environ.pop("HC_BUILD_MODE", None)
+        os.environ["HC_BUILD_MODE"] = "session"
         self.transcript = self.root / "transcript.jsonl"
         self.transcript.write_text("")
 

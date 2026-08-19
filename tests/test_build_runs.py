@@ -210,7 +210,7 @@ class SessionBuildTests(unittest.TestCase):
         p.prompts.write_text(json.dumps({"prompts": []}))
         p.manifest.write_text(json.dumps({"cwd": str(self.root)}))
         self.old_env = dict(os.environ)
-        os.environ.pop("HC_BUILD_MODE", None)
+        os.environ["HC_BUILD_MODE"] = "session"
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         self.transcript = self.root / "transcript.jsonl"
         self.transcript.write_text("")

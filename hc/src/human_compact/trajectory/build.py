@@ -17,7 +17,10 @@ DONE marker, and ``failed`` if the process ends with none of that.
 
 Two ways the work reaches Claude, chosen by ``HC_BUILD_MODE``:
 
-* ``session`` (the default): the build is handed to the CONNECTED session --
+* ``headless`` (the default): a separate ``claude -p`` process in the chat's
+  directory, its stream-json read on a thread. Runs the moment Build is
+  pressed, in any workspace; isolated, no shared context.
+* ``session``: the build is handed to the CONNECTED session --
   the one this workspace is a view of -- through the plugin's own hooks. Build
   writes the prompt to a queue in the session directory; the next hook that
   fires delivers it: the Stop hook answers ``{"decision": "block", "reason":
@@ -27,10 +30,8 @@ Two ways the work reaches Claude, chosen by ``HC_BUILD_MODE``:
   of those happens, then ``building``. Claude's answers -- the protocol lines
   above -- are read back out of the session transcript at the same hooks.
   Nothing is typed into a window and no second process runs: it is the
-  reader's own session, with everything it already knows.
-* ``headless``: a separate ``claude -p`` process in the chat's directory,
-  its stream-json read on a thread. Unattended and isolated; no shared
-  context.
+  reader's own session, with everything it already knows -- but only once
+  the hooks run a runtime that has this code.
 
 Both fold their results into the goal state under the chat's own lock.
 """
@@ -140,9 +141,12 @@ _DIRECTIVE = re.compile(r"\{[^{}]*\"id\"\s*:\s*\"t[0-9a-z]+\"[^{}]*\}")
 
 
 def mode() -> str:
-    """How builds reach Claude: the connected session, or a headless process."""
-    value = os.environ.get("HC_BUILD_MODE", "session").strip().lower()
-    return "headless" if value == "headless" else "session"
+    """How builds reach Claude: a headless process (the default -- it runs the
+    moment Build is pressed, in any workspace), or the connected session
+    through its hooks (HC_BUILD_MODE=session: needs the plugin runtime that
+    carries this code to be the one the hooks run)."""
+    value = os.environ.get("HC_BUILD_MODE", "headless").strip().lower()
+    return "session" if value == "session" else "headless"
 
 
 # ------------------------------------------------ the connected session's queue
