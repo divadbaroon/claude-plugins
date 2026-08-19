@@ -161,6 +161,27 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_pasted_list_lands_as_one_row_per_bullet(self):
+        from playwright.sync_api import sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                # A list whose newlines were lost on the way through the
+                # clipboard, plus a properly indented line: one row each.
+                page.evaluate(
+                    "() => navigator.clipboard.writeText("
+                    "'- Create projects- Global vault\\n    - a child row')")
+                page.keyboard.press("Meta+v")
+                page.wait_for_timeout(1500)
+                self.assertEqual([("Create projects", 0, ""),
+                                  ("Global vault", 0, ""),
+                                  ("a child row", 1, "")], self.rows())
+            finally:
+                browser.close()
+
     def test_picked_rows_build_ask_and_finish_on_the_answer(self):
         from playwright.sync_api import expect, sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:

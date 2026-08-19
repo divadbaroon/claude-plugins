@@ -2506,8 +2506,10 @@
       // one row per bullet, where the browser's own insertion would mash
       // the whole body into the row holding the caret.
       event.preventDefault();
+      // Chromium hands the body in `data` when the host is plain text;
+      // the dataTransfer form is the spec's, kept for the browsers on it.
       var body = event.dataTransfer
-        ? str(event.dataTransfer.getData("text/plain")) : "";
+        ? str(event.dataTransfer.getData("text/plain")) : str(event.data);
       var ground = where.collapsed
         ? { items: todoItems, index: where.b, caret: where.bCaret }
         : todoCut(todoItems, where.a, where.aCaret, where.b, where.bCaret, "");
@@ -2697,7 +2699,12 @@
       }
     }, true);
     document.addEventListener("beforeinput", function (event) {
-      if (event.target === todoHost()) todoBeforeInput(event);
+      // The browser aims the event at the editing host of the range it is
+      // about to edit: the list for a selection across rows, the row itself
+      // for a caret sitting inside one. Both are ours.
+      if (event.target === todoHost() || todoLineOf(event.target)) {
+        todoBeforeInput(event);
+      }
     }, true);
     document.addEventListener("input", function (event) {
       if (event.target !== todoHost()) return;
