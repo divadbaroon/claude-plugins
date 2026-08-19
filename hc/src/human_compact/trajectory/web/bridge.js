@@ -1769,6 +1769,9 @@
       "[data-hc-launch] .hc-todo-line{flex:1 1 auto;min-width:0;min-height:1.9em;outline:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-line{color:var(--ink);font-weight:600}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"done\"] .hc-todo-line{color:var(--fnt);text-decoration:line-through}",
+      // A rule between the list's bands: rows not yet sent, rows out with
+      // the builder, rows that came back done.
+      "[data-hc-launch] .hc-todo-sep{border-top:1px solid var(--bd);margin:7px 6px;user-select:none}",
       "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
       "[data-hc-launch] .hc-todo-ask{user-select:text}",
       "[data-hc-launch] .hc-todo-ask{margin:2px 0 8px;border-left:2px solid var(--hc-warn);padding:2px 0 2px 10px}",
@@ -1997,6 +2000,39 @@
     return end;
   }
 
+  function todoBandOf(items) {
+    // Which band of the list each row sits in: 0 for rows not yet sent
+    // ("active" -- the absence of a status), 1 for rows out with the
+    // builder (queued, building, asking -- and failed, which came back
+    // needing another go), 2 for rows that came back done. A family is
+    // banded whole: it is done only when every row in it is, and it is
+    // out only when any row in it is.
+    var rows = array(items), bands = [], i = 0;
+    while (i < rows.length) {
+      var end = todoSpan(rows, i);
+      var out = false, done = true;
+      for (var j = i; j < end; j++) {
+        if (rows[j].status) out = true;
+        if (rows[j].status !== "done") done = false;
+      }
+      var band = done ? 2 : out ? 1 : 0;
+      for (; i < end; i++) bands.push(band);
+    }
+    return bands;
+  }
+
+  function todoSectioned(items) {
+    // The same rows, banded: active families first, then families out
+    // with the builder, then finished ones -- each band keeping the
+    // order the rows were already in. The rows themselves are the rows
+    // given, not copies: a caller holding one keeps holding it.
+    var rows = array(items);
+    var bands = todoBandOf(rows);
+    var out = [[], [], []];
+    rows.forEach(function (row, i) { out[bands[i]].push(row); });
+    return out[0].concat(out[1], out[2]);
+  }
+
   function todoEnter(items, index, caret) {
     var rows = todoCopyRows(items);
     var row = rows[index];
@@ -2221,7 +2257,7 @@
 
   function todoLoad(goal) {
     todoGoalId = goal.id;
-    todoItems = goal.items.length ? goal.items : [todoRow("", 0)];
+    todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
     todoPicked = {};
     todoBuildError = "";
   }
@@ -2464,6 +2500,8 @@
       if (todoPicked[row.id]) { row.status = "building"; row.question = ""; }
     });
     todoPicked = {};
+    // The rows just handed off drop into the middle band right away.
+    todoItems = todoSectioned(todoItems);
     renderTodoRail(true);
     var goalId = todoGoalId;
     post({ op: "build_todos", goal_id: goalId, ids: ids }).then(function (res) {
@@ -2481,6 +2519,8 @@
           todoItems.forEach(function (row) {
             if (ids.indexOf(row.id) >= 0 && row.status === "building") row.status = "";
           });
+          // Released rows climb back into the active band.
+          todoItems = todoSectioned(todoItems);
         }
       }
       refreshState();
@@ -2716,8 +2756,9 @@
       // list is drawn as one empty row to type into; that row is the rail's
       // own and is never "incoming".
       var blank = todoItems && todoItems.length === 1 && !todoItems[0].text;
-      if (goal.items.length ? !same(goal.items, todoItems) : !blank) {
-        todoItems = goal.items.length ? goal.items : [todoRow("", 0)];
+      var incoming = goal.items.length ? todoSectioned(goal.items) : null;
+      if (incoming ? !same(incoming, todoItems) : !blank) {
+        todoItems = incoming || [todoRow("", 0)];
         force = true;
       }
     }
@@ -2800,7 +2841,19 @@
     list.setAttribute("contenteditable", TODO_EDITABLE);
     list.setAttribute("spellcheck", "false");
     while (list.firstChild) list.removeChild(list.firstChild);
-    todoItems.forEach(function (row) { list.appendChild(todoRowNode(row)); });
+    // A rule between the bands: active rows, then rows out with the
+    // builder, then done ones. The caret cannot land on it, like the
+    // gutters -- it is a line, not a row.
+    var bands = todoBandOf(todoItems);
+    todoItems.forEach(function (row, i) {
+      if (i && bands[i] !== bands[i - 1]) {
+        var sep = document.createElement("div");
+        sep.className = "hc-todo-sep";
+        sep.setAttribute("contenteditable", "false");
+        list.appendChild(sep);
+      }
+      list.appendChild(todoRowNode(row));
+    });
     var focus = todoFocusAt;
     todoFocusAt = null;
     if (focus) {
@@ -4268,6 +4321,8 @@
       cut: todoCut,
       selectionText: todoSelectionText,
       family: todoFamily,
+      bands: todoBandOf,
+      sectioned: todoSectioned,
     },
     holdRoot: holdRoot,
     releaseRoot: releaseRoot,

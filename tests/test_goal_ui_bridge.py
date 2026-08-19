@@ -345,6 +345,66 @@ class TodoListModelTests(BridgeTestCase):
     def test_a_family_out_of_range_is_empty(self):
         self.assertEqual([], self.model("L.family(items, 5)", [("one", 0)]))
 
+    # --- the bands the list is drawn in ---------------------------------------
+    #
+    # Rows not yet sent sit on top, rows out with the builder in the middle,
+    # rows that came back done at the bottom -- with a rule between bands.
+
+    def banded(self, spec):
+        return [{"id": "t%08d" % i, "text": text, "depth": depth,
+                 "status": status, "question": ""}
+                for i, (text, depth, status) in enumerate(spec)]
+
+    def band_model(self, expression, spec):
+        return self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var items = %s;"
+            "out = (%s);" % (json.dumps(self.banded(spec)), expression))
+
+    def test_rows_without_a_status_are_all_one_band(self):
+        out = self.band_model("L.bands(items)",
+                              [("one", 0, ""), ("two", 0, ""), ("three", 1, "")])
+        self.assertEqual([0, 0, 0], out)
+
+    def test_done_sinks_and_building_sits_between(self):
+        out = self.band_model(
+            "L.sectioned(items).map(function (r) { return r.text; })",
+            [("done", 0, "done"), ("building", 0, "building"),
+             ("active", 0, "")])
+        self.assertEqual(["active", "building", "done"], out)
+
+    def test_queued_asking_and_failed_all_ride_the_middle_band(self):
+        out = self.band_model("L.bands(items)",
+                              [("q", 0, "queued"), ("a", 0, "asking"),
+                               ("f", 0, "failed"), ("d", 0, "done")])
+        self.assertEqual([1, 1, 1, 2], out)
+
+    def test_a_family_is_banded_whole(self):
+        # A parent out with the builder keeps its done child beside it: the
+        # family is done only when every row in it is.
+        out = self.band_model("L.bands(items)",
+                              [("parent", 0, "building"), ("child", 1, "done"),
+                               ("sibling", 0, "")])
+        self.assertEqual([1, 1, 0], out)
+
+    def test_a_done_parent_with_an_unsent_child_is_still_out(self):
+        out = self.band_model("L.bands(items)",
+                              [("parent", 0, "done"), ("child", 1, "")])
+        self.assertEqual([1, 1], out)
+
+    def test_a_band_keeps_the_order_its_rows_were_in(self):
+        out = self.band_model(
+            "L.sectioned(items).map(function (r) { return r.text; })",
+            [("d1", 0, "done"), ("a1", 0, ""), ("b1", 0, "building"),
+             ("a2", 0, ""), ("d2", 0, "done")])
+        self.assertEqual(["a1", "a2", "b1", "d1", "d2"], out)
+
+    def test_sectioning_moves_the_rows_themselves_not_copies(self):
+        out = self.band_model(
+            "L.sectioned(items)[2] === items[0]",
+            [("done", 0, "done"), ("active", 0, ""), ("building", 0, "building")])
+        self.assertTrue(out)
+
     # --- enter -------------------------------------------------------------
 
     def test_enter_on_a_written_row_opens_a_sibling_below_it(self):
