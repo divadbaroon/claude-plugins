@@ -1357,6 +1357,13 @@ def _goal_context_text(
                 lines.append(f"{indent}  - USER NOTES:")
                 lines.extend(f"{indent}    {line}".rstrip()
                              for line in join_doc(written).splitlines())
+            # The rail's list, kept apart from the notes so an edit to one
+            # never touches the other -- and injected the same way, whole.
+            todos_md = str(goal.get("todos_md") or "").strip("\n")
+            if todos_md.strip():
+                lines.append(f"{indent}  - TODOS:")
+                lines.extend(f"{indent}    {line}".rstrip()
+                             for line in todos_md.splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
             # What the user attached as background for this goal, named by

@@ -9,12 +9,12 @@
 
   var KEY = "hc-vault-ui-v1";
   var SYNC_KEY = "hc-vault-ui-sync-v1";
-  // The document a goal opens as when nobody has written one yet. Kept
-  // byte-identical to human_compact.trajectory.goals.default_doc(), because
-  // inference appends into these exact headings: a heading only the browser
-  // knows about is a section the analyzer can never add to. A test in
-  // tests/test_goal_ui_bridge.py greps this line and compares the two.
-  var DEFAULT_DOC = "# Objective\n\n# TODOs\n\n# In my words\n\n# Decisions\n\n# Built\n\n# Blockers\n\n# Open questions\n";
+  // The document a goal opens as when nobody has written one yet: nothing.
+  // Kept byte-identical to human_compact.trajectory.goals.default_doc() --
+  // no spine of empty headings; a heading arrives with the first thing
+  // written under it. A test in tests/test_goal_ui_bridge.py greps this line
+  // and compares the two.
+  var DEFAULT_DOC = "";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
                       scope: "global", sessionId: "" };
   var stateFingerprint = null;
@@ -448,6 +448,9 @@
       open: true,
       status: goal.status === "in_progress" ? "inprog" : "todo",
       notes: str(goal.notes),
+      todos_md: str(goal.todos_md),
+      todo_items: array(goal.todo_items),
+      prompt_md: str(goal.prompt_md),
       desc: str(goal.description),
       labels: [],
       prompts: promptRows(goal, byId),
@@ -1688,12 +1691,14 @@
       "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0!important}",
       // Header bar: brand, status pills, panel toggles, session. A fixed
       // height, so the columns can be sized against it exactly.
-      "[data-hc-launch] .hc>div:first-child{height:var(--hc-top);box-sizing:border-box;padding:0 16px!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
+      // Sticky, and above the columns: the pills are pinned to the viewport
+      // top, so the bar they sit in has to stay there too when the page
+      // scrolls -- or they float off it.
+      "[data-hc-launch] .hc>div:first-child{position:sticky;top:0;z-index:19;background:var(--bg);height:var(--hc-top);box-sizing:border-box;padding:0 16px!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch][data-hc-notice] .hc>div:first-child{height:37px}",
       // The product name is the one serif on the page; the marker before
       // it and everything after it stay in the workspace's monospace.
       "[data-hc-launch] .hc-brand{font:600 15px Georgia,'Iowan Old Style','Times New Roman',serif!important;letter-spacing:.1px;line-height:1}",
-      "[data-hc-launch] .hc-brand::before{content:'\\25ae';color:var(--acc);margin-right:7px;font:700 13px 'Source Code Pro',ui-monospace,monospace;vertical-align:1px}",
       "[data-hc-launch] .hc-session{font:11px 'Source Code Pro',monospace;color:var(--mut)}",
       "[data-hc-launch] .hc-session:not(:empty)::before{content:'\\25cf';color:var(--hc-ok);margin-right:6px;font-size:9px;vertical-align:1px}",
       "[data-hc-launch] .hc-updated{color:var(--fnt)}",
@@ -1745,17 +1750,43 @@
       "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-rail-tab-on{color:var(--ink)}",
-      "[data-hc-launch] .hc-rail-saved{font:10px 'Source Code Pro',monospace;letter-spacing:.4px;color:var(--fnt)}",
-      // The list itself: a dash gutter, and rows that are inputs so the
-      // caret is something this code can place.
-      "[data-hc-launch] .hc-todos{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 12px 4px}",
-      "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px}",
-      "[data-hc-launch] .hc-todo-dash{flex:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--fnt);user-select:none}",
-      "[data-hc-launch] .hc-todo-text{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;font:12px/1.9 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-rail-saved{font:10px 'Source Code Pro',monospace;letter-spacing:.4px;color:var(--fnt);margin-left:10px}",
+      // The list: rows of editable text in one column, so a selection can
+      // run across them and Cmd+A takes them all; a dash gutter that picks a
+      // row for a build; a state badge at the right; a question thread under
+      // a row Claude asked about; Copy at the lower left, Build at the right.
+      "[data-hc-launch] .hc-todos{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}",
+      "[data-hc-launch] .hc-todos-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 10px 4px;outline:none;caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px;padding:2px 6px;border-radius:5px}",
+      "[data-hc-launch] .hc-todo-row:hover{background:var(--hov)}",
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-picked]{background:var(--panel2)}",
+      "[data-hc-launch] .hc-todo-dash{flex:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--fnt);user-select:none;cursor:pointer;width:8px;text-align:center}",
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-dash{color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-line{flex:1 1 auto;min-width:0;min-height:1.9em;outline:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-line{color:var(--ink);font-weight:600}",
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"done\"] .hc-todo-line{color:var(--fnt);text-decoration:line-through}",
+      "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
+      "[data-hc-launch] .hc-todo-ask{user-select:text}",
+      "[data-hc-launch] .hc-todo-ask{margin:2px 0 8px;border-left:2px solid var(--hc-warn);padding:2px 0 2px 10px}",
+      "[data-hc-launch] .hc-todo-question{font:12px/1.5 'Source Code Pro',monospace;color:var(--dtxt);margin-bottom:5px}",
+      "[data-hc-launch] .hc-todo-reply{display:flex;align-items:center;gap:6px}",
+      "[data-hc-launch] .hc-todo-arrow{color:var(--hc-warn);font-size:11px}",
+      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-answer::placeholder{color:var(--fnt)}",
+      "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
+      "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-todo-copy:hover{color:var(--ink);border-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 'Source Code Pro',monospace;color:var(--del);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-todo-build{margin-left:auto;padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
+      "[data-hc-launch] .hc-todo-build[data-hc-todo-build=\"on\"]{color:#fff;background:#1f6feb;border-color:#1f6feb;cursor:pointer}",
+      "[data-hc-launch] .hc-rail-select{margin-left:auto;font:500 10px 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-select:hover{color:var(--ink)}",
+      "[data-hc-launch] .hc-rail-generate{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-generate:hover{color:var(--ink);border-color:var(--ink)}",
+      "[data-hc-launch] .hc-rail-generate[data-hc-generating=\"on\"]{color:var(--fnt);cursor:default}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
       "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-left>div:nth-child(2){padding:6px 6px 0}",
-      "[data-hc-launch] .hc-rail-left>div:last-child{padding:8px 12px 6px!important;border-top:1px solid var(--bd);font-size:9.5px!important;line-height:1.6}",
       // A tree row is one line high, so its title has to be one line: a
       // wrapped one overlapped the row under it at this width.
       "[data-hc-launch] .hc-row{white-space:nowrap}",
@@ -1763,17 +1794,13 @@
       // The prompt itself: a code block, not a box to type in.
       "[data-hc-launch] .hc-rail-code{flex:1 1 auto;min-height:0;width:100%;box-sizing:border-box;overflow:auto;resize:none;margin:0;padding:10px 16px 12px;border:none;border-radius:0;background:transparent;outline:none;font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
       "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
-      "[data-hc-launch] .hc-rail-actions{flex:none;padding:10px 12px 0}",
-      "[data-hc-launch] .hc-rail-copy{display:block;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
+      "[data-hc-launch] .hc-rail-copy{display:block;flex:1;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
       // The light fill is dark enough that only white clears AA on it; the
       // dark theme's fill is bright enough that only near-black does.
       "[data-hc-launch][data-hc-theme=\"dark\"] .hc-rail-copy{color:#08130c}",
       "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
       // What the chat is actually being told, from /api/state.injection.
-      "[data-hc-launch] .hc-inject{flex:none;margin:auto 12px 0;padding:9px 11px;border:1px solid var(--bd);border-radius:4px;background:var(--panel2);font:10.5px/1.75 'Source Code Pro',monospace;color:var(--mut)}",
-      "[data-hc-launch] .hc-inject-head{color:var(--fnt);letter-spacing:.6px}",
-      "[data-hc-launch] .hc-inject-on{color:var(--hc-ok)}",
-      "[data-hc-launch] .hc-inject-off{color:var(--fnt)}",
       // Sources, as a chip rail above the document.
       "[data-hc-launch] .hc-sources{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:12px}",
       "[data-hc-launch] .hc-sources-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut);margin-right:2px}",
@@ -1885,46 +1912,33 @@
     return docSectionWrite(document_, TODO_SECTION, body);
   }
 
-  // --- the nested list the rail edits ---------------------------------------
+  // --- the rail's list: rows the reader edits and picks -----------------------
   //
-  // One section of the goal's markdown document, held as {text, depth} rows.
-  // Every operation returns a new list plus where the caret should land, so
-  // the renderer never has to reason about what a key meant -- and so all of
-  // it is testable without a DOM.
+  // The list is the goal's `todo_items`: one row per line, each with an id
+  // the reader never sees, its text, its depth, and the state a build run
+  // gives it. It is held apart from the notes so an edit to one never reaches
+  // the other. Rows are drawn as spans inside ONE editable column, not as
+  // inputs and not as one editable each: a browser will not let a selection
+  // cross from one editing host into another, so one host is what makes a
+  // selection dragged across rows a real selection, lets Cmd+A take every
+  // row, and lets Copy of that selection be the rows as markdown. The keys the
+  // list is about -- Enter, Tab, Shift-Tab, Backspace at a bullet, Cmd+/ to
+  // pick, Cmd+Backspace to delete -- are operations on the row list, each
+  // returning the rows and where the caret should land, so all of them are
+  // testable without a DOM.
 
   var TODO_INDENT = "    ";
-
-  function todoParse(body) {
-    var rows = [];
-    str(body).split("\n").forEach(function (line) {
-      if (!line.trim()) return;
-      var lead = /^[ \t]*/.exec(line)[0].replace(/\t/g, TODO_INDENT);
-      var text = line.slice(/^[ \t]*/.exec(line)[0].length);
-      // A line that never became a bullet -- inference's or the reader's --
-      // is still one of the reader's lines. Keep it, as a row.
-      text = text.replace(/^[-*]\s+/, "");
-      rows.push({ text: text, depth: Math.floor(lead.length / 4) });
-    });
-    // Nothing sits two levels below its parent, however the text was typed.
-    var ceiling = 0;
-    rows.forEach(function (row) {
-      row.depth = Math.max(0, Math.min(row.depth, ceiling));
-      ceiling = row.depth + 1;
-    });
-    // An empty section is still somewhere to type.
-    return rows.length ? rows : [{ text: "", depth: 0 }];
-  }
-
-  function todoSerialize(items) {
-    var rows = (items || []).filter(function (row) {
-      return str(row && row.text).trim() !== "";
-    });
-    // A goal the reader only looked at must not gain a "- " in its document.
-    if (!rows.length) return "";
-    return rows.map(function (row) {
-      return repeat(TODO_INDENT, row.depth) + "- " + row.text;
-    }).join("\n") + "\n";
-  }
+  var railTab = "todos";
+  var todoItems = null;
+  var todoGoalId = null;
+  var todoPicked = {};
+  var todoSavedLabel = "";
+  var todoSaveTimer = null;
+  var todoFocusAt = null;
+  var todoCopied = false;
+  var todoCopiedTimer = null;
+  var todoBuilding = false;
+  var todoBuildError = "";
 
   function repeat(unit, times) {
     var out = "";
@@ -1932,10 +1946,42 @@
     return out;
   }
 
-  function todoCopy(items) {
-    return (items || []).map(function (row) {
-      return { text: str(row.text), depth: row.depth | 0 };
+  function todoNewId() {
+    var rand = Math.floor(Math.random() * 0xffffffff).toString(16);
+    return "t" + ("00000000" + rand).slice(-8);
+  }
+
+  function todoRow(text, depth, id) {
+    return { id: id || todoNewId(), text: str(text), depth: depth | 0,
+             status: "", question: "" };
+  }
+
+  function todoCopyRows(items) {
+    return array(items).map(function (row) {
+      return { id: str(row.id) || todoNewId(), text: str(row.text),
+               depth: row.depth | 0, status: str(row.status),
+               question: str(row.question) };
     });
+  }
+
+  function todoNormalize(items) {
+    var rows = todoCopyRows(items);
+    var ceiling = 0;
+    rows.forEach(function (row) {
+      row.depth = Math.max(0, Math.min(row.depth, ceiling));
+      ceiling = row.depth + 1;
+    });
+    return rows;
+  }
+
+  function todoSerialize(items) {
+    var rows = array(items).filter(function (row) {
+      return str(row && row.text).trim() !== "";
+    });
+    if (!rows.length) return "";
+    return rows.map(function (row) {
+      return repeat(TODO_INDENT, row.depth | 0) + "- " + row.text;
+    }).join("\n") + "\n";
   }
 
   function todoSpan(items, index) {
@@ -1946,27 +1992,26 @@
   }
 
   function todoEnter(items, index, caret) {
-    var rows = todoCopy(items);
+    var rows = todoCopyRows(items);
     var row = rows[index];
     if (!row) return null;
     var text = row.text;
-    var at = (typeof caret === "number") ? caret : text.length;
+    var at = (typeof caret === "number") ? Math.min(caret, text.length) : text.length;
     if (!text.trim()) {
       // An empty row never makes another empty row. Nested, the key spends
       // itself outdenting; at the margin it does nothing at all.
-      if (row.depth > 0) {
-        row.depth -= 1;
-        return { items: rows, index: index, caret: 0 };
-      }
+      if (row.depth > 0) row.depth -= 1;
       return { items: rows, index: index, caret: 0 };
     }
     row.text = text.slice(0, at);
-    rows.splice(index + 1, 0, { text: text.slice(at), depth: row.depth });
+    // The tail goes down without the space that separated it from the caret.
+    var tail = text.slice(at).replace(/^ +(?=\S)/, "");
+    rows.splice(index + 1, 0, todoRow(tail, row.depth));
     return { items: rows, index: index + 1, caret: 0 };
   }
 
   function todoIndent(items, index) {
-    var rows = todoCopy(items);
+    var rows = todoCopyRows(items);
     if (index <= 0 || !rows[index]) return { items: rows, index: index };
     // Only ever one level below the row above: the first child of a parent
     // cannot be a grandchild of it.
@@ -1978,7 +2023,7 @@
   }
 
   function todoOutdent(items, index) {
-    var rows = todoCopy(items);
+    var rows = todoCopyRows(items);
     if (!rows[index] || rows[index].depth === 0) return { items: rows, index: index };
     var end = todoSpan(rows, index);
     for (var i = index; i < end; i++) rows[i].depth -= 1;
@@ -1988,12 +2033,12 @@
   function todoBackspace(items, index, caret) {
     // Only the start of a row is ours; anywhere else is ordinary typing.
     if (caret !== 0) return null;
-    var rows = todoCopy(items);
+    var rows = todoCopyRows(items);
     var row = rows[index];
     if (!row) return null;
     if (!row.text) {
       if (row.depth > 0) return todoOutdent(rows, index);
-      if (rows.length === 1) return { items: rows, index: 0, caret: 0 };
+      if (rows.length === 1) return null;
       rows.splice(index, 1);
       var back = Math.max(0, index - 1);
       return { items: rows, index: back, caret: rows[back].text.length };
@@ -2006,35 +2051,147 @@
     return { items: rows, index: index - 1, caret: caretAt };
   }
 
-  // --- the rail: two tabs, one of them an editable nested list --------------
-  //
-  // The list is drawn by the bridge rather than the artifact, the way the
-  // injection card is, because it needs key semantics the artifact has no
-  // notion of. Rows are inputs: one line each, and a caret this code can put
-  // where the key said it should go.
+  function todoRemove(items, index) {
+    var rows = todoCopyRows(items);
+    if (!rows[index]) return null;
+    rows.splice(index, 1);
+    if (!rows.length) rows.push(todoRow("", 0));
+    var next = Math.min(index, rows.length - 1);
+    return { items: rows, index: next, caret: rows[next].text.length };
+  }
 
-  var railTab = "todos";
-  var todoItems = null;
-  var todoGoalId = null;
-  var todoShape = null;
-  var todoSavedLabel = "";
-  var todoSaveTimer = null;
-  var todoFocusAt = null;
+  function todoCut(items, a, aCaret, b, bCaret, insert) {
+    // A selection that runs across rows: what is between the two carets goes,
+    // the two rows become one, and `insert` (typed or pasted) lands there.
+    var rows = todoCopyRows(items);
+    if (!rows[a] || !rows[b]) return null;
+    if (a > b || (a === b && aCaret > bCaret)) {
+      var t = a; a = b; b = t; t = aCaret; aCaret = bCaret; bCaret = t;
+    }
+    var head = rows[a].text.slice(0, aCaret);
+    var tail = rows[b].text.slice(bCaret);
+    var put = str(insert);
+    rows[a].text = head + put + tail;
+    rows.splice(a + 1, b - a);
+    return { items: rows, index: a, caret: head.length + put.length };
+  }
 
-  function todoShapeOf(goalId, items) {
-    return goalId + " " + (items || []).map(function (row) {
-      return row.depth;
-    }).join(",") + " " + (items || []).length;
+  function todoSelectionText(items, a, aCaret, b, bCaret) {
+    var rows = todoCopyRows(items);
+    if (!rows[a] || !rows[b]) return "";
+    if (a > b || (a === b && aCaret > bCaret)) {
+      var t = a; a = b; b = t; t = aCaret; aCaret = bCaret; bCaret = t;
+    }
+    var out = [];
+    for (var i = a; i <= b; i++) {
+      var text = rows[i].text;
+      var from = i === a ? aCaret : 0;
+      var to = i === b ? bCaret : text.length;
+      out.push(repeat(TODO_INDENT, rows[i].depth) + "- " + text.slice(from, to));
+    }
+    return out.join("\n");
+  }
+
+  // --- the rows on screen ---------------------------------------------------
+
+  var TODO_STATUS = {
+    building: ["building", "var(--hc-blue, #58a6ff)"],
+    asking: ["needs you", "var(--hc-warn)"],
+    done: ["done", "var(--hc-ok)"],
+    failed: ["failed", "var(--del)"]
+  };
+
+  function todoHost() { return document.querySelector(".hc-todos-list"); }
+
+  function todoLineOf(node) {
+    while (node && node !== document) {
+      if (node.getAttribute && node.getAttribute("data-hc-todo-line") !== null) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function todoIndexOfId(id) {
+    if (!todoItems) return -1;
+    for (var i = 0; i < todoItems.length; i++) if (todoItems[i].id === id) return i;
+    return -1;
+  }
+
+  function todoIndexOfLine(node) {
+    var line = todoLineOf(node);
+    return line ? todoIndexOfId(line.getAttribute("data-hc-todo-line")) : -1;
+  }
+
+  function todoCaretIn(line, container, offset) {
+    // How many characters from the start of the row's text the point is.
+    try {
+      var range = document.createRange();
+      range.setStart(line, 0);
+      range.setEnd(container, offset);
+      return range.toString().length;
+    } catch (e) { return 0; }
+  }
+
+  function todoSelection() {
+    // Where the selection is, in rows: null when it is not in the list.
+    var sel = window.getSelection ? window.getSelection() : null;
+    if (!sel || !sel.rangeCount) return null;
+    var anchor = todoLineOf(sel.anchorNode), focus = todoLineOf(sel.focusNode);
+    if (!anchor || !focus) return null;
+    var a = todoIndexOfId(anchor.getAttribute("data-hc-todo-line"));
+    var b = todoIndexOfId(focus.getAttribute("data-hc-todo-line"));
+    if (a < 0 || b < 0) return null;
+    return { a: a, aCaret: todoCaretIn(anchor, sel.anchorNode, sel.anchorOffset),
+             b: b, bCaret: todoCaretIn(focus, sel.focusNode, sel.focusOffset),
+             collapsed: sel.isCollapsed };
+  }
+
+  function todoPlaceCaret(line, caret) {
+    if (!line) return;
+    var text = line.firstChild;
+    if (!text || text.nodeType !== 3) {
+      text = document.createTextNode("");
+      line.appendChild(text);
+    }
+    var at = Math.max(0, Math.min(caret, text.length));
+    var host = todoHost();
+    if (host && document.activeElement !== host) host.focus();
+    try {
+      var range = document.createRange();
+      range.setStart(text, at);
+      range.collapse(true);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {}
+  }
+
+  function todoSelectAll() {
+    var host = todoHost();
+    var lines = host ? host.querySelectorAll("[data-hc-todo-line]") : [];
+    if (!lines.length) return false;
+    try {
+      var range = document.createRange();
+      range.setStart(lines[0], 0);
+      var last = lines[lines.length - 1];
+      range.setEnd(last, last.childNodes.length);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return true;
+    } catch (e) { return false; }
   }
 
   function todoTyping() {
-    var active = document.activeElement;
-    return !!(active && active.className === "hc-todo-text");
+    return document.activeElement === todoHost()
+      || !!(document.activeElement
+            && document.activeElement.getAttribute
+            && document.activeElement.getAttribute("data-hc-todo-answer") !== null);
   }
 
   function todoFind(nodes, id) {
     // The live node, not flattenTree's copy: this is the object the rail
-    // writes its section back into, and a clone would swallow every save.
+    // writes into, and a clone would swallow every save.
     var found = null;
     array(nodes).some(function (node) {
       if (!node || typeof node.id !== "string") return false;
@@ -2049,13 +2206,17 @@
     var id = selectedGoalId();
     if (!id) return null;
     var node = todoFind(readLocalGoals(), id);
-    return node ? { id: id, notes: str(node.notes) } : null;
+    return node ? { id: id, notes: str(node.notes),
+                    items: todoNormalize(node.todo_items),
+                    prompt: str(node.prompt_md) }
+                : null;
   }
 
   function todoLoad(goal) {
     todoGoalId = goal.id;
-    todoItems = todoParse(todoDocRead(goal.notes));
-    todoShape = todoShapeOf(goal.id, todoItems);
+    todoItems = goal.items.length ? goal.items : [todoRow("", 0)];
+    todoPicked = {};
+    todoBuildError = "";
   }
 
   function todoStamp(now) {
@@ -2069,32 +2230,32 @@
       + " " + suffix;
   }
 
+  function writeGoalsLocal(goals) {
+    var saved;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { saved = {}; }
+    saved.goals = goals;
+    saved.updatedAt = Date.now();
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    lastObservedGoals = JSON.stringify(goals);
+    todoSavedLabel = todoStamp();
+    importGoals(goals);
+  }
+
   function todoSaveNow() {
     if (todoSaveTimer) { clearTimeout(todoSaveTimer); todoSaveTimer = null; }
     if (!todoGoalId || !todoItems) return false;
     var goals = readLocalGoals();
     var node = todoFind(goals, todoGoalId);
     if (!node) return false;
-    var before = str(node.notes);
-    // A goal nobody has written to yet still shows the whole spine in the
-    // notes editor, which reads `notes || DEFAULT_DOC`. Writing from the rail
-    // against "" would collapse the document to a single heading and take
-    // the other six away from the reader who was looking at them.
-    var after = todoDocWrite(before || DEFAULT_DOC, todoSerialize(todoItems));
-    if (after === before) return false;
-    // Written through the same tree import the notes editor uses, so one
-    // document keeps one writer and the server sees one kind of change.
-    node.notes = after;
-    var roots = goals;
-    var saved;
-    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
-    catch (e) { saved = {}; }
-    saved.goals = roots;
-    saved.updatedAt = Date.now();
-    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
-    lastObservedGoals = JSON.stringify(roots);
-    todoSavedLabel = todoStamp();
-    importGoals(roots);
+    var next = todoCopyRows(todoItems);
+    if (same(todoNormalize(node.todo_items), next)) return false;
+    // Its own field, written through the same tree import the notes editor
+    // uses -- and never the notes: the list and the document are two things.
+    // The server lays its own build state back over these rows by id.
+    node.todo_items = next;
+    node.todos_md = todoSerialize(next);
+    writeGoalsLocal(goals);
     return true;
   }
 
@@ -2106,101 +2267,292 @@
   function todoApply(result) {
     if (!result) return false;
     todoItems = result.items;
-    todoShape = null;
     todoFocusAt = { index: result.index, caret: result.caret };
     todoSaveSoon();
     return true;
   }
 
-  function todoKey(event, index) {
-    var input = event.target;
-    if (!todoItems || !todoItems[index]) return;
-    var caret = (input && typeof input.selectionStart === "number")
-      ? input.selectionStart : 0;
-    if (input) todoItems[index].text = input.value;
+  function todoSyncLine(line) {
+    // Text alone never redraws: the row the reader is typing in is the one
+    // thing on screen that must not be replaced underneath them.
+    var index = todoIndexOfLine(line);
+    if (index < 0 || !todoItems) return;
+    var text = str(line.textContent).replace(/\n/g, "");
+    if (todoItems[index].text !== text) {
+      todoItems[index].text = text;
+      todoSaveSoon();
+    }
+  }
+
+  function todoKey(event) {
+    // The row a key is about is wherever the selection's focus is: the
+    // whole list is one editing host, so the event's target is the host.
+    var where = todoSelection();
+    if (!todoItems) return;
+    if (!where) {
+      // The caret is in the host but outside every row's text (between
+      // rows, beside a gutter). Nothing may be typed there: put it at the
+      // end of the last row and take the key from the browser.
+      if ((event.key.length === 1 && !event.metaKey && !event.ctrlKey)
+          || event.key === "Backspace" || event.key === "Delete"
+          || event.key === "Enter") {
+        event.preventDefault();
+        todoFocusAt = { index: todoItems.length - 1, caret: null };
+        renderTodoRail(true);
+      }
+      return;
+    }
+    var index = where.b;
+    var line = todoLineOf(window.getSelection().focusNode);
+    if (line) todoSyncLine(line);
+    var caret = where.collapsed ? where.bCaret : null;
+    var mod = event.metaKey || event.ctrlKey;
     var handled = false;
-    if (event.key === "Enter") {
-      // Always ours. An empty row at the left margin spends the key and
-      // draws nothing new -- which is the point: no bullet without text may
-      // make another bullet without text.
-      todoApply(todoEnter(todoItems, index, caret));
+    if (mod && event.key === "a") {
+      // Every row, as one selection -- and no redraw, which would take the
+      // selection away again.
+      if (todoSelectAll()) { event.preventDefault(); event.stopPropagation(); }
+      return;
+    } else if (mod && event.key === "/") {
+      todoTogglePick(todoItems[index].id);
       handled = true;
+      renderTodoRail(true);
+      event.preventDefault();
+      return;
+    } else if (mod && event.key === "Enter") {
+      todoBuild();
+      handled = true;
+    } else if (mod && (event.key === "Backspace" || event.key === "Delete")) {
+      handled = todoApply(todoRemove(todoItems, index));
+    } else if (mod || event.altKey) {
+      // Cmd+C, Cmd+V, Cmd+Z and the rest are the browser's (copy is
+      // answered on the copy event, where the rows leave as markdown).
+      return;
+    } else if (!where.collapsed && where.a !== where.b) {
+      // A selection across rows: the browser will not edit across editing
+      // hosts, so what a key does to it is ours.
+      if (event.key === "Backspace" || event.key === "Delete") {
+        handled = todoApply(todoCut(todoItems, where.a, where.aCaret,
+                                    where.b, where.bCaret, ""));
+      } else if (event.key === "Enter") {
+        var cut = todoCut(todoItems, where.a, where.aCaret, where.b, where.bCaret, "");
+        handled = !!cut && todoApply(todoEnter(cut.items, cut.index, cut.caret));
+      } else if (event.key.length === 1) {
+        handled = todoApply(todoCut(todoItems, where.a, where.aCaret,
+                                    where.b, where.bCaret, event.key));
+      }
+    } else if (event.key === "Enter" && !event.shiftKey) {
+      handled = todoApply(todoEnter(todoItems, index, caret));
     } else if (event.key === "Tab") {
       if (!todoApply(event.shiftKey ? todoOutdent(todoItems, index)
                                     : todoIndent(todoItems, index))) {
         todoFocusAt = { index: index, caret: caret };
       }
       handled = true;
-    } else if (event.key === "Backspace") {
-      handled = todoApply(todoBackspace(todoItems, index, caret));
-    } else if (event.key === "ArrowUp" && index > 0) {
-      todoFocusAt = { index: index - 1, caret: null };
+    } else if (event.key === "Backspace" && where.collapsed && caret === 0) {
+      // Ours whether or not it changes anything: left to the browser, a
+      // backspace at the head of a row would eat the row's gutter.
+      todoApply(todoBackspace(todoItems, index, caret));
       handled = true;
-    } else if (event.key === "ArrowDown" && index < todoItems.length - 1) {
-      todoFocusAt = { index: index + 1, caret: null };
+    } else if (event.key === "Delete" && where.collapsed
+               && caret === todoItems[index].text.length) {
+      if (index < todoItems.length - 1) {
+        todoApply(todoBackspace(todoItems, index + 1, 0));
+      }
       handled = true;
     }
     if (!handled) return;
     event.preventDefault();
+    // Ours, and nobody else's: the artifact listens on the document too, and
+    // reads Tab and the arrows as "move the goal selection".
+    event.stopPropagation();
     renderTodoRail(true);
   }
 
-  function todoRow(item, index) {
-    var row = document.createElement("div");
-    row.className = "hc-todo-row";
-    row.style.paddingLeft = (item.depth * 20) + "px";
-    var dash = document.createElement("span");
-    dash.className = "hc-todo-dash";
-    dash.textContent = "-";
-    row.appendChild(dash);
-    var input = document.createElement("input");
-    input.className = "hc-todo-text";
-    input.type = "text";
-    input.spellcheck = false;
-    input.value = item.text;
-    // Which row this is, as an attribute rather than a closure: the artifact
-    // re-creates the subtree it owns, and a clone keeps attributes while
-    // dropping every listener and property bound to the original node.
-    input.setAttribute("data-hc-todo", String(index));
-    row.appendChild(input);
-    return row;
+  function todoBeforeInput(event) {
+    // Typing or pasting over a selection that runs across rows -- and any
+    // edit the browser would make outside a row's text (between rows, over
+    // a gutter), which is nowhere the model has a place for.
+    var where = todoSelection();
+    if (!where) { event.preventDefault(); return; }
+    if (where.collapsed || where.a === where.b) return;
+    var put = "";
+    if (event.inputType === "insertText") put = str(event.data);
+    else if (event.inputType === "insertFromPaste" && event.dataTransfer) {
+      put = str(event.dataTransfer.getData("text/plain")).replace(/\s*\n\s*/g, " ");
+    } else if (!/^delete/.test(str(event.inputType))) return;
+    event.preventDefault();
+    if (todoApply(todoCut(todoItems, where.a, where.aCaret, where.b, where.bCaret, put))) {
+      renderTodoRail(true);
+    }
+  }
+
+  function todoCopyEvent(event) {
+    // A selection across rows leaves as the rows it covers, as markdown.
+    var where = todoSelection();
+    if (!where || where.collapsed || !event.clipboardData) return;
+    var text = todoSelectionText(todoItems, where.a, where.aCaret, where.b, where.bCaret);
+    if (!text) return;
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+  }
+
+  function todoTogglePick(id) {
+    var row = todoItems && todoItems[todoIndexOfId(id)];
+    if (!row || (row.status && row.status !== "failed")) return;
+    if (todoPicked[id]) delete todoPicked[id]; else todoPicked[id] = true;
+  }
+
+  function todoPickable() {
+    return array(todoItems).filter(function (row) {
+      return row.text.trim() && (!row.status || row.status === "failed");
+    });
+  }
+
+  function todoToggleAll() {
+    var rows = todoPickable();
+    if (!rows.length) return;
+    var all = rows.every(function (row) { return todoPicked[row.id]; });
+    todoPicked = {};
+    if (!all) rows.forEach(function (row) { todoPicked[row.id] = true; });
+  }
+
+  function todoPickedIds() {
+    return array(todoItems).filter(function (row) {
+      return todoPicked[row.id];
+    }).map(function (row) { return row.id; });
+  }
+
+  function todoBuild() {
+    var ids = todoPickedIds();
+    if (!ids.length || todoBuilding || !todoGoalId) return;
+    todoSaveNow();
+    todoBuilding = true;
+    todoBuildError = "";
+    // Building from the moment it is submitted: the server says so too, on
+    // its next state, but the rail should not wait for it.
+    todoItems.forEach(function (row) {
+      if (todoPicked[row.id]) { row.status = "building"; row.question = ""; }
+    });
+    todoPicked = {};
+    renderTodoRail(true);
+    var goalId = todoGoalId;
+    post({ op: "build_todos", goal_id: goalId, ids: ids }).then(function (res) {
+      todoBuilding = false;
+      if (!res || !res.ok) {
+        todoBuildError = (res && res.error) || "the build could not start";
+        if (todoGoalId === goalId && todoItems) {
+          todoItems.forEach(function (row) {
+            if (ids.indexOf(row.id) >= 0 && row.status === "building") row.status = "";
+          });
+        }
+      }
+      refreshState();
+      renderTodoRail(true);
+    });
+  }
+
+  function todoAnswer(id, text) {
+    if (!todoGoalId || !str(text).trim()) return;
+    var goalId = todoGoalId;
+    var row = todoItems && todoItems[todoIndexOfId(id)];
+    if (row) { row.status = "building"; row.question = ""; }
+    renderTodoRail(true);
+    post({ op: "answer_todo", goal_id: goalId, id: id, answer: text })
+      .then(function (res) {
+        if ((!res || !res.ok) && todoGoalId === goalId) {
+          todoBuildError = (res && res.error) || "the answer could not be sent";
+        }
+        refreshState();
+        renderTodoRail(true);
+      });
+  }
+
+  function todoCopyAll() {
+    var text = todoSerialize(todoItems);
+    var done = function () {
+      todoCopied = true;
+      clearTimeout(todoCopiedTimer);
+      todoCopiedTimer = setTimeout(function () {
+        todoCopied = false;
+        renderTodoRail(true);
+      }, 1600);
+      renderTodoRail(true);
+    };
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy") === true; } catch (e) { ok = false; }
+      ta.remove();
+      return ok;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        if (fallback()) done();
+      });
+    } else if (fallback()) {
+      done();
+    }
   }
 
   var todoDelegated = false;
 
-  function todoIndexOf(node) {
-    if (!node || !node.getAttribute) return -1;
-    var at = node.getAttribute("data-hc-todo");
-    return at === null ? -1 : parseInt(at, 10);
-  }
-
   function todoDelegate() {
     // Listeners live on the document, which nothing re-creates. Binding them
     // to the rows themselves worked exactly until the artifact next redrew
-    // its own rail, after which every key went to a node with no handlers --
-    // typing still landed, so the list looked alive while nothing it did was
-    // being recorded.
+    // its own rail, after which every key went to a node with no handlers.
     if (todoDelegated || !document.addEventListener) return;
     todoDelegated = true;
     document.addEventListener("keydown", function (event) {
-      var index = todoIndexOf(event.target);
-      if (index >= 0) todoKey(event, index);
+      var node = event.target;
+      if (node === todoHost()) { todoKey(event); return; }
+      if (node && node.getAttribute
+          && node.getAttribute("data-hc-todo-answer") !== null
+          && event.key === "Enter") {
+        event.preventDefault();
+        todoAnswer(node.getAttribute("data-hc-todo-answer"), node.value);
+      }
+    }, true);
+    document.addEventListener("beforeinput", function (event) {
+      if (event.target === todoHost()) todoBeforeInput(event);
     }, true);
     document.addEventListener("input", function (event) {
-      var index = todoIndexOf(event.target);
-      if (index < 0 || !todoItems || !todoItems[index]) return;
-      // Text alone never redraws: the row the reader is typing in is the one
-      // thing on screen that must not be replaced underneath them.
-      todoItems[index].text = event.target.value;
-      todoSaveSoon();
+      if (event.target !== todoHost()) return;
+      var sel = window.getSelection();
+      var line = sel && todoLineOf(sel.focusNode);
+      if (line) todoSyncLine(line);
+    }, true);
+    document.addEventListener("copy", function (event) {
+      if (todoSelection()) todoCopyEvent(event);
     }, true);
     document.addEventListener("blur", function (event) {
-      if (todoIndexOf(event.target) >= 0) todoSaveNow();
+      if (event.target === todoHost()) todoSaveNow();
     }, true);
     document.addEventListener("click", function (event) {
       var node = event.target;
-      var name = node && node.getAttribute
-        ? node.getAttribute("data-hc-rail-tab") : null;
+      if (!node || !node.getAttribute) return;
+      var dash = node.getAttribute("data-hc-todo-dash");
+      if (dash !== null) {
+        todoTogglePick(dash);
+        renderTodoRail(true);
+        return;
+      }
+      if (node.className === "hc-todo-copy") { todoCopyAll(); return; }
+      if (node.className === "hc-todo-build" || node.getAttribute("data-hc-todo-build") !== null) {
+        todoBuild(); return;
+      }
+      if (node.className === "hc-rail-select") {
+        todoToggleAll();
+        renderTodoRail(true);
+        return;
+      }
+      if (node.className === "hc-rail-generate") { promptGenerate(); return; }
+      var name = node.getAttribute("data-hc-rail-tab");
       if (name !== "todos" && name !== "prompt") return;
       railTab = name;
       renderTodoRail(true);
@@ -2218,14 +2570,88 @@
     return tab;
   }
 
+  var TODO_EDITABLE = (function () {
+    try {
+      var probe = document.createElement("div");
+      probe.contentEditable = "plaintext-only";
+      return probe.contentEditable === "plaintext-only" ? "plaintext-only" : "true";
+    } catch (e) { return "true"; }
+  })();
+
+  function todoRowNode(row) {
+    var wrap = document.createElement("div");
+    wrap.className = "hc-todo";
+    var line = document.createElement("div");
+    line.className = "hc-todo-row";
+    line.style.paddingLeft = (row.depth * 20) + "px";
+    if (row.status) line.setAttribute("data-hc-todo-state", row.status);
+    if (todoPicked[row.id]) line.setAttribute("data-hc-todo-picked", "");
+    var dash = document.createElement("span");
+    dash.className = "hc-todo-dash";
+    dash.textContent = "-";
+    dash.title = "pick for build (⌘/)";
+    dash.setAttribute("data-hc-todo-dash", row.id);
+    // The gutter and the badge are islands the caret cannot enter; the
+    // row's text is editable by inheritance from the list, which is the
+    // one editing host -- never its own, or the selection could not cross.
+    dash.setAttribute("contenteditable", "false");
+    line.appendChild(dash);
+    var text = document.createElement("span");
+    text.className = "hc-todo-line";
+    // Which row this is, as an attribute rather than a closure: the artifact
+    // re-creates the subtree it owns, and a clone keeps attributes while
+    // dropping every listener and property bound to the original node.
+    text.setAttribute("data-hc-todo-line", row.id);
+    text.textContent = row.text;
+    line.appendChild(text);
+    var state = TODO_STATUS[row.status];
+    if (state) {
+      var badge = document.createElement("span");
+      badge.className = "hc-todo-status";
+      badge.setAttribute("contenteditable", "false");
+      badge.textContent = state[0];
+      badge.style.color = state[1];
+      line.appendChild(badge);
+    }
+    wrap.appendChild(line);
+    if (row.status === "asking") {
+      var ask = document.createElement("div");
+      ask.className = "hc-todo-ask";
+      ask.setAttribute("contenteditable", "false");
+      ask.style.marginLeft = (row.depth * 20 + 22) + "px";
+      var q = document.createElement("div");
+      q.className = "hc-todo-question";
+      q.textContent = row.question || "Claude has a question about this one.";
+      ask.appendChild(q);
+      var reply = document.createElement("div");
+      reply.className = "hc-todo-reply";
+      var arrow = document.createElement("span");
+      arrow.className = "hc-todo-arrow";
+      arrow.textContent = "↳";
+      reply.appendChild(arrow);
+      var answer = document.createElement("input");
+      answer.className = "hc-todo-answer";
+      answer.type = "text";
+      answer.placeholder = "answer, then enter";
+      answer.spellcheck = false;
+      answer.setAttribute("data-hc-todo-answer", row.id);
+      reply.appendChild(answer);
+      ask.appendChild(reply);
+      wrap.appendChild(ask);
+    }
+    return wrap;
+  }
+
   function renderTodoRail(force) {
     if (serverState.scope !== "chat") return false;
     todoDelegate();
     var host = document.querySelector(".hc-todos");
+    var list = todoHost();
     var tabs = document.querySelector(".hc-rail-tabs");
     var stamp = document.querySelector(".hc-rail-saved");
+    var select = document.querySelector(".hc-rail-select");
     var promptBox = document.querySelector(".hc-rail-prompt");
-    if (!host || !tabs) return false;
+    if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
     if (!goal) {
@@ -2235,11 +2661,13 @@
       todoLoad(goal);
       force = true;
     } else if (!todoTyping() && !todoSaveTimer) {
-      // Inference appends to this section too, so the document can change
-      // under the rail -- but only ever while the reader is not mid-edit.
-      var incoming = todoParse(todoDocRead(goal.notes));
-      if (todoSerialize(incoming) !== todoSerialize(todoItems)) {
-        todoItems = incoming;
+      // The server's build state -- and inference's additions -- reach the
+      // rail here, but only ever while the reader is not mid-edit. An empty
+      // list is drawn as one empty row to type into; that row is the rail's
+      // own and is never "incoming".
+      var blank = todoItems && todoItems.length === 1 && !todoItems[0].text;
+      if (goal.items.length ? !same(goal.items, todoItems) : !blank) {
+        todoItems = goal.items.length ? goal.items : [todoRow("", 0)];
         force = true;
       }
     }
@@ -2250,33 +2678,67 @@
       tabs.appendChild(todoTabSpan("prompt", "Prompt"));
     }
     if (stamp) stamp.textContent = todoSavedLabel;
-    host.style.display = railTab === "todos" ? "block" : "none";
+    host.style.display = railTab === "todos" ? "flex" : "none";
     if (promptBox) {
       // "flex", not "block": this is the column the prompt stretches inside,
       // and an inline display beats the stylesheet that made it one -- which
       // left the field exactly one line tall.
       promptBox.style.display = railTab === "prompt" ? "flex" : "none";
     }
+    if (select) {
+      var pickable = goal && railTab === "todos" ? todoPickable() : [];
+      select.style.display = pickable.length ? "" : "none";
+      var every = pickable.length && pickable.every(function (row) {
+        return todoPicked[row.id];
+      });
+      select.textContent = every ? "Deselect all" : "Select all";
+    }
     if (goal && railTab === "prompt") renderPromptTab(goal);
-    if (railTab !== "todos" || !todoItems) return true;
+    if (railTab !== "todos") return true;
 
-    var shape = todoShapeOf(todoGoalId, todoItems);
-    if (!force && shape === todoShape && host.children.length) return true;
-    todoShape = shape;
-    while (host.firstChild) host.removeChild(host.firstChild);
-    todoItems.forEach(function (item, index) {
-      host.appendChild(todoRow(item, index));
+    var actions = host.querySelector(".hc-todos-actions");
+    if (actions) {
+      actions.style.display = goal ? "" : "none";
+      var copy = actions.querySelector(".hc-todo-copy");
+      if (copy) copy.textContent = todoCopied ? "copied ✓" : "Copy TODOs";
+      var build = actions.querySelector(".hc-todo-build");
+      if (build) {
+        var picked = todoPickedIds().length;
+        build.textContent = todoBuilding ? "Building…"
+          : picked ? "Build " + picked : "Build";
+        build.setAttribute("data-hc-todo-build", picked ? "on" : "off");
+      }
+      var note = actions.querySelector(".hc-todo-error");
+      if (note) {
+        note.textContent = todoBuildError;
+        note.style.display = todoBuildError ? "" : "none";
+      }
+    }
+    if (!goal || !todoItems) {
+      while (list.firstChild) list.removeChild(list.firstChild);
+      return true;
+    }
+    var shape = todoItems.map(function (row) {
+      return [row.id, row.depth, row.status, row.question, !!todoPicked[row.id]];
     });
+    var drawn = list.getAttribute("data-hc-todo-shape");
+    if (!force && drawn === JSON.stringify(shape) && list.children.length) {
+      return true;
+    }
+    list.setAttribute("data-hc-todo-shape", JSON.stringify(shape));
+    list.setAttribute("contenteditable", TODO_EDITABLE);
+    list.setAttribute("spellcheck", "false");
+    while (list.firstChild) list.removeChild(list.firstChild);
+    todoItems.forEach(function (row) { list.appendChild(todoRowNode(row)); });
     var focus = todoFocusAt;
     todoFocusAt = null;
     if (focus) {
-      var at = Math.max(0, Math.min(focus.index, host.children.length - 1));
-      var input = host.children[at] && host.children[at].querySelector("input");
-      if (input) {
-        input.focus();
+      var at = Math.max(0, Math.min(focus.index, todoItems.length - 1));
+      var line = list.querySelector("[data-hc-todo-line=\"" + todoItems[at].id + "\"]");
+      if (line) {
         var caret = (focus.caret === null || focus.caret === undefined)
-          ? input.value.length : focus.caret;
-        try { input.setSelectionRange(caret, caret); } catch (e) {}
+          ? todoItems[at].text.length : focus.caret;
+        todoPlaceCaret(line, caret);
       }
     }
     return true;
@@ -2284,15 +2746,14 @@
 
   // --- the reader's own prompt ---------------------------------------------
   //
-  // The rail's Prompt tab is seeded from the assembled context and is then
-  // theirs to edit. Edits land in the goal document's own "# Prompt" section
-  // rather than in browser storage: every /goals-ui opens a fresh port, which
-  // is a fresh origin with empty localStorage, so anything kept only there is
-  // gone the next time the workspace opens.
+  // The rail's Prompt tab is the reader's own words. They land in the goal's
+  // `prompt_md` field -- beside the notes, never in them -- rather than in
+  // browser storage: every /goals-ui opens a fresh port, which is a fresh
+  // origin with empty localStorage, so anything kept only there is gone the
+  // next time the workspace opens.
 
   var promptGoalId = null;
   var promptSaveTimer = null;
-  var promptSeeded = null;
 
   function promptField() {
     var node = document.querySelector("textarea.hc-rail-code");
@@ -2306,22 +2767,10 @@
     var goals = readLocalGoals();
     var node = todoFind(goals, promptGoalId);
     if (!node) return false;
-    var before = str(node.notes);
-    // An untouched prompt is the assembled one, and assembling it again costs
-    // nothing -- so it is not written. Only a real divergence is the reader's.
-    var text = field.value === promptSeeded ? "" : field.value;
-    var after = docSectionWrite(before || DEFAULT_DOC, PROMPT_SECTION, text);
-    if (after === before) return false;
-    node.notes = after;
-    var saved;
-    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
-    catch (e) { saved = {}; }
-    saved.goals = goals;
-    saved.updatedAt = Date.now();
-    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
-    lastObservedGoals = JSON.stringify(goals);
-    todoSavedLabel = todoStamp();
-    importGoals(goals);
+    var text = field.value;
+    if (str(node.prompt_md) === text) return false;
+    node.prompt_md = text;
+    writeGoalsLocal(goals);
     return true;
   }
 
@@ -2349,28 +2798,56 @@
     }, true);
   }
 
+  var promptGenerating = false;
+  var promptGenerateError = "";
+
+  function promptGenerate() {
+    // Claude writes the prompt for this goal from the tree the plugin holds;
+    // the field takes it as the reader's own text, theirs to edit.
+    if (promptGenerating || !promptGoalId) return;
+    var goalId = promptGoalId;
+    promptGenerating = true;
+    promptGenerateError = "";
+    renderTodoRail(true);
+    post({ op: "generate_prompt", goal_id: goalId }).then(function (res) {
+      promptGenerating = false;
+      if (res && res.ok && typeof res.prompt === "string") {
+        var goals = readLocalGoals();
+        var node = todoFind(goals, goalId);
+        if (node) {
+          node.prompt_md = res.prompt;
+          writeGoalsLocal(goals);
+        }
+        var field = promptField();
+        if (field && promptGoalId === goalId) field.value = res.prompt;
+      } else {
+        promptGenerateError = (res && res.error) || "the prompt could not be generated";
+      }
+      renderTodoRail(true);
+    });
+  }
+
   function renderPromptTab(goal) {
     promptDelegate();
+    var generate = document.querySelector(".hc-rail-generate");
+    if (generate) {
+      generate.textContent = promptGenerating ? "Generating…" : "Generate";
+      generate.setAttribute("data-hc-generating", promptGenerating ? "on" : "off");
+      generate.title = promptGenerateError || "Ask Claude to write this goal's prompt";
+    }
     var field = promptField();
     if (!field) return;
     if (goal.id !== promptGoalId) {
       promptGoalId = goal.id;
-      promptSeeded = null;
     }
-    var own = docSectionRead(goal.notes, PROMPT_SECTION).replace(/\n+$/, "");
-    // What the artifact would show: it binds the assembled prompt as the
-    // field's DEFAULT value, which a textarea applies once, at creation. So
-    // after a rename the field keeps the first draft it was ever given
-    // unless the current one is put back by hand.
-    var assembled = str(field.defaultValue || field.textContent);
+    // The field is the reader's own words only -- the goal's `prompt_md`.
+    // The context the goal assembles (objective, decisions, built, blockers,
+    // sources, TODOs) is not shown here; Copy prepends it. So what is on
+    // screen is what they wrote, and what leaves is the whole thing.
+    var own = goal.prompt;
     // Never over the top of what they are typing right now.
-    if (document.activeElement === field) {
-      if (promptSeeded === null) promptSeeded = assembled;
-      return;
-    }
-    promptSeeded = assembled;
-    var want = own || assembled;
-    if (field.value !== want) field.value = want;
+    if (document.activeElement === field) return;
+    if (field.value !== own) field.value = own;
   }
 
   // Kept in step with ui.CHAT_GROUND, which paints the same colour into the
@@ -2580,11 +3057,19 @@
   // CSS variables on the root and hidden-ness is a root attribute, so the
   // stylesheet above does the drawing and a re-render of the artifact's
   // tree cannot lose either. Nothing here touches the artifact's nodes.
-  var LAYOUT_KEY = "hc-launch-layout";
+  // v2: the rails open at a quarter of the window each (a 1:2:1 split), so
+  // a layout saved by the shell that shipped narrower ones is not reused.
+  var LAYOUT_KEY = "hc-launch-layout-v2";
   var RAIL_MIN = { left: 200, right: 240 };
-  var RAIL_MAX = { left: 480, right: 520 };
-  var RAIL_DEFAULT = { left: 300, right: 330 };
+  var RAIL_MAX = { left: 720, right: 720 };
   var layout = null;
+
+  function railDefault(side) {
+    var width = (typeof window !== "undefined" && window.innerWidth) || 1440;
+    var quarter = Math.round(width / 4);
+    return Math.min(RAIL_MAX[side], Math.max(RAIL_MIN[side], quarter));
+  }
+  var RAIL_DEFAULT = { left: railDefault("left"), right: railDefault("right") };
 
   function clampWidth(side, px) {
     var n = Number(px);
@@ -2972,7 +3457,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><textarea class=\"hc-rail-code\" key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\"></textarea><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt it assembles from that goal\u2019s document.</div></sc-if></div><div class=\"hc-inject\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><textarea class=\"hc-rail-code\" key=\"{{ selKey }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" placeholder=\"Write your prompt. The goal\u2019s context is added when you copy.\" spellcheck=\"false\"></textarea><div class=\"hc-rail-actions\"><span class=\"hc-rail-generate\" data-hc-generating=\"off\">Generate</span><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write a prompt for it.</div></sc-if></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's
@@ -3251,7 +3736,7 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = false, fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      section('TODOs');\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
+       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = (t === ''), fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      const pre = secOf(''); if (pre) parts.push('Notes:\\n' + pre);\n      const todos = String((sel && sel.todos_md) || '').trim(); if (todos) parts.push('TODOs:\\n' + todos);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
       // A prompt without its conversation is a quote without a source. The
       // separator belongs to the source, not to the line: chat prompt
       // records carry no session_id (chat_state writes id, ordinal, role,
@@ -3310,7 +3795,13 @@
        // The rail is where the prompt is read in a chat, and the pane that
        // owned the textarea is not drawn there -- so this falls back to the
        // assembled draft the rail is printing, which is the same string.
-       + "      copyPrompt: () => { const t = this._draftEl ? this._draftEl.value : String(draft || ''); "
+       // What is copied is the assembled context and then the reader's own
+       // words from the rail; the field shows only the latter. With nothing
+       // written, the assembled prompt goes as it stands -- with something
+       // written, its canned closing line gives way to theirs.
+       + "      copyPrompt: () => { const own = this._draftEl ? String(this._draftEl.value || '').trim() : ''; "
+       + "const base = String(draft || ''); "
+       + "const t = own ? base.replace(/\\n\\nImplement this (?:sub)?goal for me\\.$/, '') + '\\n\\n' + own : base; "
        + "const done = () => { this.setState({ copied: true }); clearTimeout(this._ct); "
        + "this._ct = setTimeout(() => this.setState({ copied: false }), 1600); }; "
        + "const fb = () => { const ta = document.createElement('textarea'); ta.value = t; "
@@ -3668,15 +4159,19 @@
     todoState: function () {
       return { goalId: todoGoalId, tab: railTab,
                items: todoItems && todoItems.slice(),
+               picked: Object.keys(todoPicked),
                saving: !!todoSaveTimer };
     },
     todoList: {
-      parse: todoParse,
       serialize: todoSerialize,
+      normalize: todoNormalize,
       enter: todoEnter,
       indent: todoIndent,
       outdent: todoOutdent,
       backspace: todoBackspace,
+      remove: todoRemove,
+      cut: todoCut,
+      selectionText: todoSelectionText,
     },
     holdRoot: holdRoot,
     releaseRoot: releaseRoot,

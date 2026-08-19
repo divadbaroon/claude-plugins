@@ -41,13 +41,14 @@ def _machine_authored(text: str) -> bool:
 
 
 # A goal's `notes` field is one markdown document, not a scratch string. The
-# headers below are its spine: inference writes under them and the human writes
-# beside that, so both halves live in one editable place instead of a row of
-# machine-owned textboxes the user may not overwrite.
-# TODOs sits directly under Objective because it is what the reader does about
-# the objective, and because the workspace rail edits that one section on its
-# own: a nested bullet list, four spaces to the level. The rest of the document
-# stays prose, and inference appends to all of them the same way.
+# headers below are the sections inference knows how to write under: it appends
+# under them, and the human writes wherever they like. A goal opens as an EMPTY
+# document -- no spine of empty headings is seeded, and none is re-added; a
+# heading appears only when something is written under it (by either party).
+# TODOs is listed for inference's sake, but the workspace rail keeps its own
+# list in the goal's `todos_md` field, apart from the notes -- deleting text in
+# the notes never deletes a todo. `prompt_md` is the reader's own prompt, kept
+# the same way.
 DOC_SECTIONS = ("Objective", "TODOs", "In my words", "Decisions", "Built",
                 "Blockers", "Open questions")
 SECTION_KEYS = {"objective": "Objective", "todos": "TODOs",
@@ -59,8 +60,8 @@ _FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 
 
 def default_doc() -> str:
-    """The empty document: every section header, no body under any of them."""
-    return "\n\n".join(f"# {title}" for title in DOC_SECTIONS) + "\n"
+    """The document a goal opens as: empty. Headings arrive with content."""
+    return ""
 
 
 def _scan_doc(notes):
@@ -147,27 +148,37 @@ def join_doc(sections) -> str:
 
 
 def ensure_doc_sections(notes: str) -> str:
-    """Add the default headers a document lacks, at the end, changing nothing else.
+    """The document as it is. Kept for callers; no headings are added.
 
-    Deliberately not a re-join: headings the user wrote keep their place and
-    their duplicates, and only the tail of the document is touched.
+    Empty headings were the old spine, and the reader asked for a document
+    that is theirs alone until something is written: append_to_section adds
+    the one heading it needs at the moment it has text for it.
+    """
+    return str(notes or "")
+
+
+def strip_empty_spine(notes: str) -> str:
+    """Drop DOC_SECTIONS headings that have nothing under them.
+
+    A one-way tidy for documents seeded by the old spine: a ``# Decisions``
+    with an empty body is noise, and one the reader wrote text under stays.
+    Headings outside DOC_SECTIONS are never touched, however empty.
     """
     document = str(notes or "")
     if not document.strip():
-        return default_doc()
+        return ""
     _, spans, open_fence = _scan_doc(document)
     if open_fence:
-        # A fence the user has not closed yet runs to the end of the document,
-        # so headers spliced at EOF would land inside their code block, where
-        # the next scan cannot see them -- and every refresh would append them
-        # again. Their unfinished text is theirs to finish; wait for it.
         return document
-    present = {span[0] for span in spans}
-    missing = [title for title in DOC_SECTIONS if title not in present]
-    if not missing:
+    sections = split_doc(document)
+    kept = [(title, body) for title, body in sections
+            if not (title in DOC_SECTIONS and not body.strip())]
+    if len(kept) == len(sections):
         return document
-    tail = "\n\n".join(f"# {title}" for title in missing)
-    return document.rstrip("\n") + "\n\n" + tail + "\n"
+    if not any(body.strip() or title not in DOC_SECTIONS
+               for title, body in kept):
+        return ""
+    return join_doc(kept)
 
 
 def append_to_section(notes: str, section_title: str, text: str) -> str:
@@ -192,8 +203,8 @@ def append_to_section(notes: str, section_title: str, text: str) -> str:
     span = next((s for s in spans if s[0] == section_title), None)
     if span is None:
         fresh = [line for line in block.splitlines() if line.strip()]
-        return (document.rstrip("\n") + f"\n\n# {section_title}\n"
-                + "\n".join(fresh) + "\n")
+        lead = document.rstrip("\n") + "\n\n" if document.strip() else ""
+        return (lead + f"# {section_title}\n" + "\n".join(fresh) + "\n")
     _, start, end = span
     present = {line.strip() for line in lines[start:end] if line.strip()}
     fresh = [line for line in block.splitlines()
@@ -206,6 +217,93 @@ def append_to_section(notes: str, section_title: str, text: str) -> str:
     addition = ([""] if cut > start else []) + fresh
     return "\n".join(lines[:cut] + addition + lines[cut:]) + \
         ("\n" if document.endswith("\n") else "")
+
+
+# --- the rail's TODO list -------------------------------------------------
+#
+# `todo_items` is the list the workspace rail edits: one row per line, each
+# with a stable id the reader never sees, its text, its depth, and the state a
+# build run gives it. `todos_md` is derived from it -- the same list as
+# markdown bullets, four spaces to the level -- for the injected context, the
+# copied prompt, and anything else that reads the list as text.
+
+TODO_INDENT = "    "
+TODO_STATUSES = ("", "building", "asking", "done", "failed")
+_TODO_ID = re.compile(r"^t[0-9a-z]{4,24}$")
+
+
+def todo_id() -> str:
+    """A fresh id for a list row: short, opaque, never shown."""
+    import secrets
+    return "t" + secrets.token_hex(4)
+
+
+def parse_todos(text) -> list:
+    """Markdown bullets -> rows. Every non-blank line is a row; a line that
+    is not a bullet is one all the same, so nothing a person typed is lost.
+
+    Ids are derived from the line's position and text, not minted: the same
+    markdown parses to the same rows every time, so a document that has only
+    ever been markdown reads back stably until its rows are first saved.
+    """
+    import hashlib
+    rows = []
+    for line in str(text or "").splitlines():
+        if not line.strip():
+            continue
+        lead = re.match(r"^[ \t]*", line).group(0).replace("\t", TODO_INDENT)
+        body = line[len(re.match(r"^[ \t]*", line).group(0)):]
+        body = re.sub(r"^[-*] ", "", body)
+        digest = hashlib.sha1(f"{len(rows)}:{body}".encode("utf-8")).hexdigest()
+        rows.append({"id": "t" + digest[:8], "text": body,
+                     "depth": len(lead) // len(TODO_INDENT),
+                     "status": "", "question": ""})
+    ceiling = 0
+    for row in rows:
+        row["depth"] = max(0, min(row["depth"], ceiling))
+        ceiling = row["depth"] + 1
+    return rows
+
+
+def render_todos(items) -> str:
+    """Rows -> markdown bullets. Blank rows are left out; an empty list is ""."""
+    lines = []
+    for row in items or []:
+        text = str(row.get("text") or "")
+        if not text.strip():
+            continue
+        depth = max(0, int(row.get("depth") or 0))
+        lines.append(TODO_INDENT * depth + "- " + text)
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+def normalize_todo_items(value) -> list:
+    """Coerce whatever was stored or posted into well-formed rows."""
+    out = []
+    seen = set()
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        rid = str(row.get("id") or "")
+        if not _TODO_ID.match(rid) or rid in seen:
+            rid = todo_id()
+        seen.add(rid)
+        try:
+            depth = max(0, min(8, int(row.get("depth") or 0)))
+        except (TypeError, ValueError):
+            depth = 0
+        status = str(row.get("status") or "")
+        if status not in TODO_STATUSES:
+            status = ""
+        out.append({"id": rid, "text": str(row.get("text") or ""),
+                    "depth": depth, "status": status,
+                    "question": str(row.get("question") or "")[:400]
+                    if status == "asking" else ""})
+    ceiling = 0
+    for row in out:
+        row["depth"] = max(0, min(row["depth"], ceiling))
+        ceiling = row["depth"] + 1
+    return out
 
 
 SOURCE_TYPES = ("github", "local", "doc")
@@ -343,6 +441,7 @@ def new_goal(gid, title, parent_id=None, **fields):
             "evidence_ids": [], "todos": [], "important_item_ids": [],
             "prompt_ids": [], "auto_prompt_ids": [], "detached_prompt_ids": [],
             "description": "", "priority": "normal", "notes": "",
+            "todos_md": "", "todo_items": [], "prompt_md": "",
             "sources": [], "opening": "",
             "origin": "inferred", "updated_at": _now()}
     goal.update(fields)
@@ -433,6 +532,39 @@ def sanitize(goals):
         # The goal's whole markdown document. Coerced, never truncated: a cap
         # here would silently eat the tail of something a person wrote.
         g["notes"] = str(g.get("notes") or "")
+        # The rail's list and the reader's prompt live beside the notes, not
+        # in them. A goal saved before that carried both as sections of the
+        # document -- lift them out once, and drop the empty spine the old
+        # default document seeded.
+        g["todos_md"] = str(g.get("todos_md") or "")
+        g["prompt_md"] = str(g.get("prompt_md") or "")
+        if g["notes"]:
+            sections = split_doc(g["notes"])
+            changed = False
+            if not g["todos_md"].strip():
+                body = section_body(g["notes"], "TODOs")
+                if body and body.strip():
+                    g["todos_md"] = body.strip("\n") + "\n"
+                    sections = [(t, "" if t == "TODOs" else b)
+                                for t, b in sections]
+                    changed = True
+            if not g["prompt_md"].strip():
+                body = section_body(g["notes"], "Prompt")
+                if body and body.strip():
+                    g["prompt_md"] = body.strip("\n") + "\n"
+                    changed = True
+            if changed or any(t == "Prompt" for t, _ in sections):
+                sections = [(t, b) for t, b in sections if t != "Prompt"]
+                g["notes"] = join_doc(sections)
+            g["notes"] = strip_empty_spine(g["notes"])
+        # Rows are canonical; the markdown is derived from them. A goal that
+        # only ever had the markdown (or just gained it from its notes) is
+        # parsed into rows once, each with a fresh id.
+        items = normalize_todo_items(g.get("todo_items"))
+        if not items and g["todos_md"].strip():
+            items = parse_todos(g["todos_md"])
+        g["todo_items"] = items
+        g["todos_md"] = render_todos(items)
         g.setdefault("description", "")
         g.setdefault("opening", "")
         # Extra context the user chose to attach. Never inferred — a local

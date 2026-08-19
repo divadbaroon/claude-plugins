@@ -272,158 +272,154 @@ class LaunchDressedTests(BridgeTestCase):
 
 
 class TodoListModelTests(BridgeTestCase):
-    """The nested list the workspace rail edits, as text on both sides.
+    """The list the workspace rail edits: rows of {id, text, depth, status}.
 
-    The list is a section of the goal's markdown document, so every operation
-    has to survive the round trip through those lines -- four spaces to the
-    level, "- " to the bullet.
+    Every key the list is about is a pure operation on the rows -- returning
+    the rows and where the caret should land, or null when the browser should
+    have the key -- so all of it is testable without a DOM. Rows carry ids the
+    reader never sees; the markdown is derived, four spaces to the level.
     """
 
-    def model(self, expression, body="", **rest):
+    def rows(self, spec):
+        return [{"id": "t%08d" % i, "text": text, "depth": depth,
+                 "status": "", "question": ""}
+                for i, (text, depth) in enumerate(spec)]
+
+    def model(self, expression, spec=(), **rest):
         return self.run_js(
             "var L = window.__hcPromptUI.todoList;"
-            "var items = L.parse(%s);"
-            "out = (%s);" % (json.dumps(body), expression), **rest)
+            "var items = %s;"
+            "out = (%s);" % (json.dumps(self.rows(spec)), expression), **rest)
 
-    # --- text in, text out -------------------------------------------------
+    def shape(self, result):
+        return [[r["text"], r["depth"]] for r in result["items"]], \
+            result.get("index"), result.get("caret")
 
-    def test_indentation_becomes_depth_and_survives_the_round_trip(self):
-        body = "- one\n- two\n    - two a\n        - deep\n- three\n"
+    # --- text out ------------------------------------------------------------
+
+    def test_rows_serialize_to_bullets_four_spaces_to_the_level(self):
         self.assertEqual(
-            [["one", 0], ["two", 0], ["two a", 1], ["deep", 2], ["three", 0]],
-            self.model("items.map(function (i) { return [i.text, i.depth]; })",
-                       body))
-        self.assertEqual(body, self.model("L.serialize(items)", body))
+            "- one\n- two\n    - two a\n        - deep\n- three\n",
+            self.model("L.serialize(items)",
+                       [("one", 0), ("two", 0), ("two a", 1), ("deep", 2),
+                        ("three", 0)]))
 
-    def test_a_line_that_is_not_a_bullet_is_read_as_one(self):
-        # Inference and hand edits both reach this section. A stray prose line
-        # must not vanish, and must not become a second kind of row.
-        self.assertEqual([["loose note", 0]],
-                         self.model("items.map(function (i) "
-                                    "{ return [i.text, i.depth]; })",
-                                    "loose note\n"))
+    def test_blank_rows_serialize_to_nothing(self):
+        self.assertEqual("", self.model("L.serialize(items)", [("", 0)]))
+        self.assertEqual("- a\n", self.model("L.serialize(items)",
+                                             [("a", 0), ("  ", 1)]))
 
-    def test_a_depth_jump_in_the_text_is_pulled_back_to_one_level(self):
-        # Nothing can be two levels below its parent; a hand-typed eight-space
-        # line under a top-level bullet is a child, not a grandchild.
-        self.assertEqual([["one", 0], ["under", 1]],
-                         self.model("items.map(function (i) "
-                                    "{ return [i.text, i.depth]; })",
-                                    "- one\n        - under\n"))
+    def test_a_depth_jump_is_pulled_back_to_one_level(self):
+        out = self.model("L.normalize(items).map(function (r) { return r.depth; })",
+                         [("one", 0), ("deep", 3), ("deeper", 5)])
+        self.assertEqual([0, 1, 2], out)
 
-    def test_an_empty_section_is_one_empty_row_to_type_into(self):
-        self.assertEqual([["", 0]],
-                         self.model("items.map(function (i) "
-                                    "{ return [i.text, i.depth]; })", ""))
-
-    def test_a_list_of_one_empty_row_serializes_to_nothing(self):
-        # Otherwise opening a goal would write "- " into the document of every
-        # goal the reader merely looked at.
-        self.assertEqual("", self.model("L.serialize(items)", ""))
+    def test_every_row_keeps_or_gets_an_id(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.normalize([{text: 'a', depth: 0}, {id: 't0000000a', text: 'b'}])"
+            "  .map(function (r) { return [typeof r.id, r.id.length > 4, r.id]; });")
+        self.assertEqual(["string", True], out[0][:2])
+        self.assertEqual(["string", True, "t0000000a"], out[1])
 
     # --- enter -------------------------------------------------------------
 
     def test_enter_on_a_written_row_opens_a_sibling_below_it(self):
-        self.assertEqual(
-            [[["one", 0], ["", 0], ["two", 0]], 1],
-            self.model("(function () { var r = L.enter(items, 0);"
-                       "  return [r.items.map(function (i) "
-                       "    { return [i.text, i.depth]; }), r.index]; })()",
-                       "- one\n- two\n"))
+        out = self.model("L.enter(items, 0, 3)", [("one", 0)])
+        self.assertEqual(([["one", 0], ["", 0]], 1, 0), self.shape(out))
+        self.assertNotEqual(out["items"][0]["id"], out["items"][1]["id"])
 
     def test_enter_in_the_middle_of_a_row_carries_the_tail_down(self):
-        self.assertEqual(
-            [["one", 0], ["two", 0]],
-            self.model("L.enter(items, 0, 3).items.map(function (i) "
-                       "{ return [i.text, i.depth]; })", "- onetwo\n"))
+        out = self.model("L.enter(items, 0, 3)", [("one two", 0)])
+        self.assertEqual(([["one", 0], ["two", 0]], 1, 0), self.shape(out))
+
+    def test_enter_keeps_the_depth_of_the_row_it_leaves(self):
+        out = self.model("L.enter(items, 1, 3)", [("one", 0), ("two", 1)])
+        self.assertEqual(([["one", 0], ["two", 1], ["", 1]], 2, 0),
+                         self.shape(out))
 
     def test_enter_on_an_empty_nested_row_outdents_it_instead(self):
-        # Hudson's rule: hit enter twice and you are back out a level.
-        self.assertEqual(
-            [[["one", 0], ["", 0]], 1],
-            self.model("(function () { var r = L.enter(items, 1);"
-                       "  return [r.items.map(function (i) "
-                       "    { return [i.text, i.depth]; }), r.index]; })()",
-                       "- one\n    - \n"))
+        out = self.model("L.enter(items, 1, 0)", [("one", 0), ("", 1)])
+        self.assertEqual(([["one", 0], ["", 0]], 1, 0), self.shape(out))
 
     def test_enter_on_an_empty_top_level_row_does_nothing_at_all(self):
-        # No bullet without text may make another bullet without text.
-        self.assertEqual(
-            [[["one", 0], ["", 0]], 1],
-            self.model("(function () { var r = L.enter(items, 1);"
-                       "  return [r.items.map(function (i) "
-                       "    { return [i.text, i.depth]; }), r.index]; })()",
-                       "- one\n- \n"))
+        out = self.model("L.enter(items, 1, 0)", [("one", 0), ("", 0)])
+        self.assertEqual(([["one", 0], ["", 0]], 1, 0), self.shape(out))
 
-    # --- tab and shift-tab -------------------------------------------------
+    # --- tab / shift-tab -----------------------------------------------------
 
     def test_tab_indents_under_the_row_above(self):
-        self.assertEqual(
-            [["one", 0], ["two", 1]],
-            self.model("L.indent(items, 1).items.map(function (i) "
-                       "{ return [i.text, i.depth]; })", "- one\n- two\n"))
+        out = self.model("L.indent(items, 1)", [("one", 0), ("two", 0)])
+        self.assertEqual([["one", 0], ["two", 1]], self.shape(out)[0])
 
     def test_the_first_row_can_never_be_indented(self):
-        self.assertEqual(
-            [["one", 0]],
-            self.model("L.indent(items, 0).items.map(function (i) "
-                       "{ return [i.text, i.depth]; })", "- one\n"))
+        out = self.model("L.indent(items, 0)", [("one", 0), ("two", 0)])
+        self.assertEqual([["one", 0], ["two", 0]], self.shape(out)[0])
 
     def test_tab_cannot_skip_a_level(self):
-        self.assertEqual(
-            [["one", 0], ["two", 1]],
-            self.model("L.indent(L.indent(items, 1).items, 1).items"
-                       ".map(function (i) { return [i.text, i.depth]; })",
-                       "- one\n- two\n"))
+        out = self.model("L.indent(items, 2)",
+                         [("one", 0), ("two", 1), ("three", 1)])
+        self.assertEqual([["one", 0], ["two", 1], ["three", 2]], self.shape(out)[0])
+        out = self.model("L.indent(L.indent(items, 2).items, 2)",
+                         [("one", 0), ("two", 1), ("three", 1)])
+        self.assertEqual([["one", 0], ["two", 1], ["three", 2]], self.shape(out)[0],
+                         "two levels under the row above is not a level")
 
     def test_indenting_a_row_takes_its_children_with_it(self):
-        self.assertEqual(
-            [["one", 0], ["two", 1], ["two a", 2]],
-            self.model("L.indent(items, 1).items.map(function (i) "
-                       "{ return [i.text, i.depth]; })",
-                       "- one\n- two\n    - two a\n"))
+        out = self.model("L.indent(items, 1)",
+                         [("one", 0), ("two", 0), ("two a", 1), ("three", 0)])
+        self.assertEqual([["one", 0], ["two", 1], ["two a", 2], ["three", 0]],
+                         self.shape(out)[0])
 
     def test_shift_tab_outdents_and_stops_at_the_left_margin(self):
-        self.assertEqual(
-            [["one", 0], ["two", 0]],
-            self.model("L.outdent(L.outdent(items, 1).items, 1).items"
-                       ".map(function (i) { return [i.text, i.depth]; })",
-                       "- one\n    - two\n"))
+        out = self.model("L.outdent(items, 1)", [("one", 0), ("two", 1)])
+        self.assertEqual([["one", 0], ["two", 0]], self.shape(out)[0])
+        out = self.model("L.outdent(L.outdent(items, 1).items, 1)",
+                         [("one", 0), ("two", 1)])
+        self.assertEqual([["one", 0], ["two", 0]], self.shape(out)[0])
 
-    # --- backspace ---------------------------------------------------------
+    # --- backspace and delete -------------------------------------------------
 
     def test_backspace_at_the_start_of_a_written_row_joins_it_upward(self):
-        self.assertEqual(
-            [[["onetwo", 0]], 0, 3],
-            self.model("(function () { var r = L.backspace(items, 1, 0);"
-                       "  return [r.items.map(function (i) "
-                       "    { return [i.text, i.depth]; }), r.index,"
-                       "    r.caret]; })()", "- one\n- two\n"))
+        out = self.model("L.backspace(items, 1, 0)", [("one", 0), ("two", 0)])
+        self.assertEqual(([["onetwo", 0]], 0, 3), self.shape(out))
 
     def test_backspace_on_an_empty_nested_row_outdents_before_deleting(self):
-        self.assertEqual(
-            [["one", 0], ["", 0]],
-            self.model("L.backspace(items, 1, 0).items.map(function (i) "
-                       "{ return [i.text, i.depth]; })", "- one\n    - \n"))
+        out = self.model("L.backspace(items, 1, 0)", [("one", 0), ("", 1)])
+        self.assertEqual([["one", 0], ["", 0]], self.shape(out)[0])
 
     def test_backspace_on_an_empty_last_row_removes_it(self):
-        self.assertEqual(
-            [[["one", 0]], 0],
-            self.model("(function () { var r = L.backspace(items, 1, 0);"
-                       "  return [r.items.map(function (i) "
-                       "    { return [i.text, i.depth]; }), r.index]; })()",
-                       "- one\n- \n"))
+        out = self.model("L.backspace(items, 1, 0)", [("one", 0), ("", 0)])
+        self.assertEqual(([["one", 0]], 0, 3), self.shape(out))
 
     def test_backspace_inside_a_row_is_left_to_the_browser(self):
-        self.assertEqual(
-            None,
-            self.model("L.backspace(items, 1, 2)", "- one\n- two\n"))
+        self.assertIsNone(self.model("L.backspace(items, 0, 2)", [("one", 0)]))
 
-    def test_the_only_row_is_never_removed(self):
-        self.assertEqual(
-            [["", 0]],
-            self.model("L.backspace(items, 0, 0).items.map(function (i) "
-                       "{ return [i.text, i.depth]; })", ""))
+    def test_the_only_row_is_never_removed_by_backspace(self):
+        self.assertIsNone(self.model("L.backspace(items, 0, 0)", [("", 0)]))
+        self.assertIsNone(self.model("L.backspace(items, 0, 0)", [("one", 0)]))
+
+    def test_cmd_backspace_removes_the_row_and_leaves_one_to_type_in(self):
+        out = self.model("L.remove(items, 1)", [("one", 0), ("two", 0), ("three", 0)])
+        self.assertEqual(([["one", 0], ["three", 0]], 1, 5), self.shape(out))
+        out = self.model("L.remove(items, 0)", [("one", 0)])
+        self.assertEqual([["", 0]], self.shape(out)[0])
+
+    # --- a selection across rows -----------------------------------------------
+
+    def test_a_selection_across_rows_cuts_to_one_row_and_takes_the_typed_key(self):
+        out = self.model("L.cut(items, 0, 2, 2, 3, '')",
+                         [("one", 0), ("two", 1), ("three", 0)])
+        self.assertEqual(([["onee", 0]], 0, 2), self.shape(out))
+        out = self.model("L.cut(items, 2, 3, 0, 2, 'X')",
+                         [("one", 0), ("two", 1), ("three", 0)])
+        self.assertEqual(([["onXee", 0]], 0, 3), self.shape(out),
+                         "backwards selections read the same as forwards")
+
+    def test_copying_a_selection_across_rows_gives_the_rows_as_markdown(self):
+        out = self.model("L.selectionText(items, 0, 1, 2, 2)",
+                         [("one", 0), ("two", 1), ("three", 0)])
+        self.assertEqual("- ne\n    - two\n- th", out)
 
 
 class TodoSectionTests(BridgeTestCase):
@@ -3104,6 +3100,8 @@ class ChatPromptTabTests(BridgeTestCase):
             "    el.parentNode.removeChild(el); }; return el; };"
             "navigator.clipboard = undefined;"
             "var said = [];"
+            # the handler closes over the assembled draft in the bundle
+            "var draft = 'the context';"
             "var fn = eval('(function () { return (' + fnsrc + '); })')"
             "  .call({ _draftEl: { value: 'the draft' },"
             "          setState: function (s) { said.push(s); } });"
@@ -3499,7 +3497,7 @@ LAUNCH_CLASSES = (
     "hc-shell", "hc-main",
     "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
     "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
-    "hc-rail-none", "hc-inject",
+    "hc-rail-none",
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
@@ -3643,13 +3641,16 @@ class LaunchSkinTests(BridgeTestCase):
         # The header is a fixed height and --hc-top is exactly that height,
         # so the columns are sized against it, not against a guess.
         self.assertIn("--hc-top:37px", css)
-        self.assertIn(".hc>div:first-child{height:var(--hc-top);", css)
+        # Sticky: the pills are pinned to the viewport, so the bar they sit
+        # in must not scroll away from under them.
+        self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
+                      "background:var(--bg);height:var(--hc-top);", css)
 
     def test_the_brand_is_the_one_serif_and_the_pills_ride_in_the_header(self):
         css = self.run_js("window.__hcPromptUI.launchCss();")
         self.assertRegex(css, r"\.hc-brand\{font:600 15px Georgia,[^}]*serif!important")
-        # The marker before the name keeps the workspace's monospace.
-        self.assertRegex(css, r"\.hc-brand::before\{[^}]*'Source Code Pro'")
+        # No marker before the name: the brand is the word alone.
+        self.assertNotIn(".hc-brand::before", css)
         # The status pills' row is lifted into the header by position, and
         # takes no height where the artifact renders it: the middle bar
         # is gone.
@@ -3669,9 +3670,11 @@ class LaunchSkinTests(BridgeTestCase):
             "  function (k) { return props[k] || ''; };"
             + tail)
 
-    def test_the_rails_start_at_the_widths_the_shell_shipped_with(self):
+    def test_the_rails_start_at_a_quarter_of_the_window_each(self):
+        # 1 : 2 : 1 -- the harness has no window width, so the default falls
+        # back to 1440 and a quarter of that.
         self.assertEqual(
-            {"left": 300, "right": 330, "hideLeft": False, "hideRight": False},
+            {"left": 360, "right": 360, "hideLeft": False, "hideRight": False},
             self.layout("window.__hcPromptUI.railLayout();"))
 
     def test_a_dragged_width_is_clamped_kept_and_drawn(self):
@@ -3682,9 +3685,9 @@ class LaunchSkinTests(BridgeTestCase):
             "var c = ui.setRailWidth('right', 9000);"
             "var d = ui.setRailWidth('right', 'nonsense');"
             "[a, b, c, d, props['--hc-left'], props['--hc-right'],"
-            " JSON.parse(localStorage.getItem('hc-launch-layout'))];")
-        self.assertEqual([380, 200, 520, 330, "200px", "330px",
-                          {"left": 200, "right": 330,
+            " JSON.parse(localStorage.getItem('hc-launch-layout-v2'))];")
+        self.assertEqual([380, 200, 720, 360, "200px", "360px",
+                          {"left": 200, "right": 360,
                            "hideLeft": False, "hideRight": False}], out)
 
     def test_hiding_a_rail_is_a_root_attribute_and_survives_the_page(self):
@@ -3696,7 +3699,7 @@ class LaunchSkinTests(BridgeTestCase):
             "var off = root.getAttribute('data-hc-hide-right') !== null;"
             "ui.toggleRail('left');"
             "[h, on, t, off, root.getAttribute('data-hc-hide-left') !== null,"
-            " JSON.parse(localStorage.getItem('hc-launch-layout')).hideLeft];")
+            " JSON.parse(localStorage.getItem('hc-launch-layout-v2')).hideLeft];")
         self.assertEqual([True, True, False, False, True, True], out)
 
     def test_the_header_gets_one_toggle_per_rail_that_reads_the_layout(self):

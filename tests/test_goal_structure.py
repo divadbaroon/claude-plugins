@@ -359,15 +359,38 @@ class InferredProjectDirectoryTests(unittest.TestCase):
 class GoalDocumentTests(unittest.TestCase):
     """A goal's notes field is one markdown document with H1 sections."""
 
-    def test_default_doc_is_the_seven_h1_sections_in_order(self):
-        # TODOs sits directly under Objective: it is what the reader does
-        # about the objective, and the rail edits only that section.
-        self.assertEqual(
-            "# Objective\n\n# TODOs\n\n# In my words\n\n# Decisions\n\n"
-            "# Built\n\n# Blockers\n\n# Open questions\n",
-            GM.default_doc(),
-        )
+    def test_default_doc_is_empty_and_the_sections_are_still_named(self):
+        # No spine of empty headings: a goal opens as a blank document, and a
+        # heading appears with the first thing written under it. The section
+        # names remain the ones inference addresses.
+        self.assertEqual("", GM.default_doc())
         self.assertEqual(list(GM.DOC_SECTIONS), list(GM.SECTION_KEYS.values()))
+
+    def test_sanitize_lifts_todos_and_prompt_out_of_the_notes_and_drops_the_spine(self):
+        # A goal saved under the old model carried both as sections of the
+        # document. They move to their own fields once; what the reader wrote
+        # under other headings stays, and the empty headings go.
+        notes = ("# Objective\n\n# TODOs\n- one\n    - two\n\n# In my words\n\n"
+                 "# Decisions\n- keep sqlite\n\n# Prompt\nmy words\n")
+        goals = {"version": 1, "goals": [dict(goal("g1"), notes=notes)]}
+        GM.sanitize(goals)
+        g = goals["goals"][0]
+        self.assertEqual("- one\n    - two\n", g["todos_md"])
+        self.assertEqual("my words\n", g["prompt_md"])
+        self.assertEqual("# Decisions\n- keep sqlite\n", g["notes"])
+        # And a second pass changes nothing.
+        GM.sanitize(goals)
+        self.assertEqual("- one\n    - two\n", goals["goals"][0]["todos_md"])
+        self.assertEqual("# Decisions\n- keep sqlite\n", goals["goals"][0]["notes"])
+
+    def test_deleting_in_the_notes_never_deletes_a_todo(self):
+        goals = {"version": 1, "goals": [dict(
+            goal("g1"), notes="# Decisions\n- keep sqlite\n",
+            todos_md="- ship it\n")]}
+        GM.sanitize(goals)
+        goals["goals"][0]["notes"] = ""
+        GM.sanitize(goals)
+        self.assertEqual("- ship it\n", goals["goals"][0]["todos_md"])
 
     def test_the_todos_section_is_reachable_by_the_key_inference_emits(self):
         self.assertEqual("TODOs", GM.SECTION_KEYS["todos"])
@@ -390,14 +413,12 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertEqual(["Built"], [title for title, _ in parts])
         self.assertEqual("## Done\n- a", parts[0][1])
 
-    def test_ensure_doc_sections_is_idempotent_and_keeps_written_text(self):
+    def test_ensure_doc_sections_adds_nothing(self):
         once = GM.ensure_doc_sections("# Decisions\n- keep sqlite\n")
 
+        self.assertEqual("# Decisions\n- keep sqlite\n", once)
         self.assertEqual(once, GM.ensure_doc_sections(once))
-        self.assertIn("# Decisions\n- keep sqlite", once)
-        for title in GM.DOC_SECTIONS:
-            self.assertIn(f"# {title}", once)
-        self.assertEqual(GM.default_doc(), GM.ensure_doc_sections(""))
+        self.assertEqual("", GM.ensure_doc_sections(""))
 
     def test_append_to_section_lands_at_the_end_and_spares_its_neighbours(self):
         start = GM.ensure_doc_sections(
@@ -421,8 +442,8 @@ class GoalDocumentTests(unittest.TestCase):
     def test_append_to_section_creates_the_section_it_needs(self):
         out = GM.append_to_section("", "Open questions", "- who owns the cap?")
 
-        self.assertIn("# Open questions\n- who owns the cap?", out)
-        self.assertIn("# Objective", out)
+        self.assertEqual("# Open questions\n- who owns the cap?\n", out)
+        self.assertNotIn("# Objective", out)
 
     def test_sanitize_leaves_a_long_document_uncut(self):
         document = "# Decisions\n" + "\n".join(f"- decision {n}" for n in range(900))
@@ -488,18 +509,18 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertIn("# not a header", GM.section_body(doc, "Built"))
         self.assertEqual(doc, GM.join_doc(parts))
 
-    def test_ensure_doc_sections_appends_what_is_missing_and_moves_nothing(self):
-        doc = "# Blockers\n- no ci\n\n# Objective\nShip it\n\n# Scratch\nkeep me\n"
+    def test_strip_empty_spine_keeps_written_and_foreign_headings(self):
+        doc = ("# Blockers\n\n# Objective\nShip it\n\n# Scratch\n\n"
+               "# Built\n")
 
-        out = GM.ensure_doc_sections(doc)
+        out = GM.strip_empty_spine(doc)
 
-        self.assertEqual(doc, GM.join_doc(GM.split_doc(doc)))
-        self.assertTrue(out.startswith(doc.rstrip("\n")))
-        self.assertEqual(
-            ["Blockers", "Objective", "Scratch", "TODOs", "In my words",
-             "Decisions", "Built", "Open questions"],
-            [title for title, _ in GM.split_doc(out)])
-        self.assertEqual(out, GM.ensure_doc_sections(out))
+        # Blockers and Built were empty spine headings; Scratch is not the
+        # spine's and stays however empty; Objective has text.
+        self.assertEqual(["Objective", "Scratch"],
+                         [title for title, _ in GM.split_doc(out)])
+        self.assertEqual(out, GM.strip_empty_spine(out))
+        self.assertEqual("", GM.strip_empty_spine("# Objective\n\n# Built\n"))
 
     def test_a_repeated_heading_survives_and_the_first_takes_the_append(self):
         doc = ("# Decisions\n- keep sqlite\n\n# Built\n- the parser\n\n"
