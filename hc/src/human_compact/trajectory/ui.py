@@ -857,6 +857,9 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                     links.append(prompt_id)
                 g["detached_prompt_ids"] = [pid for pid in removed
                                             if pid != prompt_id]
+                # A prompt of theirs tied to the goal is work begun on it.
+                if g.get("status") == "active":
+                    g["status"] = "in_progress"
             else:
                 g["prompt_ids"] = [pid for pid in links if pid != prompt_id]
                 if prompt_id not in removed:
@@ -1150,7 +1153,7 @@ class H(BaseHTTPRequestHandler):
             self._finish_request()
 
 
-def _configure_server(server, trajdir, chat_scoped):
+def _configure_server(server, trajdir, chat_scoped, follow=True):
     server.trajdir = trajdir
     server.chat_scoped = chat_scoped
     server.state_lock = threading.RLock()
@@ -1159,6 +1162,75 @@ def _configure_server(server, trajdir, chat_scoped):
     server.last_activity = time.monotonic()
     server.active_requests = 0
     server.idle_expired = False
+    server.follow_stop = threading.Event()
+    server.follow_thread = None
+    if chat_scoped and follow:
+        # The prompts this workspace offers are the chat's own turns. They
+        # used to arrive only through the hooks -- which go quiet the moment
+        # a plugin path moves or a session is resumed under a stale hook
+        # config, and the list then froze at wherever the last hook left it.
+        # The server can read the transcript itself: follow it.
+        server.follow_thread = threading.Thread(
+            target=_follow_transcript, args=(server, server.follow_stop),
+            daemon=True, name="hc-follow-transcript")
+        server.follow_thread.start()
+
+
+def _find_transcript(session_id, manifest):
+    """Where the chat's transcript is now.
+
+    The manifest remembers the path the hooks last reported; a session that
+    was closed and reopened keeps its id and its file, but if that file is
+    gone (moved project, cleared history), look it up by id under Claude's
+    own projects directory and take the newest.
+    """
+    recorded = str((manifest or {}).get("transcript_path") or "")
+    if recorded and Path(recorded).is_file():
+        return Path(recorded)
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    candidates = sorted(
+        (home / "projects").glob(f"*/{session_id}.jsonl"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _follow_transcript(server, stop, interval=None):
+    """Ingest the chat's transcript as it grows, without waiting for a hook.
+
+    Cheap when nothing changed: one stat per tick. Ingestion is the same
+    incremental, cursor-and-fingerprint read the hooks use, so a rewritten or
+    truncated file is replayed from the top, never misread.
+    """
+    interval = float(interval if interval is not None else
+                     os.environ.get("HC_CHAT_FOLLOW_SECONDS", "2"))
+    seen = None
+    while not stop.wait(interval if seen is not None else 0.2):
+        try:
+            session_id, root = _chat_identity(server.trajdir)
+            manifest = CS.load_manifest(session_id, root)
+            transcript = _find_transcript(session_id, manifest)
+            if transcript is None:
+                seen = ("", 0, 0)
+                continue
+            stat = transcript.stat()
+            mark = (str(transcript), stat.st_size, stat.st_mtime_ns)
+            if mark == seen:
+                continue
+            source = manifest.get("source") or {}
+            if (str(source.get("path") or "") == str(transcript)
+                    and int(source.get("cursor") or 0) == stat.st_size
+                    and int(source.get("mtime_ns") or 0) == stat.st_mtime_ns):
+                seen = mark       # a hook already took this much
+                continue
+            CS.ingest_transcript(session_id, transcript, root=root)
+            seen = mark
+        except (OSError, ValueError, TypeError, TimeoutError):
+            # The lock was busy, or the file moved between stat and read:
+            # the next tick tries again from the manifest's cursor.
+            continue
+        except Exception:  # noqa: BLE001 - a follower may never take the server down
+            continue
 
 
 def _resolved_idle_timeout(value, chat_scoped):
@@ -1254,6 +1326,7 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
         print("\n  stopped")
     finally:
         idle_stop.set()
+        srv.follow_stop.set()
         if previous_term is not None:
             import signal
             try:

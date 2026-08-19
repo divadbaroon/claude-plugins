@@ -1066,7 +1066,14 @@
       box.appendChild(list);
       box.appendChild(row);
       overlay.appendChild(box);
-      (document.body || document.documentElement).appendChild(overlay);
+      // Inside the workspace's root, not on <body>: the theme's variables
+      // (--panel, --ink, --bd …) are declared on `.hc`, so a picker mounted
+      // outside it fell back to the light defaults on a dark page.
+      var root = document.querySelector(".hc");
+      if (root && document.documentElement
+          && document.documentElement.contains
+          && !document.documentElement.contains(root)) root = null;
+      (root || document.body || document.documentElement).appendChild(overlay);
       if (document.addEventListener) {
         document.addEventListener("keydown", onKey, true);
       }

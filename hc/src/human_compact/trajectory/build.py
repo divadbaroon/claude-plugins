@@ -593,6 +593,9 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
             if row["id"] in ids:
                 row["status"] = first
                 row["question"] = ""
+        # Rows handed to Claude are work begun on the goal.
+        if goal.get("status") == "active":
+            goal["status"] = "in_progress"
         goal["updated_at"] = GM._now()
         GM.sanitize(goals)
         prompts = CS.load_prompts(session_id, root)

@@ -2153,6 +2153,21 @@ class LiveFeedTests(BridgeTestCase):
             "JSON.stringify([first !== second, !!document.querySelector('.hc-ask')]);")
         self.assertEqual([True, True], json.loads(opened))
 
+    def test_the_picker_is_mounted_inside_the_workspace_so_it_takes_its_theme(self):
+        # The theme's variables (--panel, --ink, --bd …) live on `.hc`. A
+        # picker hung on <body> sat outside them and fell back to the light
+        # defaults on a dark page.
+        where = self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.pick_state()) +
+            "var hc = document.createElement('div'); hc.className = 'hc';"
+            "document.body.appendChild(hc);"
+            "window.__hcPromptUI.pickPrompt('g1', null);"
+            "var ask = document.querySelector('.hc-ask');"
+            "JSON.stringify(!!ask && ask.parentNode && ask.parentNode.className);")
+        self.assertEqual("hc", json.loads(where))
+
     def test_a_second_click_does_not_stack_a_second_picker(self):
         count = self.run_js(
             "localStorage.setItem('hc-vault-ui-v1',"
