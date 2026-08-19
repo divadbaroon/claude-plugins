@@ -45,14 +45,13 @@ Never use private assistant thinking. Copy only supplied event ids.
 Each goal also has "sections": the goal's own markdown document, which the
 user reads and edits by hand. objective and in_my_words are plain sentences;
 decisions, built, blockers and open_questions are lists of short bullet
-strings. todos is the nested next-action list the user edits directly in the
-workspace: bullet strings, each optionally indented four spaces per level to
-put it under the line above it. Write only what THIS chat's evidence supports
-and leave a section empty when it supports nothing. Never invent, pad, or
-restate the title.
+strings. The workspace's TODO list is not part of the document: never write
+todos into a section. Write only what THIS chat's evidence supports and leave
+a section empty when it supports nothing. Never invent, pad, or restate the
+title.
 
 Return ONLY minified JSON:
-{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","todos":[],"in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
+{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
 
 PROJECT CONTEXT:
 <<CONTEXT>>
@@ -71,7 +70,7 @@ Return ONLY minified JSON {"operations":[...]} using these operations:
 {"op":"complete_todo","goal_id":"","text_match":""}
 {"op":"set_status","goal_id":"","status":"active|in_progress|completed|abandoned"}
 {"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":""}
-{"op":"append_section","goal_id":"","section":"objective|todos|in_my_words|decisions|built|blockers|open_questions","text":""}
+{"op":"append_section","goal_id":"","section":"objective|in_my_words|decisions|built|blockers|open_questions","text":""}
 
 Rules: infer completion only from explicit evidence. A top-level new_goal needs
 an explicitly distinct objective in distinct_because. Prefer attaching evidence

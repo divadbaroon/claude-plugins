@@ -130,14 +130,17 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 self.assertEqual([("ship it", 0, ""), ("and test", 1, ""),
                                   ("docs", 0, "")], self.rows(),
                                  "the list reaches the server as rows")
-                # Cmd+A takes every row; Cmd+C leaves with them as markdown
+                # Cmd+A picks every row for the build -- a selection for
+                # building, not a text selection -- and Cmd+A again
+                # releases them.
                 page.keyboard.press("Meta+a")
-                page.keyboard.press("Meta+c")
-                page.wait_for_timeout(200)
-                self.assertEqual("- ship it\n    - and test\n- docs",
-                                 page.evaluate("() => navigator.clipboard.readText()"))
+                expect(page.locator(".hc-todo-build")).to_have_text("Build 3")
+                expect(page.locator(".hc-rail-select")).to_have_text("Deselect all")
+                page.keyboard.press("Meta+a")
+                expect(page.locator(".hc-todo-build")).to_have_text("Build")
                 # A selection dragged across rows is one selection: what is
                 # typed over it lands in the row the selection began in.
+                page.locator(".hc-todo-line").nth(2).click()
                 page.keyboard.press("End")
                 page.keyboard.press("Shift+ArrowUp")
                 page.keyboard.press("Shift+ArrowUp")
@@ -146,10 +149,11 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 texts = [r[0] for r in self.rows()]
                 self.assertEqual(1, len(texts), texts)
                 self.assertTrue(texts[0].endswith("Z"), texts)
-                # Copy TODOs at the lower left copies the whole list
+                # Copy TODOs at the lower left copies the whole list, each
+                # row named with its state (no notes here, so no CONTEXT).
                 page.locator(".hc-todo-copy").click()
                 expect(page.get_by_text("copied ✓", exact=True)).to_be_visible()
-                self.assertEqual("- " + texts[0] + "\n",
+                self.assertEqual("- [active] " + texts[0] + "\n",
                                  page.evaluate("() => navigator.clipboard.readText()"))
                 # No goal document was involved
                 goals, _ = chat_state.load_goals(self.session, self.root)

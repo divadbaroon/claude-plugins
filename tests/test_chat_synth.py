@@ -692,11 +692,16 @@ class SectionContractTests(unittest.TestCase):
         missing = [key for key in GM.SECTION_KEYS if key not in line]
         self.assertEqual([], missing, "append_section: %s" % line)
 
-    def test_todos_is_described_as_a_nested_bullet_list(self):
-        # The rail edits this section with tab/shift-tab, so what inference
-        # writes has to be indentable lines, not prose.
-        self.assertIn("todos", S.INITIAL_PROMPT)
-        self.assertRegex(S.INITIAL_PROMPT, r"todos[^\n]*nested|nested[^\n]*todos")
+    def test_todos_is_not_a_section_either_prompt_writes_to(self):
+        # The rail's list is its own store, decoupled from the notes: the
+        # sections schema must not name it, append_section must not accept
+        # it, and the prompt says so in words the model reads.
+        self.assertNotIn('"todos"', self._sections_schema(S.INITIAL_PROMPT))
+        line = next(row for row in S.INCREMENTAL_PROMPT.splitlines()
+                    if '"op":"append_section"' in row)
+        self.assertNotIn("todos", line)
+        self.assertIn("never write", S.INITIAL_PROMPT)
+        self.assertIn("todos into a section", S.INITIAL_PROMPT)
 
 
 if __name__ == "__main__":

@@ -45,13 +45,13 @@ def _machine_authored(text: str) -> bool:
 # under them, and the human writes wherever they like. A goal opens as an EMPTY
 # document -- no spine of empty headings is seeded, and none is re-added; a
 # heading appears only when something is written under it (by either party).
-# TODOs is listed for inference's sake, but the workspace rail keeps its own
-# list in the goal's `todos_md` field, apart from the notes -- deleting text in
-# the notes never deletes a todo. `prompt_md` is the reader's own prompt, kept
-# the same way.
-DOC_SECTIONS = ("Objective", "TODOs", "In my words", "Decisions", "Built",
+# TODOs is deliberately NOT one of them: the workspace rail's list is its own
+# store (`todo_items`, persisted in todos.json), and nothing -- inference
+# included -- writes todos into the notes or reads them back out. `prompt_md`
+# is the reader's own prompt, kept the same way.
+DOC_SECTIONS = ("Objective", "In my words", "Decisions", "Built",
                 "Blockers", "Open questions")
-SECTION_KEYS = {"objective": "Objective", "todos": "TODOs",
+SECTION_KEYS = {"objective": "Objective",
                 "in_my_words": "In my words",
                 "decisions": "Decisions", "built": "Built",
                 "blockers": "Blockers", "open_questions": "Open questions"}
@@ -398,13 +398,51 @@ def link_evidence_prompts(goals, prompts):
     return goals
 
 
+# The rail's rows persist in their own file, todos.json -- a mapping of goal
+# id to rows -- never inside the notes and never re-derived from them. The
+# goal dicts still carry `todo_items` in memory (every reader works on the
+# joined shape); the split is a storage fact, applied on the way to disk and
+# undone on the way back.
+
+def split_todo_store(goals) -> dict:
+    """The rows lifted out of each goal, keyed by goal id, for todos.json."""
+    rows = {}
+    for g in goals.get("goals", []):
+        items = normalize_todo_items(g.get("todo_items"))
+        if items:
+            rows[str(g.get("id") or "")] = items
+    return rows
+
+
+def overlay_todo_store(goals, held):
+    """Lay todos.json's rows back onto the goals. A goal the store never
+    heard of keeps whatever rows it carries inline -- the shape every store
+    had before the split, read once and rewritten split on the next save."""
+    held = held if isinstance(held, dict) else {}
+    for g in goals.get("goals", []):
+        rows = held.get(str(g.get("id") or ""))
+        if isinstance(rows, list):
+            g["todo_items"] = normalize_todo_items(rows)
+    return goals
+
+
+def strip_todo_items(goals):
+    """A copy of *goals* fit for goals.json: the rows live in todos.json."""
+    lean = dict(goals)
+    lean["goals"] = [dict(g, todo_items=[]) for g in goals.get("goals", [])]
+    return lean
+
+
 def load(trajdir: Path):
     def j(name, default):
         try:
             return json.loads((trajdir / name).read_text())
         except (OSError, json.JSONDecodeError):
             return default
-    return (j("goals.json", {"version": 1, "goals": []}),
+    todos = j("todos.json", {})
+    return (overlay_todo_store(j("goals.json", {"version": 1, "goals": []}),
+                               todos.get("todos") if isinstance(todos, dict)
+                               else {}),
             j("important.json", {"items": []}))
 
 
@@ -413,7 +451,10 @@ def save(trajdir: Path, goals, important):
     secure_dir(trajdir, root)
     link_evidence_prompts(goals, evidence_prompts(trajdir))
     goals["generated_at"] = _now()
-    for name, obj in (("goals.json", goals), ("important.json", important)):
+    for name, obj in (("goals.json", strip_todo_items(goals)),
+                      ("important.json", important),
+                      ("todos.json", {"version": 1,
+                                      "todos": split_todo_store(goals)})):
         atomic_write_json(trajdir / name, obj, root=root)
     write_goal_context(trajdir, goals, important)
 
@@ -532,22 +573,17 @@ def sanitize(goals):
         # The goal's whole markdown document. Coerced, never truncated: a cap
         # here would silently eat the tail of something a person wrote.
         g["notes"] = str(g.get("notes") or "")
-        # The rail's list and the reader's prompt live beside the notes, not
-        # in them. A goal saved before that carried both as sections of the
-        # document -- lift them out once, and drop the empty spine the old
-        # default document seeded.
+        # The reader's prompt lives beside the notes, not in them. A goal
+        # saved before that carried it as a section of the document -- lift
+        # it out once, and drop the empty spine the old default document
+        # seeded. The rail's TODO list is NOT lifted: todos are their own
+        # store, and a "# TODOs" heading in the notes is just the reader's
+        # own writing, never read as the list and never deleted for it.
         g["todos_md"] = str(g.get("todos_md") or "")
         g["prompt_md"] = str(g.get("prompt_md") or "")
         if g["notes"]:
             sections = split_doc(g["notes"])
             changed = False
-            if not g["todos_md"].strip():
-                body = section_body(g["notes"], "TODOs")
-                if body and body.strip():
-                    g["todos_md"] = body.strip("\n") + "\n"
-                    sections = [(t, "" if t == "TODOs" else b)
-                                for t, b in sections]
-                    changed = True
             if not g["prompt_md"].strip():
                 body = section_body(g["notes"], "Prompt")
                 if body and body.strip():
@@ -558,8 +594,8 @@ def sanitize(goals):
                 g["notes"] = join_doc(sections)
             g["notes"] = strip_empty_spine(g["notes"])
         # Rows are canonical; the markdown is derived from them. A goal that
-        # only ever had the markdown (or just gained it from its notes) is
-        # parsed into rows once, each with a fresh id.
+        # only ever had the markdown is parsed into rows once, each with a
+        # fresh id.
         items = normalize_todo_items(g.get("todo_items"))
         if not items and g["todos_md"].strip():
             items = parse_todos(g["todos_md"])

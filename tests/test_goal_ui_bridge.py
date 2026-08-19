@@ -309,6 +309,48 @@ class TodoListModelTests(BridgeTestCase):
         self.assertEqual("- a\n", self.model("L.serialize(items)",
                                              [("a", 0), ("  ", 1)]))
 
+    def test_rows_serialize_with_their_states_for_a_prompt_body(self):
+        # The copy a session receives names every row's state -- "active"
+        # for a row not yet sent, its status word otherwise.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.serializeStates(["
+            "  {id: 't00000001', text: 'one', depth: 0, status: ''},"
+            "  {id: 't00000002', text: 'two', depth: 1, status: 'building'},"
+            "  {id: 't00000003', text: 'three', depth: 0, status: 'done'},"
+            "  {id: 't00000004', text: '  ', depth: 0, status: 'queued'}]);")
+        self.assertEqual(
+            "- [active] one\n    - [building] two\n- [done] three\n", out)
+
+    def test_the_todo_copy_carries_the_notes_as_context_only(self):
+        # The Copy TODOs body: rows with states first, then the goal's notes
+        # under a CONTEXT header that says not to act on them.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.copyText("
+            "  [{id: 't00000001', text: 'ship it', depth: 0, status: ''}],"
+            "  '# Decisions\\n- keep sqlite\\n');")
+        self.assertEqual(
+            "TODOs (each with its current state):\n- [active] ship it\n"
+            "\nCONTEXT — the goal's notes, for background only. Do NOT make"
+            " any changes specified in these notes; act only on the TODOs"
+            " above:\n# Decisions\n- keep sqlite\n", out)
+
+    def test_the_todo_copy_without_notes_is_the_bare_state_list(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.copyText("
+            "  [{id: 't00000001', text: 'ship it', depth: 0, status: ''}], '');")
+        self.assertEqual("- [active] ship it\n", out)
+
+    def test_the_copied_prompt_includes_todo_states(self):
+        # The chat scope's recommended-prompt builder reads the rows, not the
+        # bare markdown, so the states travel with the copied prompt body.
+        out = self.patched_bundle(
+            "out = [out.indexOf(\"'TODOs (each with its current state):\") >= 0,"
+            "       out.indexOf('sel.todo_items') >= 0];", scope="chat")
+        self.assertEqual([True, True], out)
+
     def test_a_depth_jump_is_pulled_back_to_one_level(self):
         out = self.model("L.normalize(items).map(function (r) { return r.depth; })",
                          [("one", 0), ("deep", 3), ("deeper", 5)])

@@ -1850,11 +1850,12 @@
     return text.length > 0 && text.indexOf("{{") < 0;
   }
 
-  // The rail owns one heading of the goal's document and must hand every
+  // Section surgery on a markdown document: find one heading, hand every
   // other line back untouched -- including a "# comment" inside a fenced
   // block, which is not a heading however much it looks like one. This is
-  // goals._scan_doc's rule, kept in the browser because the rail writes the
-  // whole document back through the same import path the notes editor uses.
+  // goals._scan_doc's rule. The rail's TODO list no longer lives in the
+  // document at all (it is its own store, todos.json on the server); the
+  // machinery stays for the reader's-prompt section and the tests.
   var TODO_SECTION = "TODOs";
   // The reader's own edit of the assembled prompt. Deliberately NOT one of
   // goals.DOC_SECTIONS: the spine is what inference may append to, and this
@@ -1929,12 +1930,12 @@
   // the other. Rows are drawn as spans inside ONE editable column, not as
   // inputs and not as one editable each: a browser will not let a selection
   // cross from one editing host into another, so one host is what makes a
-  // selection dragged across rows a real selection, lets Cmd+A take every
-  // row, and lets Copy of that selection be the rows as markdown. The keys the
-  // list is about -- Enter, Tab, Shift-Tab, Backspace at a bullet, Cmd+/ to
-  // pick, Cmd+Backspace to delete -- are operations on the row list, each
-  // returning the rows and where the caret should land, so all of them are
-  // testable without a DOM.
+  // selection dragged across rows a real selection, and lets Copy of that
+  // selection be the rows as markdown. The keys the list is about -- Enter,
+  // Tab, Shift-Tab, Backspace at a bullet, Cmd+/ to pick, Cmd+A to pick
+  // every row for the build, Cmd+Backspace to delete -- are operations on
+  // the row list, each returning the rows and where the caret should land,
+  // so all of them are testable without a DOM.
 
   var TODO_INDENT = "    ";
   var railTab = "todos";
@@ -1991,6 +1992,35 @@
     return rows.map(function (row) {
       return repeat(TODO_INDENT, row.depth | 0) + "- " + row.text;
     }).join("\n") + "\n";
+  }
+
+  function todoSerializeStates(items) {
+    // The same bullets, each carrying its state: what a session receiving
+    // the list needs to know before touching a row. A row with no status
+    // yet is named "active" rather than left bare, so the reader never has
+    // to guess what an unmarked bullet means.
+    var rows = array(items).filter(function (row) {
+      return str(row && row.text).trim() !== "";
+    });
+    if (!rows.length) return "";
+    return rows.map(function (row) {
+      return repeat(TODO_INDENT, row.depth | 0)
+        + "- [" + (str(row.status) || "active") + "] " + row.text;
+    }).join("\n") + "\n";
+  }
+
+  function todoCopyText(items, notes) {
+    // The body the Copy TODOs control puts on the clipboard: the rows with
+    // their states, and the goal's notes underneath as CONTEXT only -- the
+    // notes describe the goal, and a session pasted this body must act on
+    // the TODOs alone, never on changes the notes happen to mention.
+    var text = todoSerializeStates(items);
+    var doc = str(notes).trim();
+    if (!text || !doc) return text;
+    return "TODOs (each with its current state):\n" + text
+      + "\nCONTEXT — the goal's notes, for background only. Do NOT make"
+      + " any changes specified in these notes; act only on the TODOs"
+      + " above:\n" + doc + "\n";
   }
 
   function todoSpan(items, index) {
@@ -2209,22 +2239,6 @@
     } catch (e) {}
   }
 
-  function todoSelectAll() {
-    var host = todoHost();
-    var lines = host ? host.querySelectorAll("[data-hc-todo-line]") : [];
-    if (!lines.length) return false;
-    try {
-      var range = document.createRange();
-      range.setStart(lines[0], 0);
-      var last = lines[lines.length - 1];
-      range.setEnd(last, last.childNodes.length);
-      var sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      return true;
-    } catch (e) { return false; }
-  }
-
   function todoTyping() {
     return document.activeElement === todoHost()
       || !!(document.activeElement
@@ -2352,9 +2366,15 @@
     var mod = event.metaKey || event.ctrlKey;
     var handled = false;
     if (mod && event.key === "a") {
-      // Every row, as one selection -- and no redraw, which would take the
-      // selection away again.
-      if (todoSelectAll()) { event.preventDefault(); event.stopPropagation(); }
+      // Every pickable row, picked for the build -- the same toggle as the
+      // Select all control, not a text selection. Cmd+A again releases them.
+      // The caret stays where it was, so the next Cmd+A (or any key) still
+      // lands on the list.
+      event.preventDefault();
+      event.stopPropagation();
+      todoToggleAll();
+      todoFocusAt = { index: index, caret: caret };
+      renderTodoRail(true);
       return;
     } else if (mod && event.key === "/") {
       todoTogglePick(todoItems[index].id);
@@ -2549,7 +2569,8 @@
   }
 
   function todoCopyAll() {
-    var text = todoSerialize(todoItems);
+    var goal = todoSelectedGoal();
+    var text = todoCopyText(todoItems, goal ? goal.notes : "");
     var done = function () {
       todoCopied = true;
       clearTimeout(todoCopiedTimer);
@@ -3860,7 +3881,7 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = (t === ''), fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      const pre = secOf(''); if (pre) parts.push('Notes:\\n' + pre);\n      const todos = String((sel && sel.todos_md) || '').trim(); if (todos) parts.push('TODOs:\\n' + todos);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
+       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = (t === ''), fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      const pre = secOf(''); if (pre) parts.push('Notes:\\n' + pre);\n      const titems = (Array.isArray(sel && sel.todo_items) ? sel.todo_items : []).filter(r => r && String(r.text || '').trim());\n      const todos = titems.length ? titems.map(r => '    '.repeat(r.depth | 0) + '- [' + (String(r.status || '') || 'active') + '] ' + r.text).join('\\n') : String((sel && sel.todos_md) || '').trim();\n      if (todos) parts.push('TODOs (each with its current state):\\n' + todos);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
       // A prompt without its conversation is a quote without a source. The
       // separator belongs to the source, not to the line: chat prompt
       // records carry no session_id (chat_state writes id, ordinal, role,
@@ -4312,6 +4333,8 @@
     },
     todoList: {
       serialize: todoSerialize,
+      serializeStates: todoSerializeStates,
+      copyText: todoCopyText,
       normalize: todoNormalize,
       enter: todoEnter,
       indent: todoIndent,
