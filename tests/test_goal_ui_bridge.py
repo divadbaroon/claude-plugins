@@ -990,6 +990,30 @@ class MergeTests(BridgeTestCase):
         self.assertEqual("t:g1:0", by_id["g1"]["children"][0]["id"])
         self.assertEqual("inprog", by_id["g-remote"]["status"])
 
+    def test_a_goal_a_stale_writer_lost_is_kept_and_a_tombstoned_one_is_not(self):
+        # The server never erases a deleted goal: it stays in the payload,
+        # marked abandoned. So a goal missing from the remote TREE splits two
+        # ways -- named in the tombstones: deleted, drop it; not even
+        # mentioned: a stale writer lost it, keep the local copy so the next
+        # import puts it back. This is the add-a-goal-and-watch-it-vanish
+        # bug: an analyzer or an old tab rewrote goals.json without the goal
+        # the reader had just made.
+        result = self.run_js(
+            """(() => {
+              const node = (id, title, extra) => Object.assign({
+                id, title, prio: "normal", done: false, open: true,
+                status: "todo", notes: "", desc: "", labels: [],
+                children: []
+              }, extra || {});
+              const base = [node("g1", "Shared"), node("g-lost", "Just made"),
+                            node("g-gone", "Deleted for real")];
+              const local = base.map((n) => Object.assign({}, n));
+              const remote = [node("g1", "Shared")];
+              return window.__hcPromptUI.mergeTrees(
+                base, local, remote, { "g-gone": true });
+            })()""")
+        self.assertEqual({"g1", "g-lost"},
+                         set(goal["id"] for goal in result))
 
 
 if __name__ == "__main__":
@@ -1575,6 +1599,34 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("if (e.repeat && e.key !== 'ArrowDown' "
                       "&& e.key !== 'ArrowUp') return;", out)
         self.assertNotIn("if (e.repeat) return;", out)
+
+    def test_marking_done_cascades_to_children_and_folds_the_branch(self):
+        # Both doors to 'done' -- the row's check and the inspector's status
+        # control -- mark every child done and collapse the goal, instead of
+        # touching one node and leaving live children hidden under a strike.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("x => ({ ...x, done: !x.done })", out)
+        self.assertNotIn("k === 'done' ? { ...x, done: true }", out)
+        self.assertEqual(2, out.count(
+            "const dn = (g) => ({ ...g, done: true, "
+            "children: (g.children || []).map(dn) });"))
+        self.assertIn("x => x.done ? { ...x, done: false } "
+                      ": { ...dn(x), open: false }", out)
+        self.assertIn("k === 'done' ? { ...dn(x), open: false }", out)
+
+    def test_the_shipped_cascade_marks_every_descendant_done(self):
+        # Run the exact lambda the patch ships, not a re-derivation of it.
+        marked = self.run_js(
+            "const dn = (g) => ({ ...g, done: true, "
+            "children: (g.children || []).map(dn) });"
+            "out = { ...dn({ id: 'p', done: false, children: ["
+            "  { id: 'c1', done: false, children: ["
+            "    { id: 'c1a', done: false }] },"
+            "  { id: 'c2', done: false }] }), open: false };")
+        self.assertTrue(marked["done"])
+        self.assertFalse(marked["open"])
+        self.assertTrue(all(c["done"] for c in marked["children"]))
+        self.assertTrue(marked["children"][0]["children"][0]["done"])
 
     def test_running_the_agent_is_the_only_way_to_get_a_plan(self):
         out = self.patched_bundle("out;")

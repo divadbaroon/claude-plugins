@@ -85,19 +85,27 @@
     return { map: map, order: order };
   }
 
-  function mergeTrees(baseRoots, localRoots, remoteRoots) {
+  function mergeTrees(baseRoots, localRoots, remoteRoots, deletedIds) {
     var base = flattenTree(baseRoots), local = flattenTree(localRoots);
     var remote = flattenTree(remoteRoots), selected = Object.create(null);
+    var deleted = deletedIds || Object.create(null);
     var order = remote.order.slice();
     local.order.forEach(function (id) {
-      if (!remote.map[id] && !base.map[id]) order.push(id);
+      if (!remote.map[id]) order.push(id);
     });
 
     order.forEach(function (id) {
       var b = base.map[id], l = local.map[id], r = remote.map[id];
       if (r && b && !l) return; // an explicit local deletion
-      if (!r && (!l || b)) return; // remote deletion, unless locally created
-      if (!r && l && !b) {
+      if (!r) {
+        if (!l) return;
+        // Absent from the remote tree with a local copy in hand. The server
+        // never erases a deleted goal -- it keeps it, marked abandoned, and
+        // the payload carries that marker -- so a goal the payload does not
+        // even mention was LOST by a stale writer, not deleted by anyone.
+        // Deleted: let it go. Lost (or locally created): keep ours; the
+        // next import puts it back.
+        if (deleted[id]) return;
         selected[id] = { value: clone(l.value), parent: l.parent };
         return;
       }
@@ -200,6 +208,18 @@
     }).join(",");
   }
 
+  function deletedIdsOf(st) {
+    // The tombstones: goals the server remembers as deleted. These are the
+    // only absences mergeTrees may honour.
+    var gone = Object.create(null);
+    array(st && st.goals).forEach(function (goal) {
+      if (goal && goal.status === "abandoned" && typeof goal.id === "string") {
+        gone[goal.id] = true;
+      }
+    });
+    return gone;
+  }
+
   function reconcileState(st) {
     if (!st || typeof st.revision !== "string") return;
     var remote = rootsFromState(st);
@@ -217,13 +237,14 @@
       // whether it has an artifact.
       var stale = readLocalGoals();
       if (stale && paneShape(stale) !== paneShape(remote)) {
-        installGoalsAndReload(mergeTrees(synced.goals, stale, remote),
+        installGoalsAndReload(mergeTrees(synced.goals, stale, remote,
+                                         deletedIdsOf(st)),
                               st.revision);
       }
       return;
     }
     var local = readLocalGoals();
-    var merged = mergeTrees(synced.goals, local, remote);
+    var merged = mergeTrees(synced.goals, local, remote, deletedIdsOf(st));
     if (same(merged, remote)) {
       writeSync(st.revision, remote);
       if (!same(local, remote)) installGoalsAndReload(remote, st.revision);
@@ -4080,7 +4101,17 @@
       // and stopped. It stays swallowed for everything else: a held
       // cmd+enter or cmd+backspace should not pour goals in or out.
       ["this._kd = (e) => {\n      if (e.repeat) return;\n",
-       "this._kd = (e) => {\n      if (e.repeat && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;\n"]
+       "this._kd = (e) => {\n      if (e.repeat && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;\n"],
+      // Done means the whole branch is done: the row's check marks every
+      // child too and folds the branch shut. Unchecking reopens only the
+      // goal itself -- what each child was before is not something to
+      // guess at, and a struck-through child is one click from back.
+      ["done: (e) => { e.stopPropagation(); this.set(s => ({ goals: this.up(s.goals, n.id, x => ({ ...x, done: !x.done })), editId: null }), true); },",
+       "done: (e) => { e.stopPropagation(); const dn = (g) => ({ ...g, done: true, children: (g.children || []).map(dn) }); this.set(s => ({ goals: this.up(s.goals, n.id, x => x.done ? { ...x, done: false } : { ...dn(x), open: false }), editId: null }), true); },"],
+      // The inspector's status control is the same door with a different
+      // handle, so 'done' cascades and folds there as well.
+      ["const setSt = (k) => sel && this.set(s => ({ goals: this.up(s.goals, sel.id, x => k === 'done' ? { ...x, done: true } : { ...x, done: false, status: k === 'inprog' ? 'inprog' : 'todo' }) }), true);",
+       "const setSt = (k) => { if (!sel) return; const dn = (g) => ({ ...g, done: true, children: (g.children || []).map(dn) }); this.set(s => ({ goals: this.up(s.goals, sel.id, x => k === 'done' ? { ...dn(x), open: false } : { ...x, done: false, status: k === 'inprog' ? 'inprog' : 'todo' }) }), true); };"]
     ];
     // Every pair is a string match against a checked-in artifact, so a
     // re-vendored bundle degrades to "the layout silently did not apply".
