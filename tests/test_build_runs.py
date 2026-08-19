@@ -33,6 +33,24 @@ resume = "--resume" in args
 log = os.environ["STUB_LOG"]
 if os.environ.get("STUB_SLEEP"):
     time.sleep(float(os.environ["STUB_SLEEP"]))
+if os.environ.get("STUB_FAIL_ONCE") == "1":
+    marker = log + ".failed"
+    with open(log, "a") as fh:
+        fh.write(json.dumps({"args": args, "prompt": prompt, "resume": resume}) + "\n")
+    if not os.path.exists(marker):
+        open(marker, "w").write("1")
+        print(json.dumps({"type": "result", "is_error": True,
+                          "result": "API Error: 500 Internal server error"}))
+        raise SystemExit(1)
+    ids = []
+    for line in open(log):
+        p0 = json.loads(line)["prompt"]
+        ids += [w.strip("[]") for w in p0.split() if w.startswith("[t") and w.endswith("]")]
+    for i in dict.fromkeys(ids):
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}), flush=True)
+    print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
+    raise SystemExit(0)
 if os.environ.get("STUB_FINISH") == "1" and not resume:
     with open(log, "a") as fh:
         fh.write(json.dumps({"args": args, "prompt": prompt}) + "\n")
@@ -227,6 +245,27 @@ class QueueBehindARunTests(BuildRunTests):
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
         self.assertEqual(2, len(calls))
         self.assertIn("[taaaa0003]", calls[1]["prompt"])
+
+
+class TransientRetryTests(BuildRunTests):
+    """A provider 500 is retried in the same session, not a verdict."""
+
+    def test_a_500_is_retried_and_the_rows_finish(self):
+        os.environ["STUB_FAIL_ONCE"] = "1"
+        BUILD.RETRY_DELAY_S, held = 0.05, BUILD.RETRY_DELAY_S
+        self.addCleanup(lambda: setattr(BUILD, "RETRY_DELAY_S", held))
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done", seconds=12),
+            self.rows())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(2, len(calls))
+        self.assertFalse(calls[0]["resume"])
+        self.assertTrue(calls[1]["resume"], "the retry resumes the same session")
+        record = BUILD.load_run(self.session, self.root, "g1")
+        self.assertEqual("idle", record["status"])
+        self.assertEqual(1, record.get("retry"))
 
 
 class SessionBuildTests(unittest.TestCase):

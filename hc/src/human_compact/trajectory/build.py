@@ -442,6 +442,15 @@ def _rows_in(session_id: str, root: Optional[Path], goal_id: str,
             if row.get("status") == status]
 
 
+# A run that died on the provider's side, not on the work: retried by
+# resuming the same session, so nothing already done is lost.
+_TRANSIENT = re.compile(
+    r"(?i)(api error: 5\d\d|overloaded|rate.?limit|internal server error"
+    r"|connection (reset|refused|error)|timed? ?out)")
+RETRY_LIMIT = 2
+RETRY_DELAY_S = 8.0
+
+
 class Run:
     """One goal's build process, and the thread that reads what it prints."""
 
@@ -456,6 +465,7 @@ class Run:
         self.thread: Optional[threading.Thread] = None
         self.asked: Optional[str] = None
         self.error = ""
+        self.retries = 0
 
     def record(self, **extra) -> Dict[str, Any]:
         rec = load_run(self.session_id, self.root, self.goal_id) or {}
@@ -542,6 +552,26 @@ class Run:
                          status="done", question="")
 
     def _finish(self, code: int) -> None:
+        # A provider-side death (a 500, an overload, a dropped connection)
+        # is not a verdict on the rows: resume the same session and keep
+        # going, up to the retry limit, with rows left as building.
+        if ((code or self.error) and self.retries < RETRY_LIMIT
+                and _TRANSIENT.search(self.error or "")
+                and _rows_in(self.session_id, self.root, self.goal_id,
+                             "building")):
+            self.retries += 1
+            self.error = ""
+            self.record(status="retrying", retry=self.retries)
+            import time as _time
+            _time.sleep(RETRY_DELAY_S * self.retries)
+            try:
+                self.spawn("The previous turn ended on a transient API "
+                           "error. Continue working through the rows; "
+                           "re-print any protocol lines that did not land.",
+                           resume=True)
+                return
+            except (OSError, RuntimeError):
+                pass  # fall through to the honest failure below
         # Rows still building when the process ends -- with no question
         # standing -- did not get done. Say so rather than leaving them
         # "building" forever. A run that stopped to ask leaves the rest
