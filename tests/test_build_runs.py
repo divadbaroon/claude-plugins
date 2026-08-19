@@ -26,11 +26,22 @@ from human_compact.trajectory import ui  # noqa: E402
 
 
 STUB = r'''#!/usr/bin/env python3
-import json, sys, os
+import json, sys, os, time
 args = sys.argv[1:]
 prompt = args[args.index("-p") + 1]
 resume = "--resume" in args
 log = os.environ["STUB_LOG"]
+if os.environ.get("STUB_SLEEP"):
+    time.sleep(float(os.environ["STUB_SLEEP"]))
+if os.environ.get("STUB_FINISH") == "1" and not resume:
+    with open(log, "a") as fh:
+        fh.write(json.dumps({"args": args, "prompt": prompt}) + "\n")
+    ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    for i in ids:
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}), flush=True)
+    print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
+    raise SystemExit(0)
 with open(log, "a") as fh:
     fh.write(json.dumps({"args": args, "prompt": prompt, "cwd": os.getcwd(),
                          "resume": resume,
@@ -194,6 +205,28 @@ class BuildRunTests(unittest.TestCase):
         goals, _ = chat_state.load_goals(self.session, self.root)
         self.assertEqual("Update the docs, please",
                          GM.by_id(goals, "g1")["todo_items"][0]["text"])
+
+
+class QueueBehindARunTests(BuildRunTests):
+    """Picks made while a build is out wait their turn, then go."""
+
+    def test_more_picks_queue_and_start_when_the_run_ends(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "0.8"
+        first = BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(first["ok"], first)
+        second = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(second["ok"], second)
+        self.assertTrue(second.get("queued") and second.get("after_run"), second)
+        self.assertEqual("queued", self.rows()["taaaa0003"][0])
+        # Both done: the second went out by itself when the first ended.
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"
+            and self.rows()["taaaa0003"][0] == "done", seconds=12),
+            self.rows())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(2, len(calls))
+        self.assertIn("[taaaa0003]", calls[1]["prompt"])
 
 
 class SessionBuildTests(unittest.TestCase):

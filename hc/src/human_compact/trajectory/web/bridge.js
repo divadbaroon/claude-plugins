@@ -2925,8 +2925,10 @@
           note.appendChild(reopen);
         } else if (queued) {
           note.className = "hc-todo-error hc-todo-note";
-          note.textContent = "queued — Claude picks it up when its turn ends"
-            + " or on your next message";
+          note.textContent = (session && session.mode === "headless")
+            ? "queued — starts when the running build finishes"
+            : "queued — Claude picks it up when its turn ends"
+              + " or on your next message";
         }
         note.style.display = note.firstChild ? "" : "none";
       }
@@ -4065,7 +4067,20 @@
       // A subgoal keeps appending: its add control sits under the children
       // it joins.
       ["addUnder(pid) {\n    const n = this.node(); this._new = n.id;\n    this.set(s => ({\n      goals: pid ? this.up(s.goals, pid, x => ({ ...x, open: true, children: (x.children || []).concat([n]) })) : s.goals.concat([n]),\n      selId: n.id, editId: n.id\n    }), true);\n  }",
-       "addUnder(pid) {\n    const n = this.node(); this._new = n.id; this._focusTitle = n.id;\n    this.set(s => ({\n      goals: pid ? this.up(s.goals, pid, x => ({ ...x, open: true, children: (x.children || []).concat([n]) })) : [n].concat(s.goals),\n      selId: n.id, editId: null\n    }), true);\n  }"]
+       "addUnder(pid) {\n    const n = this.node(); this._new = n.id; this._focusTitle = n.id;\n    this.set(s => ({\n      goals: pid ? this.up(s.goals, pid, x => ({ ...x, open: true, children: (x.children || []).concat([n]) })) : [n].concat(s.goals),\n      selId: n.id, editId: null\n    }), true);\n  }"],
+      // The way in to a subgoal existed only under goals that already had
+      // one: the add row was drawn beneath the children it joins, so a
+      // childless goal offered no door. The selected row always offers it
+      // now -- the eye is already there, and adding under anything else
+      // starts with selecting it.
+      ["if (open && kids.length) rows.push({",
+       "if (open && (kids.length || isSel)) rows.push({"],
+      // A held arrow walks the tree, which already wraps at both ends.
+      // Key repeat was swallowed for every key, so holding moved one row
+      // and stopped. It stays swallowed for everything else: a held
+      // cmd+enter or cmd+backspace should not pour goals in or out.
+      ["this._kd = (e) => {\n      if (e.repeat) return;\n",
+       "this._kd = (e) => {\n      if (e.repeat && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;\n"]
     ];
     // Every pair is a string match against a checked-in artifact, so a
     // re-vendored bundle degrades to "the layout silently did not apply".

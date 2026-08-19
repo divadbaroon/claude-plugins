@@ -1560,6 +1560,22 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("children: (x.children || []).concat([n])", out)
         self.assertIn("this._focusTitle = n.id", out)
 
+    def test_the_selected_goal_always_offers_an_add_subgoal_row(self):
+        # The add row used to render only under goals that already had
+        # children, so a childless goal offered no way in to a subgoal.
+        out = self.patched_bundle("out;")
+        self.assertIn("if (open && (kids.length || isSel)) rows.push({", out)
+        self.assertNotIn("if (open && kids.length) rows.push({", out)
+
+    def test_a_held_arrow_key_keeps_walking_the_tree(self):
+        # Key repeat is let through for ArrowUp/ArrowDown only; every other
+        # shortcut still fires once per press, so a held cmd+enter or
+        # cmd+backspace cannot pour goals in or out.
+        out = self.patched_bundle("out;")
+        self.assertIn("if (e.repeat && e.key !== 'ArrowDown' "
+                      "&& e.key !== 'ArrowUp') return;", out)
+        self.assertNotIn("if (e.repeat) return;", out)
+
     def test_running_the_agent_is_the_only_way_to_get_a_plan(self):
         out = self.patched_bundle("out;")
         self.assertNotIn(">generate todos<", out)

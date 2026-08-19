@@ -553,6 +553,49 @@ class Run:
                          status="failed" if (code or self.error) else "done")
         self.record(status="waiting" if waiting else ("failed" if code else "idle"),
                     exit_code=code, error=self.error)
+        # Rows that queued up behind this run go out now -- unless the run
+        # stopped on a question, whose answer resumes this same session
+        # first; they stay queued and leave with the resumed run's finish.
+        if not waiting:
+            held = _pop_later(self.session_id, self.root, self.goal_id)
+            if held:
+                start(self.session_id, self.root, self.goal_id, held)
+
+
+# A headless run takes one process per goal, and that process reads nothing
+# once started -- so rows picked while one is out wait their turn rather than
+# being turned away. They are marked "queued", remembered here, and started
+# the moment the running build ends.
+
+def _later_path(session_id: str, root: Optional[Path]) -> Path:
+    return _builds_dir(session_id, root) / "later.json"
+
+
+def _load_later(session_id: str, root: Optional[Path]) -> Dict[str, List[str]]:
+    try:
+        value = json.loads(_later_path(session_id, root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _push_later(session_id: str, root: Optional[Path], goal_id: str,
+                ids: List[str]) -> None:
+    later = _load_later(session_id, root)
+    held = [i for i in later.get(goal_id) or [] if isinstance(i, str)]
+    later[goal_id] = held + [i for i in ids if i not in held]
+    path = _later_path(session_id, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, later)
+
+
+def _pop_later(session_id: str, root: Optional[Path], goal_id: str) -> List[str]:
+    later = _load_later(session_id, root)
+    ids = [i for i in later.pop(goal_id, []) if isinstance(i, str)]
+    path = _later_path(session_id, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, later)
+    return ids
 
 
 def _cwd_for(session_id: str, root: Optional[Path]) -> str:
@@ -576,7 +619,26 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
         return {"ok": False, "error": "pick at least one TODO"}
     live = _run_for(session_id, root, goal_id)
     if live and live.alive():
-        return {"ok": False, "error": "a build is already running for this goal"}
+        # The running process cannot take more work; these rows go next.
+        with CS.session_lock(session_id, root, wait_s=5):
+            goals, important = CS.load_goals(session_id, root)
+            goal = GM.by_id(goals, goal_id)
+            if not goal:
+                return {"ok": False, "error": "goal not found"}
+            known = {row["id"] for row in goal.get("todo_items") or []}
+            ids = [i for i in ids if i in known]
+            if not ids:
+                return {"ok": False, "error": "those TODOs are not on this goal"}
+            for row in goal.get("todo_items") or []:
+                if row["id"] in ids:
+                    row["status"] = "queued"
+                    row["question"] = ""
+            goal["updated_at"] = GM._now()
+            GM.sanitize(goals)
+            if not CS.save_goals(session_id, goals, important, root):
+                return {"ok": False, "error": "goal state changed; try again"}
+        _push_later(session_id, root, goal_id, ids)
+        return {"ok": True, "queued": True, "after_run": True, "rows": ids}
     with CS.session_lock(session_id, root, wait_s=5):
         goals, important = CS.load_goals(session_id, root)
         goal = GM.by_id(goals, goal_id)
