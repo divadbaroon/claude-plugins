@@ -247,6 +247,12 @@ def _save_goals(trajdir, goals, important, chat_scoped):
 # with the same cursor machinery as the workspace's own, and its user turns
 # join the related-prompts pool, tagged with the chat's label. No goals are
 # read from it and nothing is written to it.
+#
+# A link has a scope. Linked from the header it is GLOBAL: its prompts are
+# offered to every goal. Linked from a goal's own pane it is scoped to that
+# goal: offered to that goal and the goals under it, never to the goals
+# above it -- a chat brought in while working on a subgoal belongs to that
+# branch, not to the parent it hangs from. One row per (session, scope).
 
 def _linked_path(session_id, root):
     return CS.paths(session_id, root).session_dir / "linked_chats.json"
@@ -258,7 +264,7 @@ def _load_linked(session_id, root):
     except (OSError, ValueError):
         return []
     rows = value.get("chats") if isinstance(value, dict) else None
-    out = []
+    out, seen = [], set()
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
@@ -267,8 +273,36 @@ def _load_linked(session_id, root):
             CS.paths(sid, root)
         except ValueError:
             continue
-        out.append({"session_id": sid, "label": str(row.get("label") or sid[:8])})
+        goal_id = row.get("goal_id")
+        goal_id = goal_id if isinstance(goal_id, str) and goal_id else None
+        if (sid, goal_id) in seen:
+            continue
+        seen.add((sid, goal_id))
+        entry = {"session_id": sid, "label": str(row.get("label") or sid[:8])}
+        if goal_id:
+            entry["goal_id"] = goal_id
+        out.append(entry)
     return out
+
+
+def _linked_sessions(chats):
+    """Each linked session once, with the goal ids it is scoped to -- or
+    None when any of its links is global, which covers every goal."""
+    scopes = {}
+    labels = {}
+    for chat in chats:
+        sid = chat["session_id"]
+        labels.setdefault(sid, chat["label"])
+        goal_id = chat.get("goal_id")
+        if sid not in scopes:
+            scopes[sid] = set() if goal_id else None
+        if scopes[sid] is not None:
+            if goal_id:
+                scopes[sid].add(goal_id)
+            else:
+                scopes[sid] = None
+    return [(sid, labels[sid], None if goals is None else sorted(goals))
+            for sid, goals in scopes.items()]
 
 
 def _save_linked(session_id, root, chats):
@@ -315,12 +349,19 @@ def _load_prompts(trajdir, chat_scoped=False):
         session_id, root = _chat_identity(trajdir)
         rows = list(CS.load_prompts(session_id, root))
         # Linked chats ride along, each row tagged with where it came from
-        # so the picker can say. Their stores are read-only here.
-        for chat in _load_linked(session_id, root):
+        # so the picker can say, and -- for a goal-scoped link -- with the
+        # goals it is for, so the picker offers it there and below and
+        # nowhere else. A global link carries no chat_goals. Their stores
+        # are read-only here.
+        for sid, label, goal_ids in _linked_sessions(_load_linked(session_id, root)):
             try:
-                for row in CS.load_prompts(chat["session_id"], root):
-                    if isinstance(row, dict):
-                        rows.append(dict(row, chat=chat["label"]))
+                for row in CS.load_prompts(sid, root):
+                    if not isinstance(row, dict):
+                        continue
+                    row = dict(row, chat=label)
+                    if goal_ids is not None:
+                        row["chat_goals"] = goal_ids
+                    rows.append(row)
             except (OSError, ValueError):
                 continue
     else:
@@ -888,17 +929,32 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             if sid == session_id:
                 return {"ok": False, "error": "this workspace already follows "
                                               "its own chat"}
+            # The scope: a goal id for a link made from that goal's pane,
+            # nothing for one made from the header. A goal-scoped link
+            # must name a goal this tree has, or it would be offered to
+            # no one and unlinkable from nowhere.
+            goal_id = str(op.get("goal_id") or "") or None
+            if goal_id and not any(g.get("id") == goal_id
+                                   for g in goals["goals"]):
+                return {"ok": False, "error": "no such goal"}
             chats = _load_linked(session_id, root)
+
+            def same(c):
+                return c["session_id"] == sid and c.get("goal_id") == goal_id
             if kind == "link_chat":
-                if any(c["session_id"] == sid for c in chats):
-                    return {"ok": True, "linked": [c["session_id"] for c in chats]}
-                label = " ".join(str(op.get("label") or "").split())[:60] or sid[:8]
-                # The linked chat's own store, so ingestion has somewhere to
-                # keep its cursor and prompts.
-                CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
-                chats.append({"session_id": sid, "label": label})
+                if not any(same(c) for c in chats):
+                    label = (" ".join(str(op.get("label") or "").split())[:60]
+                             or next((c["label"] for c in chats
+                                      if c["session_id"] == sid), sid[:8]))
+                    # The linked chat's own store, so ingestion has somewhere
+                    # to keep its cursor and prompts.
+                    CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
+                    entry = {"session_id": sid, "label": label}
+                    if goal_id:
+                        entry["goal_id"] = goal_id
+                    chats.append(entry)
             else:
-                chats = [c for c in chats if c["session_id"] != sid]
+                chats = [c for c in chats if not same(c)]
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
@@ -1383,8 +1439,10 @@ def _follow_transcript(server, stop, interval=None):
         first = False
         try:
             session_id, root = _chat_identity(server.trajdir)
-            targets = [session_id] + [chat["session_id"]
-                                      for chat in _load_linked(session_id, root)]
+            # Each linked session once, however many scopes link it: its
+            # transcript has one cursor.
+            targets = [session_id] + [sid for sid, _label, _goals
+                                      in _linked_sessions(_load_linked(session_id, root))]
         except (OSError, ValueError):
             continue
         for target in targets:

@@ -85,6 +85,25 @@
     return { map: map, order: order };
   }
 
+  function layBuildState(local, remote) {
+    // The TODO rows as this page has them -- text, depth, order, what was
+    // added or taken away: the edit -- with the build state the server has
+    // for each id laid back over them: the run. The list is one field, but
+    // it is those two things, and the server's own import splits it the
+    // same way. Taken whole, one typed row would carry the page's stale
+    // "not sent" over a row the server had just marked queued or asking.
+    var held = Object.create(null);
+    array(remote).forEach(function (row) {
+      if (row && typeof row.id === "string") held[row.id] = row;
+    });
+    return array(local).map(function (row) {
+      var out = clone(row);
+      var was = row && held[row.id];
+      if (was) { out.status = str(was.status); out.question = str(was.question); }
+      return out;
+    });
+  }
+
   function mergeTrees(baseRoots, localRoots, remoteRoots, deletedIds) {
     var base = flattenTree(baseRoots), local = flattenTree(localRoots);
     var remote = flattenTree(remoteRoots), selected = Object.create(null);
@@ -119,7 +138,9 @@
       keys.forEach(function (key) {
         if (key === "id") return;
         if (!b || !same(l.value[key], b.value[key])) {
-          value[key] = clone(l.value[key]);
+          value[key] = key === "todo_items"
+            ? layBuildState(l.value[key], r.value[key])
+            : clone(l.value[key]);
         }
       });
       var parent = r.parent;
@@ -201,6 +222,40 @@
     window.location.reload();
   }
 
+  function installGoals(goals, revision) {
+    // The tree the sync settled on, into the store and into the artifact's
+    // own state -- and the page stays where the reader is, caret and all.
+    // The artifact publishes a setter from its constructor for exactly
+    // this; only a page whose artifact has none (booted before the setter
+    // existed) still reloads to learn the tree. A build marking rows queued
+    // and its goal in progress is the common case: that used to reload the
+    // page on every Build.
+    var setter = (typeof window !== "undefined") ? window.__hcSetGoals : null;
+    if (typeof setter !== "function") {
+      installGoalsAndReload(goals, revision);
+      return false;
+    }
+    var saved;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { saved = {}; }
+    var ids = flattenTree(goals).map;
+    var selId = (typeof saved.selId === "string" && ids[saved.selId])
+      ? saved.selId : (goals.length ? goals[0].id : null);
+    saved.goals = goals;
+    saved.selId = selId;
+    saved.updatedAt = Date.now();
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    writeSync(revision, goals);
+    lastObservedGoals = JSON.stringify(goals);
+    try {
+      setter(clone(goals), selId);
+    } catch (e) {
+      installGoalsAndReload(goals, revision);
+      return false;
+    }
+    return true;
+  }
+
   // What the inspector's shape depends on, per goal: whether a run is live,
   // and whether there is an artifact to review. Task-by-task progress is not
   // in here on purpose -- the feed draws that straight into the DOM, and
@@ -274,9 +329,8 @@
       // whether it has an artifact.
       var stale = readLocalGoals();
       if (stale && paneShape(stale) !== paneShape(remote)) {
-        installGoalsAndReload(mergeTrees(synced.goals, stale, remote,
-                                         deletedIdsOf(st)),
-                              st.revision);
+        installGoals(mergeTrees(synced.goals, stale, remote, deletedIdsOf(st)),
+                     st.revision);
       }
       return;
     }
@@ -290,12 +344,13 @@
     var merged = mergeTrees(synced.goals, local, remote, deletedIdsOf(st));
     if (same(merged, remote)) {
       writeSync(st.revision, remote);
-      if (!same(local, remote)) installGoalsAndReload(remote, st.revision);
+      if (!same(local, remote)) installGoals(remote, st.revision);
       return;
     }
     syncBusy = true;
     postImport(merged, st.revision).then(function (result) {
-      installGoalsAndReload(merged, result.revision);
+      syncBusy = false;
+      installGoals(merged, result.revision);
     }).catch(function () {
       syncBusy = false;
       lastObservedGoals = null;
@@ -306,10 +361,13 @@
   function refreshState() {
     // An import we started is a change this page already shows. Reconciling
     // against a half-applied revision is what turned a delete into a reload.
-    if (syncBusy) return;
-    if (refreshPending) return;
+    // Answers with the fetch when one starts, so a caller that has just
+    // changed something can wait for the state that follows it -- and with
+    // nothing when it does not.
+    if (syncBusy) return null;
+    if (refreshPending) return null;
     refreshPending = true;
-    fetch("/api/state", { cache: "no-store" })
+    return fetch("/api/state", { cache: "no-store" })
       .then(function (r) {
         if (!r.ok) throw new Error("state request failed (" + r.status + ")");
         return r.json();
@@ -688,6 +746,9 @@
       }),
       serverState.runs
     ]);
+    // Row status is not in the fingerprint -- the tree does not redraw for
+    // it -- so the builder's transitions are read before the early return.
+    trackTodoAlerts(st);
     if (fingerprint === stateFingerprint) return true;
     stateFingerprint = fingerprint;
     return true;
@@ -1072,14 +1133,42 @@
   // pathological one cannot lock the tab building rows.
   var PICK_LIMIT = 2000;
 
+  // The goal and every goal above it, as a set of ids. A chat linked on a
+  // goal is offered to that goal and the goals under it: a prompt tagged
+  // with chat_goals belongs in the picker for goal S when one of those
+  // goals is S or an ancestor of S -- never when it is a descendant.
+  function goalLine(goalId) {
+    var byId = {};
+    array(serverState.goals).forEach(function (g) {
+      if (g && typeof g.id === "string") byId[g.id] = g;
+    });
+    var line = {};
+    var at = goalId, hops = 0;
+    while (typeof at === "string" && at && !line[at] && hops++ < 64) {
+      line[at] = true;
+      at = byId[at] ? byId[at].parent_goal_id : null;
+    }
+    return line;
+  }
+
+  function promptOfferedTo(prompt, line) {
+    var scope = prompt && prompt.chat_goals;
+    if (!Array.isArray(scope)) return true;
+    for (var i = 0; i < scope.length; i++) {
+      if (line[scope[i]]) return true;
+    }
+    return false;
+  }
+
   function pickPrompt(goalId, trigger) {
     var goal = array(serverState.goals).filter(function (g) {
       return g && g.id === goalId;
     })[0];
     var linked = {};
     array(goal && goal.prompt_ids).forEach(function (id) { linked[id] = true; });
+    var line = goalLine(goalId);
     var pool = array(serverState.prompts).filter(function (prompt) {
-      return !linked[prompt.id];
+      return !linked[prompt.id] && promptOfferedTo(prompt, line);
     }).slice().reverse();
     return new Promise(function (resolve) {
       ensureDialogStyles();
@@ -1286,10 +1375,14 @@
       var node = event && event.target;
       while (node && node !== document) {
         var name = node.className ? String(node.className) : "";
-        if (name.indexOf("hc-chat-addbtn") >= 0) {
+        if (name.indexOf("hc-chat-addbtn") >= 0
+            || name.indexOf("hc-chat-linkbtn") >= 0) {
           if (event.preventDefault) event.preventDefault();
           if (event.stopPropagation) event.stopPropagation();
-          openChatPicker(node);
+          // The header's button links for the whole workspace; the one in
+          // a goal's pane links for that goal and the goals under it.
+          openChatPicker(node, name.indexOf("hc-chat-linkbtn") >= 0
+                                 ? null : selectedGoalId());
           return;
         }
         if (name.indexOf("hc-prompt-addbtn") >= 0) {
@@ -1303,8 +1396,35 @@
     }, true);
   }
 
-  function openChatPicker(button) {
+  // How one linked chat stands in relation to a picker opened for `goalId`
+  // (null: the header, i.e. the whole workspace). `on` is the link this
+  // picker can undo; `via` names a link made elsewhere that already covers
+  // this scope, which the picker reports and leaves alone.
+  function chatStanding(entries, goalId, line, titles) {
+    var on = false, via = "";
+    entries.forEach(function (entry) {
+      var scope = entry.goal_id || null;
+      if (scope === goalId) on = true;
+      else if (goalId && !scope) via = via || "linked for every goal";
+      else if (goalId && line[scope]) {
+        via = via || ("linked on " + (titles[scope] || scope));
+      } else if (!goalId && scope) {
+        via = via || "linked on " + (titles[scope] || scope);
+      }
+    });
+    return { on: on, via: via };
+  }
+
+  function openChatPicker(button, goalId) {
     if (document.querySelector(".hc-ask")) return;
+    goalId = typeof goalId === "string" && goalId ? goalId : null;
+    var goal = goalId ? array(serverState.goals).filter(function (g) {
+      return g && g.id === goalId;
+    })[0] : null;
+    if (goalId && !goal) {
+      button.textContent = "select a goal first";
+      return;
+    }
     fetch("/api/chats").then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok !== true) {
@@ -1312,17 +1432,28 @@
           return;
         }
         ensureDialogStyles();
+        var titles = {};
+        array(serverState.goals).forEach(function (g) {
+          if (g && typeof g.id === "string") titles[g.id] = str(g.title);
+        });
+        var line = goalId ? goalLine(goalId) : {};
         var overlay = document.createElement("div");
         overlay.className = "hc-ask";
         var box = document.createElement("div");
         box.className = "hc-ask-box hc-pick-box";
         var title = document.createElement("div");
         title.className = "hc-ask-title";
-        title.textContent = "Chats this workspace draws prompts from";
+        title.textContent = goalId
+          ? "Chats this goal draws prompts from"
+          : "Chats this workspace draws prompts from";
         var note = document.createElement("div");
         note.className = "hc-pick-count";
-        note.textContent = "A linked chat only adds its prompts to the "
-          + "picker and stays in sync; its goals are never read.";
+        note.textContent = (goalId
+          ? "Linked here, a chat offers its prompts to \u201c"
+            + (str(goal.title) || "Untitled") + "\u201d and the goals "
+            + "under it, not to the goals above. "
+          : "Linked here, a chat offers its prompts to every goal. ")
+          + "Its goals are never read; it stays in sync.";
         var list = document.createElement("div");
         list.className = "hc-pick-list";
         function close() {
@@ -1335,10 +1466,14 @@
         }
         function draw() {
           while (list.firstChild) list.removeChild(list.firstChild);
-          var shown = {};
+          var shown = {}, order = [];
           array(data.linked).forEach(function (chat) {
-            shown[chat.session_id] = { id: chat.session_id, label: chat.label,
-                                       project: "", on: true };
+            if (!shown[chat.session_id]) {
+              shown[chat.session_id] = { id: chat.session_id, label: chat.label,
+                                         project: "", entries: [] };
+              order.push(chat.session_id);
+            }
+            shown[chat.session_id].entries.push(chat);
           });
           array(data.available).forEach(function (chat) {
             if (shown[chat.session_id]) {
@@ -1347,9 +1482,10 @@
             }
             shown[chat.session_id] = { id: chat.session_id,
                                        label: str(chat.project) || chat.session_id.slice(0, 8),
-                                       project: str(chat.project), on: false };
+                                       project: str(chat.project), entries: [] };
+            order.push(chat.session_id);
           });
-          var rows = Object.keys(shown).map(function (id) { return shown[id]; });
+          var rows = order.map(function (id) { return shown[id]; });
           if (!rows.length) {
             var none = document.createElement("div");
             none.className = "hc-pick-none";
@@ -1358,37 +1494,45 @@
             return;
           }
           rows.forEach(function (chat) {
+            var standing = chatStanding(chat.entries, goalId, line, titles);
             var row = document.createElement("button");
             row.className = "hc-pick-row";
             var when = document.createElement("span");
             when.className = "hc-pick-when";
-            when.textContent = (chat.on ? "LINKED \u00b7 " : "")
-              + chat.id.slice(0, 8) + (chat.project ? " \u00b7 " + chat.project : "");
+            when.textContent = (standing.on ? "LINKED \u00b7 " : "")
+              + chat.id.slice(0, 8) + (chat.project ? " \u00b7 " + chat.project : "")
+              + (standing.via ? " \u00b7 " + standing.via : "");
             var text = document.createElement("span");
             text.className = "hc-pick-text";
             text.textContent = (chat.label || chat.id)
-              + (chat.on ? " \u2014 click to unlink" : " \u2014 click to link");
+              + (standing.on ? " \u2014 click to unlink"
+                 : (standing.via && !goalId
+                    ? " \u2014 click to link for every goal"
+                    : " \u2014 click to link"));
             row.appendChild(when);
             row.appendChild(text);
             row.onclick = function () {
               row.disabled = true;
-              post({ op: chat.on ? "unlink_chat" : "link_chat",
-                     session_id: chat.id, label: chat.label })
-                .then(function (result) {
-                  if (result && result.ok === true) {
-                    chat.on = !chat.on;
-                    if (chat.on) {
-                      data.linked.push({ session_id: chat.id, label: chat.label });
-                    } else {
-                      data.linked = data.linked.filter(function (c) {
-                        return c.session_id !== chat.id;
-                      });
-                    }
-                    refreshState();
+              var body = { op: standing.on ? "unlink_chat" : "link_chat",
+                           session_id: chat.id, label: chat.label };
+              if (goalId) body.goal_id = goalId;
+              post(body).then(function (result) {
+                if (result && result.ok === true) {
+                  if (standing.on) {
+                    data.linked = data.linked.filter(function (c) {
+                      return !(c.session_id === chat.id
+                               && (c.goal_id || null) === goalId);
+                    });
+                  } else {
+                    var entry = { session_id: chat.id, label: chat.label };
+                    if (goalId) entry.goal_id = goalId;
+                    data.linked.push(entry);
                   }
-                  row.disabled = false;
-                  draw();
-                });
+                  refreshState();
+                }
+                row.disabled = false;
+                draw();
+              });
             };
             list.appendChild(row);
           });
@@ -1421,9 +1565,10 @@
     // attach_prompt and detach_prompt -- answer in this scope, and the
     // prompts it offers are the ones this chat recorded, so a chat that
     // could not correct a wrong inference was the only thing missing.
+    bindPromptAdd();
+    renderChatLink();
     var slot = promptAddSlot();
     if (!slot) return false;
-    bindPromptAdd();
     if (slot.querySelector && slot.querySelector(".hc-prompt-addbtn")) {
       return true;
     }
@@ -1432,12 +1577,35 @@
     button.className = "hc-prompt-addbtn";
     button.type = "button";
     button.textContent = "+ add a prompt";
+    // This goal's own link: the chat is offered here and below, not above.
     var chats = document.createElement("button");
     chats.className = "hc-chat-addbtn";
     chats.type = "button";
+    chats.title = "Link a chat to this goal and the goals under it";
     chats.textContent = "+ add a chat";
     slot.appendChild(chats);
     slot.appendChild(button);
+    return true;
+  }
+
+  // The workspace-wide link lives in the header, beside the session chip:
+  // a chat linked there is offered to every goal. The slot is left by the
+  // header patch; only chat scope has one, which is the scope the op
+  // answers in. Attributes survive the artifact's re-render, listeners do
+  // not -- the click is delegated in bindPromptAdd.
+  function renderChatLink() {
+    var slot = document.querySelector(".hc-chats");
+    if (!slot) return false;
+    if (slot.querySelector && slot.querySelector(".hc-chat-linkbtn")) {
+      return true;
+    }
+    ensurePaneStyles();
+    var link = document.createElement("button");
+    link.className = "hc-chat-linkbtn";
+    link.type = "button";
+    link.title = "Link chats whose prompts every goal can draw from";
+    link.textContent = "+ chats";
+    slot.appendChild(link);
     return true;
   }
 
@@ -1768,6 +1936,979 @@
     return fresh.length;
   }
 
+  // --- what the builder just did to a TODO row ------------------------------
+  // A row handed to the builder comes back from the server as done, failed,
+  // or asking. The rail shows that for the goal on screen; this says it for
+  // every goal, once, in the top-right corner, and keeps the list behind a
+  // bell in the header. Chat scope only, like the notices above: a global
+  // vault has no builder behind it.
+  //
+  // Detection is a diff of row status between two accepted states, so it
+  // needs no new server field and fires exactly once per transition. The
+  // first state seen is the baseline: a page opening on a finished build
+  // does not report old news. The race a 1.5s poll can lose -- a row that
+  // goes from handed-off to done between two polls -- is covered for rows
+  // this page handed off itself: todoBuild and todoAnswer mark them out
+  // before the server is asked, so the next "done" still reads as a finish.
+
+  var ALERT_SETTINGS_KEY = "hc-alerts-settings-v1";
+  var ALERT_LOG_KEY = "hc-alerts-log-v1";
+  var ALERT_LOG_MAX = 50;
+  var ALERT_SECONDS_MIN = 1;
+  var ALERT_SECONDS_MAX = 120;
+  var ALERT_DEFAULTS = { banners: true, seconds: 6 };
+  var ALERT_OUT = { building: true, queued: true, asking: true };
+  var ALERT_SAYS = Object.create(null);
+  ALERT_SAYS.done = "TODO finished";
+  ALERT_SAYS.failed = "TODO failed";
+  ALERT_SAYS.asking = "Claude has a question";
+
+  var ALERT_CSS = [
+      ".hc-alert-stack{position:fixed;top:calc(var(--hc-top,37px) + 10px);right:16px;z-index:100002;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
+      ".hc-alert{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace;cursor:pointer}",
+      ".hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:var(--hc-ok,#1a7f37)}",
+      ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
+      ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
+      ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
+      ".hc-alert-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-alert-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
+      ".hc-alert-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}",
+      // The bell, in the header slot the template leaves for it.
+      ".hc-alerts{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-bell{position:relative;display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
+      ".hc-bell:hover,.hc-bell[data-hc-bell-open]{color:var(--ink,#111)}",
+      ".hc-bell-count{display:none;position:absolute;top:-4px;right:-6px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:9px/14px 'Source Code Pro',monospace;text-align:center}",
+      ".hc-bell[data-hc-unread] .hc-bell-count{display:block}",
+      // The center: a list under the bell, newest first, with the settings
+      // that govern the banners at its foot.
+      ".hc-alert-center{position:fixed;top:calc(var(--hc-top,37px) + 6px);right:16px;z-index:100003;width:360px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-top,37px) - 24px);display:flex;flex-direction:column;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-alert-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
+      ".hc-alert-center-act{font-weight:400;color:var(--mut,#575757);cursor:pointer;user-select:none;margin-left:10px}",
+      ".hc-alert-center-act:hover{color:var(--ink,#111)}",
+      ".hc-alert-center-list{flex:1 1 auto;overflow-y:auto;min-height:0}",
+      ".hc-alert-center-empty{padding:14px 11px;color:var(--mut,#575757)}",
+      ".hc-alert-row{position:relative;display:block;padding:8px 11px 8px 22px;border-bottom:1px solid var(--bd,#e3e3e3);cursor:pointer}",
+      ".hc-alert-row:hover{background:var(--hov,#f4f4f4)}",
+      ".hc-alert-row::before{content:'';position:absolute;left:9px;top:14px;width:6px;height:6px;border-radius:3px;background:transparent}",
+      ".hc-alert-row[data-hc-alert-unread]::before{background:var(--acc,#a5492a)}",
+      ".hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:var(--ink,#111)}",
+      ".hc-alert-row .hc-alert-title{font-weight:500;color:var(--mut,#575757)}",
+      ".hc-alert-when{float:right;color:var(--fnt,#9b9b9b);font-weight:400;margin-left:8px}",
+      // Banners and the center live on the body, outside .hc, where the
+      // artifact's theme variables do not reach; the theme is mirrored onto
+      // the root, so the dark palette is spelled out here in the launch
+      // skin's own greys.
+      "[data-hc-theme=\"dark\"] .hc-alert,[data-hc-theme=\"dark\"] .hc-alert-center{background:#161b22;color:#e6edf3;border-color:#30363d;box-shadow:0 10px 30px rgba(0,0,0,.5)}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:#3fb950}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:#f85149}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:#d29922}",
+      "[data-hc-theme=\"dark\"] .hc-alert-title,[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:#e6edf3}",
+      "[data-hc-theme=\"dark\"] .hc-alert-detail,[data-hc-theme=\"dark\"] .hc-alert-close,[data-hc-theme=\"dark\"] .hc-alert-center-act,[data-hc-theme=\"dark\"] .hc-alert-center-empty,[data-hc-theme=\"dark\"] .hc-alert-row .hc-alert-title{color:#8b949e}",
+      "[data-hc-theme=\"dark\"] .hc-alert-goal,[data-hc-theme=\"dark\"] .hc-alert-when{color:#6e7681}",
+      "[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row{border-color:#21262d}",
+      "[data-hc-theme=\"dark\"] .hc-alert-close:hover,[data-hc-theme=\"dark\"] .hc-alert-center-act:hover{color:#e6edf3;background:#21262d}",
+      "[data-hc-theme=\"dark\"] .hc-alert-row:hover{background:#1c2128}",
+      // The gear, in the header slot after the bell, and the settings panel
+      // it opens. What governs the banners lives here, not in the center:
+      // the center lists what happened; the gear is where the page is set.
+      ".hc-settings{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-gear{display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
+      ".hc-gear:hover,.hc-gear[data-hc-gear-open]{color:var(--ink,#111)}",
+      ".hc-settings-panel{position:fixed;top:calc(var(--hc-top,37px) + 6px);right:16px;z-index:100003;width:320px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-top,37px) - 24px);display:flex;flex-direction:column;overflow-y:auto;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-settings-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
+      ".hc-settings-act{font-weight:400;color:var(--mut,#575757);cursor:pointer;user-select:none;margin-left:10px}",
+      ".hc-settings-act:hover{color:var(--ink,#111)}",
+      ".hc-settings-sec{padding:8px 11px;display:flex;flex-direction:column;gap:6px;color:var(--mut,#575757)}",
+      ".hc-settings-sec+.hc-settings-sec{border-top:1px solid var(--bd,#e3e3e3)}",
+      ".hc-settings-sec-head{font-weight:600;color:var(--ink,#111)}",
+      ".hc-settings-sec label{display:flex;align-items:center;gap:8px;cursor:pointer}",
+      ".hc-settings-sec input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}",
+      // The hand-off, in the header slot before the bell: one click puts
+      // the whole workspace -- goals, notes, TODO states, git -- on the
+      // clipboard as markdown for a teammate's agent, and says so briefly.
+      ".hc-handoff{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-handoff-btn{position:relative;display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px;font:10px/1 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-handoff-btn:hover{color:var(--ink,#111)}",
+      ".hc-handoff-btn[data-hc-handoff=\"busy\"]{color:var(--mut,#575757);cursor:progress}",
+      ".hc-handoff-btn[data-hc-handoff=\"copied\"]{color:var(--ok,#2f7d4f)}",
+      ".hc-handoff-btn[data-hc-handoff=\"failed\"]{color:var(--acc,#a5492a)}",
+      ".hc-handoff-said{display:none;white-space:nowrap}",
+      ".hc-handoff-btn[data-hc-handoff] .hc-handoff-said{display:inline}"
+  ].join("");
+
+  var HANDOFF_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7\"></path><polyline points=\"16 6 12 2 8 6\"></polyline><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"15\"></line></svg>";
+  var HANDOFF_SAYS = { busy: "assembling…", copied: "copied ✓",
+                       failed: "copy failed" };
+  var HANDOFF_TITLE = "Hand off: copy the whole workspace as markdown for a teammate’s agent";
+
+  var BELL_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"></path><path d=\"M13.7 21a2 2 0 0 1-3.4 0\"></path></svg>";
+  var GEAR_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"></circle><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"></path></svg>";
+
+  var alertPrev = null;            // row id -> status, from the last state
+  var alertLog = null;             // newest first; loaded on first use
+  var alertSettingsCache = null;
+  var alertStackBox = null;
+  var alertCenterBox = null;
+  var settingsPanelBox = null;
+  var alertTimers = Object.create(null);
+  var alertBound = false;
+  var alertSeq = 0;
+
+  function ensureAlertStyles() {
+    if (document.getElementById("hc-alert-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-alert-style";
+    style.textContent = ALERT_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function alertSettings() {
+    if (alertSettingsCache) return alertSettingsCache;
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ALERT_SETTINGS_KEY) || "null"); }
+    catch (e) { saved = null; }
+    var out = { banners: ALERT_DEFAULTS.banners, seconds: ALERT_DEFAULTS.seconds };
+    if (saved && typeof saved === "object") {
+      if (typeof saved.banners === "boolean") out.banners = saved.banners;
+      if (typeof saved.seconds === "number" && isFinite(saved.seconds)) {
+        out.seconds = alertClampSeconds(saved.seconds);
+      }
+    }
+    alertSettingsCache = out;
+    return out;
+  }
+
+  function alertClampSeconds(value) {
+    var n = Number(value);
+    if (!isFinite(n)) return ALERT_DEFAULTS.seconds;
+    n = Math.round(n);
+    if (n < ALERT_SECONDS_MIN) return ALERT_SECONDS_MIN;
+    if (n > ALERT_SECONDS_MAX) return ALERT_SECONDS_MAX;
+    return n;
+  }
+
+  function setAlertSettings(patch) {
+    var cur = alertSettings();
+    var next = { banners: cur.banners, seconds: cur.seconds };
+    if (patch && typeof patch === "object") {
+      if (typeof patch.banners === "boolean") next.banners = patch.banners;
+      if (patch.seconds !== undefined && patch.seconds !== null && patch.seconds !== "") {
+        next.seconds = alertClampSeconds(patch.seconds);
+      }
+    }
+    alertSettingsCache = next;
+    try { localStorage.setItem(ALERT_SETTINGS_KEY, JSON.stringify(next)); } catch (e) {}
+    // A banner already up keeps the clock it was armed with; the next one
+    // gets the new one. Turning banners off takes the ones up down.
+    if (!next.banners) dropAllAlerts();
+    renderSettingsPanel();
+    return next;
+  }
+
+  function loadAlertLog() {
+    if (alertLog) return alertLog;
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ALERT_LOG_KEY) || "null"); }
+    catch (e) { saved = null; }
+    alertLog = array(saved).filter(function (row) {
+      return row && typeof row === "object" && typeof row.id === "string"
+        && ALERT_SAYS[str(row.kind)];
+    }).map(function (row) {
+      return { id: row.id, kind: str(row.kind), goalId: str(row.goalId),
+               goalTitle: str(row.goalTitle), rowId: str(row.rowId),
+               text: str(row.text), question: str(row.question),
+               at: (typeof row.at === "number") ? row.at : Date.parse(str(row.at)) || 0,
+               read: !!row.read };
+    }).slice(0, ALERT_LOG_MAX);
+    return alertLog;
+  }
+
+  function saveAlertLog() {
+    if (!alertLog) return;
+    if (alertLog.length > ALERT_LOG_MAX) alertLog.length = ALERT_LOG_MAX;
+    try { localStorage.setItem(ALERT_LOG_KEY, JSON.stringify(alertLog)); } catch (e) {}
+  }
+
+  function alertUnread() {
+    return loadAlertLog().filter(function (row) { return !row.read; }).length;
+  }
+
+  function alertById(id) {
+    var log = loadAlertLog();
+    for (var i = 0; i < log.length; i++) if (log[i].id === id) return log[i];
+    return null;
+  }
+
+  function markAlertRead(id, read) {
+    var row = alertById(id);
+    if (!row || row.read === !!read) return false;
+    row.read = !!read;
+    saveAlertLog();
+    renderBell();
+    renderAlertCenter();
+    return true;
+  }
+
+  function markAllAlertsRead() {
+    var changed = false;
+    loadAlertLog().forEach(function (row) {
+      if (!row.read) { row.read = true; changed = true; }
+    });
+    if (changed) { saveAlertLog(); renderBell(); renderAlertCenter(); }
+    return changed;
+  }
+
+  function clearAlertLog() {
+    alertLog = [];
+    saveAlertLog();
+    dropAllAlerts();
+    renderBell();
+    renderAlertCenter();
+  }
+
+  // The transitions worth a word, between two states of the goals.
+  function todoAlertsFrom(goals, prev) {
+    var next = Object.create(null), fresh = [];
+    array(goals).forEach(function (goal) {
+      if (!goal || typeof goal !== "object") return;
+      array(goal.todo_items).forEach(function (row) {
+        if (!row || typeof row.id !== "string") return;
+        var status = str(row.status);
+        next[row.id] = status;
+        if (!prev) return;
+        var was = str(prev[row.id]);
+        if (was === status) return;
+        var kind = "";
+        if (status === "done" && ALERT_OUT[was]) kind = "done";
+        else if (status === "failed") kind = "failed";
+        else if (status === "asking") kind = "asking";
+        if (!kind) return;
+        fresh.push({ kind: kind, goalId: str(goal.id),
+                     goalTitle: str(goal.title).trim() || "Untitled",
+                     rowId: row.id, text: str(row.text).trim(),
+                     question: str(row.question).trim() });
+      });
+    });
+    return { next: next, fresh: fresh };
+  }
+
+  // Rows this page just handed to the builder: remembered as out so a
+  // finish that lands before the next poll still counts as one.
+  function alertNoteOut(ids) {
+    if (!alertPrev) alertPrev = Object.create(null);
+    array(ids).forEach(function (id) {
+      if (typeof id === "string") alertPrev[id] = "building";
+    });
+  }
+
+  // A banner that was up when the page reloaded -- and a state change from
+  // the builder is exactly what makes reconcileState reload it -- comes back
+  // for the time it had left. Read, dismissed, or expired ones do not.
+  function resumeAlertBanners() {
+    if (!alertSettings().banners) return 0;
+    var window_ms = alertSettings().seconds * 1000;
+    var now = Date.now();
+    var back = loadAlertLog().filter(function (entry) {
+      return !entry.read && now - entry.at < window_ms && !alertBannerFor(entry.id);
+    }).slice(0, NOTICE_MAX).reverse();
+    back.forEach(function (entry) {
+      showAlertBanner(entry, window_ms - (now - entry.at));
+    });
+    return back.length;
+  }
+
+  function trackTodoAlerts(st) {
+    if (!st || serverState.scope !== "chat" || !Array.isArray(st.goals)) return [];
+    var diff = todoAlertsFrom(st.goals, alertPrev);
+    alertPrev = diff.next;
+    if (!diff.fresh.length) return [];
+    var log = loadAlertLog();
+    var made = diff.fresh.map(function (row) {
+      alertSeq += 1;
+      var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
+                    kind: row.kind, goalId: row.goalId, goalTitle: row.goalTitle,
+                    rowId: row.rowId, text: row.text, question: row.question,
+                    at: Date.now(), read: false };
+      log.unshift(entry);
+      return entry;
+    });
+    saveAlertLog();
+    if (alertSettings().banners) {
+      made.forEach(function (entry) { showAlertBanner(entry); });
+    }
+    renderBell();
+    renderAlertCenter();
+    return made;
+  }
+
+  // In the live document, not merely parented: the artifact unpacks its
+  // template by replacing the whole documentElement, so a node appended to
+  // the body before that keeps a parent and is on no screen.
+  function inLiveDocument(node) {
+    var at = node;
+    while (at && at.parentNode) at = at.parentNode;
+    return !!at && (at === document || at === document.documentElement);
+  }
+
+  function alertStack() {
+    return (alertStackBox && inLiveDocument(alertStackBox)) ? alertStackBox : null;
+  }
+
+  function alertHost() {
+    if (alertStack()) return alertStackBox;
+    ensureAlertStyles();
+    alertStackBox = document.createElement("div");
+    alertStackBox.className = "hc-alert-stack";
+    // On the body, outside the artifact's subtree, for the same reason the
+    // notices are: the artifact rebuilds its subtree on every state change.
+    (document.body || document.documentElement).appendChild(alertStackBox);
+    return alertStackBox;
+  }
+
+  function alertDetailOf(entry) {
+    if (entry.kind === "asking" && entry.question) return entry.question;
+    return entry.text || "(untitled TODO)";
+  }
+
+  function alertBannerNode(entry) {
+    var box = document.createElement("div");
+    box.className = "hc-alert";
+    box.setAttribute("data-hc-alert", entry.id);
+    box.setAttribute("data-hc-alert-kind", entry.kind);
+    box.setAttribute("role", "status");
+    var close = document.createElement("span");
+    close.className = "hc-alert-close";
+    close.textContent = "×";
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Dismiss");
+    box.appendChild(close);
+    var title = document.createElement("div");
+    title.className = "hc-alert-title";
+    title.textContent = ALERT_SAYS[entry.kind];
+    box.appendChild(title);
+    var detail = document.createElement("div");
+    detail.className = "hc-alert-detail";
+    detail.textContent = alertDetailOf(entry);
+    box.appendChild(detail);
+    var goal = document.createElement("div");
+    goal.className = "hc-alert-goal";
+    goal.textContent = entry.goalTitle;
+    box.appendChild(goal);
+    return box;
+  }
+
+  function showAlertBanner(entry, ms) {
+    var up = alertBannerFor(entry.id);
+    if (up) return up;
+    var host = alertHost();
+    bindAlerts();
+    var box = host.appendChild(alertBannerNode(entry));
+    // Three at once is what fits without covering the page it reports on.
+    while (host.children.length > NOTICE_MAX) dropAlertBanner(host.children[0]);
+    armAlert(box, ms);
+    return box;
+  }
+
+  function alertIdOf(box) {
+    return (box && box.getAttribute) ? str(box.getAttribute("data-hc-alert")) : "";
+  }
+
+  function holdAlert(box) {
+    var id = alertIdOf(box);
+    if (!id || !alertTimers[id]) return;
+    clearTimeout(alertTimers[id]);
+    delete alertTimers[id];
+  }
+
+  function armAlert(box, ms) {
+    var id = alertIdOf(box);
+    if (!id) return;
+    holdAlert(box);
+    var wait = (typeof ms === "number" && isFinite(ms) && ms > 0)
+      ? ms : alertSettings().seconds * 1000;
+    alertTimers[id] = setTimeout(function () { dropAlertBanner(box); }, wait);
+  }
+
+  function dropAlertBanner(box) {
+    if (!box) return;
+    holdAlert(box);
+    if (box.parentNode) box.parentNode.removeChild(box);
+  }
+
+  function dropAllAlerts() {
+    var host = alertStack();
+    if (!host) return;
+    while (host.children && host.children.length) dropAlertBanner(host.children[0]);
+  }
+
+  function alertBannerFor(id) {
+    var host = alertStack();
+    var kids = (host && host.children) || [];
+    for (var i = 0; i < kids.length; i++) if (alertIdOf(kids[i]) === id) return kids[i];
+    return null;
+  }
+
+  // Going to the row: the goal is selected in the tree, the rail opens on
+  // its TODOs, and the entry reads as seen.
+  function alertGo(id) {
+    var entry = alertById(id);
+    if (!entry) return false;
+    markAlertRead(id, true);
+    dropAlertBanner(alertBannerFor(id));
+    closeAlertCenter();
+    railTab = "todos";
+    if (entry.goalId) {
+      if (typeof window !== "undefined" && typeof window.__hcSelectGoal === "function") {
+        try { window.__hcSelectGoal(entry.goalId); } catch (e) {}
+      } else {
+        try {
+          var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+          saved.selId = entry.goalId;
+          localStorage.setItem(KEY, JSON.stringify(saved));
+        } catch (e) {}
+      }
+    }
+    renderTodoRail(true);
+    return true;
+  }
+
+  function closestByClass(node, name) {
+    while (node && node !== document) {
+      var own = node.className ? String(node.className).split(" ") : [];
+      if (own.indexOf(name) >= 0) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function bindAlerts() {
+    if (alertBound || !document.addEventListener) return;
+    alertBound = true;
+    document.addEventListener("click", function (event) {
+      var target = event && event.target;
+      if (!target) return;
+      var stop = function () {
+        if (event.preventDefault) event.preventDefault();
+        if (event.stopPropagation) event.stopPropagation();
+      };
+      // The bell toggles the center; the gear toggles the settings panel.
+      if (closestByClass(target, "hc-handoff-btn")) {
+        stop();
+        copyHandoff();
+        return;
+      }
+      // One of the two is up at a time.
+      if (closestByClass(target, "hc-bell")) {
+        stop();
+        closeSettingsPanel();
+        toggleAlertCenter();
+        return;
+      }
+      if (closestByClass(target, "hc-gear")) {
+        stop();
+        closeAlertCenter();
+        toggleSettingsPanel();
+        return;
+      }
+      var panel = closestByClass(target, "hc-settings-panel");
+      if (panel) {
+        if (closestByClass(target, "hc-settings-act")) {
+          stop();
+          closeSettingsPanel();
+        }
+        // Clicks on the controls fall through to the inputs.
+        return;
+      }
+      // A banner: × dismisses it as read; anywhere else goes to the row.
+      var banner = closestByClass(target, "hc-alert");
+      if (banner) {
+        stop();
+        var id = alertIdOf(banner);
+        if (closestByClass(target, "hc-alert-close")) {
+          markAlertRead(id, true);
+          dropAlertBanner(banner);
+        } else {
+          alertGo(id);
+        }
+        return;
+      }
+      var center = closestByClass(target, "hc-alert-center");
+      if (center) {
+        var act = closestByClass(target, "hc-alert-center-act");
+        if (act) {
+          stop();
+          var what = str(act.getAttribute("data-hc-alert-act"));
+          if (what === "read-all") markAllAlertsRead();
+          else if (what === "clear") clearAlertLog();
+          else if (what === "close") closeAlertCenter();
+          return;
+        }
+        var row = closestByClass(target, "hc-alert-row");
+        if (row) { stop(); alertGo(str(row.getAttribute("data-hc-alert"))); }
+        // Clicks on the settings controls fall through to the inputs.
+        return;
+      }
+      // Anywhere else closes whichever is up.
+      if (alertCenterShown()) closeAlertCenter();
+      if (settingsPanelShown()) closeSettingsPanel();
+    }, true);
+    document.addEventListener("change", function (event) {
+      var target = event && event.target;
+      var key = (target && target.getAttribute) ? str(target.getAttribute("data-hc-alert-set")) : "";
+      if (!key) return;
+      if (key === "banners") setAlertSettings({ banners: !!target.checked });
+      else if (key === "seconds") setAlertSettings({ seconds: target.value });
+    }, true);
+    // The clock stops while the pointer is on a banner, as for the notices.
+    document.addEventListener("mouseover", function (event) {
+      var box = closestByClass(event && event.target, "hc-alert");
+      if (box) holdAlert(box);
+    }, true);
+    document.addEventListener("mouseout", function (event) {
+      var box = closestByClass(event && event.target, "hc-alert");
+      if (!box) return;
+      var to = event.relatedTarget;
+      if (to && box.contains && box.contains(to)) return;
+      armAlert(box);
+    }, true);
+  }
+
+  // The bell sits in the header; its badge is the unread count.
+  var alertResumed = false;
+
+  function renderBell() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-alerts");
+    if (!slot) return false;
+    ensureAlertStyles();
+    bindAlerts();
+    // The slot exists only once the artifact has unpacked the patched
+    // template, which is the first moment a banner appended to the body
+    // stays on screen. Whatever was up before the reload comes back here.
+    if (!alertResumed) { alertResumed = true; resumeAlertBanners(); }
+    var bell = slot.querySelector(".hc-bell");
+    if (!bell) {
+      bell = document.createElement("span");
+      bell.className = "hc-bell";
+      bell.setAttribute("role", "button");
+      bell.setAttribute("aria-label", "Notifications");
+      bell.title = "Notifications";
+      bell.innerHTML = BELL_ICON;
+      var count = document.createElement("span");
+      count.className = "hc-bell-count";
+      bell.appendChild(count);
+      slot.appendChild(bell);
+    }
+    var unread = alertUnread();
+    var badge = bell.querySelector(".hc-bell-count");
+    var label = unread > 99 ? "99+" : String(unread);
+    var changed = false;
+    if (badge && badge.textContent !== label) { badge.textContent = label; changed = true; }
+    var has = bell.getAttribute("data-hc-unread") !== null;
+    if (unread && !has) { bell.setAttribute("data-hc-unread", String(unread)); changed = true; }
+    else if (unread && bell.getAttribute("data-hc-unread") !== String(unread)) {
+      bell.setAttribute("data-hc-unread", String(unread)); changed = true;
+    } else if (!unread && has) { bell.removeAttribute("data-hc-unread"); changed = true; }
+    var open = alertCenterShown();
+    if (open && bell.getAttribute("data-hc-bell-open") === null) {
+      bell.setAttribute("data-hc-bell-open", ""); changed = true;
+    } else if (!open && bell.getAttribute("data-hc-bell-open") !== null) {
+      bell.removeAttribute("data-hc-bell-open"); changed = true;
+    }
+    return changed;
+  }
+
+  function alertCenterShown() {
+    return !!(alertCenterBox && inLiveDocument(alertCenterBox));
+  }
+
+  function alertWhen(at) {
+    var d = new Date(at);
+    if (!isFinite(d.getTime())) return "";
+    var hh = d.getHours(), mm = d.getMinutes();
+    return (hh < 10 ? "0" : "") + hh + ":" + (mm < 10 ? "0" : "") + mm;
+  }
+
+  function alertCenterNode() {
+    var box = document.createElement("div");
+    box.className = "hc-alert-center";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Notifications");
+    var head = document.createElement("div");
+    head.className = "hc-alert-center-head";
+    var name = document.createElement("span");
+    name.textContent = "Notifications";
+    head.appendChild(name);
+    var acts = document.createElement("span");
+    [["read-all", "Mark all read"], ["clear", "Clear"], ["close", "×"]].forEach(function (spec) {
+      var a = document.createElement("span");
+      a.className = "hc-alert-center-act";
+      a.setAttribute("data-hc-alert-act", spec[0]);
+      a.setAttribute("role", "button");
+      a.textContent = spec[1];
+      acts.appendChild(a);
+    });
+    head.appendChild(acts);
+    box.appendChild(head);
+    var list = document.createElement("div");
+    list.className = "hc-alert-center-list";
+    box.appendChild(list);
+    return box;
+  }
+
+  function alertInputs(node, out) {
+    out = out || [];
+    var kids = (node && node.children) || [];
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].getAttribute && kids[i].getAttribute("data-hc-alert-set") !== null) {
+        out.push(kids[i]);
+      }
+      alertInputs(kids[i], out);
+    }
+    return out;
+  }
+
+  function renderAlertCenter() {
+    if (!alertCenterShown()) return false;
+    var box = alertCenterBox;
+    var list = box.querySelector(".hc-alert-center-list");
+    if (list) {
+      while (list.firstChild) list.removeChild(list.firstChild);
+      var log = loadAlertLog();
+      if (!log.length) {
+        var empty = document.createElement("div");
+        empty.className = "hc-alert-center-empty";
+        empty.textContent = "Nothing yet. Builds that finish, fail, or ask land here.";
+        list.appendChild(empty);
+      }
+      log.forEach(function (entry) {
+        var row = document.createElement("div");
+        row.className = "hc-alert-row";
+        row.setAttribute("data-hc-alert", entry.id);
+        row.setAttribute("data-hc-alert-kind", entry.kind);
+        if (!entry.read) row.setAttribute("data-hc-alert-unread", "");
+        var title = document.createElement("div");
+        title.className = "hc-alert-title";
+        var when = document.createElement("span");
+        when.className = "hc-alert-when";
+        when.textContent = alertWhen(entry.at);
+        title.appendChild(when);
+        var says = document.createElement("span");
+        says.textContent = ALERT_SAYS[entry.kind];
+        title.appendChild(says);
+        row.appendChild(title);
+        var detail = document.createElement("div");
+        detail.className = "hc-alert-detail";
+        detail.textContent = alertDetailOf(entry);
+        row.appendChild(detail);
+        var goal = document.createElement("div");
+        goal.className = "hc-alert-goal";
+        goal.textContent = entry.goalTitle;
+        row.appendChild(goal);
+        list.appendChild(row);
+      });
+    }
+    return true;
+  }
+
+  function openAlertCenter() {
+    if (alertCenterShown()) return alertCenterBox;
+    ensureAlertStyles();
+    bindAlerts();
+    alertCenterBox = alertCenterNode();
+    (document.body || document.documentElement).appendChild(alertCenterBox);
+    renderAlertCenter();
+    renderBell();
+    return alertCenterBox;
+  }
+
+  function closeAlertCenter() {
+    if (!alertCenterShown()) return false;
+    alertCenterBox.parentNode.removeChild(alertCenterBox);
+    renderBell();
+    return true;
+  }
+
+  function toggleAlertCenter() {
+    return alertCenterShown() ? closeAlertCenter() : !!openAlertCenter();
+  }
+
+  // --- the settings panel, behind the header gear -------------------------
+  // The controls that govern the banners live here. The center is a list of
+  // what the builder did; a setting is not an event, so it does not sit at
+  // the foot of that list. Sections are added here as the page grows
+  // settings; notifications is the first.
+
+  function settingsPanelShown() {
+    return !!(settingsPanelBox && inLiveDocument(settingsPanelBox));
+  }
+
+  function settingsPanelNode() {
+    var box = document.createElement("div");
+    box.className = "hc-settings-panel";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Settings");
+    var head = document.createElement("div");
+    head.className = "hc-settings-head";
+    var name = document.createElement("span");
+    name.textContent = "Settings";
+    head.appendChild(name);
+    var close = document.createElement("span");
+    close.className = "hc-settings-act";
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Close settings");
+    close.textContent = "×";
+    head.appendChild(close);
+    box.appendChild(head);
+    var text = function (words) {
+      var s = document.createElement("span");
+      s.textContent = words;
+      return s;
+    };
+    var sec = document.createElement("div");
+    sec.className = "hc-settings-sec";
+    sec.setAttribute("data-hc-settings-sec", "notifications");
+    var sh = document.createElement("div");
+    sh.className = "hc-settings-sec-head";
+    sh.textContent = "Notifications";
+    sec.appendChild(sh);
+    var l1 = document.createElement("label");
+    var c1 = document.createElement("input");
+    c1.type = "checkbox";
+    c1.setAttribute("type", "checkbox");
+    c1.setAttribute("data-hc-alert-set", "banners");
+    l1.appendChild(c1);
+    l1.appendChild(text("Show a banner when a TODO finishes, fails, or asks"));
+    sec.appendChild(l1);
+    var l2 = document.createElement("label");
+    l2.appendChild(text("Banner stays for"));
+    var n2 = document.createElement("input");
+    n2.type = "number";
+    n2.setAttribute("type", "number");
+    n2.setAttribute("min", String(ALERT_SECONDS_MIN));
+    n2.setAttribute("max", String(ALERT_SECONDS_MAX));
+    n2.setAttribute("step", "1");
+    n2.setAttribute("data-hc-alert-set", "seconds");
+    l2.appendChild(n2);
+    l2.appendChild(text("seconds"));
+    sec.appendChild(l2);
+    box.appendChild(sec);
+    return box;
+  }
+
+  function renderSettingsPanel() {
+    if (!settingsPanelShown()) return false;
+    var cur = alertSettings();
+    var inputs = alertInputs(settingsPanelBox);
+    for (var i = 0; i < inputs.length; i++) {
+      var key = str(inputs[i].getAttribute("data-hc-alert-set"));
+      if (key === "banners") inputs[i].checked = !!cur.banners;
+      else if (key === "seconds") inputs[i].value = String(cur.seconds);
+    }
+    return true;
+  }
+
+  function openSettingsPanel() {
+    if (settingsPanelShown()) return settingsPanelBox;
+    ensureAlertStyles();
+    bindAlerts();
+    settingsPanelBox = settingsPanelNode();
+    (document.body || document.documentElement).appendChild(settingsPanelBox);
+    renderSettingsPanel();
+    renderGear();
+    return settingsPanelBox;
+  }
+
+  function closeSettingsPanel() {
+    if (!settingsPanelShown()) return false;
+    settingsPanelBox.parentNode.removeChild(settingsPanelBox);
+    renderGear();
+    return true;
+  }
+
+  function toggleSettingsPanel() {
+    return settingsPanelShown() ? closeSettingsPanel() : !!openSettingsPanel();
+  }
+
+  // The gear sits in the header after the bell, in the slot the template
+  // leaves for it. Drawn by the same sweep as the bell, so a re-render of
+  // the header that drops the node gets it back within the tick.
+  function renderGear() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-settings");
+    if (!slot) return false;
+    ensureAlertStyles();
+    bindAlerts();
+    var gear = slot.querySelector(".hc-gear");
+    if (!gear) {
+      gear = document.createElement("span");
+      gear.className = "hc-gear";
+      gear.setAttribute("role", "button");
+      gear.setAttribute("aria-label", "Settings");
+      gear.title = "Settings";
+      gear.innerHTML = GEAR_ICON;
+      slot.appendChild(gear);
+    }
+    var open = settingsPanelShown();
+    var changed = false;
+    if (open && gear.getAttribute("data-hc-gear-open") === null) {
+      gear.setAttribute("data-hc-gear-open", ""); changed = true;
+    } else if (!open && gear.getAttribute("data-hc-gear-open") !== null) {
+      gear.removeAttribute("data-hc-gear-open"); changed = true;
+    }
+    return changed;
+  }
+
+  // --- the hand-off, before the bell ----------------------------------------
+  // One click asks the server for the workspace as markdown -- every goal's
+  // notes, prompt and TODO rows with their build states, the repository's
+  // git and GitHub metadata, under a prompt for a teammate's agent -- and
+  // puts it on the clipboard. The server keeps a copy as handoff.md beside
+  // the goals. A clipboard that refuses (no focus, no permission) gets the
+  // file downloaded instead, so the click always yields the document.
+
+  var handoffState = "";           // "", busy, copied, failed
+  var handoffTimer = null;
+  var handoffLast = null;          // the last document fetched, for tests
+
+  function handoffSay(state) {
+    handoffState = state;
+    clearTimeout(handoffTimer);
+    if (state === "copied" || state === "failed") {
+      handoffTimer = setTimeout(function () {
+        handoffState = "";
+        renderHandoff();
+      }, 1800);
+    }
+    renderHandoff();
+  }
+
+  function handoffDownload(text, name) {
+    try {
+      var blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = name || "hc-handoff.md";
+      a.style.display = "none";
+      (document.body || document.documentElement).appendChild(a);
+      a.click();
+      setTimeout(function () {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      }, 0);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function handoffToClipboard(text) {
+    // Answers with a promise of whether the text is on the clipboard. The
+    // async clipboard first; the hidden-textarea copy when that is missing
+    // or refuses. Safari wants the write inside the click: ClipboardItem
+    // with a promise of the text lets the write start in the gesture and
+    // the fetch resolve it, and is tried first when it exists.
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      (document.body || document.documentElement).appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy") === true; } catch (e) { ok = false; }
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+      return ok;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; },
+                                                      function () { return fallback(); });
+    }
+    return Promise.resolve(fallback());
+  }
+
+  function fetchHandoff() {
+    return fetch("/api/handoff", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!(body && body.ok && typeof body.markdown === "string")) {
+          throw new Error((body && body.error) || "no hand-off");
+        }
+        handoffLast = body;
+        return body;
+      });
+  }
+
+  function copyHandoff() {
+    if (handoffState === "busy") return null;
+    handoffSay("busy");
+    var onClipboard;
+    var fetched = fetchHandoff();
+    if (typeof ClipboardItem === "function" && navigator.clipboard
+        && navigator.clipboard.write) {
+      // Started inside the click, resolved by the fetch.
+      var textPromise = fetched.then(function (body) {
+        return new Blob([body.markdown], { type: "text/plain" });
+      });
+      var item;
+      try { item = new ClipboardItem({ "text/plain": textPromise }); } catch (e) { item = null; }
+      onClipboard = item
+        ? navigator.clipboard.write([item]).then(function () { return true; },
+                                                function () { return false; })
+        : Promise.resolve(false);
+      onClipboard = onClipboard.then(function (ok) {
+        return ok ? fetched.then(function () { return true; })
+                  : fetched.then(function (body) { return handoffToClipboard(body.markdown); });
+      });
+    } else {
+      onClipboard = fetched.then(function (body) { return handoffToClipboard(body.markdown); });
+    }
+    return onClipboard.then(function (ok) {
+      if (ok) { handoffSay("copied"); return true; }
+      var body = handoffLast;
+      if (body) handoffDownload(body.markdown, body.filename);
+      handoffSay("failed");
+      return false;
+    }, function () {
+      handoffSay("failed");
+      return false;
+    });
+  }
+
+  function renderHandoff() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-handoff");
+    if (!slot) return false;
+    ensureAlertStyles();
+    bindAlerts();
+    var btn = slot.querySelector(".hc-handoff-btn");
+    if (!btn) {
+      btn = document.createElement("span");
+      btn.className = "hc-handoff-btn";
+      btn.setAttribute("role", "button");
+      btn.setAttribute("aria-label", "Hand off to a teammate");
+      btn.title = HANDOFF_TITLE;
+      btn.innerHTML = HANDOFF_ICON;
+      var said = document.createElement("span");
+      said.className = "hc-handoff-said";
+      btn.appendChild(said);
+      slot.appendChild(btn);
+    }
+    var changed = false;
+    var was = btn.getAttribute("data-hc-handoff");
+    if (handoffState && was !== handoffState) {
+      btn.setAttribute("data-hc-handoff", handoffState); changed = true;
+    } else if (!handoffState && was !== null) {
+      btn.removeAttribute("data-hc-handoff"); changed = true;
+    }
+    var label = btn.querySelector(".hc-handoff-said");
+    var words = handoffState ? (HANDOFF_SAYS[handoffState] || "") : "";
+    if (label && label.textContent !== words) { label.textContent = words; changed = true; }
+    return changed;
+  }
+
   function watchRunFeed() {
     // The artifact reads its state at boot, so a live feed cannot travel
     // through it. Poll and draw straight into the pane instead.
@@ -2026,7 +3167,11 @@
       "[data-hc-launch] .hc-todos-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 10px 4px;outline:none;caret-color:var(--ink)}",
       "[data-hc-launch] .hc-todo{position:relative}",
       "[data-hc-launch] .hc-todo[data-hc-todo-head] .hc-todo-row{padding-right:24px}",
-      "[data-hc-launch] .hc-todo-cancel{position:absolute;right:4px;bottom:1px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:4px;font:500 13px/15px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
+      // The x sits on the head's first line, level with the state badge --
+      // the tile's top, not its bottom, which for an asking row is under the
+      // question thread. 5px = the row's 2px top padding + half the gap
+      // between a 22.8px line box and a 16px control.
+      "[data-hc-launch] .hc-todo-cancel{position:absolute;top:5px;right:4px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:4px;font:500 13px/15px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
       "[data-hc-launch] .hc-todo:hover .hc-todo-cancel{opacity:1}",
       "[data-hc-launch] .hc-todo-cancel:hover{color:var(--del);background:var(--hov)}",
       "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px;padding:2px 6px;border-radius:5px}",
@@ -2043,10 +3188,13 @@
       "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
       "[data-hc-launch] .hc-todo-ask{user-select:text}",
       "[data-hc-launch] .hc-todo-ask{margin:2px 0 8px;border-left:2px solid var(--hc-warn);padding:2px 0 2px 10px}",
-      "[data-hc-launch] .hc-todo-question{font:12px/1.5 'Source Code Pro',monospace;color:var(--dtxt);margin-bottom:5px}",
-      "[data-hc-launch] .hc-todo-reply{display:flex;align-items:center;gap:6px}",
+      // The question and the answer both wrap: a long question runs onto
+      // more lines, and the answer box grows as it is typed into, rather
+      // than either scrolling its text out of the rail's width.
+      "[data-hc-launch] .hc-todo-question{font:12px/1.5 'Source Code Pro',monospace;color:var(--dtxt);margin-bottom:5px;white-space:pre-wrap;overflow-wrap:anywhere}",
+      "[data-hc-launch] .hc-todo-reply{display:flex;align-items:baseline;gap:6px}",
       "[data-hc-launch] .hc-todo-arrow{color:var(--hc-warn);font-size:11px}",
-      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;margin:0;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);display:block;resize:none;overflow:hidden;height:auto;white-space:pre-wrap;overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-answer::placeholder{color:var(--fnt)}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
@@ -2063,7 +3211,30 @@
       "[data-hc-launch] .hc-rail-generate[data-hc-generating=\"on\"]{color:var(--fnt);cursor:default}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
       "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
-      "[data-hc-launch] .hc-rail-left>div:nth-child(2){padding:6px 6px 0}",
+      // The search bar sits directly under GOALS, with no rule between the
+      // two: the heading's line moves down to under the input. The rail's
+      // tree is the third child now, after the heading and the search.
+      "[data-hc-launch] .hc-rail-left>.hc-rail-head{border-bottom:0;padding-bottom:2px}",
+      "[data-hc-launch] .hc-search{flex:none;display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-search-input{display:block;width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:3px 13px 9px;font:11.5px 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
+      "[data-hc-launch] .hc-search-input::placeholder{color:var(--fnt)}",
+      "[data-hc-launch] .hc-search-input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}",
+      // While a query is typed the rail shows hits in place of the tree:
+      // the search box grows to the rail, and every sibling but the
+      // heading is hidden. The tree comes back when the box is cleared.
+      "[data-hc-launch] .hc-search-hits{display:none}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search{flex:1 1 auto;border-bottom:0}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-input{border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-hits{display:block;flex:1 1 auto;min-height:0;overflow-y:auto;padding:6px 6px 0}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching]>:not(.hc-rail-head):not(.hc-search){display:none!important}",
+      "[data-hc-launch] .hc-search-hit{padding:5px 8px;border-radius:2px;cursor:pointer}",
+      "[data-hc-launch] .hc-search-hit:hover,[data-hc-launch] .hc-search-hit[data-hc-hit-active]{background:var(--acchov)}",
+      "[data-hc-launch] .hc-search-hit-title{font-size:12.5px;line-height:1.4;color:var(--ink)}",
+      "[data-hc-launch] .hc-search-hit-trail{font:10px 'Source Code Pro',monospace;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "[data-hc-launch] .hc-search-hit-where{font:10.5px/1.5 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "[data-hc-launch] .hc-search-hit-where b{font-weight:600;color:var(--fnt)}",
+      "[data-hc-launch] .hc-search-none{padding:10px 8px;font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-left>div:nth-child(3){padding:6px 6px 0}",
       // A tree row is one line high, so its title has to be one line: a
       // wrapped one overlapped the row under it at this width.
       "[data-hc-launch] .hc-row{white-space:nowrap}",
@@ -2682,6 +3853,28 @@
                 : null;
   }
 
+  function todoLayState(items, incoming) {
+    // The build state the store holds for each row, laid over the rows on
+    // screen by id -- status and question only; text, depth and order are
+    // the reader's. Answers whether anything changed.
+    var held = Object.create(null);
+    array(incoming).forEach(function (row) {
+      if (row && typeof row.id === "string") held[row.id] = row;
+    });
+    var changed = false;
+    array(items).forEach(function (row) {
+      var was = row && held[row.id];
+      if (!was) return;
+      var status = str(was.status), question = str(was.question);
+      if (str(row.status) !== status || str(row.question) !== question) {
+        row.status = status;
+        row.question = question;
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
   function todoLoad(goal) {
     todoGoalId = goal.id;
     todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
@@ -2698,6 +3891,32 @@
     var minute = when.getMinutes();
     return "saved " + hour + ":" + (minute < 10 ? "0" : "") + minute
       + " " + suffix;
+  }
+
+  // The fields of a goal the rail owns: written here, read by the artifact
+  // only at boot. When the artifact saves its own tree, these come from the
+  // store -- the last thing the rail (or the server, through the sync)
+  // wrote -- never from the artifact's memory of them.
+  var RAIL_FIELDS = ["todo_items", "todos_md", "prompt_md"];
+
+  function railFields(goals, stored) {
+    var held = flattenTree(stored === undefined ? readLocalGoals() : stored).map;
+    var lay = function (nodes) {
+      return array(nodes).map(function (node) {
+        if (!node || typeof node.id !== "string") return node;
+        var was = held[node.id];
+        var out = {};
+        Object.keys(node).forEach(function (key) { out[key] = node[key]; });
+        if (was) {
+          RAIL_FIELDS.forEach(function (key) {
+            if (key in was.value) out[key] = was.value[key];
+          });
+        }
+        if (Array.isArray(node.children)) out.children = lay(node.children);
+        return out;
+      });
+    };
+    return lay(goals);
   }
 
   function writeGoalsLocal(goals) {
@@ -2760,14 +3979,29 @@
     var where = todoSelection();
     if (!todoItems) return;
     if (!where) {
+      // Cmd+Enter is the build wherever the caret is -- and after a pick
+      // from the gutter it is in no row at all. Once: not once to land the
+      // caret and once more to build.
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        todoBuild();
+        return;
+      }
       // The caret is in the host but outside every row's text (between
       // rows, beside a gutter). Nothing may be typed there: put it at the
-      // end of the last row and take the key from the browser.
+      // end of the last row still being written -- not a row out with the
+      // builder or done, which sit below -- and take the key from the
+      // browser.
       if ((event.key.length === 1 && !event.metaKey && !event.ctrlKey)
           || event.key === "Backspace" || event.key === "Delete"
           || event.key === "Enter") {
         event.preventDefault();
-        todoFocusAt = { index: todoItems.length - 1, caret: null };
+        var last = todoItems.length - 1;
+        for (var k = todoItems.length - 1; k >= 0; k--) {
+          if (!todoItems[k].status) { last = k; break; }
+        }
+        todoFocusAt = { index: last, caret: null };
         renderTodoRail(true);
       }
       return;
@@ -2800,13 +4034,20 @@
       return;
     } else if (mod && event.key === "/") {
       todoTogglePick(todoItems[index].id);
-      handled = true;
+      // The caret stays on the row it picked, so the next key -- Cmd+Enter
+      // -- still finds the list.
+      todoFocusAt = { index: index, caret: caret };
       renderTodoRail(true);
       event.preventDefault();
+      event.stopPropagation();
       return;
     } else if (mod && event.key === "Enter") {
+      // The build draws the list itself, caret on the fresh empty row; a
+      // second redraw here would take that caret away again.
+      event.preventDefault();
+      event.stopPropagation();
       todoBuild();
-      handled = true;
+      return;
     } else if (mod && (event.key === "Backspace" || event.key === "Delete")) {
       handled = todoApply(todoRemove(todoItems, index));
     } else if (mod || event.altKey) {
@@ -2923,6 +4164,9 @@
   // row of the family, or from its answer box, is the same act.
 
   var TODO_OUT = { queued: true, building: true, asking: true, failed: true };
+  // Out states a child under an out head does not badge: the head's badge
+  // already says the family is with the builder.
+  var TODO_CHILD_QUIET = { queued: true, building: true };
 
   function todoOut(row) {
     return !!(row && TODO_OUT[str(row.status)]);
@@ -2973,12 +4217,12 @@
     todoItems = todoSectioned(todoItems);
     todoFocusAt = { index: todoIndexOfId(headId), caret: null };
     var goalId = todoGoalId;
+    todoHold();
     post({ op: "cancel_todos", goal_id: goalId, ids: ids }).then(function (res) {
       if ((!res || !res.ok) && todoGoalId === goalId) {
         todoBuildError = (res && res.error) || "the build could not be cancelled";
       }
-      refreshState();
-      renderTodoRail(true);
+      todoSettle();
     });
     return true;
   }
@@ -2987,6 +4231,9 @@
     var at = todoIndexOfId(id);
     var row = todoItems && todoItems[at];
     if (!row || (row.status && row.status !== "failed")) return;
+    // A row with nothing on it is nothing to build: the gutter of the empty
+    // row the list keeps for typing into does not pick.
+    if (!str(row.text).trim()) return;
     var on = !todoPicked[id];
     // A parent stands for the rows under it: picking it picks its children,
     // and unpicking releases them. Rows already building keep their state.
@@ -3017,9 +4264,99 @@
     }).map(function (row) { return row.id; });
   }
 
+  function todoTypingTarget(node) {
+    // Whether a key aimed at this node is typing: a field, or an editing
+    // host. The list itself is one, and has its own handler.
+    var tag = (node && node.tagName) ? String(node.tagName).toUpperCase() : "";
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+      || !!(node && node.isContentEditable);
+  }
+
+  function todoSole(items) {
+    // The rows to build when nothing is picked and there is only one thing
+    // to pick: the list's one unsent family (a row, or a row and what is
+    // nested under it). Rows with no text are nothing to build and do not
+    // count; two unsent families are a choice, and nothing is chosen.
+    var rows = array(items), live = [];
+    rows.forEach(function (row, i) {
+      if (str(row.text).trim() && (!row.status || row.status === "failed")) live.push(i);
+    });
+    if (!live.length) return [];
+    var family = todoFamily(rows, live[0]);
+    return live.every(function (i) { return family.indexOf(i) >= 0; }) ? live : [];
+  }
+
+  function todoBlankAfter(items, sent) {
+    // The rows with a fresh empty row at the foot of the active band -- the
+    // place the next TODO gets typed once `sent` have left for the build --
+    // or null when an empty row is already there to type into.
+    var rows = array(items), bands = todoBandOf(rows);
+    var end = 0, blank = false;
+    rows.forEach(function (row, i) {
+      if (bands[i] !== 0) return;
+      end = i + 1;
+      if (sent.indexOf(row.id) < 0 && !str(row.text).trim()) blank = true;
+    });
+    if (blank) return null;
+    var fresh = todoRow("", 0);
+    var out = rows.slice();
+    out.splice(end, 0, fresh);
+    return { items: out, id: fresh.id };
+  }
+
+  // --- holding the rail's own word until the server's arrives --------------
+  //
+  // A row just handed off (answered, taken back) shows its new state at
+  // once, while the store still says what it said before -- and the sweep
+  // reads the store. Until a state fetched AFTER the op has landed, the
+  // store is not laid back over the rail; a bound on the wait keeps a lost
+  // reply from holding it forever.
+
+  var todoHeld = false, todoHoldSeq = 0, todoHoldTimer = null;
+
+  function todoHold() {
+    todoHeld = true;
+    todoHoldSeq += 1;
+    if (todoHoldTimer) clearTimeout(todoHoldTimer);
+    todoHoldTimer = setTimeout(function () {
+      todoHoldTimer = null;
+      todoHeld = false;
+      renderTodoRail(true);
+    }, 6000);
+  }
+
+  function todoSettle() {
+    // A refresh that starts after now; the hold lifts when it has landed.
+    var mine = todoHoldSeq, tries = 0;
+    var done = function () {
+      if (mine === todoHoldSeq) {
+        todoHeld = false;
+        if (todoHoldTimer) { clearTimeout(todoHoldTimer); todoHoldTimer = null; }
+      }
+      renderTodoRail(true);
+    };
+    var tick = function () {
+      var going = refreshState();
+      if (going) going.then(done, done);
+      else if (++tries < 40) setTimeout(tick, 100);
+      else done();
+    };
+    tick();
+  }
+
   function todoBuild() {
+    if (todoBuilding || !todoGoalId || !todoItems) return;
     var ids = todoPickedIds();
-    if (!ids.length || todoBuilding || !todoGoalId) return;
+    if (!ids.length) {
+      // Nothing picked and one thing to pick: that is the build.
+      todoSole(todoItems).forEach(function (i) { todoPicked[todoItems[i].id] = true; });
+      ids = todoPickedIds();
+    }
+    if (!ids.length) return;
+    // What comes next is typed into a fresh row, not into one just sent:
+    // the row is there before the reader has to ask for it with Enter.
+    var blank = todoBlankAfter(todoItems, ids);
+    if (blank) todoItems = blank.items;
     todoSaveNow();
     todoBuilding = true;
     todoBuildError = "";
@@ -3028,9 +4365,19 @@
     todoItems.forEach(function (row) {
       if (todoPicked[row.id]) { row.status = "building"; row.question = ""; }
     });
+    alertNoteOut(ids);
     todoPicked = {};
     // The rows just handed off drop into the middle band right away.
     todoItems = todoSectioned(todoItems);
+    // And the caret lands on the empty active row, ready for the next.
+    var at = -1;
+    todoItems.some(function (row, i) {
+      if (!row.status && !str(row.text).trim()) { at = i; return true; }
+      return false;
+    });
+    if (at >= 0) todoFocusAt = { index: at, caret: 0 };
+    // Held before the redraw: the redraw is where the store would be read.
+    todoHold();
     renderTodoRail(true);
     var goalId = todoGoalId;
     post({ op: "build_todos", goal_id: goalId, ids: ids }).then(function (res) {
@@ -3052,8 +4399,7 @@
           todoItems = todoSectioned(todoItems);
         }
       }
-      refreshState();
-      renderTodoRail(true);
+      todoSettle();
     });
   }
 
@@ -3062,6 +4408,8 @@
     var goalId = todoGoalId;
     var row = todoItems && todoItems[todoIndexOfId(id)];
     if (row) { row.status = "building"; row.question = ""; }
+    alertNoteOut([id]);
+    todoHold();
     renderTodoRail(true);
     post({ op: "answer_todo", goal_id: goalId, id: id, answer: text })
       .then(function (res) {
@@ -3072,8 +4420,7 @@
         if ((!res || !res.ok) && todoGoalId === goalId) {
           todoBuildError = (res && res.error) || "the answer could not be sent";
         }
-        refreshState();
-        renderTodoRail(true);
+        todoSettle();
       });
   }
 
@@ -3203,7 +4550,7 @@
       if (node === todoHost()) { todoKey(event); return; }
       if (node && node.getAttribute
           && node.getAttribute("data-hc-todo-answer") !== null) {
-        if (event.key === "Enter") {
+        if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           todoAnswer(node.getAttribute("data-hc-todo-answer"), node.value);
         } else if (event.key === "Escape") {
@@ -3215,6 +4562,17 @@
             renderTodoRail(true);
           }
         }
+        return;
+      }
+      // Cmd+Enter from anywhere that is not a place to type -- the Build
+      // control just clicked, Select all, the tree -- is the build, the
+      // same as from the list. Once: the reader should not have to click
+      // back into the list first.
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter"
+          && railTab === "todos" && todoItems && !todoTypingTarget(node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        todoBuild();
       }
     }, true);
     document.addEventListener("beforeinput", function (event) {
@@ -3226,7 +4584,15 @@
       }
     }, true);
     document.addEventListener("input", function (event) {
-      if (event.target !== todoHost()) return;
+      var typed = event.target;
+      if (typed && typed.getAttribute
+          && typed.getAttribute("data-hc-todo-answer") !== null) {
+        // The answer box grows with its text: one line until it needs two.
+        typed.style.height = "auto";
+        typed.style.height = typed.scrollHeight + "px";
+        return;
+      }
+      if (typed !== todoHost()) return;
       var sel = window.getSelection();
       var line = sel && todoLineOf(sel.focusNode);
       if (line) todoSyncLine(line);
@@ -3348,7 +4714,12 @@
     text.setAttribute("data-hc-todo-line", row.id);
     text.textContent = row.text;
     line.appendChild(text);
+    // The badge names the family's state on its head. A child under an out
+    // head that is merely along for the build -- building, queued -- says
+    // nothing the head has not; one that needs the user, or failed, still
+    // does. Done rows are their own band and always say so.
     var state = TODO_STATUS[row.status];
+    if (state && !head && TODO_CHILD_QUIET[row.status]) state = null;
     if (state) {
       var badge = document.createElement("span");
       badge.className = "hc-todo-status";
@@ -3373,9 +4744,13 @@
       arrow.className = "hc-todo-arrow";
       arrow.textContent = "↳";
       reply.appendChild(arrow);
-      var answer = document.createElement("input");
+      // A textarea, not an input: an answer longer than the rail is wide
+      // wraps onto another line and the box grows with it, where an input
+      // would scroll the start of it out of sight. Enter still sends.
+      var answer = document.createElement("textarea");
       answer.className = "hc-todo-answer";
-      answer.type = "text";
+      answer.rows = 1;
+      answer.setAttribute("rows", "1");
       answer.placeholder = "answer, then enter";
       answer.spellcheck = false;
       answer.setAttribute("data-hc-todo-answer", row.id);
@@ -3398,22 +4773,41 @@
     if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
+    if (!goal || goal.id !== todoGoalId) {
+      // Whatever the reader typed into the goal the rail is leaving is
+      // written before the rail forgets which goal that was: a save still
+      // in its window would otherwise fire with nothing to write into.
+      todoSaveNow();
+    }
     if (!goal) {
       todoGoalId = null;
       todoItems = null;
     } else if (goal.id !== todoGoalId) {
       todoLoad(goal);
       force = true;
-    } else if (!todoTyping() && !todoSaveTimer) {
+    } else if (!todoHeld) {
       // The server's build state -- and inference's additions -- reach the
-      // rail here, but only ever while the reader is not mid-edit. An empty
-      // list is drawn as one empty row to type into; that row is the rail's
-      // own and is never "incoming".
+      // rail here, but never while the rail is ahead of the store on an op
+      // of its own. An empty list is drawn as one empty row to type into;
+      // that row is the rail's own and is never "incoming".
       var blank = todoItems && todoItems.length === 1 && !todoItems[0].text;
       var incoming = goal.items.length ? todoSectioned(goal.items) : null;
-      if (incoming ? !same(incoming, todoItems) : !blank) {
-        todoItems = incoming || [todoRow("", 0)];
-        force = true;
+      if (!todoTyping() && !todoSaveTimer) {
+        if (incoming ? !same(incoming, todoItems) : !blank) {
+          todoItems = incoming || [todoRow("", 0)];
+          force = true;
+        }
+      } else if (incoming && todoItems && document.activeElement === todoHost()) {
+        // Mid-edit, the rows are the reader's: nothing replaces the one
+        // they are typing in. The server's word on a row's STATE still
+        // lands, though -- laid over the rows by id, text untouched -- or a
+        // build finishing while they type the next TODO would never show.
+        // The caret is put back where it was, by row id, since the rows
+        // may re-band.
+        if (todoLayState(todoItems, incoming)) {
+          todoItems = todoSectioned(todoItems);
+          force = true;
+        }
       }
     }
 
@@ -3493,6 +4887,24 @@
     if (!force && drawn === JSON.stringify(shape) && list.children.length) {
       return true;
     }
+    // A redraw replaces every row on screen. It must not take the caret
+    // with it: where the reader was typing is kept by row id (the rows may
+    // have re-banded under them) and put back once the rows are drawn. An
+    // answer half-typed into a question's box is kept the same way.
+    var active = document.activeElement;
+    if (!todoFocusAt && active === list) {
+      var kept = todoSelection();
+      if (kept && todoItems[kept.b]) {
+        todoFocusAt = { index: kept.b, caret: kept.collapsed ? kept.bCaret : null };
+      }
+    }
+    var reply = null;
+    if (active && active.getAttribute
+        && active.getAttribute("data-hc-todo-answer") !== null) {
+      reply = { id: active.getAttribute("data-hc-todo-answer"),
+                value: str(active.value),
+                at: typeof active.selectionStart === "number" ? active.selectionStart : null };
+    }
     list.setAttribute("data-hc-todo-shape", JSON.stringify(shape));
     list.setAttribute("contenteditable", TODO_EDITABLE);
     list.setAttribute("spellcheck", "false");
@@ -3520,6 +4932,20 @@
         var caret = (focus.caret === null || focus.caret === undefined)
           ? todoItems[at].text.length : focus.caret;
         todoPlaceCaret(line, caret);
+      }
+    }
+    if (reply) {
+      var box = list.querySelector("[data-hc-todo-answer=\"" + reply.id + "\"]");
+      if (box) {
+        box.value = reply.value;
+        try {
+          box.focus();
+          if (reply.at !== null && box.setSelectionRange) {
+            box.setSelectionRange(reply.at, reply.at);
+          }
+          box.style.height = "auto";
+          box.style.height = box.scrollHeight + "px";
+        } catch (e) {}
       }
     }
     return true;
@@ -4020,6 +5446,322 @@
     return true;
   }
 
+  // --- finding a goal: the search bar under GOALS ---------------------------
+  // The tree is where goals live, and the reader forgets which branch a
+  // thing went under. The box directly under GOALS takes a few words and
+  // ranks every goal by them -- its title first, then its notes, its TODO
+  // rows and its prompt -- forgiving a slip or two of spelling. Hits stand
+  // in for the tree while there is a query; picking one opens its branch,
+  // selects it, and clears the box.
+
+  var SEARCH_FIELDS = ["title", "notes", "todos", "prompt"];
+  var SEARCH_WEIGHT = { title: 3, notes: 1, todos: 1, prompt: 1 };
+  var SEARCH_LABEL = { title: "", notes: "notes:", todos: "TODO:",
+                       prompt: "prompt:" };
+
+  function searchWords(text) {
+    return str(text).toLowerCase().split(/[^0-9a-zÀ-ɏ_#]+/)
+      .filter(Boolean);
+  }
+
+  // Optimal string alignment distance: Levenshtein plus a swapped pair,
+  // abandoned the moment no row can come in under the cap.
+  function editDistance(a, b, cap) {
+    a = str(a); b = str(b);
+    cap = cap >= 0 ? cap : Math.max(a.length, b.length);
+    if (Math.abs(a.length - b.length) > cap) return cap + 1;
+    var prev2 = null, prev = [], cur, i, j;
+    for (j = 0; j <= b.length; j += 1) prev[j] = j;
+    for (i = 1; i <= a.length; i += 1) {
+      cur = [i];
+      var best = i;
+      for (j = 1; j <= b.length; j += 1) {
+        var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+        var v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        if (prev2 && i > 1 && j > 1 && a.charAt(i - 1) === b.charAt(j - 2)
+            && a.charAt(i - 2) === b.charAt(j - 1)) {
+          v = Math.min(v, prev2[j - 2] + 1);
+        }
+        cur[j] = v;
+        if (v < best) best = v;
+      }
+      if (best > cap) return cap + 1;
+      prev2 = prev; prev = cur;
+    }
+    return prev[b.length];
+  }
+
+  // How well one typed word matches one word of a field, 0..1. Exact,
+  // then a prefix (the reader is still typing), then inside the word; then
+  // a slip or two of spelling, scaled to how much was typed -- one from
+  // four letters, two from seven, none under four ("the" is one edit from
+  // most of English). A slip is measured against the whole word and
+  // against its prefix, so a typo in a half-typed word still finds it.
+  function wordScore(token, word) {
+    token = str(token); word = str(word);
+    if (!token || !word) return 0;
+    if (word === token) return 1;
+    var at = word.indexOf(token);
+    if (at === 0) return 0.9;
+    if (at > 0) return 0.7;
+    var slips = token.length >= 7 ? 2 : token.length >= 4 ? 1 : 0;
+    if (!slips) return 0;
+    var d = Math.min(editDistance(token, word, slips),
+                     editDistance(token, word.slice(0, token.length), slips));
+    if (d > slips) return 0;
+    return 0.6 * (1 - d / token.length);
+  }
+
+  // Every field the reader may remember a goal by. TODOs are the rows;
+  // the prompt is the one written for the goal and the ones linked to it.
+  function searchFields(goal, promptsById) {
+    var todos = array(goal.todo_items).map(function (row) {
+      return str(row && row.text);
+    }).filter(Boolean);
+    var said = array(goal.prompt_ids).map(function (id) {
+      var p = promptsById[id];
+      return p ? str(p.text) : "";
+    }).filter(Boolean);
+    return {
+      title: str(goal.title),
+      notes: [str(goal.notes), str(goal.description)].filter(Boolean).join("\n"),
+      todos: todos.length ? todos.join("\n") : str(goal.todos_md),
+      prompt: [str(goal.prompt_md)].concat(said).filter(Boolean).join("\n")
+    };
+  }
+
+  // The line of a field the matched word is on, cut to fit a rail, with
+  // the word kept inside what is shown.
+  function searchExcerpt(text, word) {
+    var lines = str(text).split("\n"), line = "";
+    for (var i = 0; i < lines.length; i += 1) {
+      if (lines[i].toLowerCase().indexOf(word) >= 0) { line = lines[i]; break; }
+    }
+    line = line.replace(/^\s*(?:[-*+]|\d+\.)?\s*(?:\[[^\]]*\]\s*)?#*\s*/, "")
+      .replace(/\s+/g, " ").trim();
+    if (!line) return "";
+    var at = line.toLowerCase().indexOf(word);
+    if (at > 28) line = "…" + line.slice(at - 20);
+    if (line.length > 90) line = line.slice(0, 88) + "…";
+    return line;
+  }
+
+  // Every goal in the tree against the query, best first. A goal scores
+  // only if every word of the query lands somewhere in it; its score is the
+  // sum of each word's best field. Equal scores fall to whichever was
+  // edited last, then to tree order.
+  function searchGoals(goals, prompts, query) {
+    var tokens = searchWords(query);
+    if (!tokens.length) return [];
+    var byId = Object.create(null), byParent = Object.create(null);
+    array(prompts).forEach(function (p) {
+      if (p && typeof p.id === "string") byId[p.id] = p;
+    });
+    array(goals).forEach(function (g) {
+      if (!g || typeof g.id !== "string" || g.status === "abandoned") return;
+      var parent = g.parent_goal_id || null;
+      (byParent[parent] = byParent[parent] || []).push(g);
+    });
+    var out = [], order = 0;
+    (function walk(list, trail) {
+      array(list).forEach(function (g) {
+        var fields = searchFields(g, byId), words = {};
+        SEARCH_FIELDS.forEach(function (f) { words[f] = searchWords(fields[f]); });
+        var total = 0, best = null, every = true;
+        tokens.forEach(function (token) {
+          var top = 0, topField = null, topWord = "";
+          SEARCH_FIELDS.forEach(function (f) {
+            words[f].forEach(function (w) {
+              var s = wordScore(token, w) * SEARCH_WEIGHT[f];
+              if (s > top) { top = s; topField = f; topWord = w; }
+            });
+          });
+          if (!top) { every = false; return; }
+          total += top;
+          if (!best || top > best.score) {
+            best = { score: top, field: topField, word: topWord };
+          }
+        });
+        if (every) {
+          out.push({
+            id: g.id, title: str(g.title) || "Untitled",
+            trail: trail.map(function (t) { return str(t.title) || "Untitled"; }),
+            score: Math.round(total * 1000) / 1000,
+            updated: Date.parse(str(g.updated_at)) || 0,
+            where: best.field,
+            excerpt: best.field === "title"
+              ? "" : searchExcerpt(fields[best.field], best.word),
+            order: order
+          });
+          order += 1;
+        }
+        walk(byParent[g.id], trail.concat([g]));
+      });
+    })(byParent[null], []);
+    out.sort(function (a, b) {
+      return (b.score - a.score) || (b.updated - a.updated) || (a.order - b.order);
+    });
+    return out.map(function (hit) { delete hit.order; return hit; });
+  }
+
+  var searchDrawn = null, searchActive = 0, searchBound = false;
+
+  function searchBox() { return document.querySelector(".hc-search"); }
+  function searchInputEl() {
+    var box = searchBox();
+    return box ? box.querySelector(".hc-search-input") : null;
+  }
+  function searchQuery() {
+    var input = searchInputEl();
+    return input ? str(input.value).trim() : "";
+  }
+  function searchHitNodes() {
+    var box = searchBox();
+    var list = box && box.querySelector(".hc-search-hits");
+    // children is a live collection in a browser and an array in the
+    // harness; slice reads both.
+    return list ? Array.prototype.slice.call(list.children || []).filter(
+      function (n) { return n && n.className === "hc-search-hit"; }) : [];
+  }
+  function markSearchActive(hits) {
+    hits.forEach(function (n, i) {
+      if (i === searchActive) n.setAttribute("data-hc-hit-active", "");
+      else n.removeAttribute("data-hc-hit-active");
+    });
+  }
+
+  function clearSearch(keepFocus) {
+    var input = searchInputEl();
+    if (input) input.value = "";
+    searchActive = 0;
+    renderSearch();
+    if (input && !keepFocus && typeof input.blur === "function") input.blur();
+  }
+
+  // Picking a hit: open the branch it is on and select it (the artifact's
+  // own reveal, patched in beside its select), then put the tree back.
+  function searchPick(id) {
+    if (!id) return false;
+    var went = false;
+    if (typeof window.__hcRevealGoal === "function") {
+      try { went = !!window.__hcRevealGoal(id); } catch (e) { went = false; }
+    }
+    if (!went && typeof window.__hcSelectGoal === "function") {
+      try { window.__hcSelectGoal(id); went = true; } catch (e) { went = false; }
+    }
+    clearSearch();
+    return went;
+  }
+
+  function bindSearch() {
+    if (searchBound || !document.addEventListener) return;
+    searchBound = true;
+    var stop = function (event) {
+      if (event.preventDefault) event.preventDefault();
+      if (event.stopPropagation) event.stopPropagation();
+    };
+    document.addEventListener("input", function (event) {
+      if (!closestByClass(event && event.target, "hc-search-input")) return;
+      searchActive = 0;
+      renderSearch();
+    }, true);
+    // Up and down walk the hits, Enter takes the one that is lit, Escape
+    // puts the tree back. Captured, so the artifact's own tree keys (which
+    // already stand aside for typing) never see them.
+    document.addEventListener("keydown", function (event) {
+      if (!closestByClass(event && event.target, "hc-search-input")) return;
+      var key = str(event.key), hits = searchHitNodes();
+      if (key === "Escape") { stop(event); clearSearch(); return; }
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        if (!hits.length) return;
+        stop(event);
+        searchActive = (searchActive + (key === "ArrowDown" ? 1 : hits.length - 1))
+          % hits.length;
+        markSearchActive(hits);
+        return;
+      }
+      if (key === "Enter") {
+        if (!hits.length) return;
+        stop(event);
+        var lit = hits[searchActive] || hits[0];
+        searchPick(str(lit.getAttribute("data-hc-goal")));
+      }
+    }, true);
+    document.addEventListener("click", function (event) {
+      var hit = closestByClass(event && event.target, "hc-search-hit");
+      if (!hit) return;
+      stop(event);
+      searchPick(str(hit.getAttribute("data-hc-goal")));
+    }, true);
+  }
+
+  function renderSearch() {
+    if (serverState.scope !== "chat") return false;
+    var box = searchBox();
+    if (!box) return false;
+    var input = box.querySelector(".hc-search-input");
+    var list = box.querySelector(".hc-search-hits");
+    if (!input || !list) return false;
+    bindSearch();
+    var rail = box.parentNode;
+    var q = str(input.value).trim();
+    var searching = !!(rail && rail.getAttribute
+                       && rail.getAttribute("data-hc-searching") !== null);
+    if (!q) {
+      if (searching) rail.removeAttribute("data-hc-searching");
+      if (searchDrawn === "") return false;
+      searchDrawn = "";
+      while (list.firstChild) list.removeChild(list.firstChild);
+      return true;
+    }
+    if (rail && rail.setAttribute && !searching) {
+      rail.setAttribute("data-hc-searching", "");
+    }
+    var ranked = searchGoals(serverState.goals, serverState.prompts, q);
+    var key = JSON.stringify([q, ranked]);
+    if (key === searchDrawn) return false;
+    searchDrawn = key;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!ranked.length) {
+      var none = document.createElement("div");
+      none.className = "hc-search-none";
+      none.textContent = "Nothing matches “" + q + "”.";
+      list.appendChild(none);
+      return true;
+    }
+    if (searchActive >= ranked.length) searchActive = 0;
+    ranked.forEach(function (hit, i) {
+      var row = document.createElement("div");
+      row.className = "hc-search-hit";
+      row.setAttribute("data-hc-goal", hit.id);
+      row.setAttribute("data-hc-where", hit.where);
+      if (i === searchActive) row.setAttribute("data-hc-hit-active", "");
+      if (hit.trail.length) {
+        var trail = document.createElement("div");
+        trail.className = "hc-search-hit-trail";
+        trail.textContent = hit.trail.join(" › ");
+        row.appendChild(trail);
+      }
+      var title = document.createElement("div");
+      title.className = "hc-search-hit-title";
+      title.textContent = hit.title;
+      row.appendChild(title);
+      if (hit.excerpt) {
+        var where = document.createElement("div");
+        where.className = "hc-search-hit-where";
+        var tag = document.createElement("b");
+        tag.textContent = SEARCH_LABEL[hit.where] + " ";
+        where.appendChild(tag);
+        var text = document.createElement("span");
+        text.textContent = hit.excerpt;
+        where.appendChild(text);
+        row.appendChild(where);
+      }
+      list.appendChild(row);
+    });
+    return true;
+  }
+
   function watchLaunchSurface() {
     function sweep() {
       if (serverState.scope !== "chat") return;
@@ -4030,6 +5772,10 @@
       renderPanelToggles();
       installRailDrag();
       renderSessionChip();
+      renderHandoff();
+      renderBell();
+      renderGear();
+      renderSearch();
       renderInjection(injectionState);
     }
     sweep();
@@ -4235,7 +5981,7 @@
        chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
             : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
       ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
-       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div>"
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
        chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><textarea class=\"hc-rail-code\" key=\"{{ selKey }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" placeholder=\"Write your prompt. The goal\u2019s context is added when you copy.\" spellcheck=\"false\"></textarea><div class=\"hc-rail-actions\"><span class=\"hc-rail-generate\" data-hc-generating=\"off\">Generate</span><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write a prompt for it.</div></sc-if></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
@@ -4278,10 +6024,16 @@
       ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
        chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span>"
             : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
+      // A notification names a goal; going to it means selecting it in the
+      // tree. The artifact owns selection, so it publishes one setter from
+      // its own set(): the bridge calls that rather than reaching into state
+      // it does not hold. Both scopes, so the anchor is found in both.
+      ["  set(fn, touch) { this.setState(",
+       "  set(fn, touch) { if (typeof window !== 'undefined') window.__hcSelectGoal = (id) => this.set(() => ({ page: 'goals', selId: id, editId: null, paneTab: 'context' })); if (typeof window !== 'undefined') window.__hcRevealGoal = (id) => { const tr = this.path(this.state.goals, id) || []; if (!tr.length) return false; this.set(s => { let gs = s.goals; tr.slice(0, -1).forEach(n => { gs = this.up(gs, n.id, x => ({ ...x, open: true })); }); return { page: 'goals', selId: id, editId: null, paneTab: 'context', goals: gs }; }); setTimeout(() => { const ids = this._rowIds || []; if (ids.indexOf(id) < 0) { this.set(() => ({ filter: 'all' })); } setTimeout(() => { const ids2 = this._rowIds || [], nx = ids2.indexOf(id), el = this._treeEl; if (el && nx >= 0) { const top = nx * 29, bot = top + 29; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; } }, 0); }, 0); return true; }; this.setState("],
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -4303,12 +6055,27 @@
       // the chip row said 'active' while the store said otherwise.
       ["      filter: 'active',",
        "      filter: (saved && ['active', 'inprog', 'done', 'all'].indexOf(saved.filter) >= 0) ? saved.filter : 'active',"],
+      // The tree, handed in from outside. The bridge's sync gives the
+      // server's tree to the artifact's own state, so a change made on the
+      // server -- a build marking rows queued and the goal in progress, a
+      // row coming back done -- lands on the page that is open, with no
+      // reload. Published from the constructor, where norm is in scope, so
+      // a tree pushed in takes the shape a loaded one does.
+      ["    if (!g0) { g0 = this.seed(); if (saved) this._resetSave = true; }\n",
+       "    if (!g0) { g0 = this.seed(); if (saved) this._resetSave = true; }\n    if (typeof window !== 'undefined') window.__hcSetGoals = (goals, selId) => this.set(() => (typeof selId === 'string' ? { goals: norm(goals), selId } : { goals: norm(goals) }));\n"],
       // And the store it writes back has to declare the version the seed
       // trusts, or the reader's own choice is discarded on the next load
       // as if it were the artifact's default. v7 means "this origin has
       // been seeded by the bridge", which is true the moment it saves.
+      // And the goals it writes back carry the rail's fields -- the TODO
+      // rows, their markdown, the reader's prompt -- from the store, not
+      // from the artifact's own memory. The artifact read those fields once
+      // at boot and never again; the rail writes them to the store as they
+      // change. Left as they were, the artifact's next save (a filter chip,
+      // a selection) would put its boot-time copy back over the rows the
+      // reader had just typed, and the watcher would then import that copy.
       ["localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 6, goals,",
-       "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals,"],
+       "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals: (typeof window !== 'undefined' && window.__hcRailFields) ? window.__hcRailFields(goals) : goals,"],
       // A chat workspace is not offered AGENT or REVIEW -- the ops behind
       // them answer "global scope only" here -- so the keyboard must not
       // step onto them either. It reads the scope at the moment of the
@@ -4683,6 +6450,7 @@
 
   window.__hcAsk = ask;
   window.__hcAskSource = askSource;
+  window.__hcRailFields = railFields;
 
   // --- a banner for work happening outside the page ------------------------
   // Analysis runs in a detached worker over the user's whole history. Without
@@ -4728,6 +6496,11 @@
   var PANE_CSS = [
       ".hc-chat-addbtn{flex:none;margin-right:7px;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
       ".hc-chat-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
+      // The header's workspace-wide link: sized to the session chip it sits
+      // beside, not to the pane buttons.
+      ".hc-chats{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-chat-linkbtn{border:1px solid var(--bd2,#d5d5d5);background:transparent;color:var(--mut,#575757);border-radius:2px;padding:2px 8px;cursor:pointer;font:600 10px 'Source Code Pro',monospace;line-height:1.4}",
+      ".hc-chat-linkbtn:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
       ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
       ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
@@ -4982,6 +6755,9 @@
 
   window.__hcPromptUI = {
     rootsFromState: rootsFromState,
+    search: { rank: searchGoals, render: renderSearch, wordScore: wordScore,
+              distance: editDistance, query: searchQuery,
+              clear: clearSearch },
     paneShape: paneShape,
     reconcileState: reconcileState,
     clearKeepPane: clearKeepPane,
@@ -4993,11 +6769,13 @@
                readSection: docSectionRead,
                writeSection: docSectionWrite },
     renderTodoRail: renderTodoRail,
+    railFields: railFields,
+    installGoals: installGoals,
     todoState: function () {
       return { goalId: todoGoalId, tab: railTab,
                items: todoItems && todoItems.slice(),
                picked: Object.keys(todoPicked),
-               saving: !!todoSaveTimer };
+               saving: !!todoSaveTimer, held: todoHeld };
     },
     todoList: {
       serialize: todoSerialize,
@@ -5019,6 +6797,8 @@
       family: todoFamily,
       bands: todoBandOf,
       sectioned: todoSectioned,
+      sole: todoSole,
+      blankAfter: todoBlankAfter,
       cancelHead: todoCancelHead,
       cancelHeads: todoCancelHeads,
       cancelIds: todoCancelIds,
@@ -5049,6 +6829,10 @@
     liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
+    renderChatLink: renderChatLink,
+    openChatPicker: openChatPicker,
+    chatStanding: chatStanding,
+    goalLine: goalLine,
     renderChatSurface: renderChatSurface,
     showNotices: showNotices,
     noticesToShow: noticesToShow,
@@ -5081,7 +6865,42 @@
     renderSessionChip: renderSessionChip,
     askSource: askSource,
     treeStep: treeStep,
-    foldedIds: foldedIds
+    foldedIds: foldedIds,
+    // TODO build alerts: the banner stack, the bell, the center, settings.
+    handoff: {
+      render: renderHandoff,
+      copy: copyHandoff,
+      fetch: fetchHandoff,
+      state: function () { return handoffState; },
+      last: function () { return handoffLast; },
+    },
+    alerts: {
+      track: trackTodoAlerts,
+      diff: todoAlertsFrom,
+      noteOut: alertNoteOut,
+      stack: alertStack,
+      log: function () { return loadAlertLog().slice(); },
+      unread: alertUnread,
+      markRead: markAlertRead,
+      markAllRead: markAllAlertsRead,
+      clear: clearAlertLog,
+      go: alertGo,
+      settings: alertSettings,
+      setSettings: setAlertSettings,
+      renderBell: renderBell,
+      open: openAlertCenter,
+      close: closeAlertCenter,
+      center: function () { return alertCenterShown() ? alertCenterBox : null; },
+      css: function () { return ALERT_CSS; }
+    },
+    // The header gear and the settings panel behind it.
+    gear: {
+      render: renderGear,
+      open: openSettingsPanel,
+      close: closeSettingsPanel,
+      toggle: toggleSettingsPanel,
+      panel: function () { return settingsPanelShown() ? settingsPanelBox : null; }
+    }
   };
 
   seed();
