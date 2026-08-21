@@ -850,6 +850,153 @@ class TodoSectionTests(BridgeTestCase):
         self.assertEqual(self.DOC, self.write(self.read()))
 
 
+class RailSyncTests(BridgeTestCase):
+    """What the rail owns in the store, and how the server's tree lands.
+
+    The artifact reads the rail's fields (TODO rows, their markdown, the
+    reader's prompt) once at boot; the rail writes them to the store as they
+    change. So the artifact's own saves carry those fields from the store,
+    and a tree the sync settles on is handed to the artifact's state rather
+    than reloading the page.
+    """
+
+    GOALS = [{"id": "g1", "title": "A", "status": "todo",
+              "todo_items": [{"id": "t1", "text": "one", "depth": 0,
+                              "status": "queued", "question": ""}],
+              "todos_md": "- one\n", "prompt_md": "p",
+              "children": [{"id": "g1a", "title": "B", "todo_items": [],
+                            "todos_md": "", "prompt_md": "", "children": []}]}]
+
+    def test_the_artifacts_save_carries_the_rails_fields_from_the_store(self):
+        out = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({v: 7, goals: %s});"
+            "out = window.__hcPromptUI.railFields([{id: 'g1', title: 'A renamed',"
+            "  todo_items: [], todos_md: '', prompt_md: '', children: ["
+            "    {id: 'g1a', title: 'B', todo_items: [{id: 't9', text: 'stale',"
+            "     depth: 0, status: '', question: ''}], children: []},"
+            "    {id: 'gNew', title: 'C', todo_items: [{id: 't2', text: 'mine',"
+            "     depth: 0, status: '', question: ''}], children: []}]}]);"
+            % json.dumps(self.GOALS))
+        # The store's rows, markdown and prompt over the artifact's boot-time
+        # copies; the artifact's own fields stay its own.
+        self.assertEqual([("one", "queued")],
+                         [(r["text"], r["status"]) for r in out[0]["todo_items"]])
+        self.assertEqual("- one\n", out[0]["todos_md"])
+        self.assertEqual("p", out[0]["prompt_md"])
+        self.assertEqual("A renamed", out[0]["title"])
+        # A child the store knows takes the store's (even empty) list; one
+        # the store has never seen keeps what the artifact holds.
+        self.assertEqual([], out[0]["children"][0]["todo_items"])
+        self.assertEqual("mine", out[0]["children"][1]["todo_items"][0]["text"])
+
+    def test_the_patched_artifact_saves_through_the_rail_and_publishes_a_setter(self):
+        out = self.patched_bundle(
+            "out = [out.indexOf(\"goals: (typeof window !== 'undefined' && "
+            "window.__hcRailFields) ? window.__hcRailFields(goals) : goals,\") >= 0,"
+            " out.indexOf('window.__hcSetGoals = (goals, selId) => this.set(') >= 0,"
+            " out.indexOf(\"JSON.stringify({ v: 6, goals,\") >= 0,"
+            " window.__hcPromptUI.patchMisses()];", scope="chat")
+        self.assertEqual([True, True, False, []], out)
+
+    def test_a_merge_lays_the_servers_build_state_over_the_pages_rows(self):
+        # The page added a row (so its list differs from the base) while the
+        # server marked the other one asking. The list is one field, but the
+        # edit is the page's and the run is the server's -- both land.
+        row = {"id": "t1", "text": "one", "depth": 0, "status": "", "question": ""}
+        base = [{"id": "g1", "title": "A", "todo_items": [row], "children": []}]
+        local = [{"id": "g1", "title": "A", "todo_items": [
+            row, {"id": "t2", "text": "", "depth": 0, "status": "", "question": ""}],
+            "children": []}]
+        remote = [{"id": "g1", "title": "A", "todo_items": [
+            {"id": "t1", "text": "one", "depth": 0, "status": "asking",
+             "question": "which?"}], "children": []}]
+        out = self.run_js("out = window.__hcPromptUI.mergeTrees(%s, %s, %s, {});"
+                          % (json.dumps(base), json.dumps(local), json.dumps(remote)))
+        self.assertEqual([("one", "asking", "which?"), ("", "", "")],
+                         [(r["text"], r["status"], r["question"])
+                          for r in out[0]["todo_items"]])
+
+    def test_install_goals_hands_the_tree_to_the_artifact_without_a_reload(self):
+        out = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({v: 7, goals: [], selId: 'g1'});"
+            "var got = null;"
+            "window.__hcSetGoals = function (goals, selId) { got = [goals, selId]; };"
+            "var ok = window.__hcPromptUI.installGoals(%s, 'r9');"
+            "out = [ok, got, JSON.parse(store['hc-vault-ui-v1']).selId,"
+            "       JSON.parse(store['hc-vault-ui-sync-v1']).revision,"
+            "       JSON.parse(store['hc-vault-ui-v1']).goals.length];"
+            % json.dumps(self.GOALS))
+        self.assertTrue(out[0])
+        self.assertEqual("g1", out[1][1])
+        self.assertEqual("one", out[1][0][0]["todo_items"][0]["text"])
+        self.assertEqual(["g1", "r9", 1], out[2:])
+
+    def test_without_a_setter_install_goals_still_reloads(self):
+        # The sandbox has no window.location: reaching the reload throws,
+        # which is the proof that it was reached.
+        out = self.run_js(
+            "var threw = false;"
+            "try { window.__hcPromptUI.installGoals(%s, 'r9'); }"
+            "catch (e) { threw = true; } out = threw;" % json.dumps(self.GOALS))
+        self.assertTrue(out)
+
+
+class SoleRowAndBlankRowTests(BridgeTestCase):
+    """Cmd+Enter with nothing picked, and the row a Build leaves behind."""
+
+    def rows(self, spec):
+        return [{"id": "t%08d" % i, "text": t, "depth": d, "status": s,
+                 "question": ""} for i, (t, d, s) in enumerate(spec)]
+
+    def ask(self, expression, spec):
+        return self.run_js(
+            "var L = window.__hcPromptUI.todoList; var items = %s; out = (%s);"
+            % (json.dumps(self.rows(spec)), expression))
+
+    def test_one_unsent_family_is_the_sole_pick(self):
+        self.assertEqual([0], self.ask("L.sole(items)",
+                                       [("one", 0, ""), ("", 0, ""), ("done", 0, "done")]))
+        self.assertEqual([0, 1], self.ask("L.sole(items)",
+                                          [("head", 0, ""), ("child", 1, ""),
+                                           ("out", 0, "queued")]))
+        self.assertEqual([1], self.ask("L.sole(items)",
+                                       [("done", 0, "done"), ("again", 0, "failed")]))
+        # two unsent families are a choice, and an empty list is nothing
+        self.assertEqual([], self.ask("L.sole(items)", [("a", 0, ""), ("b", 0, "")]))
+        self.assertEqual([], self.ask("L.sole(items)",
+                                      [("", 0, ""), ("out", 0, "building")]))
+
+    def test_a_build_leaves_an_empty_row_at_the_foot_of_the_active_band(self):
+        out = self.ask("L.blankAfter(items, ['t00000001'])",
+                       [("keep", 0, ""), ("send", 0, ""), ("out", 0, "queued")])
+        self.assertEqual(["keep", "send", "", "out"], [r["text"] for r in out["items"]])
+        self.assertEqual(out["items"][2]["id"], out["id"])
+        # unless one is there already once the sent rows have left
+        self.assertIsNone(self.ask("L.blankAfter(items, ['t00000000'])",
+                                   [("send", 0, ""), ("", 0, "")]))
+        out = self.ask("L.blankAfter(items, ['t00000000', 't00000001'])",
+                       [("send", 0, ""), ("", 0, "")])
+        self.assertEqual(["send", "", ""], [r["text"] for r in out["items"]])
+
+    def test_the_answer_box_is_a_textarea_that_wraps(self):
+        out = self.run_js(
+            "var n = window.__hcPromptUI.todoList.rowNode("
+            "  {id: 't1', text: 'x', depth: 0, status: 'asking', question: 'q'}, true);"
+            "var box = n.querySelector('.hc-todo-answer');"
+            "out = [box.tagName, box.getAttribute('rows'),"
+            "       box.getAttribute('data-hc-todo-answer')];")
+        self.assertEqual(["textarea", "1", "t1"], out)
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        css = "".join(css) if isinstance(css, list) else css
+        answer = re.search(r"\.hc-todo-answer\{([^}]*)\}", css).group(1)
+        self.assertIn("resize:none", answer)
+        self.assertIn("overflow-wrap:anywhere", answer)
+        self.assertIn("white-space:pre-wrap", answer)
+        question = re.search(r"\.hc-todo-question\{([^}]*)\}", css).group(1)
+        self.assertIn("white-space:pre-wrap", question)
+        self.assertIn("overflow-wrap:anywhere", question)
+
+
 class HoldGroundTests(BridgeTestCase):
     """What the viewport is painted while the workspace is held back.
 

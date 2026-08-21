@@ -85,6 +85,25 @@
     return { map: map, order: order };
   }
 
+  function layBuildState(local, remote) {
+    // The TODO rows as this page has them -- text, depth, order, what was
+    // added or taken away: the edit -- with the build state the server has
+    // for each id laid back over them: the run. The list is one field, but
+    // it is those two things, and the server's own import splits it the
+    // same way. Taken whole, one typed row would carry the page's stale
+    // "not sent" over a row the server had just marked queued or asking.
+    var held = Object.create(null);
+    array(remote).forEach(function (row) {
+      if (row && typeof row.id === "string") held[row.id] = row;
+    });
+    return array(local).map(function (row) {
+      var out = clone(row);
+      var was = row && held[row.id];
+      if (was) { out.status = str(was.status); out.question = str(was.question); }
+      return out;
+    });
+  }
+
   function mergeTrees(baseRoots, localRoots, remoteRoots, deletedIds) {
     var base = flattenTree(baseRoots), local = flattenTree(localRoots);
     var remote = flattenTree(remoteRoots), selected = Object.create(null);
@@ -119,7 +138,9 @@
       keys.forEach(function (key) {
         if (key === "id") return;
         if (!b || !same(l.value[key], b.value[key])) {
-          value[key] = clone(l.value[key]);
+          value[key] = key === "todo_items"
+            ? layBuildState(l.value[key], r.value[key])
+            : clone(l.value[key]);
         }
       });
       var parent = r.parent;
@@ -201,6 +222,40 @@
     window.location.reload();
   }
 
+  function installGoals(goals, revision) {
+    // The tree the sync settled on, into the store and into the artifact's
+    // own state -- and the page stays where the reader is, caret and all.
+    // The artifact publishes a setter from its constructor for exactly
+    // this; only a page whose artifact has none (booted before the setter
+    // existed) still reloads to learn the tree. A build marking rows queued
+    // and its goal in progress is the common case: that used to reload the
+    // page on every Build.
+    var setter = (typeof window !== "undefined") ? window.__hcSetGoals : null;
+    if (typeof setter !== "function") {
+      installGoalsAndReload(goals, revision);
+      return false;
+    }
+    var saved;
+    try { saved = JSON.parse(localStorage.getItem(KEY) || "{}"); }
+    catch (e) { saved = {}; }
+    var ids = flattenTree(goals).map;
+    var selId = (typeof saved.selId === "string" && ids[saved.selId])
+      ? saved.selId : (goals.length ? goals[0].id : null);
+    saved.goals = goals;
+    saved.selId = selId;
+    saved.updatedAt = Date.now();
+    try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) {}
+    writeSync(revision, goals);
+    lastObservedGoals = JSON.stringify(goals);
+    try {
+      setter(clone(goals), selId);
+    } catch (e) {
+      installGoalsAndReload(goals, revision);
+      return false;
+    }
+    return true;
+  }
+
   // What the inspector's shape depends on, per goal: whether a run is live,
   // and whether there is an artifact to review. Task-by-task progress is not
   // in here on purpose -- the feed draws that straight into the DOM, and
@@ -274,9 +329,8 @@
       // whether it has an artifact.
       var stale = readLocalGoals();
       if (stale && paneShape(stale) !== paneShape(remote)) {
-        installGoalsAndReload(mergeTrees(synced.goals, stale, remote,
-                                         deletedIdsOf(st)),
-                              st.revision);
+        installGoals(mergeTrees(synced.goals, stale, remote, deletedIdsOf(st)),
+                     st.revision);
       }
       return;
     }
@@ -290,12 +344,13 @@
     var merged = mergeTrees(synced.goals, local, remote, deletedIdsOf(st));
     if (same(merged, remote)) {
       writeSync(st.revision, remote);
-      if (!same(local, remote)) installGoalsAndReload(remote, st.revision);
+      if (!same(local, remote)) installGoals(remote, st.revision);
       return;
     }
     syncBusy = true;
     postImport(merged, st.revision).then(function (result) {
-      installGoalsAndReload(merged, result.revision);
+      syncBusy = false;
+      installGoals(merged, result.revision);
     }).catch(function () {
       syncBusy = false;
       lastObservedGoals = null;
@@ -306,10 +361,13 @@
   function refreshState() {
     // An import we started is a change this page already shows. Reconciling
     // against a half-applied revision is what turned a delete into a reload.
-    if (syncBusy) return;
-    if (refreshPending) return;
+    // Answers with the fetch when one starts, so a caller that has just
+    // changed something can wait for the state that follows it -- and with
+    // nothing when it does not.
+    if (syncBusy) return null;
+    if (refreshPending) return null;
     refreshPending = true;
-    fetch("/api/state", { cache: "no-store" })
+    return fetch("/api/state", { cache: "no-store" })
       .then(function (r) {
         if (!r.ok) throw new Error("state request failed (" + r.status + ")");
         return r.json();
@@ -2960,10 +3018,13 @@
       "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
       "[data-hc-launch] .hc-todo-ask{user-select:text}",
       "[data-hc-launch] .hc-todo-ask{margin:2px 0 8px;border-left:2px solid var(--hc-warn);padding:2px 0 2px 10px}",
-      "[data-hc-launch] .hc-todo-question{font:12px/1.5 'Source Code Pro',monospace;color:var(--dtxt);margin-bottom:5px}",
-      "[data-hc-launch] .hc-todo-reply{display:flex;align-items:center;gap:6px}",
+      // The question and the answer both wrap: a long question runs onto
+      // more lines, and the answer box grows as it is typed into, rather
+      // than either scrolling its text out of the rail's width.
+      "[data-hc-launch] .hc-todo-question{font:12px/1.5 'Source Code Pro',monospace;color:var(--dtxt);margin-bottom:5px;white-space:pre-wrap;overflow-wrap:anywhere}",
+      "[data-hc-launch] .hc-todo-reply{display:flex;align-items:baseline;gap:6px}",
       "[data-hc-launch] .hc-todo-arrow{color:var(--hc-warn);font-size:11px}",
-      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;margin:0;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);display:block;resize:none;overflow:hidden;height:auto;white-space:pre-wrap;overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-answer::placeholder{color:var(--fnt)}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
@@ -3622,6 +3683,28 @@
                 : null;
   }
 
+  function todoLayState(items, incoming) {
+    // The build state the store holds for each row, laid over the rows on
+    // screen by id -- status and question only; text, depth and order are
+    // the reader's. Answers whether anything changed.
+    var held = Object.create(null);
+    array(incoming).forEach(function (row) {
+      if (row && typeof row.id === "string") held[row.id] = row;
+    });
+    var changed = false;
+    array(items).forEach(function (row) {
+      var was = row && held[row.id];
+      if (!was) return;
+      var status = str(was.status), question = str(was.question);
+      if (str(row.status) !== status || str(row.question) !== question) {
+        row.status = status;
+        row.question = question;
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
   function todoLoad(goal) {
     todoGoalId = goal.id;
     todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
@@ -3638,6 +3721,32 @@
     var minute = when.getMinutes();
     return "saved " + hour + ":" + (minute < 10 ? "0" : "") + minute
       + " " + suffix;
+  }
+
+  // The fields of a goal the rail owns: written here, read by the artifact
+  // only at boot. When the artifact saves its own tree, these come from the
+  // store -- the last thing the rail (or the server, through the sync)
+  // wrote -- never from the artifact's memory of them.
+  var RAIL_FIELDS = ["todo_items", "todos_md", "prompt_md"];
+
+  function railFields(goals, stored) {
+    var held = flattenTree(stored === undefined ? readLocalGoals() : stored).map;
+    var lay = function (nodes) {
+      return array(nodes).map(function (node) {
+        if (!node || typeof node.id !== "string") return node;
+        var was = held[node.id];
+        var out = {};
+        Object.keys(node).forEach(function (key) { out[key] = node[key]; });
+        if (was) {
+          RAIL_FIELDS.forEach(function (key) {
+            if (key in was.value) out[key] = was.value[key];
+          });
+        }
+        if (Array.isArray(node.children)) out.children = lay(node.children);
+        return out;
+      });
+    };
+    return lay(goals);
   }
 
   function writeGoalsLocal(goals) {
@@ -3700,14 +3809,29 @@
     var where = todoSelection();
     if (!todoItems) return;
     if (!where) {
+      // Cmd+Enter is the build wherever the caret is -- and after a pick
+      // from the gutter it is in no row at all. Once: not once to land the
+      // caret and once more to build.
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        event.stopPropagation();
+        todoBuild();
+        return;
+      }
       // The caret is in the host but outside every row's text (between
       // rows, beside a gutter). Nothing may be typed there: put it at the
-      // end of the last row and take the key from the browser.
+      // end of the last row still being written -- not a row out with the
+      // builder or done, which sit below -- and take the key from the
+      // browser.
       if ((event.key.length === 1 && !event.metaKey && !event.ctrlKey)
           || event.key === "Backspace" || event.key === "Delete"
           || event.key === "Enter") {
         event.preventDefault();
-        todoFocusAt = { index: todoItems.length - 1, caret: null };
+        var last = todoItems.length - 1;
+        for (var k = todoItems.length - 1; k >= 0; k--) {
+          if (!todoItems[k].status) { last = k; break; }
+        }
+        todoFocusAt = { index: last, caret: null };
         renderTodoRail(true);
       }
       return;
@@ -3740,13 +3864,20 @@
       return;
     } else if (mod && event.key === "/") {
       todoTogglePick(todoItems[index].id);
-      handled = true;
+      // The caret stays on the row it picked, so the next key -- Cmd+Enter
+      // -- still finds the list.
+      todoFocusAt = { index: index, caret: caret };
       renderTodoRail(true);
       event.preventDefault();
+      event.stopPropagation();
       return;
     } else if (mod && event.key === "Enter") {
+      // The build draws the list itself, caret on the fresh empty row; a
+      // second redraw here would take that caret away again.
+      event.preventDefault();
+      event.stopPropagation();
       todoBuild();
-      handled = true;
+      return;
     } else if (mod && (event.key === "Backspace" || event.key === "Delete")) {
       handled = todoApply(todoRemove(todoItems, index));
     } else if (mod || event.altKey) {
@@ -3916,12 +4047,12 @@
     todoItems = todoSectioned(todoItems);
     todoFocusAt = { index: todoIndexOfId(headId), caret: null };
     var goalId = todoGoalId;
+    todoHold();
     post({ op: "cancel_todos", goal_id: goalId, ids: ids }).then(function (res) {
       if ((!res || !res.ok) && todoGoalId === goalId) {
         todoBuildError = (res && res.error) || "the build could not be cancelled";
       }
-      refreshState();
-      renderTodoRail(true);
+      todoSettle();
     });
     return true;
   }
@@ -3930,6 +4061,9 @@
     var at = todoIndexOfId(id);
     var row = todoItems && todoItems[at];
     if (!row || (row.status && row.status !== "failed")) return;
+    // A row with nothing on it is nothing to build: the gutter of the empty
+    // row the list keeps for typing into does not pick.
+    if (!str(row.text).trim()) return;
     var on = !todoPicked[id];
     // A parent stands for the rows under it: picking it picks its children,
     // and unpicking releases them. Rows already building keep their state.
@@ -3960,9 +4094,99 @@
     }).map(function (row) { return row.id; });
   }
 
+  function todoTypingTarget(node) {
+    // Whether a key aimed at this node is typing: a field, or an editing
+    // host. The list itself is one, and has its own handler.
+    var tag = (node && node.tagName) ? String(node.tagName).toUpperCase() : "";
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
+      || !!(node && node.isContentEditable);
+  }
+
+  function todoSole(items) {
+    // The rows to build when nothing is picked and there is only one thing
+    // to pick: the list's one unsent family (a row, or a row and what is
+    // nested under it). Rows with no text are nothing to build and do not
+    // count; two unsent families are a choice, and nothing is chosen.
+    var rows = array(items), live = [];
+    rows.forEach(function (row, i) {
+      if (str(row.text).trim() && (!row.status || row.status === "failed")) live.push(i);
+    });
+    if (!live.length) return [];
+    var family = todoFamily(rows, live[0]);
+    return live.every(function (i) { return family.indexOf(i) >= 0; }) ? live : [];
+  }
+
+  function todoBlankAfter(items, sent) {
+    // The rows with a fresh empty row at the foot of the active band -- the
+    // place the next TODO gets typed once `sent` have left for the build --
+    // or null when an empty row is already there to type into.
+    var rows = array(items), bands = todoBandOf(rows);
+    var end = 0, blank = false;
+    rows.forEach(function (row, i) {
+      if (bands[i] !== 0) return;
+      end = i + 1;
+      if (sent.indexOf(row.id) < 0 && !str(row.text).trim()) blank = true;
+    });
+    if (blank) return null;
+    var fresh = todoRow("", 0);
+    var out = rows.slice();
+    out.splice(end, 0, fresh);
+    return { items: out, id: fresh.id };
+  }
+
+  // --- holding the rail's own word until the server's arrives --------------
+  //
+  // A row just handed off (answered, taken back) shows its new state at
+  // once, while the store still says what it said before -- and the sweep
+  // reads the store. Until a state fetched AFTER the op has landed, the
+  // store is not laid back over the rail; a bound on the wait keeps a lost
+  // reply from holding it forever.
+
+  var todoHeld = false, todoHoldSeq = 0, todoHoldTimer = null;
+
+  function todoHold() {
+    todoHeld = true;
+    todoHoldSeq += 1;
+    if (todoHoldTimer) clearTimeout(todoHoldTimer);
+    todoHoldTimer = setTimeout(function () {
+      todoHoldTimer = null;
+      todoHeld = false;
+      renderTodoRail(true);
+    }, 6000);
+  }
+
+  function todoSettle() {
+    // A refresh that starts after now; the hold lifts when it has landed.
+    var mine = todoHoldSeq, tries = 0;
+    var done = function () {
+      if (mine === todoHoldSeq) {
+        todoHeld = false;
+        if (todoHoldTimer) { clearTimeout(todoHoldTimer); todoHoldTimer = null; }
+      }
+      renderTodoRail(true);
+    };
+    var tick = function () {
+      var going = refreshState();
+      if (going) going.then(done, done);
+      else if (++tries < 40) setTimeout(tick, 100);
+      else done();
+    };
+    tick();
+  }
+
   function todoBuild() {
+    if (todoBuilding || !todoGoalId || !todoItems) return;
     var ids = todoPickedIds();
-    if (!ids.length || todoBuilding || !todoGoalId) return;
+    if (!ids.length) {
+      // Nothing picked and one thing to pick: that is the build.
+      todoSole(todoItems).forEach(function (i) { todoPicked[todoItems[i].id] = true; });
+      ids = todoPickedIds();
+    }
+    if (!ids.length) return;
+    // What comes next is typed into a fresh row, not into one just sent:
+    // the row is there before the reader has to ask for it with Enter.
+    var blank = todoBlankAfter(todoItems, ids);
+    if (blank) todoItems = blank.items;
     todoSaveNow();
     todoBuilding = true;
     todoBuildError = "";
@@ -3975,6 +4199,15 @@
     todoPicked = {};
     // The rows just handed off drop into the middle band right away.
     todoItems = todoSectioned(todoItems);
+    // And the caret lands on the empty active row, ready for the next.
+    var at = -1;
+    todoItems.some(function (row, i) {
+      if (!row.status && !str(row.text).trim()) { at = i; return true; }
+      return false;
+    });
+    if (at >= 0) todoFocusAt = { index: at, caret: 0 };
+    // Held before the redraw: the redraw is where the store would be read.
+    todoHold();
     renderTodoRail(true);
     var goalId = todoGoalId;
     post({ op: "build_todos", goal_id: goalId, ids: ids }).then(function (res) {
@@ -3996,8 +4229,7 @@
           todoItems = todoSectioned(todoItems);
         }
       }
-      refreshState();
-      renderTodoRail(true);
+      todoSettle();
     });
   }
 
@@ -4007,6 +4239,7 @@
     var row = todoItems && todoItems[todoIndexOfId(id)];
     if (row) { row.status = "building"; row.question = ""; }
     alertNoteOut([id]);
+    todoHold();
     renderTodoRail(true);
     post({ op: "answer_todo", goal_id: goalId, id: id, answer: text })
       .then(function (res) {
@@ -4017,8 +4250,7 @@
         if ((!res || !res.ok) && todoGoalId === goalId) {
           todoBuildError = (res && res.error) || "the answer could not be sent";
         }
-        refreshState();
-        renderTodoRail(true);
+        todoSettle();
       });
   }
 
@@ -4148,7 +4380,7 @@
       if (node === todoHost()) { todoKey(event); return; }
       if (node && node.getAttribute
           && node.getAttribute("data-hc-todo-answer") !== null) {
-        if (event.key === "Enter") {
+        if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           todoAnswer(node.getAttribute("data-hc-todo-answer"), node.value);
         } else if (event.key === "Escape") {
@@ -4160,6 +4392,17 @@
             renderTodoRail(true);
           }
         }
+        return;
+      }
+      // Cmd+Enter from anywhere that is not a place to type -- the Build
+      // control just clicked, Select all, the tree -- is the build, the
+      // same as from the list. Once: the reader should not have to click
+      // back into the list first.
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter"
+          && railTab === "todos" && todoItems && !todoTypingTarget(node)) {
+        event.preventDefault();
+        event.stopPropagation();
+        todoBuild();
       }
     }, true);
     document.addEventListener("beforeinput", function (event) {
@@ -4171,7 +4414,15 @@
       }
     }, true);
     document.addEventListener("input", function (event) {
-      if (event.target !== todoHost()) return;
+      var typed = event.target;
+      if (typed && typed.getAttribute
+          && typed.getAttribute("data-hc-todo-answer") !== null) {
+        // The answer box grows with its text: one line until it needs two.
+        typed.style.height = "auto";
+        typed.style.height = typed.scrollHeight + "px";
+        return;
+      }
+      if (typed !== todoHost()) return;
       var sel = window.getSelection();
       var line = sel && todoLineOf(sel.focusNode);
       if (line) todoSyncLine(line);
@@ -4323,9 +4574,13 @@
       arrow.className = "hc-todo-arrow";
       arrow.textContent = "↳";
       reply.appendChild(arrow);
-      var answer = document.createElement("input");
+      // A textarea, not an input: an answer longer than the rail is wide
+      // wraps onto another line and the box grows with it, where an input
+      // would scroll the start of it out of sight. Enter still sends.
+      var answer = document.createElement("textarea");
       answer.className = "hc-todo-answer";
-      answer.type = "text";
+      answer.rows = 1;
+      answer.setAttribute("rows", "1");
       answer.placeholder = "answer, then enter";
       answer.spellcheck = false;
       answer.setAttribute("data-hc-todo-answer", row.id);
@@ -4348,22 +4603,41 @@
     if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
+    if (!goal || goal.id !== todoGoalId) {
+      // Whatever the reader typed into the goal the rail is leaving is
+      // written before the rail forgets which goal that was: a save still
+      // in its window would otherwise fire with nothing to write into.
+      todoSaveNow();
+    }
     if (!goal) {
       todoGoalId = null;
       todoItems = null;
     } else if (goal.id !== todoGoalId) {
       todoLoad(goal);
       force = true;
-    } else if (!todoTyping() && !todoSaveTimer) {
+    } else if (!todoHeld) {
       // The server's build state -- and inference's additions -- reach the
-      // rail here, but only ever while the reader is not mid-edit. An empty
-      // list is drawn as one empty row to type into; that row is the rail's
-      // own and is never "incoming".
+      // rail here, but never while the rail is ahead of the store on an op
+      // of its own. An empty list is drawn as one empty row to type into;
+      // that row is the rail's own and is never "incoming".
       var blank = todoItems && todoItems.length === 1 && !todoItems[0].text;
       var incoming = goal.items.length ? todoSectioned(goal.items) : null;
-      if (incoming ? !same(incoming, todoItems) : !blank) {
-        todoItems = incoming || [todoRow("", 0)];
-        force = true;
+      if (!todoTyping() && !todoSaveTimer) {
+        if (incoming ? !same(incoming, todoItems) : !blank) {
+          todoItems = incoming || [todoRow("", 0)];
+          force = true;
+        }
+      } else if (incoming && todoItems && document.activeElement === todoHost()) {
+        // Mid-edit, the rows are the reader's: nothing replaces the one
+        // they are typing in. The server's word on a row's STATE still
+        // lands, though -- laid over the rows by id, text untouched -- or a
+        // build finishing while they type the next TODO would never show.
+        // The caret is put back where it was, by row id, since the rows
+        // may re-band.
+        if (todoLayState(todoItems, incoming)) {
+          todoItems = todoSectioned(todoItems);
+          force = true;
+        }
       }
     }
 
@@ -4443,6 +4717,24 @@
     if (!force && drawn === JSON.stringify(shape) && list.children.length) {
       return true;
     }
+    // A redraw replaces every row on screen. It must not take the caret
+    // with it: where the reader was typing is kept by row id (the rows may
+    // have re-banded under them) and put back once the rows are drawn. An
+    // answer half-typed into a question's box is kept the same way.
+    var active = document.activeElement;
+    if (!todoFocusAt && active === list) {
+      var kept = todoSelection();
+      if (kept && todoItems[kept.b]) {
+        todoFocusAt = { index: kept.b, caret: kept.collapsed ? kept.bCaret : null };
+      }
+    }
+    var reply = null;
+    if (active && active.getAttribute
+        && active.getAttribute("data-hc-todo-answer") !== null) {
+      reply = { id: active.getAttribute("data-hc-todo-answer"),
+                value: str(active.value),
+                at: typeof active.selectionStart === "number" ? active.selectionStart : null };
+    }
     list.setAttribute("data-hc-todo-shape", JSON.stringify(shape));
     list.setAttribute("contenteditable", TODO_EDITABLE);
     list.setAttribute("spellcheck", "false");
@@ -4470,6 +4762,20 @@
         var caret = (focus.caret === null || focus.caret === undefined)
           ? todoItems[at].text.length : focus.caret;
         todoPlaceCaret(line, caret);
+      }
+    }
+    if (reply) {
+      var box = list.querySelector("[data-hc-todo-answer=\"" + reply.id + "\"]");
+      if (box) {
+        box.value = reply.value;
+        try {
+          box.focus();
+          if (reply.at !== null && box.setSelectionRange) {
+            box.setSelectionRange(reply.at, reply.at);
+          }
+          box.style.height = "auto";
+          box.style.height = box.scrollHeight + "px";
+        } catch (e) {}
       }
     }
     return true;
@@ -5578,12 +5884,27 @@
       // the chip row said 'active' while the store said otherwise.
       ["      filter: 'active',",
        "      filter: (saved && ['active', 'inprog', 'done', 'all'].indexOf(saved.filter) >= 0) ? saved.filter : 'active',"],
+      // The tree, handed in from outside. The bridge's sync gives the
+      // server's tree to the artifact's own state, so a change made on the
+      // server -- a build marking rows queued and the goal in progress, a
+      // row coming back done -- lands on the page that is open, with no
+      // reload. Published from the constructor, where norm is in scope, so
+      // a tree pushed in takes the shape a loaded one does.
+      ["    if (!g0) { g0 = this.seed(); if (saved) this._resetSave = true; }\n",
+       "    if (!g0) { g0 = this.seed(); if (saved) this._resetSave = true; }\n    if (typeof window !== 'undefined') window.__hcSetGoals = (goals, selId) => this.set(() => (typeof selId === 'string' ? { goals: norm(goals), selId } : { goals: norm(goals) }));\n"],
       // And the store it writes back has to declare the version the seed
       // trusts, or the reader's own choice is discarded on the next load
       // as if it were the artifact's default. v7 means "this origin has
       // been seeded by the bridge", which is true the moment it saves.
+      // And the goals it writes back carry the rail's fields -- the TODO
+      // rows, their markdown, the reader's prompt -- from the store, not
+      // from the artifact's own memory. The artifact read those fields once
+      // at boot and never again; the rail writes them to the store as they
+      // change. Left as they were, the artifact's next save (a filter chip,
+      // a selection) would put its boot-time copy back over the rows the
+      // reader had just typed, and the watcher would then import that copy.
       ["localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 6, goals,",
-       "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals,"],
+       "localStorage.setItem('hc-vault-ui-v1', JSON.stringify({ v: 7, goals: (typeof window !== 'undefined' && window.__hcRailFields) ? window.__hcRailFields(goals) : goals,"],
       // A chat workspace is not offered AGENT or REVIEW -- the ops behind
       // them answer "global scope only" here -- so the keyboard must not
       // step onto them either. It reads the scope at the moment of the
@@ -5958,6 +6279,7 @@
 
   window.__hcAsk = ask;
   window.__hcAskSource = askSource;
+  window.__hcRailFields = railFields;
 
   // --- a banner for work happening outside the page ------------------------
   // Analysis runs in a detached worker over the user's whole history. Without
@@ -6276,11 +6598,13 @@
                readSection: docSectionRead,
                writeSection: docSectionWrite },
     renderTodoRail: renderTodoRail,
+    railFields: railFields,
+    installGoals: installGoals,
     todoState: function () {
       return { goalId: todoGoalId, tab: railTab,
                items: todoItems && todoItems.slice(),
                picked: Object.keys(todoPicked),
-               saving: !!todoSaveTimer };
+               saving: !!todoSaveTimer, held: todoHeld };
     },
     todoList: {
       serialize: todoSerialize,
@@ -6302,6 +6626,8 @@
       family: todoFamily,
       bands: todoBandOf,
       sectioned: todoSectioned,
+      sole: todoSole,
+      blankAfter: todoBlankAfter,
       cancelHead: todoCancelHead,
       cancelHeads: todoCancelHeads,
       cancelIds: todoCancelIds,
