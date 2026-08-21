@@ -552,6 +552,90 @@ def conversation_rows(trajdir, limit=200):
     return rows
 
 
+MAX_TREE_ENTRIES = 4000
+_TREE_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv",
+              ".mypy_cache", ".pytest_cache", "dist", "build", ".next"}
+
+
+def project_tree(root, depth=3):
+    """The project's own files, bounded, for the workspace's file rail.
+
+    Containment is the job: every path is resolved and checked to be inside
+    *root* before it is named, so a symlink out of the project cannot be
+    listed and nothing above the project is reachable.
+    """
+    try:
+        base = Path(root).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return []
+    if not base.is_dir():
+        return []
+    budget = [MAX_TREE_ENTRIES]
+
+    def walk(directory, level):
+        if level > depth or budget[0] <= 0:
+            return []
+        try:
+            entries = sorted(directory.iterdir(),
+                             key=lambda e: (not e.is_dir(), e.name.lower()))
+        except OSError:
+            return []
+        out = []
+        for entry in entries:
+            if budget[0] <= 0:
+                break
+            if entry.name.startswith(".") and entry.name != ".claude-plugin":
+                continue
+            if entry.name in _TREE_SKIP:
+                continue
+            try:
+                entry.resolve().relative_to(base)
+            except (OSError, ValueError, RuntimeError):
+                continue
+            budget[0] -= 1
+            out.append({"n": entry.name + "/", "kids": walk(entry, level + 1)}
+                       if entry.is_dir() else {"n": entry.name})
+        return out
+
+    return walk(base, 1)
+
+
+def _project_identity(trajdir, chat_scoped, session_id):
+    """The directory this chat works in, named for the reader.
+
+    Empty rather than guessed: a workspace that cannot say where it is should
+    say nothing rather than invent a repository.
+    """
+    cwd = None
+    if chat_scoped and session_id:
+        try:
+            from . import chat_state as CS
+            cwd = (CS.load_manifest(str(session_id)) or {}).get("cwd")
+        except Exception:                          # noqa: BLE001 - advisory
+            cwd = None
+    if not cwd:
+        return {"cwd": "", "name": "", "branch": "", "remote": ""}
+    from . import agent_exec as AE
+    path = Path(str(cwd))
+    return {"cwd": str(path), "name": path.name,
+            "branch": AE._git_branch(str(path)) or "",
+            "remote": _git_remote(str(path))}
+
+
+def _git_remote(cwd):
+    """The origin URL as git records it, or "" -- never a placeholder."""
+    try:
+        text = (Path(cwd).expanduser().resolve() / ".git" / "config").read_text(
+            encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    block = re.search(r'\[remote "origin"\]([^\[]*)', text)
+    if not block:
+        return ""
+    url = re.search(r"url\s*=\s*(\S+)", block.group(1))
+    return url.group(1) if url else ""
+
+
 def setup_state(trajdir):
     """What onboarding still has to answer, read from the vault itself.
 
@@ -741,6 +825,9 @@ def _payload(trajdir=None, chat_scoped=None):
                    "agent_runs": runs,
                    "agent_claim": claim,
                    "scope": "chat" if chat_scoped else "global",
+                   # Where this chat works. Recorded in the manifest already; the
+                   # workspace could only name a project by guessing without it.
+                   "project": _project_identity(trajdir, chat_scoped, session),
                    "provider": _configured_provider(trajdir),
                    "revision": _goal_revision(goals, important)}
     if identity is not None:
@@ -1171,6 +1258,26 @@ class H(BaseHTTPRequestHandler):
                 html = html.replace(
                     "</body>", '<script src="/bridge.js"></script>\n</body>', 1)
                 self._send(200, html.encode(), "text/html; charset=utf-8")
+            elif self.path in ("/projects", "/projects.html"):
+                html = resources.files("human_compact.trajectory").joinpath(
+                    "web/projects_bundle.html").read_text(encoding="utf-8")
+                html = html.replace(
+                    "</head>", preboot_mask(self.server.chat_scoped) + "</head>", 1)
+                html = html.replace(
+                    "</body>", '<script src="/projects.js"></script>\n</body>', 1)
+                self._send(200, html.encode(), "text/html; charset=utf-8")
+            elif self.path == "/projects.js":
+                js = resources.files("human_compact.trajectory").joinpath(
+                    "web/projects.js").read_bytes()
+                self._send(200, js, "application/javascript")
+            elif self.path.split("?", 1)[0] == "/api/tree":
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                self._send(200, {"ok": True, "root": who["cwd"],
+                                 "tree": (project_tree(who["cwd"])
+                                          if who["cwd"] else [])})
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
