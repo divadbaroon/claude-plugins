@@ -331,10 +331,27 @@ class OverviewTests(BridgeTestCase):
 
     def test_the_overview_css_places_it_over_the_document_column(self):
         css = self.run_js("window.__hcPromptUI.projectCss();")
-        self.assertIn(".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:var(--hc-left,300px);right:var(--hc-right,330px)", css)
+        # The whole window under the header: both rails are covered, and the
+        # page's own variables paint it -- copied across, since the palette
+        # is declared on .hc and the overview lives on <body>.
+        self.assertIn(".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0", css)
+        self.assertIn("background:var(--bg,#fff);color:var(--ink,#111)", css)
         self.assertIn("[data-hc-overview] .hc-overview{display:block}", css)
-        self.assertIn("[data-hc-hide-left] .hc-overview{left:0}", css)
-        self.assertIn("[data-hc-hide-right] .hc-overview{right:0}", css)
+
+    def test_the_overview_and_menu_take_the_pages_palette(self):
+        got = json.loads(self.run_js(
+            PRELUDE + fetch_js()
+            + "getComputedStyle = function () { return { getPropertyValue: function (n) {"
+            "  return { '--bg': '#0d1117', '--ink': '#e6edf3', '--panel': '#0d1117' }[n] || ''; } }; };"
+            + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
+            + "var seen = {}; var track = function (node) { node.style.setProperty = function (k, v) { seen[k] = v; node.style[k] = v; };"
+            "  node.style.getPropertyValue = function (k) { return node.style[k] || ''; }; };"
+            "var made0 = made.length;"
+            "P.openOverview();"
+            "var box = document.querySelector('.hc-overview');"
+            "track(box); var changed = P.syncProjectTheme(box); var again = P.syncProjectTheme(box);"
+            "JSON.stringify([changed, again, seen]);"))
+        self.assertEqual([True, False, {"--bg": "#0d1117", "--ink": "#e6edf3", "--panel": "#0d1117"}], got)
 
 
 if __name__ == "__main__":

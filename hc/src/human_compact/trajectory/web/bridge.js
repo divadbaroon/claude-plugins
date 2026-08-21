@@ -2681,13 +2681,12 @@
       ".hc-project-link:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-project-link[data-hc-linked]{color:var(--ink,#111);border-color:var(--acc,#a5492a)}",
       ".hc-project-none{padding:6px 11px 10px;color:var(--fnt,#9b9b9b)}",
-      // The overview: over the document column, under the header, between
-      // the rails -- and to the window's edge where a rail is hidden.
-      ".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:var(--hc-left,300px);right:var(--hc-right,330px);bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 20px 24px;box-sizing:border-box}",
+      // The overview: the whole window under the header. It is the
+      // project's screen, not a pane of the goal's -- both rails are
+      // covered, and GOALS (or Esc) brings the three columns back.
+      ".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 24px 24px;box-sizing:border-box}",
       "[data-hc-overview] .hc-overview{display:block}",
-      "[data-hc-hide-left] .hc-overview{left:0}",
-      "[data-hc-hide-right] .hc-overview{right:0}",
-      ".hc-overview-tabs{display:flex;gap:22px;align-items:baseline;padding:12px 0 0;border-bottom:1px solid var(--bd,#e3e3e3);margin:0 -20px 16px;padding-left:20px;padding-right:20px}",
+      ".hc-overview-tabs{display:flex;gap:22px;align-items:baseline;padding:12px 0 0;border-bottom:1px solid var(--bd,#e3e3e3);margin:0 -24px 16px;padding-left:24px;padding-right:24px}",
       ".hc-overview-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
       ".hc-overview-tab:hover{color:var(--ink,#111)}",
       ".hc-overview-tab-on{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
@@ -2739,6 +2738,43 @@
     style.id = "hc-project-style";
     style.textContent = PROJECT_CSS;
     (document.head || document.documentElement).appendChild(style);
+  }
+
+  // The palette (--bg, --ink, ...) is declared on the artifact's .hc root,
+  // and the menu and overview are parented on <body>, outside it, where
+  // those names resolve to nothing. Copy the live values across, so both
+  // read exactly as the page does in either theme, and again whenever the
+  // theme moves.
+  var THEME_VARS = ["--bg", "--panel", "--panel2", "--ink", "--mut", "--fnt",
+                    "--bd", "--bd2", "--line", "--hov", "--acc", "--accbg",
+                    "--onacc", "--del", "--dtxt"];
+
+  function projectTheme() {
+    var app = document.querySelector(".hc");
+    if (!app || typeof getComputedStyle !== "function") return null;
+    var computed;
+    try { computed = getComputedStyle(app); } catch (error) { return null; }
+    if (!computed || typeof computed.getPropertyValue !== "function") return null;
+    var out = {};
+    THEME_VARS.forEach(function (name) {
+      var value = String(computed.getPropertyValue(name) || "").trim();
+      if (value) out[name] = value;
+    });
+    return out;
+  }
+
+  function syncProjectTheme(node) {
+    if (!node || !node.style || typeof node.style.setProperty !== "function") return false;
+    var theme = projectTheme();
+    if (!theme) return false;
+    var changed = false;
+    Object.keys(theme).forEach(function (name) {
+      if (node.style.getPropertyValue(name) !== theme[name]) {
+        node.style.setProperty(name, theme[name]);
+        changed = true;
+      }
+    });
+    return changed;
   }
 
   function projectInfo() {
@@ -2980,6 +3016,7 @@
     ensureProjectStyles();
     closeProjectMenu();
     projectMenuBox = projectMenuNode(who);
+    syncProjectTheme(projectMenuBox);
     placeProjectMenu();
     (document.body || document.documentElement).appendChild(projectMenuBox);
     var name = document.querySelector(".hc-project-name");
@@ -3196,10 +3233,13 @@
       if (overviewBox && overviewBox.parentNode) overviewBox.parentNode.removeChild(overviewBox);
       overviewBox = overviewNode(who);
       overviewBox.setAttribute("data-hc-cwd", who.cwd);
+      syncProjectTheme(overviewBox);
       (document.body || document.documentElement).appendChild(overviewBox);
       loadOverviewPanes(who);
       return true;
     }
+    // The theme can move while the overview is up.
+    var themed = syncProjectTheme(overviewBox);
     // The objective the server now holds, unless the reader is mid-edit.
     var objective = overviewBox.querySelector(".hc-overview-objective");
     if (objective && objective.getAttribute("data-hc-editing") === null
@@ -3207,7 +3247,7 @@
       objective.value = str(who.objective);
       return true;
     }
-    return false;
+    return themed;
   }
 
   function openOverview() {
@@ -7585,6 +7625,8 @@
     setOverviewPane: setOverviewPane,
     saveObjective: saveObjective,
     projectCss: function () { return PROJECT_CSS; },
+    projectTheme: projectTheme,
+    syncProjectTheme: syncProjectTheme,
     setRailWidth: setRailWidth,
     setRailHidden: setRailHidden,
     toggleRail: toggleRail,
