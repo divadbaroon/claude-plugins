@@ -331,8 +331,13 @@ def _discover_chats(own_session_id, root, limit=30):
             continue
         if not stat.st_size:
             continue
+        # Where the chat worked, when its manifest says: the project
+        # switcher groups chats by directory, and a name alone ("plugins")
+        # cannot tell two repositories with the same last segment apart.
+        cwd = _manifest_cwd(sid, root)
         rows.append({"session_id": sid,
                      "project": path.parent.name.split("-")[-1] or path.parent.name,
+                     "cwd": cwd,
                      "mtime": stat.st_mtime, "size": stat.st_size})
     rows.sort(key=lambda row: row["mtime"], reverse=True)
     return rows[:limit]
@@ -604,22 +609,116 @@ def _project_identity(trajdir, chat_scoped, session_id):
     """The directory this chat works in, named for the reader.
 
     Empty rather than guessed: a workspace that cannot say where it is should
-    say nothing rather than invent a repository.
+    say nothing rather than invent a repository. The project is the Claude
+    Code project: the directory the chat was started in, which is what its
+    manifest recorded. Every chat in that directory is a chat of the same
+    project, and what the reader writes about the project (its objective)
+    is kept once per directory, not once per chat.
     """
-    cwd = None
-    if chat_scoped and session_id:
-        try:
-            from . import chat_state as CS
-            cwd = (CS.load_manifest(str(session_id)) or {}).get("cwd")
-        except Exception:                          # noqa: BLE001 - advisory
-            cwd = None
+    empty = {"cwd": "", "name": "", "branch": "", "remote": "",
+             "objective": ""}
+    if not (chat_scoped and session_id):
+        return empty
+    try:
+        _sid, root = _chat_identity(trajdir)
+    except (OSError, ValueError):
+        return empty
+    cwd = _manifest_cwd(str(session_id), root)
     if not cwd:
-        return {"cwd": "", "name": "", "branch": "", "remote": ""}
-    from . import agent_exec as AE
+        return empty
     path = Path(str(cwd))
     return {"cwd": str(path), "name": path.name,
             "branch": AE._git_branch(str(path)) or "",
-            "remote": _git_remote(str(path))}
+            "remote": _git_remote(str(path)),
+            "objective": _load_project(root, str(path)).get("objective", "")}
+
+
+def _manifest_cwd(session_id, root):
+    """The directory a chat's manifest names, read as written.
+
+    Read from the file rather than through load_manifest: that loader hands
+    back a blank default when the manifest's own session_id disagrees with
+    the directory's, which a seeded or copied workspace does -- and the
+    directory it was started in is still the directory it was started in.
+    """
+    try:
+        path = CS.paths(str(session_id), root).manifest
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    cwd = value.get("cwd") if isinstance(value, dict) else None
+    return cwd if isinstance(cwd, str) else ""
+
+
+# The project's own record: one file per directory, under the vault base
+# beside the chat sessions, so two chats in one repository read and write
+# the same objective. Keyed by the resolved path's digest, never by the
+# path itself, which is not a safe file name.
+PROJECT_OBJECTIVE_LIMIT = 2000
+
+
+def _project_path(root, cwd):
+    try:
+        resolved = str(Path(cwd).expanduser().resolve())
+    except (OSError, RuntimeError):
+        resolved = str(cwd)
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+    return CS._state_base(root) / "projects" / f"{digest}.json"
+
+
+def _load_project(root, cwd):
+    if not cwd:
+        return {}
+    try:
+        value = json.loads(_project_path(root, cwd).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    objective = value.get("objective")
+    if isinstance(objective, str):
+        out["objective"] = objective[:PROJECT_OBJECTIVE_LIMIT]
+    return out
+
+
+def _save_project(root, cwd, record):
+    from .secure_io import atomic_write_json
+    path = _project_path(root, cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, dict(record, cwd=str(cwd)), root=path.parent)
+
+
+PROJECT_FILE_LIMIT = 256 * 1024
+
+
+def project_file(root, relpath):
+    """One text file of the project, for the overview's README pane.
+
+    The same containment rule as the tree: the path is resolved and checked
+    to be inside *root* before it is read, so `../` and symlinks out of the
+    project read nothing. Bounded, and text only: a binary answers as such
+    rather than as mojibake.
+    """
+    try:
+        base = Path(root).expanduser().resolve(strict=True)
+        target = (base / str(relpath)).resolve(strict=True)
+        target.relative_to(base)
+    except (OSError, ValueError, RuntimeError):
+        return {"ok": False, "error": "no such file in the project"}
+    if not target.is_file():
+        return {"ok": False, "error": "not a file"}
+    try:
+        with open(target, "rb") as handle:
+            raw = handle.read(PROJECT_FILE_LIMIT + 1)
+    except OSError:
+        return {"ok": False, "error": "unreadable"}
+    if b"\0" in raw[:8192]:
+        return {"ok": False, "error": "binary file"}
+    truncated = len(raw) > PROJECT_FILE_LIMIT
+    text = raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")
+    return {"ok": True, "path": str(target.relative_to(base)),
+            "text": text, "truncated": truncated}
 
 
 def _git_remote(cwd):
@@ -1029,6 +1128,22 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
+        if kind == "set_project_objective":
+            # What the project is for, in the reader's words: kept once per
+            # project directory, so every chat in it reads the same line.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            if not who["cwd"]:
+                return {"ok": False, "error": "this chat has no project directory"}
+            text = op.get("objective")
+            if not isinstance(text, str):
+                return {"ok": False, "error": "objective must be text"}
+            record = _load_project(root, who["cwd"])
+            record["objective"] = text.strip()[:PROJECT_OBJECTIVE_LIMIT]
+            _save_project(root, who["cwd"], record)
+            return {"ok": True, "objective": record["objective"]}
         if kind in ("link_chat", "unlink_chat"):
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
@@ -1283,19 +1398,10 @@ class H(BaseHTTPRequestHandler):
                 html = html.replace(
                     "</body>", '<script src="/bridge.js"></script>\n</body>', 1)
                 self._send(200, html.encode(), "text/html; charset=utf-8")
-            elif self.path in ("/projects", "/projects.html"):
-                html = resources.files("human_compact.trajectory").joinpath(
-                    "web/projects_bundle.html").read_text(encoding="utf-8")
-                html = html.replace(
-                    "</head>", preboot_mask(self.server.chat_scoped) + "</head>", 1)
-                html = html.replace(
-                    "</body>", '<script src="/projects.js"></script>\n</body>', 1)
-                self._send(200, html.encode(), "text/html; charset=utf-8")
-            elif self.path == "/projects.js":
-                js = resources.files("human_compact.trajectory").joinpath(
-                    "web/projects.js").read_bytes()
-                self._send(200, js, "application/javascript")
             elif self.path.split("?", 1)[0] == "/api/tree":
+                # The project's files, for the overview's file pane. Where
+                # the project is comes from the chat's manifest; a workspace
+                # that does not know answers with an empty tree, not a guess.
                 trajdir = self.server.trajdir
                 session = (_chat_identity(trajdir)[0]
                            if self.server.chat_scoped else None)
@@ -1303,6 +1409,19 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "root": who["cwd"],
                                  "tree": (project_tree(who["cwd"])
                                           if who["cwd"] else [])})
+            elif self.path.split("?", 1)[0] == "/api/file":
+                # One text file of the project, named relative to its root.
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                relpath = (query.get("path") or [""])[0]
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                if not who["cwd"] or not relpath:
+                    self._send(200, {"ok": False, "error": "no project"})
+                else:
+                    self._send(200, project_file(who["cwd"], relpath))
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()

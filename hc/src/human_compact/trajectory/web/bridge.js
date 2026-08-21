@@ -738,7 +738,11 @@
       // Whether that conversation is still there to build in, and how many
       // builds wait for its next turn.
       buildSession: (st.build_session && typeof st.build_session === "object")
-        ? st.build_session : null
+        ? st.build_session : null,
+      // The directory this chat works in -- the Claude Code project -- as
+      // the manifest recorded it: name, branch, origin, and the objective
+      // written for it. Empty when the manifest never said.
+      project: (st.project && typeof st.project === "object") ? st.project : null
     };
     var fingerprint = JSON.stringify([
       serverState.goals.map(function (g) {
@@ -2632,6 +2636,713 @@
 
   function toggleAlertCenter() {
     return alertCenterShown() ? closeAlertCenter() : !!openAlertCenter();
+  }
+
+  // --- the project: where this chat works --------------------------------
+  // A Claude Code project is a directory: the one the chat was started in,
+  // which its manifest recorded and /api/state reports as `project`. The
+  // header names it after the brand -- "Engelbart / myrepo ▾ / ● session" --
+  // and the name opens a menu: the project's facts (directory, branch,
+  // origin), a way into its overview, and the other chats started in the
+  // same directory, each linkable as a prompt source for every goal.
+  //
+  // The overview is the project's own screen, drawn over the document
+  // column and nothing else: the name and objective (the reader's words,
+  // kept once per directory), and the repository as context -- its README
+  // and its file tree, both read from the server under the same containment
+  // rule. Nothing here is narrated: a pane the vault cannot fill says so.
+  // Chat scope only; a global vault has no manifest to name a project from.
+
+  var PROJECT_CSS = [
+      // The header spreads its children apart; the chip takes the slack on
+      // its right so it stays against the brand, and the pills follow it.
+      ".hc-project{display:inline-flex;align-items:center;gap:8px;margin-left:10px;margin-right:auto;font:11px 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      ".hc-project:empty{display:none}",
+      ".hc-project-sep{color:var(--fnt,#9b9b9b)}",
+      ".hc-project-name{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;color:var(--ink,#111);font-weight:600;padding:2px 4px;border-radius:4px}",
+      ".hc-project-name:hover,.hc-project-name[data-hc-project-open]{background:var(--hov,#f2f2f2)}",
+      ".hc-project-caret{font-size:8px;color:var(--fnt,#9b9b9b)}",
+      // The menu under the name: facts, the overview, the project's chats.
+      ".hc-project-menu{position:fixed;top:calc(var(--hc-top,37px) + 4px);left:var(--hc-project-left,120px);z-index:100003;width:340px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-top,37px) - 24px);overflow-y:auto;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-project-menu-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
+      ".hc-project-menu-sub{font-weight:400;color:var(--mut,#575757);font-size:10px}",
+      ".hc-project-act{padding:7px 11px;cursor:pointer;user-select:none;color:var(--ink,#111);border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-project-act:hover{background:var(--hov,#f2f2f2)}",
+      ".hc-project-facts{padding:6px 11px 8px;border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-project-fact{display:flex;gap:10px;align-items:baseline;padding:2px 0}",
+      ".hc-project-fact-k{flex:none;width:62px;font:600 9px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
+      ".hc-project-fact-v{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;color:var(--mut,#575757)}",
+      ".hc-project-fact-v a{color:inherit}",
+      ".hc-project-chats-head{padding:7px 11px 3px;font:600 9px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
+      ".hc-project-chat{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:4px 11px}",
+      ".hc-project-chat-name{color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-project-chat-name[data-hc-this]{color:var(--ink,#111)}",
+      ".hc-project-link{flex:none;font:10px 'Source Code Pro',monospace;padding:1px 7px;border:1px solid var(--bd2,#d5d5d5);border-radius:99px;background:transparent;color:var(--mut,#575757);cursor:pointer;user-select:none}",
+      ".hc-project-link:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-project-link[data-hc-linked]{color:var(--ink,#111);border-color:var(--acc,#a5492a)}",
+      ".hc-project-none{padding:6px 11px 10px;color:var(--fnt,#9b9b9b)}",
+      // The overview: over the document column, under the header, between
+      // the rails -- and to the window's edge where a rail is hidden.
+      ".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:var(--hc-left,300px);right:var(--hc-right,330px);bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 20px 24px;box-sizing:border-box}",
+      "[data-hc-overview] .hc-overview{display:block}",
+      "[data-hc-hide-left] .hc-overview{left:0}",
+      "[data-hc-hide-right] .hc-overview{right:0}",
+      ".hc-overview-tabs{display:flex;gap:22px;align-items:baseline;padding:12px 0 0;border-bottom:1px solid var(--bd,#e3e3e3);margin:0 -20px 16px;padding-left:20px;padding-right:20px}",
+      ".hc-overview-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
+      ".hc-overview-tab:hover{color:var(--ink,#111)}",
+      ".hc-overview-tab-on{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
+      ".hc-overview-card{border:1px solid var(--bd,#e3e3e3);border-radius:3px;background:var(--panel,#fff);padding:14px 18px 16px;margin-bottom:14px}",
+      ".hc-overview-name{font:600 14px 'Source Code Pro',monospace;color:var(--ink,#111);padding-bottom:10px;border-bottom:1px solid var(--bd,#e3e3e3);margin-bottom:12px}",
+      ".hc-overview-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.3px;color:var(--mut,#575757);text-transform:uppercase}",
+      ".hc-overview-label small{font-weight:400;letter-spacing:.2px;text-transform:none;color:var(--fnt,#9b9b9b);margin-left:6px}",
+      ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:44px;resize:vertical;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12.5px/1.6 'Source Code Pro',monospace;caret-color:var(--ink,#111)}",
+      ".hc-overview-objective::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-context{display:flex;border:1px solid var(--bd,#e3e3e3);border-radius:3px;background:var(--panel,#fff);min-height:320px}",
+      ".hc-overview-srcs{flex:0 0 220px;border-right:1px solid var(--bd,#e3e3e3);padding:10px}",
+      ".hc-overview-src{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:3px;background:var(--panel2,#f6f6f6);cursor:default}",
+      ".hc-overview-src-glyph{flex:none;width:18px;height:18px;border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 9px/18px 'Source Code Pro',monospace;text-align:center}",
+      ".hc-overview-src-name{font-weight:600;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-overview-src-kind{font-size:9.5px;color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-repo{flex:1 1 auto;min-width:0;padding:14px 20px 18px}",
+      ".hc-overview-repo-name{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-overview-repo-meta{font-size:10.5px;color:var(--mut,#575757);margin-top:2px;overflow-wrap:anywhere}",
+      ".hc-overview-repo-meta a{color:inherit}",
+      ".hc-overview-panes{display:flex;gap:18px;border-bottom:1px solid var(--bd,#e3e3e3);margin:12px 0 12px}",
+      ".hc-overview-pane-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 7px;border-bottom:2px solid transparent;margin-bottom:-1px}",
+      ".hc-overview-pane-tab:hover{color:var(--ink,#111)}",
+      ".hc-overview-pane-tab-on{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
+      ".hc-overview-pane{display:none}",
+      ".hc-overview-pane[data-hc-pane-on]{display:block}",
+      ".hc-overview-readme{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.65 'Source Code Pro',monospace;color:var(--dtxt,#333);max-height:60vh;overflow-y:auto}",
+      ".hc-overview-empty{color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-tree{font:12px/1.8 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
+      ".hc-overview-dir{cursor:pointer;user-select:none}",
+      ".hc-overview-dir::before{content:'\\25b8';display:inline-block;width:12px;color:var(--fnt,#9b9b9b);font-size:9px}",
+      ".hc-overview-dir[data-hc-open]::before{content:'\\25be'}",
+      ".hc-overview-file::before{content:'';display:inline-block;width:12px}",
+      ".hc-overview-kids{display:none;padding-left:16px}",
+      ".hc-overview-dir[data-hc-open]+.hc-overview-kids{display:block}",
+      ".hc-overview-more{color:var(--fnt,#9b9b9b);font-size:10.5px;margin-top:6px}"
+  ].join("\n");
+
+  var projectBound = false;
+  var projectMenuBox = null;
+  var overviewBox = null;
+  var overviewPane = "readme";
+  // What the overview fetched, and for which directory: a change of project
+  // (a different chat's state landing here) empties it.
+  var projectFetched = { cwd: null, tree: null, readme: null, chats: null };
+
+  function ensureProjectStyles() {
+    if (document.getElementById("hc-project-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-project-style";
+    style.textContent = PROJECT_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function projectInfo() {
+    var who = serverState.project;
+    if (!who || typeof who !== "object" || !who.name) return null;
+    return who;
+  }
+
+  function projectCache(cwd) {
+    if (projectFetched.cwd !== cwd) {
+      projectFetched = { cwd: cwd, tree: null, readme: null, chats: null };
+    }
+    return projectFetched;
+  }
+
+  function fetchJSON(path) {
+    if (typeof fetch !== "function") return Promise.resolve(null);
+    try {
+      return fetch(path, { cache: "no-store" })
+        .then(function (r) { return r.json(); })
+        .catch(function () { return null; });
+    } catch (error) {
+      return Promise.resolve(null);
+    }
+  }
+
+  // A node's children as an array: a browser hands back an HTMLCollection,
+  // which Array.isArray refuses, so array() would read an element as empty.
+  function kids(node) {
+    return node && node.children ? Array.prototype.slice.call(node.children) : [];
+  }
+
+  function wipe(node) {
+    if (!node) return;
+    while (node.children && node.children.length) {
+      node.removeChild(node.children[node.children.length - 1]);
+    }
+    if (!node.children || !node.children.length) node.textContent = "";
+  }
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  // The chip after the brand. Built once into the slot the header patch
+  // leaves; only the name changes after that. The click is handled at the
+  // document: the artifact re-materializes the header on render, which
+  // keeps attributes and drops listeners.
+  function renderProjectChip() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-project");
+    if (!slot) return false;
+    ensureProjectStyles();
+    bindProject();
+    var who = projectInfo();
+    var name = slot.querySelector(".hc-project-name");
+    if (!who) {
+      if (name) { wipe(slot); return true; }
+      return false;
+    }
+    if (!name) {
+      slot.appendChild(el("span", "hc-project-sep", "/"));
+      name = el("span", "hc-project-name");
+      name.setAttribute("role", "button");
+      name.setAttribute("aria-label", "Project menu");
+      name.title = "This chat's project: " + who.cwd;
+      name.appendChild(el("span", "hc-project-name-text", who.name));
+      name.appendChild(el("span", "hc-project-caret", "▾"));
+      slot.appendChild(name);
+      return true;
+    }
+    var text = name.querySelector(".hc-project-name-text");
+    if (text && text.textContent !== who.name) {
+      text.textContent = who.name;
+      name.title = "This chat's project: " + who.cwd;
+      return true;
+    }
+    return false;
+  }
+
+  function projectMenuShown() {
+    return !!(projectMenuBox && inLiveDocument(projectMenuBox));
+  }
+
+  function closeProjectMenu() {
+    if (!projectMenuShown()) return false;
+    if (projectMenuBox.parentNode) projectMenuBox.parentNode.removeChild(projectMenuBox);
+    projectMenuBox = null;
+    var name = document.querySelector(".hc-project-name");
+    if (name && name.removeAttribute) name.removeAttribute("data-hc-project-open");
+    return true;
+  }
+
+  function placeProjectMenu() {
+    var root = document.documentElement;
+    var name = document.querySelector(".hc-project-name");
+    if (!root || !root.style || typeof root.style.setProperty !== "function"
+        || !name || !name.getBoundingClientRect) return;
+    var box = name.getBoundingClientRect();
+    if (box && typeof box.left === "number") {
+      root.style.setProperty("--hc-project-left", Math.max(8, Math.round(box.left)) + "px");
+    }
+  }
+
+  function relativeAge(epochSeconds) {
+    if (typeof epochSeconds !== "number" || !isFinite(epochSeconds)) return "";
+    var ago = Math.max(0, Date.now() / 1000 - epochSeconds);
+    if (ago < 90) return "just now";
+    if (ago < 3600) return Math.round(ago / 60) + "m ago";
+    if (ago < 86400) return Math.round(ago / 3600) + "h ago";
+    return Math.round(ago / 86400) + "d ago";
+  }
+
+  function projectFact(facts, key, value, href) {
+    var row = el("div", "hc-project-fact");
+    row.appendChild(el("span", "hc-project-fact-k", key));
+    var v = el("span", "hc-project-fact-v");
+    if (value && href) {
+      var a = el("a", "", value);
+      a.setAttribute("href", href);
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener");
+      v.appendChild(a);
+    } else {
+      v.textContent = value || "—";
+    }
+    row.appendChild(v);
+    facts.appendChild(row);
+  }
+
+  // The origin as something a browser can open, when it is a GitHub-style
+  // remote; otherwise no link at all -- a made-up URL is worse than none.
+  function remoteHref(remote) {
+    var text = str(remote).trim();
+    if (!text) return "";
+    var ssh = text.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+    if (ssh) return "https://" + ssh[1] + "/" + ssh[2];
+    if (/^https?:\/\//.test(text)) return text.replace(/\.git$/, "");
+    return "";
+  }
+
+  // The chats of this project: every discovered chat whose manifest names
+  // the same directory, this one first. Each other one carries a link
+  // toggle -- a workspace-wide link, the same op the header's "+ chats"
+  // makes -- so the project's own conversations are one click from being
+  // prompt sources here.
+  function projectChatsOf(data, who) {
+    var linked = {};
+    array(data && data.linked).forEach(function (row) {
+      if (row && row.session_id && !row.goal_id) linked[row.session_id] = true;
+    });
+    var rows = array(data && data.available).filter(function (row) {
+      return row && typeof row.session_id === "string"
+        && str(row.cwd) && str(row.cwd) === str(who.cwd);
+    }).map(function (row) {
+      return { session_id: row.session_id, mtime: row.mtime,
+               linked: !!linked[row.session_id] };
+    });
+    return rows;
+  }
+
+  function projectMenuNode(who) {
+    var box = el("div", "hc-project-menu");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Project");
+    var head = el("div", "hc-project-menu-head");
+    head.appendChild(el("span", "", who.name));
+    head.appendChild(el("span", "hc-project-menu-sub", "project"));
+    box.appendChild(head);
+    var open = el("div", "hc-project-act", "Overview →");
+    open.setAttribute("data-hc-project-act", "overview");
+    open.setAttribute("role", "button");
+    box.appendChild(open);
+    var facts = el("div", "hc-project-facts");
+    projectFact(facts, "directory", who.cwd);
+    projectFact(facts, "branch", who.branch);
+    projectFact(facts, "origin", who.remote, remoteHref(who.remote));
+    box.appendChild(facts);
+    box.appendChild(el("div", "hc-project-chats-head", "chats in this project"));
+    var list = el("div", "hc-project-chats");
+    var mine = el("div", "hc-project-chat");
+    var mineName = el("span", "hc-project-chat-name",
+                      (str(serverState.sessionId).slice(0, 8) || "this chat") + " · this chat");
+    mineName.setAttribute("data-hc-this", "");
+    mine.appendChild(mineName);
+    list.appendChild(mine);
+    list.appendChild(el("div", "hc-project-none", "looking…"));
+    box.appendChild(list);
+    return box;
+  }
+
+  function renderProjectChats(box, who, data) {
+    var list = box && box.querySelector(".hc-project-chats");
+    if (!list) return;
+    var waiting = list.querySelector(".hc-project-none");
+    if (waiting && waiting.parentNode) waiting.parentNode.removeChild(waiting);
+    var rows = projectChatsOf(data, who);
+    if (!rows.length) {
+      list.appendChild(el("div", "hc-project-none",
+                          data ? "no other chats were started here" : "could not list chats"));
+      return;
+    }
+    rows.slice(0, 12).forEach(function (row) {
+      var line = el("div", "hc-project-chat");
+      var name = el("span", "hc-project-chat-name",
+                    row.session_id.slice(0, 8) + (relativeAge(row.mtime) ? " · " + relativeAge(row.mtime) : ""));
+      name.title = row.session_id;
+      line.appendChild(name);
+      var btn = el("span", "hc-project-link", row.linked ? "linked" : "link");
+      btn.setAttribute("role", "button");
+      btn.setAttribute("data-hc-session", row.session_id);
+      if (row.linked) btn.setAttribute("data-hc-linked", "");
+      btn.title = row.linked ? "Stop offering this chat's prompts" : "Offer this chat's prompts to every goal";
+      line.appendChild(btn);
+      list.appendChild(line);
+    });
+    if (rows.length > 12) {
+      list.appendChild(el("div", "hc-project-none", (rows.length - 12) + " more"));
+    }
+  }
+
+  function loadProjectChats(box, who) {
+    var cache = projectCache(who.cwd);
+    if (cache.chats) { renderProjectChats(box, who, cache.chats); return Promise.resolve(true); }
+    return fetchJSON("/api/chats").then(function (data) {
+      var ok = data && data.ok && Array.isArray(data.available);
+      cache.chats = ok ? data : null;
+      if (projectMenuShown() && projectMenuBox === box) renderProjectChats(box, who, ok ? data : null);
+      return !!ok;
+    });
+  }
+
+  function openProjectMenu() {
+    var who = projectInfo();
+    if (!who) return false;
+    ensureProjectStyles();
+    closeProjectMenu();
+    projectMenuBox = projectMenuNode(who);
+    placeProjectMenu();
+    (document.body || document.documentElement).appendChild(projectMenuBox);
+    var name = document.querySelector(".hc-project-name");
+    if (name) name.setAttribute("data-hc-project-open", "");
+    loadProjectChats(projectMenuBox, who);
+    return true;
+  }
+
+  function toggleProjectMenu() {
+    return projectMenuShown() ? !closeProjectMenu() : openProjectMenu();
+  }
+
+  function toggleProjectLink(sessionId, linkedNow) {
+    var who = projectInfo();
+    if (!who || !sessionId) return Promise.resolve(false);
+    var body = { op: linkedNow ? "unlink_chat" : "link_chat", session_id: sessionId };
+    if (!linkedNow) body.label = sessionId.slice(0, 8);
+    return post(body).then(function (result) {
+      if (!result || !result.ok) return false;
+      projectCache(who.cwd).chats = null;
+      if (projectMenuShown()) {
+        var list = projectMenuBox.querySelector(".hc-project-chats");
+        if (list) {
+          wipe(list);
+          list.appendChild(el("div", "hc-project-none", "looking…"));
+        }
+        loadProjectChats(projectMenuBox, who);
+      }
+      return true;
+    });
+  }
+
+  // --- the overview screen -------------------------------------------------
+
+  function overviewShown() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute && root.getAttribute("data-hc-overview") !== null);
+  }
+
+  function overviewNode(who) {
+    var box = el("div", "hc-overview");
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", "Project overview");
+    var tabs = el("div", "hc-overview-tabs");
+    var over = el("span", "hc-overview-tab hc-overview-tab-on", "OVERVIEW");
+    over.setAttribute("data-hc-overview-tab", "overview");
+    var goals = el("span", "hc-overview-tab", "GOALS");
+    goals.setAttribute("data-hc-overview-tab", "goals");
+    goals.setAttribute("role", "button");
+    tabs.appendChild(over);
+    tabs.appendChild(goals);
+    box.appendChild(tabs);
+
+    var card = el("div", "hc-overview-card");
+    card.appendChild(el("div", "hc-overview-name", who.name));
+    var label = el("div", "hc-overview-label", "main objective");
+    label.appendChild(el("small", "", "· optional"));
+    card.appendChild(label);
+    var objective = el("textarea", "hc-overview-objective");
+    objective.setAttribute("placeholder", "What are you trying to accomplish?");
+    objective.setAttribute("spellcheck", "false");
+    objective.setAttribute("rows", "2");
+    objective.value = str(who.objective);
+    card.appendChild(objective);
+    box.appendChild(card);
+
+    box.appendChild(el("div", "hc-overview-label", "context"));
+    var context = el("div", "hc-overview-context");
+    var srcs = el("div", "hc-overview-srcs");
+    var src = el("div", "hc-overview-src");
+    src.appendChild(el("span", "hc-overview-src-glyph", "R"));
+    var srcText = el("div", "");
+    srcText.appendChild(el("div", "hc-overview-src-name", who.name));
+    srcText.appendChild(el("div", "hc-overview-src-kind", "Repository"));
+    src.appendChild(srcText);
+    srcs.appendChild(src);
+    context.appendChild(srcs);
+    var repo = el("div", "hc-overview-repo");
+    repo.appendChild(el("div", "hc-overview-repo-name", who.name));
+    var meta = el("div", "hc-overview-repo-meta");
+    var href = remoteHref(who.remote);
+    if (who.remote && href) {
+      var a = el("a", "", who.remote);
+      a.setAttribute("href", href);
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener");
+      meta.appendChild(a);
+    } else if (who.remote) {
+      meta.appendChild(el("span", "", who.remote));
+    }
+    if (who.branch) {
+      meta.appendChild(el("span", "", (who.remote ? " · " : "") + who.branch));
+    }
+    if (!who.remote && !who.branch) meta.textContent = who.cwd;
+    repo.appendChild(meta);
+    var panes = el("div", "hc-overview-panes");
+    [["readme", "README.md"], ["files", "Files"]].forEach(function (spec) {
+      var tab = el("span", "hc-overview-pane-tab" + (spec[0] === overviewPane ? " hc-overview-pane-tab-on" : ""), spec[1]);
+      tab.setAttribute("data-hc-overview-pane", spec[0]);
+      tab.setAttribute("role", "button");
+      panes.appendChild(tab);
+    });
+    repo.appendChild(panes);
+    var readme = el("div", "hc-overview-pane");
+    readme.setAttribute("data-hc-pane", "readme");
+    if (overviewPane === "readme") readme.setAttribute("data-hc-pane-on", "");
+    readme.appendChild(el("div", "hc-overview-empty", "reading…"));
+    repo.appendChild(readme);
+    var files = el("div", "hc-overview-pane");
+    files.setAttribute("data-hc-pane", "files");
+    if (overviewPane === "files") files.setAttribute("data-hc-pane-on", "");
+    files.appendChild(el("div", "hc-overview-empty", "reading…"));
+    repo.appendChild(files);
+    context.appendChild(repo);
+    box.appendChild(context);
+    return box;
+  }
+
+  function overviewPaneNode(name) {
+    if (!overviewBox) return null;
+    var panes = [];
+    (function walk(node) {
+      kids(node).forEach(function (child) {
+        if (String(child.className).split(" ").indexOf("hc-overview-pane") >= 0) panes.push(child);
+        walk(child);
+      });
+    })(overviewBox);
+    for (var i = 0; i < panes.length; i++) {
+      if (panes[i].getAttribute("data-hc-pane") === name) return panes[i];
+    }
+    return null;
+  }
+
+  function renderReadme(result) {
+    var pane = overviewPaneNode("readme");
+    if (!pane) return;
+    wipe(pane);
+    if (!result || !result.ok) {
+      pane.appendChild(el("div", "hc-overview-empty",
+                          result && result.error === "binary file"
+                            ? "README.md is not a text file"
+                            : "No README.md in this project."));
+      return;
+    }
+    // Raw, not rendered: the bundle ships no markdown renderer, and a
+    // half-rendering is less readable than the source. It is what the file
+    // says, which is the point of a README pane.
+    pane.appendChild(el("pre", "hc-overview-readme", result.text));
+    if (result.truncated) {
+      pane.appendChild(el("div", "hc-overview-more", "… truncated; the file is longer than this pane reads"));
+    }
+  }
+
+  function treeNodes(rows, into, depth) {
+    array(rows).forEach(function (row) {
+      if (!row || typeof row.n !== "string") return;
+      var isDir = Array.isArray(row.kids);
+      var line = el("div", isDir ? "hc-overview-dir" : "hc-overview-file", row.n);
+      if (isDir) {
+        line.setAttribute("role", "button");
+        if (depth === 0) line.setAttribute("data-hc-open", "");
+      }
+      into.appendChild(line);
+      if (isDir) {
+        var kids = el("div", "hc-overview-kids");
+        treeNodes(row.kids, kids, depth + 1);
+        into.appendChild(kids);
+      }
+    });
+  }
+
+  function renderTree(result) {
+    var pane = overviewPaneNode("files");
+    if (!pane) return;
+    wipe(pane);
+    var rows = result && result.ok ? array(result.tree) : null;
+    if (!rows || !rows.length) {
+      pane.appendChild(el("div", "hc-overview-empty",
+                          rows ? "The project directory is empty." : "Could not read the project's files."));
+      return;
+    }
+    var tree = el("div", "hc-overview-tree");
+    treeNodes(rows, tree, 0);
+    pane.appendChild(tree);
+  }
+
+  function loadOverviewPanes(who) {
+    var cache = projectCache(who.cwd);
+    var jobs = [];
+    if (cache.readme) renderReadme(cache.readme);
+    else jobs.push(fetchJSON("/api/file?path=README.md").then(function (result) {
+      cache.readme = result || { ok: false };
+      if (overviewShown()) renderReadme(cache.readme);
+    }));
+    if (cache.tree) renderTree(cache.tree);
+    else jobs.push(fetchJSON("/api/tree").then(function (result) {
+      cache.tree = result || { ok: false };
+      if (overviewShown()) renderTree(cache.tree);
+    }));
+    return Promise.all(jobs);
+  }
+
+  function renderOverview() {
+    var who = projectInfo();
+    var root = document.documentElement;
+    if (!who || serverState.scope !== "chat") {
+      if (overviewShown()) closeOverview();
+      return false;
+    }
+    if (!overviewShown()) return false;
+    ensureProjectStyles();
+    if (!overviewBox || !inLiveDocument(overviewBox)
+        || overviewBox.getAttribute("data-hc-cwd") !== who.cwd) {
+      if (overviewBox && overviewBox.parentNode) overviewBox.parentNode.removeChild(overviewBox);
+      overviewBox = overviewNode(who);
+      overviewBox.setAttribute("data-hc-cwd", who.cwd);
+      (document.body || document.documentElement).appendChild(overviewBox);
+      loadOverviewPanes(who);
+      return true;
+    }
+    // The objective the server now holds, unless the reader is mid-edit.
+    var objective = overviewBox.querySelector(".hc-overview-objective");
+    if (objective && objective.getAttribute("data-hc-editing") === null
+        && objective.value !== str(who.objective)) {
+      objective.value = str(who.objective);
+      return true;
+    }
+    return false;
+  }
+
+  function openOverview() {
+    var who = projectInfo();
+    var root = document.documentElement;
+    if (!who || !root || !root.setAttribute) return false;
+    closeProjectMenu();
+    root.setAttribute("data-hc-overview", "");
+    renderOverview();
+    return true;
+  }
+
+  function closeOverview() {
+    var root = document.documentElement;
+    if (!root || !root.removeAttribute) return false;
+    var was = overviewShown();
+    root.removeAttribute("data-hc-overview");
+    return was;
+  }
+
+  function toggleOverview() {
+    return overviewShown() ? !closeOverview() : openOverview();
+  }
+
+  function setOverviewPane(name) {
+    if (name !== "readme" && name !== "files") return false;
+    overviewPane = name;
+    if (!overviewBox) return true;
+    ["readme", "files"].forEach(function (pane) {
+      var node = overviewPaneNode(pane);
+      if (!node) return;
+      if (pane === name) node.setAttribute("data-hc-pane-on", "");
+      else node.removeAttribute("data-hc-pane-on");
+    });
+    var panes = overviewBox.querySelector(".hc-overview-panes");
+    kids(panes).forEach(function (tab) {
+      var on = tab.getAttribute("data-hc-overview-pane") === name;
+      tab.className = "hc-overview-pane-tab" + (on ? " hc-overview-pane-tab-on" : "");
+    });
+    return true;
+  }
+
+  function saveObjective(textarea) {
+    var who = projectInfo();
+    if (!who || !textarea) return Promise.resolve(false);
+    var text = str(textarea.value);
+    if (textarea.removeAttribute) textarea.removeAttribute("data-hc-editing");
+    if (text.trim() === str(who.objective).trim()) return Promise.resolve(false);
+    return post({ op: "set_project_objective", objective: text }).then(function (result) {
+      if (!result || !result.ok) return false;
+      if (serverState.project) serverState.project.objective = str(result.objective);
+      return true;
+    });
+  }
+
+  function bindProject() {
+    if (projectBound || !document.addEventListener) return;
+    projectBound = true;
+    document.addEventListener("click", function (event) {
+      var target = event && event.target;
+      if (!target) return;
+      var stop = function () {
+        if (event.preventDefault) event.preventDefault();
+        if (event.stopPropagation) event.stopPropagation();
+      };
+      if (closestByClass(target, "hc-project-name")) {
+        stop();
+        toggleProjectMenu();
+        return;
+      }
+      var act = closestByClass(target, "hc-project-act");
+      if (act) {
+        stop();
+        if (act.getAttribute("data-hc-project-act") === "overview") openOverview();
+        else closeProjectMenu();
+        return;
+      }
+      var link = closestByClass(target, "hc-project-link");
+      if (link) {
+        stop();
+        toggleProjectLink(link.getAttribute("data-hc-session"),
+                          link.getAttribute("data-hc-linked") !== null);
+        return;
+      }
+      if (closestByClass(target, "hc-project-menu")) return;
+      if (projectMenuShown()) closeProjectMenu();
+      var tab = closestByClass(target, "hc-overview-tab");
+      if (tab) {
+        stop();
+        if (tab.getAttribute("data-hc-overview-tab") === "goals") closeOverview();
+        return;
+      }
+      var paneTab = closestByClass(target, "hc-overview-pane-tab");
+      if (paneTab) {
+        stop();
+        setOverviewPane(paneTab.getAttribute("data-hc-overview-pane"));
+        return;
+      }
+      var dir = closestByClass(target, "hc-overview-dir");
+      if (dir) {
+        stop();
+        if (dir.getAttribute("data-hc-open") !== null) dir.removeAttribute("data-hc-open");
+        else dir.setAttribute("data-hc-open", "");
+      }
+    }, true);
+    document.addEventListener("focusin", function (event) {
+      var target = event && event.target;
+      if (target && closestByClass(target, "hc-overview-objective")) {
+        target.setAttribute("data-hc-editing", "");
+      }
+    }, true);
+    document.addEventListener("focusout", function (event) {
+      var target = event && event.target;
+      if (target && closestByClass(target, "hc-overview-objective")) saveObjective(target);
+    }, true);
+    document.addEventListener("keydown", function (event) {
+      if (!event) return;
+      var target = event.target;
+      if (event.key === "Escape") {
+        if (projectMenuShown()) { closeProjectMenu(); return; }
+        if (target && closestByClass(target, "hc-overview-objective")) {
+          saveObjective(target);
+          if (typeof target.blur === "function") target.blur();
+          return;
+        }
+        if (overviewShown()) closeOverview();
+        return;
+      }
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)
+          && target && closestByClass(target, "hc-overview-objective")) {
+        if (event.preventDefault) event.preventDefault();
+        saveObjective(target);
+        if (typeof target.blur === "function") target.blur();
+      }
+    }, true);
   }
 
   // --- the settings panel, behind the header gear -------------------------
@@ -5374,7 +6085,11 @@
   // brand ends so the offset follows the font rather than a guess.
   function placePills() {
     var root = document.documentElement;
-    var brand = document.querySelector(".hc-brand");
+    // After the project chip when there is one: the pills follow the last
+    // thing the header names before them.
+    var chip = document.querySelector(".hc-project");
+    var brand = (chip && chip.children && chip.children.length) ? chip
+              : document.querySelector(".hc-brand");
     if (!root || !root.style || typeof root.style.setProperty !== "function"
         || !brand || !brand.getBoundingClientRect) return false;
     var box = brand.getBoundingClientRect();
@@ -5772,6 +6487,8 @@
       renderPanelToggles();
       installRailDrag();
       renderSessionChip();
+      renderProjectChip();
+      renderOverview();
       renderHandoff();
       renderBell();
       renderGear();
@@ -6022,7 +6739,7 @@
       // The window is named for what it is: one chat's goals. "Vault"
       // is the global product this scope is not.
       ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
-       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span>"
+       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span><span class=\"hc-project\"></span>"
             : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
       // A notification names a goal; going to it means selecting it in the
       // tree. The artifact owns selection, so it publishes one setter from
@@ -6855,6 +7572,19 @@
     applyLaunchSkin: applyLaunchSkin,
     launchCss: function () { return LAUNCH_CSS; },
     railLayout: function () { return loadLayout(); },
+    renderProjectChip: renderProjectChip,
+    openProjectMenu: openProjectMenu,
+    closeProjectMenu: closeProjectMenu,
+    projectMenuShown: projectMenuShown,
+    projectChatsOf: projectChatsOf,
+    remoteHref: remoteHref,
+    openOverview: openOverview,
+    closeOverview: closeOverview,
+    renderOverview: renderOverview,
+    overviewShown: overviewShown,
+    setOverviewPane: setOverviewPane,
+    saveObjective: saveObjective,
+    projectCss: function () { return PROJECT_CSS; },
     setRailWidth: setRailWidth,
     setRailHidden: setRailHidden,
     toggleRail: toggleRail,
