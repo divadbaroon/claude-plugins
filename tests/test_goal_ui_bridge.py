@@ -581,8 +581,38 @@ class TodoListModelTests(BridgeTestCase):
 
     def test_the_cancel_control_takes_its_corner_from_the_stylesheet(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
-        self.assertIn(".hc-todo-cancel{position:absolute;right:", css)
+        self.assertIn(".hc-todo-cancel{position:absolute;top:", css)
+        self.assertNotIn(".hc-todo-cancel{position:absolute;right:4px;bottom:", css)
         self.assertIn(".hc-todo[data-hc-todo-head] .hc-todo-row{padding-right", css)
+
+    def test_the_cancel_control_sits_on_the_line_of_the_state_badge(self):
+        # The x is on the head's first line, next to the "building" badge,
+        # not at the bottom of the tile (which, for an asking row, is under
+        # the question thread).
+        drawn = self.band_model(
+            "var node = L.rowNode(items[0], true);"
+            "var css = window.__hcPromptUI.launchCss();"
+            "var m = /\\.hc-todo-cancel\\{([^}]*)\\}/.exec(css)[1];"
+            "JSON.stringify([node.children[0].className,"
+            "  /(^|;)top:/.test(m), /(^|;)bottom:/.test(m),"
+            "  node.querySelector('.hc-todo-status').textContent])",
+            [("p", 0, "asking")])
+        self.assertEqual(["hc-todo-cancel", True, False, "needs you"], json.loads(drawn))
+
+    def test_children_under_an_out_head_carry_no_building_badge(self):
+        # The head says "building" for the family; its children are quiet.
+        drawn = self.band_model(
+            "var heads = L.cancelHeads(items);"
+            "JSON.stringify(items.map(function (row, i) {"
+            "  var b = L.rowNode(row, heads.indexOf(i) >= 0)"
+            "    .querySelector('.hc-todo-status');"
+            "  return b ? b.textContent : null;"
+            "}))",
+            [("p", 0, "building"), ("c", 1, "building"), ("q", 1, "queued"),
+             ("a", 1, "asking"), ("f", 1, "failed"), ("d", 1, "done"),
+             ("lone", 0, "queued"), ("u", 0, ""), ("uc", 1, "building")])
+        self.assertEqual(["building", None, None, "needs you", "failed", "done",
+                          "queued", None, "building"], json.loads(drawn))
 
     def test_a_band_keeps_the_order_its_rows_were_in(self):
         out = self.band_model(
@@ -3864,6 +3894,202 @@ class ChatPromptLinkTests(BridgeTestCase):
                            "prompt_id": "a#2"}],
                          [c for c in posted if c.get("op") == "attach_prompt"])
 
+    # --- linked chats: one link for the workspace, one per goal -------------
+
+    def scoped_state(self):
+        # Two chats linked: "wide" for every goal (no chat_goals), "deep"
+        # on g1a only. g1a hangs under g1.
+        state = self.chat_state()
+        state["prompts"].append(
+            {"id": "w#1", "role": "user", "text": "from the wide chat",
+             "created_at": "2026-08-06", "chat": "wide"})
+        state["prompts"].append(
+            {"id": "d#1", "role": "user", "text": "from the deep chat",
+             "created_at": "2026-08-07", "chat": "deep", "chat_goals": ["g1a"]})
+        state["prompts"].append(
+            {"id": "t#1", "role": "user", "text": "from the top chat",
+             "created_at": "2026-08-08", "chat": "top", "chat_goals": ["g1"]})
+        return state
+
+    def offered(self, goal_id):
+        return json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.scoped_state()) +
+            "window.__hcPromptUI.pickPrompt(%s);" % json.dumps(goal_id) +
+            "var list = document.querySelector('.hc-pick-list');"
+            "JSON.stringify(list.children.map(function (r) "
+            "{ return r.children[1] ? r.children[1].textContent : "
+            "r.textContent; }));"))
+
+    def test_a_goal_scoped_chat_is_offered_there_and_below_never_above(self):
+        # A chat linked on g1a belongs to that branch: g1a sees it, its
+        # parent g1 does not. One linked on g1 reaches g1 and g1a both, and
+        # a workspace-wide link reaches everyone.
+        self.assertEqual(["from the top chat", "from the deep chat",
+                          "from the wide chat", "and record the audio",
+                          "make it a desktop app"],
+                         self.offered("g1a"))
+        self.assertEqual(["from the top chat", "from the wide chat",
+                          "and record the audio"],
+                         self.offered("g1"))
+
+    def test_the_goal_line_is_the_goal_and_its_ancestors(self):
+        self.assertEqual(
+            [{"g1a": True, "g1": True}, {"g1": True}, {}],
+            json.loads(self.run_js(
+                "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+                "JSON.stringify([window.__hcPromptUI.goalLine('g1a'),"
+                " window.__hcPromptUI.goalLine('g1'),"
+                " window.__hcPromptUI.goalLine(null)]);")))
+
+    def test_the_workspace_wide_link_lives_in_the_header(self):
+        # One button, drawn once into the header slot the patch leaves, and
+        # the per-goal button in the pane is still there beside the prompt
+        # one. The header's is a different class: the click handler tells
+        # the two scopes apart by it.
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var head = document.createElement('span');"
+            "head.className = 'hc-chats';"
+            "document.body.appendChild(head);"
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add';"
+            "document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "window.__hcPromptUI.renderPromptAdd();"
+            "JSON.stringify([head.children.length,"
+            " head.children[0].className, head.children[0].textContent,"
+            " slot.children.map(function (c) { return c.className; })]);"))
+        self.assertEqual([1, "hc-chat-linkbtn", "+ chats",
+                          ["hc-chat-addbtn", "hc-prompt-addbtn"]], got)
+
+    def test_the_header_button_renders_without_the_pane(self):
+        # The header is on screen before any goal is selected, so the link
+        # does not wait for the pane's slot to exist.
+        got = json.loads(self.run_js(
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var head = document.createElement('span');"
+            "head.className = 'hc-chats';"
+            "document.body.appendChild(head);"
+            "var drew = window.__hcPromptUI.renderPromptAdd();"
+            "JSON.stringify([drew, head.children.length]);"))
+        self.assertEqual([False, 1], got)
+
+    # fetch -> json -> draw is several microtasks deep; this is enough
+    # of them for the picker to be on screen, and for a posted op to land.
+    TICKS = ".then(function () {})" * 6
+
+    CHATS = ("fetch = function (url, opts) {"
+             "  calls.push([url, opts && opts.body ? JSON.parse(opts.body) : null]);"
+             "  var body = String(url).indexOf('/api/chats') >= 0"
+             "    ? { ok: true, linked: LINKED, available: ["
+             "        { session_id: 'aaaaaaaa-1', project: 'alpha' },"
+             "        { session_id: 'bbbbbbbb-2', project: 'beta' }] }"
+             "    : { ok: true };"
+             "  return Promise.resolve({ ok: true, json: function () {"
+             "    return Promise.resolve(body); } }); };")
+
+    def picker_rows(self, linked, goal_id, click=None):
+        return json.loads(self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1a' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var LINKED = %s;" % json.dumps(linked) +
+            self.CHATS +
+            "var btn = document.createElement('button');"
+            "window.__hcPromptUI.openChatPicker(btn, %s);" % json.dumps(goal_id) +
+            "Promise.resolve()" + self.TICKS +
+            "  .then(function () {"
+            "    var list = document.querySelector('.hc-pick-list');"
+            "    var rows = list.children.map(function (r) {"
+            "      return [r.children[0].textContent, r.children[1].textContent]; });"
+            + ("    list.children[%d].onclick();" % click if click is not None else "") +
+            "    return Promise.resolve().then(function () {}).then(function () {})"
+            "      .then(function () { return JSON.stringify([rows,"
+            "        calls.map(function (c) { return c[1]; }).filter(Boolean)]); });"
+            "  });"))
+
+    def test_the_header_picker_links_for_every_goal(self):
+        rows, posted = self.picker_rows(
+            [{"session_id": "bbbbbbbb-2", "label": "beta", "goal_id": "g1a"}],
+            None, click=0)
+        # Linked rows first, then the rest; ids are shown short.
+        self.assertEqual(
+            [["bbbbbbbb · beta · linked on Capture interactions",
+              "beta — click to link for every goal"],
+             ["aaaaaaaa · alpha", "alpha — click to link"]],
+            rows)
+        self.assertEqual([{"op": "link_chat", "session_id": "bbbbbbbb-2",
+                           "label": "beta"}],
+                         [c for c in posted if c.get("op") == "link_chat"])
+
+    def test_the_goal_picker_links_for_that_goal_and_reports_wider_links(self):
+        # alpha is linked for the whole workspace, so g1a's picker shows it
+        # covered and offers nothing to undo there; beta is linked on g1a
+        # itself, so g1a's picker can unlink it -- scoped to g1a.
+        rows, posted = self.picker_rows(
+            [{"session_id": "aaaaaaaa-1", "label": "alpha"},
+             {"session_id": "bbbbbbbb-2", "label": "beta", "goal_id": "g1a"}],
+            "g1a", click=1)
+        self.assertEqual(
+            [["aaaaaaaa · alpha · linked for every goal", "alpha — click to link"],
+             ["LINKED · bbbbbbbb · beta", "beta — click to unlink"]],
+            rows)
+        self.assertEqual([{"op": "unlink_chat", "session_id": "bbbbbbbb-2",
+                           "label": "beta", "goal_id": "g1a"}],
+                         [c for c in posted if c.get("op") == "unlink_chat"])
+
+    def test_a_parents_link_is_reported_below_and_a_childs_is_not_above(self):
+        # Linked on g1, beta covers g1a: g1a's picker says so. Linked on
+        # g1a, alpha does not cover g1: g1's picker treats it as unlinked.
+        rows, _ = self.picker_rows(
+            [{"session_id": "aaaaaaaa-1", "label": "alpha", "goal_id": "g1a"},
+             {"session_id": "bbbbbbbb-2", "label": "beta", "goal_id": "g1"}],
+            "g1a")
+        self.assertEqual(
+            [["LINKED · aaaaaaaa · alpha", "alpha — click to unlink"],
+             ["bbbbbbbb · beta · linked on Build the platform",
+              "beta — click to link"]],
+            rows)
+        rows, posted = self.picker_rows(
+            [{"session_id": "aaaaaaaa-1", "label": "alpha", "goal_id": "g1a"},
+             {"session_id": "bbbbbbbb-2", "label": "beta", "goal_id": "g1"}],
+            "g1", click=0)
+        self.assertEqual(
+            [["aaaaaaaa · alpha", "alpha — click to link"],
+             ["LINKED · bbbbbbbb · beta", "beta — click to unlink"]],
+            rows)
+        self.assertEqual([{"op": "link_chat", "session_id": "aaaaaaaa-1",
+                           "label": "alpha", "goal_id": "g1"}],
+                         [c for c in posted if c.get("op") == "link_chat"])
+
+    def test_the_two_buttons_open_pickers_of_their_own_scope(self):
+        # The pane's button links for the selected goal; the header's for
+        # the workspace. Same delegated click handler, told apart by class.
+        got = json.loads(self.run_js(
+            "localStorage.setItem('hc-vault-ui-v1',"
+            "  JSON.stringify({ selId: 'g1a' }));"
+            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
+            "var LINKED = [];" + self.CHATS +
+            "var head = document.createElement('span');"
+            "head.className = 'hc-chats'; document.body.appendChild(head);"
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-prompt-add'; document.body.appendChild(slot);"
+            "window.__hcPromptUI.renderPromptAdd();"
+            + self.CLICK +
+            "click(slot.querySelector('.hc-chat-addbtn'));"
+            "Promise.resolve()" + self.TICKS +
+            "  .then(function () {"
+            "    var t1 = document.querySelector('.hc-ask-title').textContent;"
+            "    var ov = document.querySelector('.hc-ask');"
+            "    ov.parentNode.removeChild(ov);"
+            "    click(head.querySelector('.hc-chat-linkbtn'));"
+            "    return Promise.resolve()" + self.TICKS +
+            "      .then(function () { return JSON.stringify([t1,"
+            "        document.querySelector('.hc-ask-title').textContent]); });"
+            "  });"))
+        self.assertEqual(["Chats this goal draws prompts from",
+                          "Chats this workspace draws prompts from"], got)
+
 
 class ChatNoticeTests(BridgeTestCase):
     """A goals workspace is a second window on a chat running in a terminal.
@@ -4145,7 +4371,7 @@ LAUNCH_CLASSES = (
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
-    "hc-panels", "hc-session", "hc-updated",
+    "hc-panels", "hc-session", "hc-chats", "hc-updated",
 )
 
 
