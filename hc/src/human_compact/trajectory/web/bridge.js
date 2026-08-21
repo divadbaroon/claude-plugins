@@ -1937,19 +1937,46 @@
       ".hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:var(--ink,#111)}",
       ".hc-alert-row .hc-alert-title{font-weight:500;color:var(--mut,#575757)}",
       ".hc-alert-when{float:right;color:var(--fnt,#9b9b9b);font-weight:400;margin-left:8px}",
-      ".hc-alert-settings{border-top:1px solid var(--bd,#e3e3e3);padding:8px 11px;display:flex;flex-direction:column;gap:6px;color:var(--mut,#575757)}",
-      ".hc-alert-settings-head{font-weight:600;color:var(--ink,#111)}",
-      ".hc-alert-settings label{display:flex;align-items:center;gap:8px;cursor:pointer}",
-      ".hc-alert-settings input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}"
+      // Banners and the center live on the body, outside .hc, where the
+      // artifact's theme variables do not reach; the theme is mirrored onto
+      // the root, so the dark palette is spelled out here in the launch
+      // skin's own greys.
+      "[data-hc-theme=\"dark\"] .hc-alert,[data-hc-theme=\"dark\"] .hc-alert-center{background:#161b22;color:#e6edf3;border-color:#30363d;box-shadow:0 10px 30px rgba(0,0,0,.5)}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:#3fb950}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:#f85149}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:#d29922}",
+      "[data-hc-theme=\"dark\"] .hc-alert-title,[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:#e6edf3}",
+      "[data-hc-theme=\"dark\"] .hc-alert-detail,[data-hc-theme=\"dark\"] .hc-alert-close,[data-hc-theme=\"dark\"] .hc-alert-center-act,[data-hc-theme=\"dark\"] .hc-alert-center-empty,[data-hc-theme=\"dark\"] .hc-alert-row .hc-alert-title{color:#8b949e}",
+      "[data-hc-theme=\"dark\"] .hc-alert-goal,[data-hc-theme=\"dark\"] .hc-alert-when{color:#6e7681}",
+      "[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row{border-color:#21262d}",
+      "[data-hc-theme=\"dark\"] .hc-alert-close:hover,[data-hc-theme=\"dark\"] .hc-alert-center-act:hover{color:#e6edf3;background:#21262d}",
+      "[data-hc-theme=\"dark\"] .hc-alert-row:hover{background:#1c2128}",
+      // The gear, in the header slot after the bell, and the settings panel
+      // it opens. What governs the banners lives here, not in the center:
+      // the center lists what happened; the gear is where the page is set.
+      ".hc-settings{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-gear{display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
+      ".hc-gear:hover,.hc-gear[data-hc-gear-open]{color:var(--ink,#111)}",
+      ".hc-settings-panel{position:fixed;top:calc(var(--hc-top,37px) + 6px);right:16px;z-index:100003;width:320px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-top,37px) - 24px);display:flex;flex-direction:column;overflow-y:auto;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-settings-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
+      ".hc-settings-act{font-weight:400;color:var(--mut,#575757);cursor:pointer;user-select:none;margin-left:10px}",
+      ".hc-settings-act:hover{color:var(--ink,#111)}",
+      ".hc-settings-sec{padding:8px 11px;display:flex;flex-direction:column;gap:6px;color:var(--mut,#575757)}",
+      ".hc-settings-sec+.hc-settings-sec{border-top:1px solid var(--bd,#e3e3e3)}",
+      ".hc-settings-sec-head{font-weight:600;color:var(--ink,#111)}",
+      ".hc-settings-sec label{display:flex;align-items:center;gap:8px;cursor:pointer}",
+      ".hc-settings-sec input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}"
   ].join("");
 
   var BELL_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"></path><path d=\"M13.7 21a2 2 0 0 1-3.4 0\"></path></svg>";
+  var GEAR_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"></circle><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"></path></svg>";
 
   var alertPrev = null;            // row id -> status, from the last state
   var alertLog = null;             // newest first; loaded on first use
   var alertSettingsCache = null;
   var alertStackBox = null;
   var alertCenterBox = null;
+  var settingsPanelBox = null;
   var alertTimers = Object.create(null);
   var alertBound = false;
   var alertSeq = 0;
@@ -2001,7 +2028,7 @@
     // A banner already up keeps the clock it was armed with; the next one
     // gets the new one. Turning banners off takes the ones up down.
     if (!next.banners) dropAllAlerts();
-    renderAlertCenter();
+    renderSettingsPanel();
     return next;
   }
 
@@ -2101,6 +2128,22 @@
     });
   }
 
+  // A banner that was up when the page reloaded -- and a state change from
+  // the builder is exactly what makes reconcileState reload it -- comes back
+  // for the time it had left. Read, dismissed, or expired ones do not.
+  function resumeAlertBanners() {
+    if (!alertSettings().banners) return 0;
+    var window_ms = alertSettings().seconds * 1000;
+    var now = Date.now();
+    var back = loadAlertLog().filter(function (entry) {
+      return !entry.read && now - entry.at < window_ms && !alertBannerFor(entry.id);
+    }).slice(0, NOTICE_MAX).reverse();
+    back.forEach(function (entry) {
+      showAlertBanner(entry, window_ms - (now - entry.at));
+    });
+    return back.length;
+  }
+
   function trackTodoAlerts(st) {
     if (!st || serverState.scope !== "chat" || !Array.isArray(st.goals)) return [];
     var diff = todoAlertsFrom(st.goals, alertPrev);
@@ -2117,14 +2160,25 @@
       return entry;
     });
     saveAlertLog();
+    if (alertSettings().banners) {
+      made.forEach(function (entry) { showAlertBanner(entry); });
+    }
     renderBell();
     renderAlertCenter();
-    if (alertSettings().banners) made.forEach(showAlertBanner);
     return made;
   }
 
+  // In the live document, not merely parented: the artifact unpacks its
+  // template by replacing the whole documentElement, so a node appended to
+  // the body before that keeps a parent and is on no screen.
+  function inLiveDocument(node) {
+    var at = node;
+    while (at && at.parentNode) at = at.parentNode;
+    return !!at && (at === document || at === document.documentElement);
+  }
+
   function alertStack() {
-    return (alertStackBox && alertStackBox.parentNode) ? alertStackBox : null;
+    return (alertStackBox && inLiveDocument(alertStackBox)) ? alertStackBox : null;
   }
 
   function alertHost() {
@@ -2170,13 +2224,15 @@
     return box;
   }
 
-  function showAlertBanner(entry) {
+  function showAlertBanner(entry, ms) {
+    var up = alertBannerFor(entry.id);
+    if (up) return up;
     var host = alertHost();
     bindAlerts();
     var box = host.appendChild(alertBannerNode(entry));
     // Three at once is what fits without covering the page it reports on.
     while (host.children.length > NOTICE_MAX) dropAlertBanner(host.children[0]);
-    armAlert(box);
+    armAlert(box, ms);
     return box;
   }
 
@@ -2191,12 +2247,13 @@
     delete alertTimers[id];
   }
 
-  function armAlert(box) {
+  function armAlert(box, ms) {
     var id = alertIdOf(box);
     if (!id) return;
     holdAlert(box);
-    alertTimers[id] = setTimeout(function () { dropAlertBanner(box); },
-                                 alertSettings().seconds * 1000);
+    var wait = (typeof ms === "number" && isFinite(ms) && ms > 0)
+      ? ms : alertSettings().seconds * 1000;
+    alertTimers[id] = setTimeout(function () { dropAlertBanner(box); }, wait);
   }
 
   function dropAlertBanner(box) {
@@ -2261,10 +2318,27 @@
         if (event.preventDefault) event.preventDefault();
         if (event.stopPropagation) event.stopPropagation();
       };
-      // The bell toggles the center.
+      // The bell toggles the center; the gear toggles the settings panel.
+      // One of the two is up at a time.
       if (closestByClass(target, "hc-bell")) {
         stop();
+        closeSettingsPanel();
         toggleAlertCenter();
+        return;
+      }
+      if (closestByClass(target, "hc-gear")) {
+        stop();
+        closeAlertCenter();
+        toggleSettingsPanel();
+        return;
+      }
+      var panel = closestByClass(target, "hc-settings-panel");
+      if (panel) {
+        if (closestByClass(target, "hc-settings-act")) {
+          stop();
+          closeSettingsPanel();
+        }
+        // Clicks on the controls fall through to the inputs.
         return;
       }
       // A banner: × dismisses it as read; anywhere else goes to the row.
@@ -2296,8 +2370,9 @@
         // Clicks on the settings controls fall through to the inputs.
         return;
       }
-      // Anywhere else closes the center.
+      // Anywhere else closes whichever is up.
       if (alertCenterShown()) closeAlertCenter();
+      if (settingsPanelShown()) closeSettingsPanel();
     }, true);
     document.addEventListener("change", function (event) {
       var target = event && event.target;
@@ -2321,12 +2396,18 @@
   }
 
   // The bell sits in the header; its badge is the unread count.
+  var alertResumed = false;
+
   function renderBell() {
     if (serverState.scope !== "chat") return false;
     var slot = document.querySelector(".hc-alerts");
     if (!slot) return false;
     ensureAlertStyles();
     bindAlerts();
+    // The slot exists only once the artifact has unpacked the patched
+    // template, which is the first moment a banner appended to the body
+    // stays on screen. Whatever was up before the reload comes back here.
+    if (!alertResumed) { alertResumed = true; resumeAlertBanners(); }
     var bell = slot.querySelector(".hc-bell");
     if (!bell) {
       bell = document.createElement("span");
@@ -2360,7 +2441,7 @@
   }
 
   function alertCenterShown() {
-    return !!(alertCenterBox && alertCenterBox.parentNode);
+    return !!(alertCenterBox && inLiveDocument(alertCenterBox));
   }
 
   function alertWhen(at) {
@@ -2394,38 +2475,6 @@
     var list = document.createElement("div");
     list.className = "hc-alert-center-list";
     box.appendChild(list);
-    var settings = document.createElement("div");
-    settings.className = "hc-alert-settings";
-    var sh = document.createElement("div");
-    sh.className = "hc-alert-settings-head";
-    sh.textContent = "Settings";
-    settings.appendChild(sh);
-    var text = function (words) {
-      var s = document.createElement("span");
-      s.textContent = words;
-      return s;
-    };
-    var l1 = document.createElement("label");
-    var c1 = document.createElement("input");
-    c1.type = "checkbox";
-    c1.setAttribute("type", "checkbox");
-    c1.setAttribute("data-hc-alert-set", "banners");
-    l1.appendChild(c1);
-    l1.appendChild(text("Show a banner when a TODO finishes, fails, or asks"));
-    settings.appendChild(l1);
-    var l2 = document.createElement("label");
-    l2.appendChild(text("Banner stays for"));
-    var n2 = document.createElement("input");
-    n2.type = "number";
-    n2.setAttribute("type", "number");
-    n2.setAttribute("min", String(ALERT_SECONDS_MIN));
-    n2.setAttribute("max", String(ALERT_SECONDS_MAX));
-    n2.setAttribute("step", "1");
-    n2.setAttribute("data-hc-alert-set", "seconds");
-    l2.appendChild(n2);
-    l2.appendChild(text("seconds"));
-    settings.appendChild(l2);
-    box.appendChild(settings);
     return box;
   }
 
@@ -2481,13 +2530,6 @@
         list.appendChild(row);
       });
     }
-    var cur = alertSettings();
-    var inputs = alertInputs(box);
-    for (var i = 0; i < inputs.length; i++) {
-      var key = str(inputs[i].getAttribute("data-hc-alert-set"));
-      if (key === "banners") inputs[i].checked = !!cur.banners;
-      else if (key === "seconds") inputs[i].value = String(cur.seconds);
-    }
     return true;
   }
 
@@ -2511,6 +2553,132 @@
 
   function toggleAlertCenter() {
     return alertCenterShown() ? closeAlertCenter() : !!openAlertCenter();
+  }
+
+  // --- the settings panel, behind the header gear -------------------------
+  // The controls that govern the banners live here. The center is a list of
+  // what the builder did; a setting is not an event, so it does not sit at
+  // the foot of that list. Sections are added here as the page grows
+  // settings; notifications is the first.
+
+  function settingsPanelShown() {
+    return !!(settingsPanelBox && inLiveDocument(settingsPanelBox));
+  }
+
+  function settingsPanelNode() {
+    var box = document.createElement("div");
+    box.className = "hc-settings-panel";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Settings");
+    var head = document.createElement("div");
+    head.className = "hc-settings-head";
+    var name = document.createElement("span");
+    name.textContent = "Settings";
+    head.appendChild(name);
+    var close = document.createElement("span");
+    close.className = "hc-settings-act";
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Close settings");
+    close.textContent = "×";
+    head.appendChild(close);
+    box.appendChild(head);
+    var text = function (words) {
+      var s = document.createElement("span");
+      s.textContent = words;
+      return s;
+    };
+    var sec = document.createElement("div");
+    sec.className = "hc-settings-sec";
+    sec.setAttribute("data-hc-settings-sec", "notifications");
+    var sh = document.createElement("div");
+    sh.className = "hc-settings-sec-head";
+    sh.textContent = "Notifications";
+    sec.appendChild(sh);
+    var l1 = document.createElement("label");
+    var c1 = document.createElement("input");
+    c1.type = "checkbox";
+    c1.setAttribute("type", "checkbox");
+    c1.setAttribute("data-hc-alert-set", "banners");
+    l1.appendChild(c1);
+    l1.appendChild(text("Show a banner when a TODO finishes, fails, or asks"));
+    sec.appendChild(l1);
+    var l2 = document.createElement("label");
+    l2.appendChild(text("Banner stays for"));
+    var n2 = document.createElement("input");
+    n2.type = "number";
+    n2.setAttribute("type", "number");
+    n2.setAttribute("min", String(ALERT_SECONDS_MIN));
+    n2.setAttribute("max", String(ALERT_SECONDS_MAX));
+    n2.setAttribute("step", "1");
+    n2.setAttribute("data-hc-alert-set", "seconds");
+    l2.appendChild(n2);
+    l2.appendChild(text("seconds"));
+    sec.appendChild(l2);
+    box.appendChild(sec);
+    return box;
+  }
+
+  function renderSettingsPanel() {
+    if (!settingsPanelShown()) return false;
+    var cur = alertSettings();
+    var inputs = alertInputs(settingsPanelBox);
+    for (var i = 0; i < inputs.length; i++) {
+      var key = str(inputs[i].getAttribute("data-hc-alert-set"));
+      if (key === "banners") inputs[i].checked = !!cur.banners;
+      else if (key === "seconds") inputs[i].value = String(cur.seconds);
+    }
+    return true;
+  }
+
+  function openSettingsPanel() {
+    if (settingsPanelShown()) return settingsPanelBox;
+    ensureAlertStyles();
+    bindAlerts();
+    settingsPanelBox = settingsPanelNode();
+    (document.body || document.documentElement).appendChild(settingsPanelBox);
+    renderSettingsPanel();
+    renderGear();
+    return settingsPanelBox;
+  }
+
+  function closeSettingsPanel() {
+    if (!settingsPanelShown()) return false;
+    settingsPanelBox.parentNode.removeChild(settingsPanelBox);
+    renderGear();
+    return true;
+  }
+
+  function toggleSettingsPanel() {
+    return settingsPanelShown() ? closeSettingsPanel() : !!openSettingsPanel();
+  }
+
+  // The gear sits in the header after the bell, in the slot the template
+  // leaves for it. Drawn by the same sweep as the bell, so a re-render of
+  // the header that drops the node gets it back within the tick.
+  function renderGear() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-settings");
+    if (!slot) return false;
+    ensureAlertStyles();
+    bindAlerts();
+    var gear = slot.querySelector(".hc-gear");
+    if (!gear) {
+      gear = document.createElement("span");
+      gear.className = "hc-gear";
+      gear.setAttribute("role", "button");
+      gear.setAttribute("aria-label", "Settings");
+      gear.title = "Settings";
+      gear.innerHTML = GEAR_ICON;
+      slot.appendChild(gear);
+    }
+    var open = settingsPanelShown();
+    var changed = false;
+    if (open && gear.getAttribute("data-hc-gear-open") === null) {
+      gear.setAttribute("data-hc-gear-open", ""); changed = true;
+    } else if (!open && gear.getAttribute("data-hc-gear-open") !== null) {
+      gear.removeAttribute("data-hc-gear-open"); changed = true;
+    }
+    return changed;
   }
 
   function watchRunFeed() {
@@ -4790,6 +4958,7 @@
       installRailDrag();
       renderSessionChip();
       renderBell();
+      renderGear();
       renderInjection(injectionState);
     }
     sweep();
@@ -5047,7 +5216,7 @@
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-alerts\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -5876,6 +6045,14 @@
       close: closeAlertCenter,
       center: function () { return alertCenterShown() ? alertCenterBox : null; },
       css: function () { return ALERT_CSS; }
+    },
+    // The header gear and the settings panel behind it.
+    gear: {
+      render: renderGear,
+      open: openSettingsPanel,
+      close: closeSettingsPanel,
+      toggle: toggleSettingsPanel,
+      panel: function () { return settingsPanelShown() ? settingsPanelBox : null; }
     }
   };
 
