@@ -407,6 +407,34 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
     def test_picked_rows_build_ask_and_finish_on_the_answer(self):
         self.skipTest("headless-only")
 
+    def test_a_row_out_with_the_builder_comes_back_on_escape_or_its_corner(self):
+        # In session mode the row waits in the queue: cancelling it from the
+        # caret takes it out of the queue and back to active.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                expect(page.locator(".hc-todo-status").first).to_have_text("queued", timeout=10_000)
+                expect(page.locator(".hc-todo-cancel")).to_have_count(1)
+                self.assertEqual(1, len(BUILD.pending(self.session, self.root)))
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.press("Escape")
+                expect(page.locator(".hc-todo-status")).to_have_count(0)
+                expect(page.locator(".hc-todo-cancel")).to_have_count(0)
+                page.wait_for_timeout(600)
+                self.assertEqual([], BUILD.pending(self.session, self.root))
+                self.assertEqual("", self.rows()[0][2])
+                expect(page.locator(".hc-todo-error")).to_be_hidden()
+            finally:
+                browser.close()
+
 
 if __name__ == "__main__":
     unittest.main()
