@@ -4377,6 +4377,7 @@ LAUNCH_CLASSES = (
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
     "hc-panels", "hc-session", "hc-chats", "hc-alerts", "hc-settings",
     "hc-updated",
+    "hc-search", "hc-search-input", "hc-search-hits",
 )
 
 

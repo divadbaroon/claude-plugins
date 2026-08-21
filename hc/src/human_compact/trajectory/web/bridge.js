@@ -2980,7 +2980,30 @@
       "[data-hc-launch] .hc-rail-generate[data-hc-generating=\"on\"]{color:var(--fnt);cursor:default}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
       "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
-      "[data-hc-launch] .hc-rail-left>div:nth-child(2){padding:6px 6px 0}",
+      // The search bar sits directly under GOALS, with no rule between the
+      // two: the heading's line moves down to under the input. The rail's
+      // tree is the third child now, after the heading and the search.
+      "[data-hc-launch] .hc-rail-left>.hc-rail-head{border-bottom:0;padding-bottom:2px}",
+      "[data-hc-launch] .hc-search{flex:none;display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-search-input{display:block;width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:3px 13px 9px;font:11.5px 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
+      "[data-hc-launch] .hc-search-input::placeholder{color:var(--fnt)}",
+      "[data-hc-launch] .hc-search-input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}",
+      // While a query is typed the rail shows hits in place of the tree:
+      // the search box grows to the rail, and every sibling but the
+      // heading is hidden. The tree comes back when the box is cleared.
+      "[data-hc-launch] .hc-search-hits{display:none}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search{flex:1 1 auto;border-bottom:0}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-input{border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-hits{display:block;flex:1 1 auto;min-height:0;overflow-y:auto;padding:6px 6px 0}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching]>:not(.hc-rail-head):not(.hc-search){display:none!important}",
+      "[data-hc-launch] .hc-search-hit{padding:5px 8px;border-radius:2px;cursor:pointer}",
+      "[data-hc-launch] .hc-search-hit:hover,[data-hc-launch] .hc-search-hit[data-hc-hit-active]{background:var(--acchov)}",
+      "[data-hc-launch] .hc-search-hit-title{font-size:12.5px;line-height:1.4;color:var(--ink)}",
+      "[data-hc-launch] .hc-search-hit-trail{font:10px 'Source Code Pro',monospace;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "[data-hc-launch] .hc-search-hit-where{font:10.5px/1.5 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "[data-hc-launch] .hc-search-hit-where b{font-weight:600;color:var(--fnt)}",
+      "[data-hc-launch] .hc-search-none{padding:10px 8px;font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-left>div:nth-child(3){padding:6px 6px 0}",
       // A tree row is one line high, so its title has to be one line: a
       // wrapped one overlapped the row under it at this width.
       "[data-hc-launch] .hc-row{white-space:nowrap}",
@@ -4947,6 +4970,322 @@
     return true;
   }
 
+  // --- finding a goal: the search bar under GOALS ---------------------------
+  // The tree is where goals live, and the reader forgets which branch a
+  // thing went under. The box directly under GOALS takes a few words and
+  // ranks every goal by them -- its title first, then its notes, its TODO
+  // rows and its prompt -- forgiving a slip or two of spelling. Hits stand
+  // in for the tree while there is a query; picking one opens its branch,
+  // selects it, and clears the box.
+
+  var SEARCH_FIELDS = ["title", "notes", "todos", "prompt"];
+  var SEARCH_WEIGHT = { title: 3, notes: 1, todos: 1, prompt: 1 };
+  var SEARCH_LABEL = { title: "", notes: "notes:", todos: "TODO:",
+                       prompt: "prompt:" };
+
+  function searchWords(text) {
+    return str(text).toLowerCase().split(/[^0-9a-zÀ-ɏ_#]+/)
+      .filter(Boolean);
+  }
+
+  // Optimal string alignment distance: Levenshtein plus a swapped pair,
+  // abandoned the moment no row can come in under the cap.
+  function editDistance(a, b, cap) {
+    a = str(a); b = str(b);
+    cap = cap >= 0 ? cap : Math.max(a.length, b.length);
+    if (Math.abs(a.length - b.length) > cap) return cap + 1;
+    var prev2 = null, prev = [], cur, i, j;
+    for (j = 0; j <= b.length; j += 1) prev[j] = j;
+    for (i = 1; i <= a.length; i += 1) {
+      cur = [i];
+      var best = i;
+      for (j = 1; j <= b.length; j += 1) {
+        var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
+        var v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+        if (prev2 && i > 1 && j > 1 && a.charAt(i - 1) === b.charAt(j - 2)
+            && a.charAt(i - 2) === b.charAt(j - 1)) {
+          v = Math.min(v, prev2[j - 2] + 1);
+        }
+        cur[j] = v;
+        if (v < best) best = v;
+      }
+      if (best > cap) return cap + 1;
+      prev2 = prev; prev = cur;
+    }
+    return prev[b.length];
+  }
+
+  // How well one typed word matches one word of a field, 0..1. Exact,
+  // then a prefix (the reader is still typing), then inside the word; then
+  // a slip or two of spelling, scaled to how much was typed -- one from
+  // four letters, two from seven, none under four ("the" is one edit from
+  // most of English). A slip is measured against the whole word and
+  // against its prefix, so a typo in a half-typed word still finds it.
+  function wordScore(token, word) {
+    token = str(token); word = str(word);
+    if (!token || !word) return 0;
+    if (word === token) return 1;
+    var at = word.indexOf(token);
+    if (at === 0) return 0.9;
+    if (at > 0) return 0.7;
+    var slips = token.length >= 7 ? 2 : token.length >= 4 ? 1 : 0;
+    if (!slips) return 0;
+    var d = Math.min(editDistance(token, word, slips),
+                     editDistance(token, word.slice(0, token.length), slips));
+    if (d > slips) return 0;
+    return 0.6 * (1 - d / token.length);
+  }
+
+  // Every field the reader may remember a goal by. TODOs are the rows;
+  // the prompt is the one written for the goal and the ones linked to it.
+  function searchFields(goal, promptsById) {
+    var todos = array(goal.todo_items).map(function (row) {
+      return str(row && row.text);
+    }).filter(Boolean);
+    var said = array(goal.prompt_ids).map(function (id) {
+      var p = promptsById[id];
+      return p ? str(p.text) : "";
+    }).filter(Boolean);
+    return {
+      title: str(goal.title),
+      notes: [str(goal.notes), str(goal.description)].filter(Boolean).join("\n"),
+      todos: todos.length ? todos.join("\n") : str(goal.todos_md),
+      prompt: [str(goal.prompt_md)].concat(said).filter(Boolean).join("\n")
+    };
+  }
+
+  // The line of a field the matched word is on, cut to fit a rail, with
+  // the word kept inside what is shown.
+  function searchExcerpt(text, word) {
+    var lines = str(text).split("\n"), line = "";
+    for (var i = 0; i < lines.length; i += 1) {
+      if (lines[i].toLowerCase().indexOf(word) >= 0) { line = lines[i]; break; }
+    }
+    line = line.replace(/^\s*(?:[-*+]|\d+\.)?\s*(?:\[[^\]]*\]\s*)?#*\s*/, "")
+      .replace(/\s+/g, " ").trim();
+    if (!line) return "";
+    var at = line.toLowerCase().indexOf(word);
+    if (at > 28) line = "…" + line.slice(at - 20);
+    if (line.length > 90) line = line.slice(0, 88) + "…";
+    return line;
+  }
+
+  // Every goal in the tree against the query, best first. A goal scores
+  // only if every word of the query lands somewhere in it; its score is the
+  // sum of each word's best field. Equal scores fall to whichever was
+  // edited last, then to tree order.
+  function searchGoals(goals, prompts, query) {
+    var tokens = searchWords(query);
+    if (!tokens.length) return [];
+    var byId = Object.create(null), byParent = Object.create(null);
+    array(prompts).forEach(function (p) {
+      if (p && typeof p.id === "string") byId[p.id] = p;
+    });
+    array(goals).forEach(function (g) {
+      if (!g || typeof g.id !== "string" || g.status === "abandoned") return;
+      var parent = g.parent_goal_id || null;
+      (byParent[parent] = byParent[parent] || []).push(g);
+    });
+    var out = [], order = 0;
+    (function walk(list, trail) {
+      array(list).forEach(function (g) {
+        var fields = searchFields(g, byId), words = {};
+        SEARCH_FIELDS.forEach(function (f) { words[f] = searchWords(fields[f]); });
+        var total = 0, best = null, every = true;
+        tokens.forEach(function (token) {
+          var top = 0, topField = null, topWord = "";
+          SEARCH_FIELDS.forEach(function (f) {
+            words[f].forEach(function (w) {
+              var s = wordScore(token, w) * SEARCH_WEIGHT[f];
+              if (s > top) { top = s; topField = f; topWord = w; }
+            });
+          });
+          if (!top) { every = false; return; }
+          total += top;
+          if (!best || top > best.score) {
+            best = { score: top, field: topField, word: topWord };
+          }
+        });
+        if (every) {
+          out.push({
+            id: g.id, title: str(g.title) || "Untitled",
+            trail: trail.map(function (t) { return str(t.title) || "Untitled"; }),
+            score: Math.round(total * 1000) / 1000,
+            updated: Date.parse(str(g.updated_at)) || 0,
+            where: best.field,
+            excerpt: best.field === "title"
+              ? "" : searchExcerpt(fields[best.field], best.word),
+            order: order
+          });
+          order += 1;
+        }
+        walk(byParent[g.id], trail.concat([g]));
+      });
+    })(byParent[null], []);
+    out.sort(function (a, b) {
+      return (b.score - a.score) || (b.updated - a.updated) || (a.order - b.order);
+    });
+    return out.map(function (hit) { delete hit.order; return hit; });
+  }
+
+  var searchDrawn = null, searchActive = 0, searchBound = false;
+
+  function searchBox() { return document.querySelector(".hc-search"); }
+  function searchInputEl() {
+    var box = searchBox();
+    return box ? box.querySelector(".hc-search-input") : null;
+  }
+  function searchQuery() {
+    var input = searchInputEl();
+    return input ? str(input.value).trim() : "";
+  }
+  function searchHitNodes() {
+    var box = searchBox();
+    var list = box && box.querySelector(".hc-search-hits");
+    // children is a live collection in a browser and an array in the
+    // harness; slice reads both.
+    return list ? Array.prototype.slice.call(list.children || []).filter(
+      function (n) { return n && n.className === "hc-search-hit"; }) : [];
+  }
+  function markSearchActive(hits) {
+    hits.forEach(function (n, i) {
+      if (i === searchActive) n.setAttribute("data-hc-hit-active", "");
+      else n.removeAttribute("data-hc-hit-active");
+    });
+  }
+
+  function clearSearch(keepFocus) {
+    var input = searchInputEl();
+    if (input) input.value = "";
+    searchActive = 0;
+    renderSearch();
+    if (input && !keepFocus && typeof input.blur === "function") input.blur();
+  }
+
+  // Picking a hit: open the branch it is on and select it (the artifact's
+  // own reveal, patched in beside its select), then put the tree back.
+  function searchPick(id) {
+    if (!id) return false;
+    var went = false;
+    if (typeof window.__hcRevealGoal === "function") {
+      try { went = !!window.__hcRevealGoal(id); } catch (e) { went = false; }
+    }
+    if (!went && typeof window.__hcSelectGoal === "function") {
+      try { window.__hcSelectGoal(id); went = true; } catch (e) { went = false; }
+    }
+    clearSearch();
+    return went;
+  }
+
+  function bindSearch() {
+    if (searchBound || !document.addEventListener) return;
+    searchBound = true;
+    var stop = function (event) {
+      if (event.preventDefault) event.preventDefault();
+      if (event.stopPropagation) event.stopPropagation();
+    };
+    document.addEventListener("input", function (event) {
+      if (!closestByClass(event && event.target, "hc-search-input")) return;
+      searchActive = 0;
+      renderSearch();
+    }, true);
+    // Up and down walk the hits, Enter takes the one that is lit, Escape
+    // puts the tree back. Captured, so the artifact's own tree keys (which
+    // already stand aside for typing) never see them.
+    document.addEventListener("keydown", function (event) {
+      if (!closestByClass(event && event.target, "hc-search-input")) return;
+      var key = str(event.key), hits = searchHitNodes();
+      if (key === "Escape") { stop(event); clearSearch(); return; }
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        if (!hits.length) return;
+        stop(event);
+        searchActive = (searchActive + (key === "ArrowDown" ? 1 : hits.length - 1))
+          % hits.length;
+        markSearchActive(hits);
+        return;
+      }
+      if (key === "Enter") {
+        if (!hits.length) return;
+        stop(event);
+        var lit = hits[searchActive] || hits[0];
+        searchPick(str(lit.getAttribute("data-hc-goal")));
+      }
+    }, true);
+    document.addEventListener("click", function (event) {
+      var hit = closestByClass(event && event.target, "hc-search-hit");
+      if (!hit) return;
+      stop(event);
+      searchPick(str(hit.getAttribute("data-hc-goal")));
+    }, true);
+  }
+
+  function renderSearch() {
+    if (serverState.scope !== "chat") return false;
+    var box = searchBox();
+    if (!box) return false;
+    var input = box.querySelector(".hc-search-input");
+    var list = box.querySelector(".hc-search-hits");
+    if (!input || !list) return false;
+    bindSearch();
+    var rail = box.parentNode;
+    var q = str(input.value).trim();
+    var searching = !!(rail && rail.getAttribute
+                       && rail.getAttribute("data-hc-searching") !== null);
+    if (!q) {
+      if (searching) rail.removeAttribute("data-hc-searching");
+      if (searchDrawn === "") return false;
+      searchDrawn = "";
+      while (list.firstChild) list.removeChild(list.firstChild);
+      return true;
+    }
+    if (rail && rail.setAttribute && !searching) {
+      rail.setAttribute("data-hc-searching", "");
+    }
+    var ranked = searchGoals(serverState.goals, serverState.prompts, q);
+    var key = JSON.stringify([q, ranked]);
+    if (key === searchDrawn) return false;
+    searchDrawn = key;
+    while (list.firstChild) list.removeChild(list.firstChild);
+    if (!ranked.length) {
+      var none = document.createElement("div");
+      none.className = "hc-search-none";
+      none.textContent = "Nothing matches “" + q + "”.";
+      list.appendChild(none);
+      return true;
+    }
+    if (searchActive >= ranked.length) searchActive = 0;
+    ranked.forEach(function (hit, i) {
+      var row = document.createElement("div");
+      row.className = "hc-search-hit";
+      row.setAttribute("data-hc-goal", hit.id);
+      row.setAttribute("data-hc-where", hit.where);
+      if (i === searchActive) row.setAttribute("data-hc-hit-active", "");
+      if (hit.trail.length) {
+        var trail = document.createElement("div");
+        trail.className = "hc-search-hit-trail";
+        trail.textContent = hit.trail.join(" › ");
+        row.appendChild(trail);
+      }
+      var title = document.createElement("div");
+      title.className = "hc-search-hit-title";
+      title.textContent = hit.title;
+      row.appendChild(title);
+      if (hit.excerpt) {
+        var where = document.createElement("div");
+        where.className = "hc-search-hit-where";
+        var tag = document.createElement("b");
+        tag.textContent = SEARCH_LABEL[hit.where] + " ";
+        where.appendChild(tag);
+        var text = document.createElement("span");
+        text.textContent = hit.excerpt;
+        where.appendChild(text);
+        row.appendChild(where);
+      }
+      list.appendChild(row);
+    });
+    return true;
+  }
+
   function watchLaunchSurface() {
     function sweep() {
       if (serverState.scope !== "chat") return;
@@ -4959,6 +5298,7 @@
       renderSessionChip();
       renderBell();
       renderGear();
+      renderSearch();
       renderInjection(injectionState);
     }
     sweep();
@@ -5164,7 +5504,7 @@
        chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
             : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
       ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
-       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div>"
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
        chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><textarea class=\"hc-rail-code\" key=\"{{ selKey }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" placeholder=\"Write your prompt. The goal\u2019s context is added when you copy.\" spellcheck=\"false\"></textarea><div class=\"hc-rail-actions\"><span class=\"hc-rail-generate\" data-hc-generating=\"off\">Generate</span><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write a prompt for it.</div></sc-if></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
@@ -5212,7 +5552,7 @@
       // its own set(): the bridge calls that rather than reaching into state
       // it does not hold. Both scopes, so the anchor is found in both.
       ["  set(fn, touch) { this.setState(",
-       "  set(fn, touch) { if (typeof window !== 'undefined') window.__hcSelectGoal = (id) => this.set(() => ({ page: 'goals', selId: id, editId: null, paneTab: 'context' })); this.setState("],
+       "  set(fn, touch) { if (typeof window !== 'undefined') window.__hcSelectGoal = (id) => this.set(() => ({ page: 'goals', selId: id, editId: null, paneTab: 'context' })); if (typeof window !== 'undefined') window.__hcRevealGoal = (id) => { const tr = this.path(this.state.goals, id) || []; if (!tr.length) return false; this.set(s => { let gs = s.goals; tr.slice(0, -1).forEach(n => { gs = this.up(gs, n.id, x => ({ ...x, open: true })); }); return { page: 'goals', selId: id, editId: null, paneTab: 'context', goals: gs }; }); setTimeout(() => { const ids = this._rowIds || []; if (ids.indexOf(id) < 0) { this.set(() => ({ filter: 'all' })); } setTimeout(() => { const ids2 = this._rowIds || [], nx = ids2.indexOf(id), el = this._treeEl; if (el && nx >= 0) { const top = nx * 29, bot = top + 29; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; } }, 0); }, 0); return true; }; this.setState("],
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
@@ -5922,6 +6262,9 @@
 
   window.__hcPromptUI = {
     rootsFromState: rootsFromState,
+    search: { rank: searchGoals, render: renderSearch, wordScore: wordScore,
+              distance: editDistance, query: searchQuery,
+              clear: clearSearch },
     paneShape: paneShape,
     reconcileState: reconcileState,
     clearKeepPane: clearKeepPane,
