@@ -149,6 +149,66 @@ class LinkedChatsTests(unittest.TestCase):
             other_dir = chat_state.paths(self.other, self.root).session_dir
             self.assertFalse((other_dir / "goals.json").exists())
 
+    def test_a_chat_linked_from_a_goal_is_scoped_to_that_goal(self):
+        # Linked from a goal's pane, the chat's prompts are tagged with that
+        # goal: the picker offers them there and in the goals under it,
+        # never above. Linked from the header as well, the tag comes off --
+        # a global link covers every goal. Unlinking one scope leaves the
+        # other standing, and the session is followed once throughout.
+        def other_row(url):
+            rows = [p for p in self.prompts(url)
+                    if p["text"] == "first in chat-other"]
+            return rows[0] if len(rows) == 1 else None
+
+        with server_for(self.trajdir) as url:
+            out = post_json(url + "/api/op", {"op": "link_chat",
+                                              "session_id": self.other,
+                                              "label": "otherproj",
+                                              "goal_id": "g1"})
+            self.assertTrue(out["ok"], out)
+            self.assertTrue(self.wait_for(lambda: other_row(url) is not None))
+            self.assertEqual(["g1"], other_row(url).get("chat_goals"))
+            self.assertEqual("otherproj", other_row(url).get("chat"))
+            chats = get_json(url + "/api/chats")["linked"]
+            self.assertEqual([{"session_id": self.other, "label": "otherproj",
+                               "goal_id": "g1"}], chats)
+
+            out = post_json(url + "/api/op", {"op": "link_chat",
+                                              "session_id": self.other})
+            self.assertTrue(out["ok"], out)
+            self.assertTrue(self.wait_for(
+                lambda: other_row(url) is not None
+                and "chat_goals" not in other_row(url)))
+            self.assertEqual(
+                1, len([p for p in self.prompts(url)
+                        if p["text"] == "first in chat-other"]),
+                "two scopes, one session, one copy of each prompt")
+            # The label was kept from the first link rather than reset.
+            chats = get_json(url + "/api/chats")["linked"]
+            self.assertEqual(["otherproj", "otherproj"],
+                             [c["label"] for c in chats])
+
+            out = post_json(url + "/api/op", {"op": "unlink_chat",
+                                              "session_id": self.other})
+            self.assertTrue(out["ok"], out)
+            self.assertTrue(self.wait_for(
+                lambda: other_row(url) is not None
+                and other_row(url).get("chat_goals") == ["g1"]))
+            out = post_json(url + "/api/op", {"op": "unlink_chat",
+                                              "session_id": self.other,
+                                              "goal_id": "g1"})
+            self.assertTrue(out["ok"], out)
+            self.assertTrue(self.wait_for(
+                lambda: "first in chat-other" not in self.texts(url)))
+
+    def test_a_goal_scoped_link_must_name_a_goal_this_tree_has(self):
+        with server_for(self.trajdir) as url:
+            out = post_json(url + "/api/op", {"op": "link_chat",
+                                              "session_id": self.other,
+                                              "goal_id": "nope"})
+            self.assertFalse(out["ok"])
+            self.assertEqual([], get_json(url + "/api/chats")["linked"])
+
     def test_link_refuses_self_and_junk(self):
         with server_for(self.trajdir) as url:
             out = post_json(url + "/api/op", {"op": "link_chat",

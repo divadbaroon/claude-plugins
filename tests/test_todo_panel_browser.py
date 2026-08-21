@@ -98,10 +98,17 @@ class TodoPanelBrowserTests(unittest.TestCase):
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
 
-    def rows(self):
+    def rows(self, blank=False):
+        # The rows on the server. A Build leaves a fresh empty row at the
+        # foot of the active band for the next TODO; `blank` keeps it.
         goals, _ = chat_state.load_goals(self.session, self.root)
         return [(r["text"], r["depth"], r["status"])
-                for r in GM.by_id(goals, "g1")["todo_items"]]
+                for r in GM.by_id(goals, "g1")["todo_items"]
+                if blank or r["text"].strip()]
+
+    def tile(self, page, text):
+        # The row reading `text`, whole tile: its gutter, line, badge, x.
+        return page.locator(".hc-todo").filter(has_text=text)
 
     def open(self, playwright):
         browser = playwright.chromium.launch(executable_path=self.chrome)
@@ -158,6 +165,40 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 # No goal document was involved
                 goals, _ = chat_state.load_goals(self.session, self.root)
                 self.assertEqual("", GM.by_id(goals, "g1")["notes"])
+            finally:
+                browser.close()
+
+    def test_rows_survive_a_switch_of_the_tree_filter(self):
+        # The tree's filter chips are the artifact's: switching one makes it
+        # save its own copy of the goals, which knows nothing of the rows the
+        # rail wrote. The rows must not go with it -- on screen or on disk.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("ship it")
+                page.wait_for_timeout(1200)
+                self.assertEqual([("ship it", 0, "")], self.rows())
+                chips = page.locator(".hc-chip")
+                chips.filter(has_text="Done").first.click()
+                page.wait_for_timeout(1500)
+                chips.filter(has_text="All").first.click()
+                page.wait_for_timeout(1500)
+                expect(page.locator(".hc-todo-line").first).to_have_text("ship it")
+                self.assertEqual([("ship it", 0, "")], self.rows())
+                # And a row still in the rail's save window when the chip is
+                # clicked -- typed, not yet written -- is written, not lost.
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.press("End")
+                page.keyboard.press("Enter")
+                page.keyboard.type("and docs")
+                chips.filter(has_text="Active").first.click()
+                page.wait_for_timeout(1500)
+                self.assertEqual([("ship it", 0, ""), ("and docs", 0, "")], self.rows())
+                expect(page.locator(".hc-todo-line").nth(1)).to_have_text("and docs")
             finally:
                 browser.close()
 
@@ -264,8 +305,90 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 expect(page.locator(".hc-todo-ask")).to_have_count(0)
                 self.assertEqual(["done", "done"], [r[2] for r in self.rows()])
                 # done rows cannot be picked again
-                page.locator(".hc-todo-dash").first.click()
+                self.tile(page, "Add the route").locator(".hc-todo-dash").click()
                 expect(build).to_have_text("Build")
+            finally:
+                browser.close()
+
+    def test_one_cmd_enter_builds_the_sole_row_and_the_page_stays(self):
+        # Nothing picked and one row to pick: Cmd+Enter builds it -- once,
+        # and from wherever the caret is. The page is not reloaded to learn
+        # the rows' new state or the goal's: the tree's own chips update in
+        # place. A fresh empty row is waiting for the next TODO, with the
+        # caret in it. And the answer box wraps rather than scrolling.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.evaluate("() => { window.__hcStay = 'same page'; }")
+                expect(page.locator(".hc-chip").filter(has_text="In progress")
+                       ).to_have_text("In progress 0")
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.keyboard.press("Meta+Enter")
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("needs you", timeout=10_000)
+                # No reload: the marker set before the build is still there,
+                # and the artifact's tree learned the goal is in progress.
+                self.assertEqual("same page", page.evaluate("() => window.__hcStay"))
+                expect(page.locator(".hc-chip").filter(has_text="In progress")
+                       ).to_have_text("In progress 1", timeout=10_000)
+                # The caret is on a fresh empty row: typing is the next TODO.
+                page.keyboard.type("Update the docs")
+                page.wait_for_timeout(1200)
+                self.assertEqual([("Update the docs", 0, ""), ("Add the route", 0, "asking")],
+                                 self.rows())
+                # The question thread wraps: a long answer grows the box
+                # downward instead of running off to the right.
+                answer = page.locator(".hc-todo-answer")
+                self.assertEqual("TEXTAREA", answer.evaluate("el => el.tagName"))
+                one_line = answer.evaluate("el => el.getBoundingClientRect().height")
+                answer.click()
+                page.keyboard.type("src/a.ts " * 20)
+                page.wait_for_timeout(200)
+                grown = answer.evaluate("el => el.getBoundingClientRect().height")
+                self.assertGreater(grown, one_line * 1.8, (one_line, grown))
+                self.assertEqual(
+                    answer.evaluate("el => el.scrollWidth <= el.clientWidth + 1"), True)
+                page.keyboard.press("Enter")
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("done", timeout=10_000)
+                # Two rows unsent, one picked from the gutter (which leaves
+                # the caret in no row at all): Cmd+Enter still builds, once.
+                self.tile(page, "Update the docs").locator(".hc-todo-line").click()
+                page.keyboard.press("End")
+                page.keyboard.press("Enter")
+                page.keyboard.type("Write the tests")
+                page.keyboard.press("Enter")
+                page.keyboard.type("Ship it")
+                page.wait_for_timeout(1200)
+                self.tile(page, "Ship it").locator(".hc-todo-dash").click()
+                expect(page.locator(".hc-todo-build")).to_have_text("Build 1")
+                page.keyboard.press("Meta+Enter")
+                expect(self.tile(page, "Ship it").locator(".hc-todo-status")
+                       ).to_have_text("needs you", timeout=10_000)
+                self.assertEqual("same page", page.evaluate("() => window.__hcStay"))
+                # Two unsent rows is a choice: with nothing picked, Cmd+Enter
+                # from the Build control's side of the page builds nothing.
+                page.keyboard.type("Also this")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-rail-select").click()  # picks both
+                page.locator(".hc-rail-select").click()  # releases both; focus is off the list
+                expect(page.locator(".hc-todo-build")).to_have_text("Build")
+                page.keyboard.press("Meta+Enter")
+                page.wait_for_timeout(600)
+                self.assertEqual(["", ""], [r[2] for r in self.rows()
+                                            if r[0] in ("Write the tests", "Also this")])
+                # And with all three unsent rows picked ("Update the docs"
+                # was never sent), from off the list: one press builds.
+                page.locator(".hc-rail-select").click()
+                expect(page.locator(".hc-todo-build")).to_have_text("Build 3")
+                page.keyboard.press("Meta+Enter")
+                expect(self.tile(page, "Also this").locator(".hc-todo-status")
+                       ).to_have_text("done", timeout=10_000)
             finally:
                 browser.close()
 
@@ -300,7 +423,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 self.assertEqual([("Add the route", 0, ""), ("Update the docs", 0, "done")],
                                  self.rows())
                 # Out again, and back by the corner this time.
-                page.locator(".hc-todo-dash").first.click()
+                self.tile(page, "Add the route").locator(".hc-todo-dash").click()
                 expect(build).to_have_text("Build 1")
                 build.click()
                 expect(page.locator(".hc-todo-status").first
@@ -310,7 +433,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.wait_for_timeout(600)
                 self.assertEqual("", self.rows()[0][2])
                 # And it can be picked once more: the row is live again.
-                page.locator(".hc-todo-dash").first.click()
+                self.tile(page, "Add the route").locator(".hc-todo-dash").click()
                 expect(build).to_have_text("Build 1")
             finally:
                 browser.close()
@@ -403,9 +526,42 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
                 browser.close()
 
     # the inherited headless tests run again here in session mode only where
-    # they do not build; skip the build one.
+    # they do not build; skip the build ones.
     def test_picked_rows_build_ask_and_finish_on_the_answer(self):
         self.skipTest("headless-only")
+
+    def test_one_cmd_enter_builds_the_sole_row_and_the_page_stays(self):
+        self.skipTest("headless-only")
+
+    def test_a_row_out_with_the_builder_comes_back_on_escape_or_its_corner(self):
+        # In session mode the row waits in the queue: cancelling it from the
+        # caret takes it out of the queue and back to active.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                expect(page.locator(".hc-todo-status").first).to_have_text("queued", timeout=10_000)
+                expect(page.locator(".hc-todo-cancel")).to_have_count(1)
+                self.assertEqual(1, len(BUILD.pending(self.session, self.root)))
+                # From the caret inside the queued row -- not the empty row
+                # the Build left above it for the next TODO.
+                self.tile(page, "Add the route").locator(".hc-todo-line").click()
+                page.keyboard.press("Escape")
+                expect(page.locator(".hc-todo-status")).to_have_count(0)
+                expect(page.locator(".hc-todo-cancel")).to_have_count(0)
+                page.wait_for_timeout(600)
+                self.assertEqual([], BUILD.pending(self.session, self.root))
+                self.assertEqual("", self.rows()[0][2])
+                expect(page.locator(".hc-todo-error")).to_be_hidden()
+            finally:
+                browser.close()
 
 
 if __name__ == "__main__":

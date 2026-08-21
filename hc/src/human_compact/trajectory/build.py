@@ -108,6 +108,13 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
         indent = "  " * int(row.get("depth") or 0)
         marker = f" [{row['id']}]" if row.get("_picked") else ""
         lines.append(f"{indent}- {row.get('text', '')}{marker}")
+    # Screenshots pasted into the rows going out: each "[attachment #N]" a
+    # row cites, resolved to the file it names, so the session can open it.
+    shots = GM.render_attachments(rows).rstrip("\n")
+    if shots:
+        lines += ["", "# Attachments", "",
+                  "Files the rows above cite; read each one for the row"
+                  " that names it.", shots]
     lines += ["", PROTOCOL.rstrip("\n")]
     return "\n".join(lines) + "\n"
 

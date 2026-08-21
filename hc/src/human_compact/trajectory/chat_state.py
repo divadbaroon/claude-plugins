@@ -28,6 +28,7 @@ from .goals import (  # noqa: F401
     normalize_sources,
     overlay_todo_store,
     promote_todos,
+    render_attachments,
     split_doc,
     split_todo_store,
     strip_todo_items,
@@ -1375,6 +1376,13 @@ def _goal_context_text(
                 lines.append(f"{indent}  - TODOS:")
                 lines.extend(f"{indent}    {line}".rstrip()
                              for line in todos_md.splitlines())
+                # The files those rows cite by "[attachment #N]", so a
+                # marker in the list above is never a dangling reference.
+                shots = render_attachments(goal.get("todo_items"))
+                if shots:
+                    lines.append(f"{indent}  - ATTACHMENTS:")
+                    lines.extend(f"{indent}    {line}".rstrip()
+                                 for line in shots.splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
             # What the user attached as background for this goal, named by
