@@ -688,6 +688,9 @@
       }),
       serverState.runs
     ]);
+    // Row status is not in the fingerprint -- the tree does not redraw for
+    // it -- so the builder's transitions are read before the early return.
+    trackTodoAlerts(st);
     if (fingerprint === stateFingerprint) return true;
     stateFingerprint = fingerprint;
     return true;
@@ -1072,14 +1075,42 @@
   // pathological one cannot lock the tab building rows.
   var PICK_LIMIT = 2000;
 
+  // The goal and every goal above it, as a set of ids. A chat linked on a
+  // goal is offered to that goal and the goals under it: a prompt tagged
+  // with chat_goals belongs in the picker for goal S when one of those
+  // goals is S or an ancestor of S -- never when it is a descendant.
+  function goalLine(goalId) {
+    var byId = {};
+    array(serverState.goals).forEach(function (g) {
+      if (g && typeof g.id === "string") byId[g.id] = g;
+    });
+    var line = {};
+    var at = goalId, hops = 0;
+    while (typeof at === "string" && at && !line[at] && hops++ < 64) {
+      line[at] = true;
+      at = byId[at] ? byId[at].parent_goal_id : null;
+    }
+    return line;
+  }
+
+  function promptOfferedTo(prompt, line) {
+    var scope = prompt && prompt.chat_goals;
+    if (!Array.isArray(scope)) return true;
+    for (var i = 0; i < scope.length; i++) {
+      if (line[scope[i]]) return true;
+    }
+    return false;
+  }
+
   function pickPrompt(goalId, trigger) {
     var goal = array(serverState.goals).filter(function (g) {
       return g && g.id === goalId;
     })[0];
     var linked = {};
     array(goal && goal.prompt_ids).forEach(function (id) { linked[id] = true; });
+    var line = goalLine(goalId);
     var pool = array(serverState.prompts).filter(function (prompt) {
-      return !linked[prompt.id];
+      return !linked[prompt.id] && promptOfferedTo(prompt, line);
     }).slice().reverse();
     return new Promise(function (resolve) {
       ensureDialogStyles();
@@ -1286,10 +1317,14 @@
       var node = event && event.target;
       while (node && node !== document) {
         var name = node.className ? String(node.className) : "";
-        if (name.indexOf("hc-chat-addbtn") >= 0) {
+        if (name.indexOf("hc-chat-addbtn") >= 0
+            || name.indexOf("hc-chat-linkbtn") >= 0) {
           if (event.preventDefault) event.preventDefault();
           if (event.stopPropagation) event.stopPropagation();
-          openChatPicker(node);
+          // The header's button links for the whole workspace; the one in
+          // a goal's pane links for that goal and the goals under it.
+          openChatPicker(node, name.indexOf("hc-chat-linkbtn") >= 0
+                                 ? null : selectedGoalId());
           return;
         }
         if (name.indexOf("hc-prompt-addbtn") >= 0) {
@@ -1303,8 +1338,35 @@
     }, true);
   }
 
-  function openChatPicker(button) {
+  // How one linked chat stands in relation to a picker opened for `goalId`
+  // (null: the header, i.e. the whole workspace). `on` is the link this
+  // picker can undo; `via` names a link made elsewhere that already covers
+  // this scope, which the picker reports and leaves alone.
+  function chatStanding(entries, goalId, line, titles) {
+    var on = false, via = "";
+    entries.forEach(function (entry) {
+      var scope = entry.goal_id || null;
+      if (scope === goalId) on = true;
+      else if (goalId && !scope) via = via || "linked for every goal";
+      else if (goalId && line[scope]) {
+        via = via || ("linked on " + (titles[scope] || scope));
+      } else if (!goalId && scope) {
+        via = via || "linked on " + (titles[scope] || scope);
+      }
+    });
+    return { on: on, via: via };
+  }
+
+  function openChatPicker(button, goalId) {
     if (document.querySelector(".hc-ask")) return;
+    goalId = typeof goalId === "string" && goalId ? goalId : null;
+    var goal = goalId ? array(serverState.goals).filter(function (g) {
+      return g && g.id === goalId;
+    })[0] : null;
+    if (goalId && !goal) {
+      button.textContent = "select a goal first";
+      return;
+    }
     fetch("/api/chats").then(function (r) { return r.json(); })
       .then(function (data) {
         if (!data || data.ok !== true) {
@@ -1312,17 +1374,28 @@
           return;
         }
         ensureDialogStyles();
+        var titles = {};
+        array(serverState.goals).forEach(function (g) {
+          if (g && typeof g.id === "string") titles[g.id] = str(g.title);
+        });
+        var line = goalId ? goalLine(goalId) : {};
         var overlay = document.createElement("div");
         overlay.className = "hc-ask";
         var box = document.createElement("div");
         box.className = "hc-ask-box hc-pick-box";
         var title = document.createElement("div");
         title.className = "hc-ask-title";
-        title.textContent = "Chats this workspace draws prompts from";
+        title.textContent = goalId
+          ? "Chats this goal draws prompts from"
+          : "Chats this workspace draws prompts from";
         var note = document.createElement("div");
         note.className = "hc-pick-count";
-        note.textContent = "A linked chat only adds its prompts to the "
-          + "picker and stays in sync; its goals are never read.";
+        note.textContent = (goalId
+          ? "Linked here, a chat offers its prompts to \u201c"
+            + (str(goal.title) || "Untitled") + "\u201d and the goals "
+            + "under it, not to the goals above. "
+          : "Linked here, a chat offers its prompts to every goal. ")
+          + "Its goals are never read; it stays in sync.";
         var list = document.createElement("div");
         list.className = "hc-pick-list";
         function close() {
@@ -1335,10 +1408,14 @@
         }
         function draw() {
           while (list.firstChild) list.removeChild(list.firstChild);
-          var shown = {};
+          var shown = {}, order = [];
           array(data.linked).forEach(function (chat) {
-            shown[chat.session_id] = { id: chat.session_id, label: chat.label,
-                                       project: "", on: true };
+            if (!shown[chat.session_id]) {
+              shown[chat.session_id] = { id: chat.session_id, label: chat.label,
+                                         project: "", entries: [] };
+              order.push(chat.session_id);
+            }
+            shown[chat.session_id].entries.push(chat);
           });
           array(data.available).forEach(function (chat) {
             if (shown[chat.session_id]) {
@@ -1347,9 +1424,10 @@
             }
             shown[chat.session_id] = { id: chat.session_id,
                                        label: str(chat.project) || chat.session_id.slice(0, 8),
-                                       project: str(chat.project), on: false };
+                                       project: str(chat.project), entries: [] };
+            order.push(chat.session_id);
           });
-          var rows = Object.keys(shown).map(function (id) { return shown[id]; });
+          var rows = order.map(function (id) { return shown[id]; });
           if (!rows.length) {
             var none = document.createElement("div");
             none.className = "hc-pick-none";
@@ -1358,37 +1436,45 @@
             return;
           }
           rows.forEach(function (chat) {
+            var standing = chatStanding(chat.entries, goalId, line, titles);
             var row = document.createElement("button");
             row.className = "hc-pick-row";
             var when = document.createElement("span");
             when.className = "hc-pick-when";
-            when.textContent = (chat.on ? "LINKED \u00b7 " : "")
-              + chat.id.slice(0, 8) + (chat.project ? " \u00b7 " + chat.project : "");
+            when.textContent = (standing.on ? "LINKED \u00b7 " : "")
+              + chat.id.slice(0, 8) + (chat.project ? " \u00b7 " + chat.project : "")
+              + (standing.via ? " \u00b7 " + standing.via : "");
             var text = document.createElement("span");
             text.className = "hc-pick-text";
             text.textContent = (chat.label || chat.id)
-              + (chat.on ? " \u2014 click to unlink" : " \u2014 click to link");
+              + (standing.on ? " \u2014 click to unlink"
+                 : (standing.via && !goalId
+                    ? " \u2014 click to link for every goal"
+                    : " \u2014 click to link"));
             row.appendChild(when);
             row.appendChild(text);
             row.onclick = function () {
               row.disabled = true;
-              post({ op: chat.on ? "unlink_chat" : "link_chat",
-                     session_id: chat.id, label: chat.label })
-                .then(function (result) {
-                  if (result && result.ok === true) {
-                    chat.on = !chat.on;
-                    if (chat.on) {
-                      data.linked.push({ session_id: chat.id, label: chat.label });
-                    } else {
-                      data.linked = data.linked.filter(function (c) {
-                        return c.session_id !== chat.id;
-                      });
-                    }
-                    refreshState();
+              var body = { op: standing.on ? "unlink_chat" : "link_chat",
+                           session_id: chat.id, label: chat.label };
+              if (goalId) body.goal_id = goalId;
+              post(body).then(function (result) {
+                if (result && result.ok === true) {
+                  if (standing.on) {
+                    data.linked = data.linked.filter(function (c) {
+                      return !(c.session_id === chat.id
+                               && (c.goal_id || null) === goalId);
+                    });
+                  } else {
+                    var entry = { session_id: chat.id, label: chat.label };
+                    if (goalId) entry.goal_id = goalId;
+                    data.linked.push(entry);
                   }
-                  row.disabled = false;
-                  draw();
-                });
+                  refreshState();
+                }
+                row.disabled = false;
+                draw();
+              });
             };
             list.appendChild(row);
           });
@@ -1421,9 +1507,10 @@
     // attach_prompt and detach_prompt -- answer in this scope, and the
     // prompts it offers are the ones this chat recorded, so a chat that
     // could not correct a wrong inference was the only thing missing.
+    bindPromptAdd();
+    renderChatLink();
     var slot = promptAddSlot();
     if (!slot) return false;
-    bindPromptAdd();
     if (slot.querySelector && slot.querySelector(".hc-prompt-addbtn")) {
       return true;
     }
@@ -1432,12 +1519,35 @@
     button.className = "hc-prompt-addbtn";
     button.type = "button";
     button.textContent = "+ add a prompt";
+    // This goal's own link: the chat is offered here and below, not above.
     var chats = document.createElement("button");
     chats.className = "hc-chat-addbtn";
     chats.type = "button";
+    chats.title = "Link a chat to this goal and the goals under it";
     chats.textContent = "+ add a chat";
     slot.appendChild(chats);
     slot.appendChild(button);
+    return true;
+  }
+
+  // The workspace-wide link lives in the header, beside the session chip:
+  // a chat linked there is offered to every goal. The slot is left by the
+  // header patch; only chat scope has one, which is the scope the op
+  // answers in. Attributes survive the artifact's re-render, listeners do
+  // not -- the click is delegated in bindPromptAdd.
+  function renderChatLink() {
+    var slot = document.querySelector(".hc-chats");
+    if (!slot) return false;
+    if (slot.querySelector && slot.querySelector(".hc-chat-linkbtn")) {
+      return true;
+    }
+    ensurePaneStyles();
+    var link = document.createElement("button");
+    link.className = "hc-chat-linkbtn";
+    link.type = "button";
+    link.title = "Link chats whose prompts every goal can draw from";
+    link.textContent = "+ chats";
+    slot.appendChild(link);
     return true;
   }
 
@@ -1766,6 +1876,639 @@
     mirrorRootState();
     made.forEach(function (box) { armNotice(box); });
     return fresh.length;
+  }
+
+  // --- what the builder just did to a TODO row ------------------------------
+  // A row handed to the builder comes back from the server as done, failed,
+  // or asking. The rail shows that for the goal on screen; this says it for
+  // every goal, once, in the top-right corner, and keeps the list behind a
+  // bell in the header. Chat scope only, like the notices above: a global
+  // vault has no builder behind it.
+  //
+  // Detection is a diff of row status between two accepted states, so it
+  // needs no new server field and fires exactly once per transition. The
+  // first state seen is the baseline: a page opening on a finished build
+  // does not report old news. The race a 1.5s poll can lose -- a row that
+  // goes from handed-off to done between two polls -- is covered for rows
+  // this page handed off itself: todoBuild and todoAnswer mark them out
+  // before the server is asked, so the next "done" still reads as a finish.
+
+  var ALERT_SETTINGS_KEY = "hc-alerts-settings-v1";
+  var ALERT_LOG_KEY = "hc-alerts-log-v1";
+  var ALERT_LOG_MAX = 50;
+  var ALERT_SECONDS_MIN = 1;
+  var ALERT_SECONDS_MAX = 120;
+  var ALERT_DEFAULTS = { banners: true, seconds: 6 };
+  var ALERT_OUT = { building: true, queued: true, asking: true };
+  var ALERT_SAYS = Object.create(null);
+  ALERT_SAYS.done = "TODO finished";
+  ALERT_SAYS.failed = "TODO failed";
+  ALERT_SAYS.asking = "Claude has a question";
+
+  var ALERT_CSS = [
+      ".hc-alert-stack{position:fixed;top:calc(var(--hc-top,37px) + 10px);right:16px;z-index:100002;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
+      ".hc-alert{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace;cursor:pointer}",
+      ".hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:var(--hc-ok,#1a7f37)}",
+      ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
+      ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
+      ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
+      ".hc-alert-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-alert-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
+      ".hc-alert-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}",
+      // The bell, in the header slot the template leaves for it.
+      ".hc-alerts{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-bell{position:relative;display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
+      ".hc-bell:hover,.hc-bell[data-hc-bell-open]{color:var(--ink,#111)}",
+      ".hc-bell-count{display:none;position:absolute;top:-4px;right:-6px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:9px/14px 'Source Code Pro',monospace;text-align:center}",
+      ".hc-bell[data-hc-unread] .hc-bell-count{display:block}",
+      // The center: a list under the bell, newest first, with the settings
+      // that govern the banners at its foot.
+      ".hc-alert-center{position:fixed;top:calc(var(--hc-top,37px) + 6px);right:16px;z-index:100003;width:360px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-top,37px) - 24px);display:flex;flex-direction:column;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-alert-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
+      ".hc-alert-center-act{font-weight:400;color:var(--mut,#575757);cursor:pointer;user-select:none;margin-left:10px}",
+      ".hc-alert-center-act:hover{color:var(--ink,#111)}",
+      ".hc-alert-center-list{flex:1 1 auto;overflow-y:auto;min-height:0}",
+      ".hc-alert-center-empty{padding:14px 11px;color:var(--mut,#575757)}",
+      ".hc-alert-row{position:relative;display:block;padding:8px 11px 8px 22px;border-bottom:1px solid var(--bd,#e3e3e3);cursor:pointer}",
+      ".hc-alert-row:hover{background:var(--hov,#f4f4f4)}",
+      ".hc-alert-row::before{content:'';position:absolute;left:9px;top:14px;width:6px;height:6px;border-radius:3px;background:transparent}",
+      ".hc-alert-row[data-hc-alert-unread]::before{background:var(--acc,#a5492a)}",
+      ".hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:var(--ink,#111)}",
+      ".hc-alert-row .hc-alert-title{font-weight:500;color:var(--mut,#575757)}",
+      ".hc-alert-when{float:right;color:var(--fnt,#9b9b9b);font-weight:400;margin-left:8px}",
+      ".hc-alert-settings{border-top:1px solid var(--bd,#e3e3e3);padding:8px 11px;display:flex;flex-direction:column;gap:6px;color:var(--mut,#575757)}",
+      ".hc-alert-settings-head{font-weight:600;color:var(--ink,#111)}",
+      ".hc-alert-settings label{display:flex;align-items:center;gap:8px;cursor:pointer}",
+      ".hc-alert-settings input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}"
+  ].join("");
+
+  var BELL_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"></path><path d=\"M13.7 21a2 2 0 0 1-3.4 0\"></path></svg>";
+
+  var alertPrev = null;            // row id -> status, from the last state
+  var alertLog = null;             // newest first; loaded on first use
+  var alertSettingsCache = null;
+  var alertStackBox = null;
+  var alertCenterBox = null;
+  var alertTimers = Object.create(null);
+  var alertBound = false;
+  var alertSeq = 0;
+
+  function ensureAlertStyles() {
+    if (document.getElementById("hc-alert-style")) return;
+    var style = document.createElement("style");
+    style.id = "hc-alert-style";
+    style.textContent = ALERT_CSS;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function alertSettings() {
+    if (alertSettingsCache) return alertSettingsCache;
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ALERT_SETTINGS_KEY) || "null"); }
+    catch (e) { saved = null; }
+    var out = { banners: ALERT_DEFAULTS.banners, seconds: ALERT_DEFAULTS.seconds };
+    if (saved && typeof saved === "object") {
+      if (typeof saved.banners === "boolean") out.banners = saved.banners;
+      if (typeof saved.seconds === "number" && isFinite(saved.seconds)) {
+        out.seconds = alertClampSeconds(saved.seconds);
+      }
+    }
+    alertSettingsCache = out;
+    return out;
+  }
+
+  function alertClampSeconds(value) {
+    var n = Number(value);
+    if (!isFinite(n)) return ALERT_DEFAULTS.seconds;
+    n = Math.round(n);
+    if (n < ALERT_SECONDS_MIN) return ALERT_SECONDS_MIN;
+    if (n > ALERT_SECONDS_MAX) return ALERT_SECONDS_MAX;
+    return n;
+  }
+
+  function setAlertSettings(patch) {
+    var cur = alertSettings();
+    var next = { banners: cur.banners, seconds: cur.seconds };
+    if (patch && typeof patch === "object") {
+      if (typeof patch.banners === "boolean") next.banners = patch.banners;
+      if (patch.seconds !== undefined && patch.seconds !== null && patch.seconds !== "") {
+        next.seconds = alertClampSeconds(patch.seconds);
+      }
+    }
+    alertSettingsCache = next;
+    try { localStorage.setItem(ALERT_SETTINGS_KEY, JSON.stringify(next)); } catch (e) {}
+    // A banner already up keeps the clock it was armed with; the next one
+    // gets the new one. Turning banners off takes the ones up down.
+    if (!next.banners) dropAllAlerts();
+    renderAlertCenter();
+    return next;
+  }
+
+  function loadAlertLog() {
+    if (alertLog) return alertLog;
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(ALERT_LOG_KEY) || "null"); }
+    catch (e) { saved = null; }
+    alertLog = array(saved).filter(function (row) {
+      return row && typeof row === "object" && typeof row.id === "string"
+        && ALERT_SAYS[str(row.kind)];
+    }).map(function (row) {
+      return { id: row.id, kind: str(row.kind), goalId: str(row.goalId),
+               goalTitle: str(row.goalTitle), rowId: str(row.rowId),
+               text: str(row.text), question: str(row.question),
+               at: (typeof row.at === "number") ? row.at : Date.parse(str(row.at)) || 0,
+               read: !!row.read };
+    }).slice(0, ALERT_LOG_MAX);
+    return alertLog;
+  }
+
+  function saveAlertLog() {
+    if (!alertLog) return;
+    if (alertLog.length > ALERT_LOG_MAX) alertLog.length = ALERT_LOG_MAX;
+    try { localStorage.setItem(ALERT_LOG_KEY, JSON.stringify(alertLog)); } catch (e) {}
+  }
+
+  function alertUnread() {
+    return loadAlertLog().filter(function (row) { return !row.read; }).length;
+  }
+
+  function alertById(id) {
+    var log = loadAlertLog();
+    for (var i = 0; i < log.length; i++) if (log[i].id === id) return log[i];
+    return null;
+  }
+
+  function markAlertRead(id, read) {
+    var row = alertById(id);
+    if (!row || row.read === !!read) return false;
+    row.read = !!read;
+    saveAlertLog();
+    renderBell();
+    renderAlertCenter();
+    return true;
+  }
+
+  function markAllAlertsRead() {
+    var changed = false;
+    loadAlertLog().forEach(function (row) {
+      if (!row.read) { row.read = true; changed = true; }
+    });
+    if (changed) { saveAlertLog(); renderBell(); renderAlertCenter(); }
+    return changed;
+  }
+
+  function clearAlertLog() {
+    alertLog = [];
+    saveAlertLog();
+    dropAllAlerts();
+    renderBell();
+    renderAlertCenter();
+  }
+
+  // The transitions worth a word, between two states of the goals.
+  function todoAlertsFrom(goals, prev) {
+    var next = Object.create(null), fresh = [];
+    array(goals).forEach(function (goal) {
+      if (!goal || typeof goal !== "object") return;
+      array(goal.todo_items).forEach(function (row) {
+        if (!row || typeof row.id !== "string") return;
+        var status = str(row.status);
+        next[row.id] = status;
+        if (!prev) return;
+        var was = str(prev[row.id]);
+        if (was === status) return;
+        var kind = "";
+        if (status === "done" && ALERT_OUT[was]) kind = "done";
+        else if (status === "failed") kind = "failed";
+        else if (status === "asking") kind = "asking";
+        if (!kind) return;
+        fresh.push({ kind: kind, goalId: str(goal.id),
+                     goalTitle: str(goal.title).trim() || "Untitled",
+                     rowId: row.id, text: str(row.text).trim(),
+                     question: str(row.question).trim() });
+      });
+    });
+    return { next: next, fresh: fresh };
+  }
+
+  // Rows this page just handed to the builder: remembered as out so a
+  // finish that lands before the next poll still counts as one.
+  function alertNoteOut(ids) {
+    if (!alertPrev) alertPrev = Object.create(null);
+    array(ids).forEach(function (id) {
+      if (typeof id === "string") alertPrev[id] = "building";
+    });
+  }
+
+  function trackTodoAlerts(st) {
+    if (!st || serverState.scope !== "chat" || !Array.isArray(st.goals)) return [];
+    var diff = todoAlertsFrom(st.goals, alertPrev);
+    alertPrev = diff.next;
+    if (!diff.fresh.length) return [];
+    var log = loadAlertLog();
+    var made = diff.fresh.map(function (row) {
+      alertSeq += 1;
+      var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
+                    kind: row.kind, goalId: row.goalId, goalTitle: row.goalTitle,
+                    rowId: row.rowId, text: row.text, question: row.question,
+                    at: Date.now(), read: false };
+      log.unshift(entry);
+      return entry;
+    });
+    saveAlertLog();
+    renderBell();
+    renderAlertCenter();
+    if (alertSettings().banners) made.forEach(showAlertBanner);
+    return made;
+  }
+
+  function alertStack() {
+    return (alertStackBox && alertStackBox.parentNode) ? alertStackBox : null;
+  }
+
+  function alertHost() {
+    if (alertStack()) return alertStackBox;
+    ensureAlertStyles();
+    alertStackBox = document.createElement("div");
+    alertStackBox.className = "hc-alert-stack";
+    // On the body, outside the artifact's subtree, for the same reason the
+    // notices are: the artifact rebuilds its subtree on every state change.
+    (document.body || document.documentElement).appendChild(alertStackBox);
+    return alertStackBox;
+  }
+
+  function alertDetailOf(entry) {
+    if (entry.kind === "asking" && entry.question) return entry.question;
+    return entry.text || "(untitled TODO)";
+  }
+
+  function alertBannerNode(entry) {
+    var box = document.createElement("div");
+    box.className = "hc-alert";
+    box.setAttribute("data-hc-alert", entry.id);
+    box.setAttribute("data-hc-alert-kind", entry.kind);
+    box.setAttribute("role", "status");
+    var close = document.createElement("span");
+    close.className = "hc-alert-close";
+    close.textContent = "×";
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Dismiss");
+    box.appendChild(close);
+    var title = document.createElement("div");
+    title.className = "hc-alert-title";
+    title.textContent = ALERT_SAYS[entry.kind];
+    box.appendChild(title);
+    var detail = document.createElement("div");
+    detail.className = "hc-alert-detail";
+    detail.textContent = alertDetailOf(entry);
+    box.appendChild(detail);
+    var goal = document.createElement("div");
+    goal.className = "hc-alert-goal";
+    goal.textContent = entry.goalTitle;
+    box.appendChild(goal);
+    return box;
+  }
+
+  function showAlertBanner(entry) {
+    var host = alertHost();
+    bindAlerts();
+    var box = host.appendChild(alertBannerNode(entry));
+    // Three at once is what fits without covering the page it reports on.
+    while (host.children.length > NOTICE_MAX) dropAlertBanner(host.children[0]);
+    armAlert(box);
+    return box;
+  }
+
+  function alertIdOf(box) {
+    return (box && box.getAttribute) ? str(box.getAttribute("data-hc-alert")) : "";
+  }
+
+  function holdAlert(box) {
+    var id = alertIdOf(box);
+    if (!id || !alertTimers[id]) return;
+    clearTimeout(alertTimers[id]);
+    delete alertTimers[id];
+  }
+
+  function armAlert(box) {
+    var id = alertIdOf(box);
+    if (!id) return;
+    holdAlert(box);
+    alertTimers[id] = setTimeout(function () { dropAlertBanner(box); },
+                                 alertSettings().seconds * 1000);
+  }
+
+  function dropAlertBanner(box) {
+    if (!box) return;
+    holdAlert(box);
+    if (box.parentNode) box.parentNode.removeChild(box);
+  }
+
+  function dropAllAlerts() {
+    var host = alertStack();
+    if (!host) return;
+    while (host.children && host.children.length) dropAlertBanner(host.children[0]);
+  }
+
+  function alertBannerFor(id) {
+    var host = alertStack();
+    var kids = (host && host.children) || [];
+    for (var i = 0; i < kids.length; i++) if (alertIdOf(kids[i]) === id) return kids[i];
+    return null;
+  }
+
+  // Going to the row: the goal is selected in the tree, the rail opens on
+  // its TODOs, and the entry reads as seen.
+  function alertGo(id) {
+    var entry = alertById(id);
+    if (!entry) return false;
+    markAlertRead(id, true);
+    dropAlertBanner(alertBannerFor(id));
+    closeAlertCenter();
+    railTab = "todos";
+    if (entry.goalId) {
+      if (typeof window !== "undefined" && typeof window.__hcSelectGoal === "function") {
+        try { window.__hcSelectGoal(entry.goalId); } catch (e) {}
+      } else {
+        try {
+          var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+          saved.selId = entry.goalId;
+          localStorage.setItem(KEY, JSON.stringify(saved));
+        } catch (e) {}
+      }
+    }
+    renderTodoRail(true);
+    return true;
+  }
+
+  function closestByClass(node, name) {
+    while (node && node !== document) {
+      var own = node.className ? String(node.className).split(" ") : [];
+      if (own.indexOf(name) >= 0) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function bindAlerts() {
+    if (alertBound || !document.addEventListener) return;
+    alertBound = true;
+    document.addEventListener("click", function (event) {
+      var target = event && event.target;
+      if (!target) return;
+      var stop = function () {
+        if (event.preventDefault) event.preventDefault();
+        if (event.stopPropagation) event.stopPropagation();
+      };
+      // The bell toggles the center.
+      if (closestByClass(target, "hc-bell")) {
+        stop();
+        toggleAlertCenter();
+        return;
+      }
+      // A banner: × dismisses it as read; anywhere else goes to the row.
+      var banner = closestByClass(target, "hc-alert");
+      if (banner) {
+        stop();
+        var id = alertIdOf(banner);
+        if (closestByClass(target, "hc-alert-close")) {
+          markAlertRead(id, true);
+          dropAlertBanner(banner);
+        } else {
+          alertGo(id);
+        }
+        return;
+      }
+      var center = closestByClass(target, "hc-alert-center");
+      if (center) {
+        var act = closestByClass(target, "hc-alert-center-act");
+        if (act) {
+          stop();
+          var what = str(act.getAttribute("data-hc-alert-act"));
+          if (what === "read-all") markAllAlertsRead();
+          else if (what === "clear") clearAlertLog();
+          else if (what === "close") closeAlertCenter();
+          return;
+        }
+        var row = closestByClass(target, "hc-alert-row");
+        if (row) { stop(); alertGo(str(row.getAttribute("data-hc-alert"))); }
+        // Clicks on the settings controls fall through to the inputs.
+        return;
+      }
+      // Anywhere else closes the center.
+      if (alertCenterShown()) closeAlertCenter();
+    }, true);
+    document.addEventListener("change", function (event) {
+      var target = event && event.target;
+      var key = (target && target.getAttribute) ? str(target.getAttribute("data-hc-alert-set")) : "";
+      if (!key) return;
+      if (key === "banners") setAlertSettings({ banners: !!target.checked });
+      else if (key === "seconds") setAlertSettings({ seconds: target.value });
+    }, true);
+    // The clock stops while the pointer is on a banner, as for the notices.
+    document.addEventListener("mouseover", function (event) {
+      var box = closestByClass(event && event.target, "hc-alert");
+      if (box) holdAlert(box);
+    }, true);
+    document.addEventListener("mouseout", function (event) {
+      var box = closestByClass(event && event.target, "hc-alert");
+      if (!box) return;
+      var to = event.relatedTarget;
+      if (to && box.contains && box.contains(to)) return;
+      armAlert(box);
+    }, true);
+  }
+
+  // The bell sits in the header; its badge is the unread count.
+  function renderBell() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-alerts");
+    if (!slot) return false;
+    ensureAlertStyles();
+    bindAlerts();
+    var bell = slot.querySelector(".hc-bell");
+    if (!bell) {
+      bell = document.createElement("span");
+      bell.className = "hc-bell";
+      bell.setAttribute("role", "button");
+      bell.setAttribute("aria-label", "Notifications");
+      bell.title = "Notifications";
+      bell.innerHTML = BELL_ICON;
+      var count = document.createElement("span");
+      count.className = "hc-bell-count";
+      bell.appendChild(count);
+      slot.appendChild(bell);
+    }
+    var unread = alertUnread();
+    var badge = bell.querySelector(".hc-bell-count");
+    var label = unread > 99 ? "99+" : String(unread);
+    var changed = false;
+    if (badge && badge.textContent !== label) { badge.textContent = label; changed = true; }
+    var has = bell.getAttribute("data-hc-unread") !== null;
+    if (unread && !has) { bell.setAttribute("data-hc-unread", String(unread)); changed = true; }
+    else if (unread && bell.getAttribute("data-hc-unread") !== String(unread)) {
+      bell.setAttribute("data-hc-unread", String(unread)); changed = true;
+    } else if (!unread && has) { bell.removeAttribute("data-hc-unread"); changed = true; }
+    var open = alertCenterShown();
+    if (open && bell.getAttribute("data-hc-bell-open") === null) {
+      bell.setAttribute("data-hc-bell-open", ""); changed = true;
+    } else if (!open && bell.getAttribute("data-hc-bell-open") !== null) {
+      bell.removeAttribute("data-hc-bell-open"); changed = true;
+    }
+    return changed;
+  }
+
+  function alertCenterShown() {
+    return !!(alertCenterBox && alertCenterBox.parentNode);
+  }
+
+  function alertWhen(at) {
+    var d = new Date(at);
+    if (!isFinite(d.getTime())) return "";
+    var hh = d.getHours(), mm = d.getMinutes();
+    return (hh < 10 ? "0" : "") + hh + ":" + (mm < 10 ? "0" : "") + mm;
+  }
+
+  function alertCenterNode() {
+    var box = document.createElement("div");
+    box.className = "hc-alert-center";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-label", "Notifications");
+    var head = document.createElement("div");
+    head.className = "hc-alert-center-head";
+    var name = document.createElement("span");
+    name.textContent = "Notifications";
+    head.appendChild(name);
+    var acts = document.createElement("span");
+    [["read-all", "Mark all read"], ["clear", "Clear"], ["close", "×"]].forEach(function (spec) {
+      var a = document.createElement("span");
+      a.className = "hc-alert-center-act";
+      a.setAttribute("data-hc-alert-act", spec[0]);
+      a.setAttribute("role", "button");
+      a.textContent = spec[1];
+      acts.appendChild(a);
+    });
+    head.appendChild(acts);
+    box.appendChild(head);
+    var list = document.createElement("div");
+    list.className = "hc-alert-center-list";
+    box.appendChild(list);
+    var settings = document.createElement("div");
+    settings.className = "hc-alert-settings";
+    var sh = document.createElement("div");
+    sh.className = "hc-alert-settings-head";
+    sh.textContent = "Settings";
+    settings.appendChild(sh);
+    var text = function (words) {
+      var s = document.createElement("span");
+      s.textContent = words;
+      return s;
+    };
+    var l1 = document.createElement("label");
+    var c1 = document.createElement("input");
+    c1.type = "checkbox";
+    c1.setAttribute("type", "checkbox");
+    c1.setAttribute("data-hc-alert-set", "banners");
+    l1.appendChild(c1);
+    l1.appendChild(text("Show a banner when a TODO finishes, fails, or asks"));
+    settings.appendChild(l1);
+    var l2 = document.createElement("label");
+    l2.appendChild(text("Banner stays for"));
+    var n2 = document.createElement("input");
+    n2.type = "number";
+    n2.setAttribute("type", "number");
+    n2.setAttribute("min", String(ALERT_SECONDS_MIN));
+    n2.setAttribute("max", String(ALERT_SECONDS_MAX));
+    n2.setAttribute("step", "1");
+    n2.setAttribute("data-hc-alert-set", "seconds");
+    l2.appendChild(n2);
+    l2.appendChild(text("seconds"));
+    settings.appendChild(l2);
+    box.appendChild(settings);
+    return box;
+  }
+
+  function alertInputs(node, out) {
+    out = out || [];
+    var kids = (node && node.children) || [];
+    for (var i = 0; i < kids.length; i++) {
+      if (kids[i].getAttribute && kids[i].getAttribute("data-hc-alert-set") !== null) {
+        out.push(kids[i]);
+      }
+      alertInputs(kids[i], out);
+    }
+    return out;
+  }
+
+  function renderAlertCenter() {
+    if (!alertCenterShown()) return false;
+    var box = alertCenterBox;
+    var list = box.querySelector(".hc-alert-center-list");
+    if (list) {
+      while (list.firstChild) list.removeChild(list.firstChild);
+      var log = loadAlertLog();
+      if (!log.length) {
+        var empty = document.createElement("div");
+        empty.className = "hc-alert-center-empty";
+        empty.textContent = "Nothing yet. Builds that finish, fail, or ask land here.";
+        list.appendChild(empty);
+      }
+      log.forEach(function (entry) {
+        var row = document.createElement("div");
+        row.className = "hc-alert-row";
+        row.setAttribute("data-hc-alert", entry.id);
+        row.setAttribute("data-hc-alert-kind", entry.kind);
+        if (!entry.read) row.setAttribute("data-hc-alert-unread", "");
+        var title = document.createElement("div");
+        title.className = "hc-alert-title";
+        var when = document.createElement("span");
+        when.className = "hc-alert-when";
+        when.textContent = alertWhen(entry.at);
+        title.appendChild(when);
+        title.appendChild(document.createTextNode(ALERT_SAYS[entry.kind]));
+        row.appendChild(title);
+        var detail = document.createElement("div");
+        detail.className = "hc-alert-detail";
+        detail.textContent = alertDetailOf(entry);
+        row.appendChild(detail);
+        var goal = document.createElement("div");
+        goal.className = "hc-alert-goal";
+        goal.textContent = entry.goalTitle;
+        row.appendChild(goal);
+        list.appendChild(row);
+      });
+    }
+    var cur = alertSettings();
+    var inputs = alertInputs(box);
+    for (var i = 0; i < inputs.length; i++) {
+      var key = str(inputs[i].getAttribute("data-hc-alert-set"));
+      if (key === "banners") inputs[i].checked = !!cur.banners;
+      else if (key === "seconds") inputs[i].value = String(cur.seconds);
+    }
+    return true;
+  }
+
+  function openAlertCenter() {
+    if (alertCenterShown()) return alertCenterBox;
+    ensureAlertStyles();
+    bindAlerts();
+    alertCenterBox = alertCenterNode();
+    (document.body || document.documentElement).appendChild(alertCenterBox);
+    renderAlertCenter();
+    renderBell();
+    return alertCenterBox;
+  }
+
+  function closeAlertCenter() {
+    if (!alertCenterShown()) return false;
+    alertCenterBox.parentNode.removeChild(alertCenterBox);
+    renderBell();
+    return true;
+  }
+
+  function toggleAlertCenter() {
+    return alertCenterShown() ? closeAlertCenter() : !!openAlertCenter();
   }
 
   function watchRunFeed() {
@@ -3028,6 +3771,7 @@
     todoItems.forEach(function (row) {
       if (todoPicked[row.id]) { row.status = "building"; row.question = ""; }
     });
+    alertNoteOut(ids);
     todoPicked = {};
     // The rows just handed off drop into the middle band right away.
     todoItems = todoSectioned(todoItems);
@@ -3062,6 +3806,7 @@
     var goalId = todoGoalId;
     var row = todoItems && todoItems[todoIndexOfId(id)];
     if (row) { row.status = "building"; row.question = ""; }
+    alertNoteOut([id]);
     renderTodoRail(true);
     post({ op: "answer_todo", goal_id: goalId, id: id, answer: text })
       .then(function (res) {
@@ -4030,6 +4775,7 @@
       renderPanelToggles();
       installRailDrag();
       renderSessionChip();
+      renderBell();
       renderInjection(injectionState);
     }
     sweep();
@@ -4278,10 +5024,16 @@
       ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
        chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span>"
             : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
+      // A notification names a goal; going to it means selecting it in the
+      // tree. The artifact owns selection, so it publishes one setter from
+      // its own set(): the bridge calls that rather than reaching into state
+      // it does not hold. Both scopes, so the anchor is found in both.
+      ["  set(fn, touch) { this.setState(",
+       "  set(fn, touch) { if (typeof window !== 'undefined') window.__hcSelectGoal = (id) => this.set(() => ({ page: 'goals', selId: id, editId: null, paneTab: 'context' })); this.setState("],
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-alerts\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -4728,6 +5480,11 @@
   var PANE_CSS = [
       ".hc-chat-addbtn{flex:none;margin-right:7px;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
       ".hc-chat-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
+      // The header's workspace-wide link: sized to the session chip it sits
+      // beside, not to the pane buttons.
+      ".hc-chats{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-chat-linkbtn{border:1px solid var(--bd2,#d5d5d5);background:transparent;color:var(--mut,#575757);border-radius:2px;padding:2px 8px;cursor:pointer;font:600 10px 'Source Code Pro',monospace;line-height:1.4}",
+      ".hc-chat-linkbtn:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
       ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
       ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
@@ -5049,6 +5806,10 @@
     liveCss: function () { return LIVE_CSS; },
     watchRunFeed: watchRunFeed,
     renderPromptAdd: renderPromptAdd,
+    renderChatLink: renderChatLink,
+    openChatPicker: openChatPicker,
+    chatStanding: chatStanding,
+    goalLine: goalLine,
     renderChatSurface: renderChatSurface,
     showNotices: showNotices,
     noticesToShow: noticesToShow,
@@ -5081,7 +5842,27 @@
     renderSessionChip: renderSessionChip,
     askSource: askSource,
     treeStep: treeStep,
-    foldedIds: foldedIds
+    foldedIds: foldedIds,
+    // TODO build alerts: the banner stack, the bell, the center, settings.
+    alerts: {
+      track: trackTodoAlerts,
+      diff: todoAlertsFrom,
+      noteOut: alertNoteOut,
+      stack: alertStack,
+      log: function () { return loadAlertLog().slice(); },
+      unread: alertUnread,
+      markRead: markAlertRead,
+      markAllRead: markAllAlertsRead,
+      clear: clearAlertLog,
+      go: alertGo,
+      settings: alertSettings,
+      setSettings: setAlertSettings,
+      renderBell: renderBell,
+      open: openAlertCenter,
+      close: closeAlertCenter,
+      center: function () { return alertCenterShown() ? alertCenterBox : null; },
+      css: function () { return ALERT_CSS; }
+    }
   };
 
   seed();
