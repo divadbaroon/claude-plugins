@@ -182,6 +182,46 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_pasted_screenshot_lands_as_a_marker_and_a_file_the_copy_names(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("fix the header")
+                # Cmd+V with an image on the clipboard. Playwright cannot put
+                # an image on the real clipboard, so the paste event the
+                # browser would fire is dispatched with the same payload.
+                page.evaluate(
+                    "() => { const bytes = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,0]);"
+                    " const dt = new DataTransfer();"
+                    " dt.items.add(new File([bytes], 'Screenshot.png', {type: 'image/png'}));"
+                    " document.activeElement.dispatchEvent(new ClipboardEvent('paste',"
+                    "   {clipboardData: dt, bubbles: true, cancelable: true})); }")
+                page.wait_for_timeout(2000)
+                rows = self.rows()
+                self.assertEqual([("fix the header [attachment #1]", 0, "")], rows)
+                goals, _ = chat_state.load_goals(self.session, self.root)
+                shots = GM.by_id(goals, "g1")["todo_items"][0]["attachments"]
+                self.assertEqual(1, shots[0]["n"])
+                self.assertEqual("Screenshot.png", shots[0]["name"])
+                path = Path(shots[0]["path"])
+                self.assertTrue(path.is_file(), path)
+                self.assertEqual(self.trajdir.resolve() / "attachments", path.parent)
+                self.assertEqual(b"\x89PNG", path.read_bytes()[:4])
+                # The copied body resolves the marker to the file.
+                page.locator(".hc-todo-copy").click()
+                expect(page.get_by_text("copied ✓", exact=True)).to_be_visible()
+                self.assertEqual(
+                    "- [active] fix the header [attachment #1]\n"
+                    "\nAttachments (files the rows cite; open them for the rows"
+                    " that name them):\n[attachment #1]: " + str(path) + "\n",
+                    page.evaluate("() => navigator.clipboard.readText()"))
+            finally:
+                browser.close()
+
     def test_picked_rows_build_ask_and_finish_on_the_answer(self):
         from playwright.sync_api import expect, sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:
@@ -226,6 +266,52 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 # done rows cannot be picked again
                 page.locator(".hc-todo-dash").first.click()
                 expect(build).to_have_text("Build")
+            finally:
+                browser.close()
+
+    def test_a_row_out_with_the_builder_comes_back_on_escape_or_its_corner(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.keyboard.press("Enter")
+                page.keyboard.type("Update the docs")
+                page.wait_for_timeout(1200)
+                build = page.locator(".hc-todo-build")
+                page.keyboard.press("Meta+a")
+                expect(build).to_have_text("Build 2")
+                build.click()
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("needs you", timeout=10_000)
+                expect(page.locator(".hc-todo-status").nth(1)).to_have_text("done")
+                # The corner control: on the row that is out, not on the done one.
+                expect(page.locator(".hc-todo-cancel")).to_have_count(1)
+                # Escape in the answer box withdraws the question: the row is
+                # back in the active band, unbuilt, and the done row is left.
+                page.locator(".hc-todo-answer").click()
+                page.keyboard.press("Escape")
+                expect(page.locator(".hc-todo-ask")).to_have_count(0)
+                expect(page.locator(".hc-todo-cancel")).to_have_count(0)
+                page.wait_for_timeout(600)
+                self.assertEqual([("Add the route", 0, ""), ("Update the docs", 0, "done")],
+                                 self.rows())
+                # Out again, and back by the corner this time.
+                page.locator(".hc-todo-dash").first.click()
+                expect(build).to_have_text("Build 1")
+                build.click()
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("needs you", timeout=10_000)
+                page.locator(".hc-todo-cancel").click()
+                expect(page.locator(".hc-todo-cancel")).to_have_count(0)
+                page.wait_for_timeout(600)
+                self.assertEqual("", self.rows()[0][2])
+                # And it can be picked once more: the row is live again.
+                page.locator(".hc-todo-dash").first.click()
+                expect(build).to_have_text("Build 1")
             finally:
                 browser.close()
 

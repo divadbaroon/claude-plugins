@@ -466,6 +466,11 @@ class Run:
         self.asked: Optional[str] = None
         self.error = ""
         self.retries = 0
+        # Rows the reader pulled back while this run was out: whatever the
+        # process still says about them is not folded in, and a stop the
+        # reader asked for is recorded as that, not as a failure.
+        self.cancelled: set = set()
+        self.stopped = False
 
     def record(self, **extra) -> Dict[str, Any]:
         rec = load_run(self.session_id, self.root, self.goal_id) or {}
@@ -539,9 +544,27 @@ class Run:
             code = self.process.wait()
             self._finish(code)
 
+    def stop(self) -> bool:
+        """End the process: the reader pulled back everything it was doing.
+        The reader thread sees the exit and finishes the run as cancelled."""
+        if not self.alive():
+            return False
+        self.stopped = True
+        assert self.process
+        try:
+            os.killpg(os.getpgid(self.process.pid), 15)
+        except (OSError, ProcessLookupError):
+            try:
+                self.process.terminate()
+            except OSError:
+                return False
+        return True
+
     def _fold(self, text: str) -> None:
         for obj in directives(text):
             row_id = obj["id"]
+            if row_id in self.cancelled:
+                continue
             if isinstance(obj.get("question"), str):
                 question = " ".join(obj["question"].split())[:100]
                 _set_row(self.session_id, self.root, self.goal_id, row_id,
@@ -555,7 +578,8 @@ class Run:
         # A provider-side death (a 500, an overload, a dropped connection)
         # is not a verdict on the rows: resume the same session and keep
         # going, up to the retry limit, with rows left as building.
-        if ((code or self.error) and self.retries < RETRY_LIMIT
+        if (not self.stopped and (code or self.error)
+                and self.retries < RETRY_LIMIT
                 and _TRANSIENT.search(self.error or "")
                 and _rows_in(self.session_id, self.root, self.goal_id,
                              "building")):
@@ -581,7 +605,9 @@ class Run:
             for row_id in _rows_in(self.session_id, self.root, self.goal_id, "building"):
                 _set_row(self.session_id, self.root, self.goal_id, row_id,
                          status="failed" if (code or self.error) else "done")
-        self.record(status="waiting" if waiting else ("failed" if code else "idle"),
+        self.record(status="waiting" if waiting
+                    else "cancelled" if self.stopped
+                    else ("failed" if code else "idle"),
                     exit_code=code, error=self.error)
         # Rows that queued up behind this run go out now -- unless the run
         # stopped on a question, whose answer resumes this same session
@@ -759,6 +785,163 @@ def answer(session_id: str, root: Optional[Path], goal_id: str,
                  question="(could not resume the build: %s)" % str(exc)[:60])
         return {"ok": False, "error": str(exc)[:200]}
     return {"ok": True, "resumed": True, "row": row_id}
+
+
+# ------------------------------------------------------------ pulling back
+#
+# The reader can take a row back from the build at any point short of done:
+# queued, building, asking, or failed, it returns to the active band with no
+# status. What "stop building it" means depends on where the row was:
+#
+# * waiting behind a headless run (later.json): it is dropped from the wait;
+# * queued for the connected session (queue.json): it leaves the queued
+#   build -- the prompt is recomposed around the rows that remain, and the
+#   build itself is dropped when none do;
+# * out with a live headless process: the process cannot be told to skip a
+#   row, so the row's later verdicts are ignored and the process is ended
+#   only when nothing it was doing is still wanted;
+# * a question the reader withdraws rather than answers, with other rows of
+#   the same run still building: the session is resumed and told to move on.
+
+CANCELLABLE = ("queued", "building", "asking", "failed")
+
+
+def _drop_later(session_id: str, root: Optional[Path], goal_id: str,
+                ids: List[str]) -> None:
+    later = _load_later(session_id, root)
+    if goal_id not in later:
+        return
+    held = [i for i in later.get(goal_id) or []
+            if isinstance(i, str) and i not in ids]
+    if held:
+        later[goal_id] = held
+    else:
+        later.pop(goal_id, None)
+    path = _later_path(session_id, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, later)
+
+
+def _recompose(session_id: str, root: Optional[Path], goal_id: str,
+               ids: List[str]) -> str:
+    goals, important = CS.load_goals(session_id, root)
+    goal = GM.by_id(goals, goal_id)
+    if not goal:
+        return ""
+    rows = picked_with_children(goal.get("todo_items") or [], ids)
+    return compose_prompt(session_id, goals, important,
+                          CS.load_prompts(session_id, root), goal, rows)
+
+
+def _drop_queued(session_id: str, root: Optional[Path], goal_id: str,
+                 ids: List[str]) -> None:
+    items = _load_queue(session_id, root)
+    if not items:
+        return
+    kept: List[Dict[str, Any]] = []
+    changed = False
+    for item in items:
+        if str(item.get("goal_id") or "") != goal_id:
+            kept.append(item)
+            continue
+        kind = item.get("kind")
+        if kind == "answer":
+            if str(item.get("row_id") or "") in ids:
+                changed = True
+                continue
+            kept.append(item)
+        elif kind == "build":
+            before = [r for r in item.get("row_ids") or [] if isinstance(r, str)]
+            after = [r for r in before if r not in ids]
+            if len(after) == len(before):
+                kept.append(item)
+                continue
+            changed = True
+            if after:
+                kept.append(dict(item, row_ids=after,
+                                 prompt=_recompose(session_id, root, goal_id, after)
+                                 or item.get("prompt")))
+        else:
+            kept.append(item)
+    if changed:
+        _save_queue(session_id, root, kept)
+
+
+def cancel(session_id: str, root: Optional[Path], goal_id: str,
+           row_ids: List[str]) -> Dict[str, Any]:
+    """Take rows back from the build: they return to active, unbuilt."""
+    ids = [i for i in row_ids if isinstance(i, str)]
+    if not ids:
+        return {"ok": False, "error": "name at least one TODO"}
+    with CS.session_lock(session_id, root, wait_s=5):
+        goals, important = CS.load_goals(session_id, root)
+        goal = GM.by_id(goals, goal_id)
+        if not goal:
+            return {"ok": False, "error": "goal not found"}
+        items = goal.get("todo_items") or []
+        known = {row["id"] for row in items}
+        ids = [i for i in ids if i in known]
+        if not ids:
+            return {"ok": False, "error": "those TODOs are not on this goal"}
+        were: Dict[str, str] = {}
+        for row in items:
+            if row["id"] in ids and row.get("status") in CANCELLABLE:
+                were[row["id"]] = str(row.get("status"))
+                row["status"] = ""
+                row["question"] = ""
+        if not were:
+            return {"ok": True, "cancelled": []}
+        goal["updated_at"] = GM._now()
+        GM.sanitize(goals)
+        if not CS.save_goals(session_id, goals, important, root):
+            return {"ok": False, "error": "goal state changed; try again"}
+    cancelled = list(were)
+    _drop_later(session_id, root, goal_id, cancelled)
+    _drop_queued(session_id, root, goal_id, cancelled)
+    out: Dict[str, Any] = {"ok": True, "cancelled": cancelled}
+    if mode() == "session":
+        return out
+    run = _run_for(session_id, root, goal_id)
+    record = load_run(session_id, root, goal_id)
+    if run is None and not record:
+        return out
+    if run is not None:
+        run.cancelled.update(cancelled)
+    still = (_rows_in(session_id, root, goal_id, "building")
+             + _rows_in(session_id, root, goal_id, "asking"))
+    if run is not None and run.alive():
+        if not still:
+            out["stopped"] = run.stop()
+        return out
+    # No process: the run ended, on a question if anything is still building.
+    withdrew = [i for i in cancelled if were[i] == "asking"]
+    if withdrew and still:
+        claude_session = (run.claude_session if run else
+                          (record or {}).get("claude_session_id"))
+        if not claude_session:
+            return out
+        if run is None:
+            run = Run(session_id, root, goal_id,
+                      str((record or {}).get("cwd") or _cwd_for(session_id, root)),
+                      claude_session)
+            run.cancelled.update(cancelled)
+            with _RUNS_GUARD:
+                _RUNS[f"{session_id}:{goal_id}"] = run
+        message = ("The user withdrew these rows from the build: "
+                   + ", ".join(withdrew)
+                   + ". Do not work on them and print no protocol lines "
+                     "for them. Continue with the remaining rows.")
+        try:
+            run.spawn(message, resume=True)
+            out["resumed"] = True
+        except (FileNotFoundError, OSError) as exc:
+            out["error"] = str(exc)[:200]
+    elif not still and (run is not None or (record or {}).get("status") == "waiting"):
+        # Nothing of this run is wanted any more: rows waiting behind it go.
+        held = _pop_later(session_id, root, goal_id)
+        if held:
+            start(session_id, root, goal_id, held)
+    return out
 
 
 def status(session_id: str, root: Optional[Path], goal_id: str) -> Dict[str, Any]:

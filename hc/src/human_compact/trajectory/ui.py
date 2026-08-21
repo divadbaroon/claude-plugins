@@ -25,6 +25,27 @@ DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
 SERVER_REGISTRY = "server.json"
 
+# Screenshots pasted into a TODO row arrive on /api/attachment as raw image
+# bytes and are kept under the workspace's own directory. A retina capture
+# runs to several megabytes; twenty-five is room for any of them and a wall
+# against anything else.
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+ATTACHMENT_TYPES = {"image/png": ".png", "image/jpeg": ".jpg",
+                    "image/gif": ".gif", "image/webp": ".webp"}
+
+
+def _store_attachment(trajdir, data, ext):
+    """Write one pasted image under <scope>/attachments, named by the moment
+    and a nonce so two pastes never share a file. Returns the absolute path."""
+    import secrets
+    folder = SIO.secure_dir(_scope(trajdir) / "attachments")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    path = folder / f"{stamp}-{secrets.token_hex(4)}{ext}"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(data)
+    return path.resolve()
+
 # This release ships one surface: the per-chat goal workspace. The rest of the
 # goal system is built and tested but not exposed, so its entry points are
 # disconnected here rather than deleted — the implementations stay reachable to
@@ -220,6 +241,69 @@ def _save_goals(trajdir, goals, important, chat_scoped):
     GM.save(trajdir, goals, important)
 
 
+# --- linked chats: other sessions whose prompts join this workspace --------
+#
+# A linked chat is a PROMPT SOURCE, nothing more: its transcript is followed
+# with the same cursor machinery as the workspace's own, and its user turns
+# join the related-prompts pool, tagged with the chat's label. No goals are
+# read from it and nothing is written to it.
+
+def _linked_path(session_id, root):
+    return CS.paths(session_id, root).session_dir / "linked_chats.json"
+
+
+def _load_linked(session_id, root):
+    try:
+        value = json.loads(_linked_path(session_id, root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = value.get("chats") if isinstance(value, dict) else None
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        sid = str(row.get("session_id") or "")
+        try:
+            CS.paths(sid, root)
+        except ValueError:
+            continue
+        out.append({"session_id": sid, "label": str(row.get("label") or sid[:8])})
+    return out
+
+
+def _save_linked(session_id, root, chats):
+    from .secure_io import atomic_write_json
+    path = _linked_path(session_id, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, {"chats": chats})
+
+
+def _discover_chats(own_session_id, root, limit=30):
+    """Sessions with transcripts under Claude's projects directory, newest
+    first: enough to point at a chat, no more."""
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    rows = []
+    for path in (home / "projects").glob("*/*.jsonl"):
+        sid = path.stem
+        if sid == own_session_id:
+            continue
+        try:
+            CS.paths(sid, root)
+        except ValueError:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if not stat.st_size:
+            continue
+        rows.append({"session_id": sid,
+                     "project": path.parent.name.split("-")[-1] or path.parent.name,
+                     "mtime": stat.st_mtime, "size": stat.st_size})
+    rows.sort(key=lambda row: row["mtime"], reverse=True)
+    return rows[:limit]
+
+
 def _load_prompts(trajdir, chat_scoped=False):
     """Read assignable human prompts for this scope.
 
@@ -229,7 +313,16 @@ def _load_prompts(trajdir, chat_scoped=False):
     """
     if chat_scoped:
         session_id, root = _chat_identity(trajdir)
-        rows = CS.load_prompts(session_id, root)
+        rows = list(CS.load_prompts(session_id, root))
+        # Linked chats ride along, each row tagged with where it came from
+        # so the picker can say. Their stores are read-only here.
+        for chat in _load_linked(session_id, root):
+            try:
+                for row in CS.load_prompts(chat["session_id"], root):
+                    if isinstance(row, dict):
+                        rows.append(dict(row, chat=chat["label"]))
+            except (OSError, ValueError):
+                continue
     else:
         rows = GM.evidence_prompts(trajdir)
     out, seen = [], set()
@@ -632,6 +725,10 @@ def _apply(op, trajdir=None, chat_scoped=None):
         ids = op.get("ids")
         return BUILD.start(session_id, root, goal_id,
                            ids if isinstance(ids, list) else [])
+    if kind == "cancel_todos":
+        ids = op.get("ids")
+        return BUILD.cancel(session_id, root, goal_id,
+                            ids if isinstance(ids, list) else [])
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -779,8 +876,33 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
-        if kind in ("build_todos", "answer_todo", "generate_prompt",
-                    "reopen_session"):
+        if kind in ("link_chat", "unlink_chat"):
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            sid = str(op.get("session_id") or "")
+            try:
+                CS.paths(sid, root)
+            except ValueError:
+                return {"ok": False, "error": "invalid session id"}
+            if sid == session_id:
+                return {"ok": False, "error": "this workspace already follows "
+                                              "its own chat"}
+            chats = _load_linked(session_id, root)
+            if kind == "link_chat":
+                if any(c["session_id"] == sid for c in chats):
+                    return {"ok": True, "linked": [c["session_id"] for c in chats]}
+                label = " ".join(str(op.get("label") or "").split())[:60] or sid[:8]
+                # The linked chat's own store, so ingestion has somewhere to
+                # keep its cursor and prompts.
+                CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
+                chats.append({"session_id": sid, "label": label})
+            else:
+                chats = [c for c in chats if c["session_id"] != sid]
+            _save_linked(session_id, root, chats)
+            return {"ok": True, "linked": [c["session_id"] for c in chats]}
+        if kind in ("build_todos", "answer_todo", "cancel_todos",
+                    "generate_prompt", "reopen_session"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -997,6 +1119,17 @@ class H(BaseHTTPRequestHandler):
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
                 self._send(200, js, "application/javascript")
+            elif self.path == "/api/chats":
+                if not self.server.chat_scoped:
+                    self._send(200, {"ok": False, "error": "chat scope only"})
+                else:
+                    session_id, root = _chat_identity(self.server.trajdir)
+                    linked = _load_linked(session_id, root)
+                    self._send(200, {
+                        "ok": True,
+                        "linked": linked,
+                        "available": _discover_chats(session_id, root),
+                    })
             elif self.path == "/api/state":
                 self._send(200, _payload(
                     self.server.trajdir, self.server.chat_scoped))
@@ -1090,10 +1223,50 @@ class H(BaseHTTPRequestHandler):
         finally:
             self._finish_request()
 
+    def _take_attachment(self):
+        """A screenshot pasted into a TODO row: the image bytes, as sent.
+
+        Raw bytes rather than the JSON op channel, because a retina capture
+        is bigger than an op is allowed to be and base64 would only make it
+        bigger. Only images, only up to MAX_ATTACHMENT_BYTES; written under
+        the workspace's own directory, and the absolute path handed back for
+        the row to remember.
+        """
+        content_types = self.headers.get_all("Content-Type", [])
+        ctype = (content_types[0].split(";", 1)[0].strip().lower()
+                 if len(content_types) == 1 else "")
+        ext = ATTACHMENT_TYPES.get(ctype)
+        if not ext:
+            self._send(415, {"ok": False, "error": "an image is required"})
+            return
+        lengths = self.headers.get_all("Content-Length", [])
+        try:
+            n = int(lengths[0]) if len(lengths) == 1 else -1
+        except (ValueError, TypeError):
+            n = -1
+        if n <= 0:
+            self._send(400, {"ok": False, "error": "invalid content length"})
+            return
+        if n > MAX_ATTACHMENT_BYTES:
+            self._send(413, {"ok": False, "error": "image too large"})
+            return
+        data = self.rfile.read(n)
+        name = " ".join(str(self.headers.get("X-HC-Name") or "").split())[:200]
+        try:
+            path = _store_attachment(self.server.trajdir, data, ext)
+        except OSError as exc:
+            self._send(500, {"ok": False, "error": str(exc)[:200]})
+            return
+        self._send(200, {"ok": True, "path": str(path),
+                         "name": name or path.name})
+
     def do_POST(self):
         if not self._begin_request():
             return
         try:
+            if self.path == "/api/attachment":
+                self._take_attachment()
+                return
             content_types = self.headers.get_all("Content-Type", [])
             if (len(content_types) != 1 or
                     content_types[0].split(";", 1)[0].strip().lower()
@@ -1204,33 +1377,41 @@ def _follow_transcript(server, stop, interval=None):
     """
     interval = float(interval if interval is not None else
                      os.environ.get("HC_CHAT_FOLLOW_SECONDS", "2"))
-    seen = None
-    while not stop.wait(interval if seen is not None else 0.2):
+    seen = {}
+    first = True
+    while not stop.wait(0.2 if first else interval):
+        first = False
         try:
             session_id, root = _chat_identity(server.trajdir)
-            manifest = CS.load_manifest(session_id, root)
-            transcript = _find_transcript(session_id, manifest)
-            if transcript is None:
-                seen = ("", 0, 0)
-                continue
-            stat = transcript.stat()
-            mark = (str(transcript), stat.st_size, stat.st_mtime_ns)
-            if mark == seen:
-                continue
-            source = manifest.get("source") or {}
-            if (str(source.get("path") or "") == str(transcript)
-                    and int(source.get("cursor") or 0) == stat.st_size
-                    and int(source.get("mtime_ns") or 0) == stat.st_mtime_ns):
-                seen = mark       # a hook already took this much
-                continue
-            CS.ingest_transcript(session_id, transcript, root=root)
-            seen = mark
-        except (OSError, ValueError, TypeError, TimeoutError):
-            # The lock was busy, or the file moved between stat and read:
-            # the next tick tries again from the manifest's cursor.
+            targets = [session_id] + [chat["session_id"]
+                                      for chat in _load_linked(session_id, root)]
+        except (OSError, ValueError):
             continue
-        except Exception:  # noqa: BLE001 - a follower may never take the server down
-            continue
+        for target in targets:
+            try:
+                manifest = CS.load_manifest(target, root)
+                transcript = _find_transcript(target, manifest)
+                if transcript is None:
+                    seen[target] = ("", 0, 0)
+                    continue
+                stat = transcript.stat()
+                mark = (str(transcript), stat.st_size, stat.st_mtime_ns)
+                if mark == seen.get(target):
+                    continue
+                source = manifest.get("source") or {}
+                if (str(source.get("path") or "") == str(transcript)
+                        and int(source.get("cursor") or 0) == stat.st_size
+                        and int(source.get("mtime_ns") or 0) == stat.st_mtime_ns):
+                    seen[target] = mark   # a hook already took this much
+                    continue
+                CS.ingest_transcript(target, transcript, root=root)
+                seen[target] = mark
+            except (OSError, ValueError, TypeError, TimeoutError):
+                # The lock was busy, or the file moved between stat and
+                # read: the next tick tries again from the manifest's cursor.
+                continue
+            except Exception:  # noqa: BLE001 - never take the server down
+                continue
 
 
 def _resolved_idle_timeout(value, chat_scoped):

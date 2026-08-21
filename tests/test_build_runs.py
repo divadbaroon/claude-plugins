@@ -73,7 +73,13 @@ if not resume:
     say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
     print(json.dumps({"type": "result", "is_error": False, "result": "asked"}))
 else:
-    msg = json.loads(prompt)
+    try:
+        msg = json.loads(prompt)
+    except ValueError:
+        # Not an answer: a withdrawal, or any other prose. Acknowledge and end.
+        say("Moving on.")
+        print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
+        raise SystemExit(0)
     say("Thanks: %s" % msg["answer"])
     say('{"id": "%s", "state": "DONE"}' % msg["id"])
     print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
@@ -268,6 +274,98 @@ class TransientRetryTests(BuildRunTests):
         self.assertEqual(1, record.get("retry"))
 
 
+class CancelTests(BuildRunTests):
+    """A row taken back from the build returns to active, wherever it was."""
+
+    def calls(self):
+        if not self.log.exists():
+            return []
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def test_a_row_waiting_behind_a_run_is_simply_dropped(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "0.8"
+        self.assertTrue(BUILD.start(self.session, self.root, "g1", ["taaaa0001"])["ok"])
+        second = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(second.get("after_run"), second)
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertEqual(["taaaa0003"], out["cancelled"])
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+        self.assertEqual({}, BUILD._load_later(self.session, self.root))
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done", seconds=12))
+        time.sleep(0.3)
+        self.assertEqual(1, len(self.calls()), "nothing went out for the cancelled row")
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+
+    def test_cancelling_everything_a_run_is_doing_ends_the_process(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "5"
+        self.assertTrue(BUILD.start(self.session, self.root, "g1", ["taaaa0001"])["ok"])
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: run.alive()))
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("stopped"), out)
+        self.assertEqual(("", ""), self.rows()["taaaa0001"])
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1") or {}).get("status")
+            == "cancelled"), BUILD.load_run(self.session, self.root, "g1"))
+        self.assertEqual(("", ""), self.rows()["taaaa0001"], "not failed: cancelled")
+
+    def test_cancelling_one_row_leaves_the_run_on_the_others(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "0.8"
+        self.assertTrue(BUILD.start(self.session, self.root, "g1",
+                                    ["taaaa0001", "taaaa0003"])["ok"])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertFalse(out.get("stopped"), out)
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done", seconds=12))
+        # The process still printed DONE for the cancelled row; it is not taken.
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+
+    def test_withdrawing_a_question_resumes_the_run_on_the_rest(self):
+        self.assertTrue(BUILD.start(self.session, self.root, "g1",
+                                    ["taaaa0001", "taaaa0003"])["ok"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "asking"))
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("resumed"), out)
+        self.assertEqual(("", ""), self.rows()["taaaa0001"])
+        self.assertTrue(self.wait_for(lambda: len(self.calls()) == 2))
+        second = self.calls()[1]
+        self.assertTrue(second["resume"], "the same session, told to move on")
+        self.assertIn("withdrew", second["prompt"])
+        self.assertIn("taaaa0001", second["prompt"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done"))
+        self.assertEqual(("", ""), self.rows()["taaaa0001"])
+
+    def test_done_rows_are_left_alone_and_failed_ones_come_back(self):
+        BUILD._set_row(self.session, self.root, "g1", "taaaa0001", status="done")
+        BUILD._set_row(self.session, self.root, "g1", "taaaa0003", status="failed")
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertEqual(["taaaa0003"], out["cancelled"])
+        self.assertEqual("done", self.rows()["taaaa0001"][0])
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+
+    def test_the_op_route_reaches_cancel(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "cancel_todos", "goal_id": "g1", "ids": ["nope"]},
+                        trajdir, True)
+        self.assertFalse(out["ok"])
+        BUILD._set_row(self.session, self.root, "g1", "taaaa0003", status="queued")
+        out = ui._apply({"op": "cancel_todos", "goal_id": "g1",
+                         "ids": ["taaaa0003"]}, trajdir, True)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+
+
 class SessionBuildTests(unittest.TestCase):
     """The default: the build is handed to the connected session by the hooks."""
 
@@ -347,6 +445,35 @@ class SessionBuildTests(unittest.TestCase):
         self.say('done {"id": "taaaa0001", "state": "DONE"} and {"id": "taaaa0003", "state": "DONE"}')
         self.assertEqual(2, BUILD.scan_transcript(self.session, self.root, str(self.transcript)))
         self.assertEqual({"taaaa0001": ("done", ""), "taaaa0003": ("done", "")}, self.rows())
+
+    def test_cancelling_a_queued_row_takes_it_out_of_the_waiting_build(self):
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertEqual(["taaaa0001"], out["cancelled"])
+        self.assertEqual(("", ""), self.rows()["taaaa0001"])
+        self.assertEqual("queued", self.rows()["taaaa0003"][0])
+        queue = BUILD.pending(self.session, self.root)
+        self.assertEqual(1, len(queue))
+        self.assertEqual(["taaaa0003"], queue[0]["row_ids"])
+        work = queue[0]["prompt"].split("# The work")[1]
+        self.assertNotIn("[taaaa0001]", work, "the prompt is recomposed without it")
+        self.assertIn("[taaaa0003]", work)
+        # The last row goes too: nothing is left for the hook to deliver.
+        BUILD.cancel(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertEqual([], BUILD.pending(self.session, self.root))
+        self.assertEqual("", BUILD.deliver(self.session, self.root, "Stop"))
+        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+
+    def test_a_queued_answer_is_withdrawn_with_its_row(self):
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        BUILD.deliver(self.session, self.root, "Stop")
+        self.say('{"id": "taaaa0001", "question": "src/a.ts or src/b.ts?"}')
+        BUILD.scan_transcript(self.session, self.root, str(self.transcript))
+        BUILD.answer(self.session, self.root, "g1", "taaaa0001", "src/a.ts")
+        self.assertEqual(1, len(BUILD.pending(self.session, self.root)))
+        BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertEqual([], BUILD.pending(self.session, self.root))
+        self.assertEqual(("", ""), self.rows()["taaaa0001"])
 
     def test_the_hook_blocks_stop_with_the_build_and_rides_along_on_a_prompt(self):
         import io

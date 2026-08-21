@@ -1158,7 +1158,8 @@
           row.className = "hc-pick-row";
           var when = document.createElement("span");
           when.className = "hc-pick-when";
-          when.textContent = promptWhen(prompt);
+          when.textContent = promptWhen(prompt)
+            + (prompt.chat ? "  \u00b7  " + str(prompt.chat) : "");
           var text = document.createElement("span");
           text.className = "hc-pick-text";
           text.textContent = str(prompt.text);
@@ -1285,6 +1286,12 @@
       var node = event && event.target;
       while (node && node !== document) {
         var name = node.className ? String(node.className) : "";
+        if (name.indexOf("hc-chat-addbtn") >= 0) {
+          if (event.preventDefault) event.preventDefault();
+          if (event.stopPropagation) event.stopPropagation();
+          openChatPicker(node);
+          return;
+        }
         if (name.indexOf("hc-prompt-addbtn") >= 0) {
           if (event.preventDefault) event.preventDefault();
           if (event.stopPropagation) event.stopPropagation();
@@ -1294,6 +1301,119 @@
         node = node.parentNode;
       }
     }, true);
+  }
+
+  function openChatPicker(button) {
+    if (document.querySelector(".hc-ask")) return;
+    fetch("/api/chats").then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data || data.ok !== true) {
+          button.textContent = (data && data.error) || "could not list chats";
+          return;
+        }
+        ensureDialogStyles();
+        var overlay = document.createElement("div");
+        overlay.className = "hc-ask";
+        var box = document.createElement("div");
+        box.className = "hc-ask-box hc-pick-box";
+        var title = document.createElement("div");
+        title.className = "hc-ask-title";
+        title.textContent = "Chats this workspace draws prompts from";
+        var note = document.createElement("div");
+        note.className = "hc-pick-count";
+        note.textContent = "A linked chat only adds its prompts to the "
+          + "picker and stays in sync; its goals are never read.";
+        var list = document.createElement("div");
+        list.className = "hc-pick-list";
+        function close() {
+          if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+          document.removeEventListener("keydown", onKey, true);
+          if (button && button.focus) button.focus();
+        }
+        function onKey(event) {
+          if (event && event.key === "Escape") { event.preventDefault(); close(); }
+        }
+        function draw() {
+          while (list.firstChild) list.removeChild(list.firstChild);
+          var shown = {};
+          array(data.linked).forEach(function (chat) {
+            shown[chat.session_id] = { id: chat.session_id, label: chat.label,
+                                       project: "", on: true };
+          });
+          array(data.available).forEach(function (chat) {
+            if (shown[chat.session_id]) {
+              shown[chat.session_id].project = str(chat.project);
+              return;
+            }
+            shown[chat.session_id] = { id: chat.session_id,
+                                       label: str(chat.project) || chat.session_id.slice(0, 8),
+                                       project: str(chat.project), on: false };
+          });
+          var rows = Object.keys(shown).map(function (id) { return shown[id]; });
+          if (!rows.length) {
+            var none = document.createElement("div");
+            none.className = "hc-pick-none";
+            none.textContent = "No other chats with transcripts were found.";
+            list.appendChild(none);
+            return;
+          }
+          rows.forEach(function (chat) {
+            var row = document.createElement("button");
+            row.className = "hc-pick-row";
+            var when = document.createElement("span");
+            when.className = "hc-pick-when";
+            when.textContent = (chat.on ? "LINKED \u00b7 " : "")
+              + chat.id.slice(0, 8) + (chat.project ? " \u00b7 " + chat.project : "");
+            var text = document.createElement("span");
+            text.className = "hc-pick-text";
+            text.textContent = (chat.label || chat.id)
+              + (chat.on ? " \u2014 click to unlink" : " \u2014 click to link");
+            row.appendChild(when);
+            row.appendChild(text);
+            row.onclick = function () {
+              row.disabled = true;
+              post({ op: chat.on ? "unlink_chat" : "link_chat",
+                     session_id: chat.id, label: chat.label })
+                .then(function (result) {
+                  if (result && result.ok === true) {
+                    chat.on = !chat.on;
+                    if (chat.on) {
+                      data.linked.push({ session_id: chat.id, label: chat.label });
+                    } else {
+                      data.linked = data.linked.filter(function (c) {
+                        return c.session_id !== chat.id;
+                      });
+                    }
+                    refreshState();
+                  }
+                  row.disabled = false;
+                  draw();
+                });
+            };
+            list.appendChild(row);
+          });
+        }
+        var rowBar = document.createElement("div");
+        rowBar.className = "hc-ask-row";
+        var done = document.createElement("button");
+        done.className = "hc-ask-btn";
+        done.textContent = "Done";
+        done.onclick = close;
+        rowBar.appendChild(done);
+        overlay.onclick = function (e) { if (e.target === overlay) close(); };
+        box.appendChild(title);
+        box.appendChild(note);
+        box.appendChild(list);
+        box.appendChild(rowBar);
+        overlay.appendChild(box);
+        var root = document.querySelector(".hc");
+        if (root && document.documentElement
+            && document.documentElement.contains
+            && !document.documentElement.contains(root)) root = null;
+        (root || document.body || document.documentElement).appendChild(overlay);
+        document.addEventListener("keydown", onKey, true);
+        draw();
+      });
   }
 
   function renderPromptAdd() {
@@ -1312,6 +1432,11 @@
     button.className = "hc-prompt-addbtn";
     button.type = "button";
     button.textContent = "+ add a prompt";
+    var chats = document.createElement("button");
+    chats.className = "hc-chat-addbtn";
+    chats.type = "button";
+    chats.textContent = "+ add a chat";
+    slot.appendChild(chats);
     slot.appendChild(button);
     return true;
   }
@@ -1899,6 +2024,11 @@
       // a row Claude asked about; Copy at the lower left, Build at the right.
       "[data-hc-launch] .hc-todos{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}",
       "[data-hc-launch] .hc-todos-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 10px 4px;outline:none;caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo{position:relative}",
+      "[data-hc-launch] .hc-todo[data-hc-todo-head] .hc-todo-row{padding-right:24px}",
+      "[data-hc-launch] .hc-todo-cancel{position:absolute;right:4px;bottom:1px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:4px;font:500 13px/15px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
+      "[data-hc-launch] .hc-todo:hover .hc-todo-cancel{opacity:1}",
+      "[data-hc-launch] .hc-todo-cancel:hover{color:var(--del);background:var(--hov)}",
       "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px;padding:2px 6px;border-radius:5px}",
       "[data-hc-launch] .hc-todo-row:hover{background:var(--hov)}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked]{background:var(--panel2)}",
@@ -2104,13 +2234,98 @@
              status: "", question: "" };
   }
 
+  function todoAttachmentsOn(row) {
+    // The row's own pasted files, well-formed: a positive number, a path.
+    var out = [], seen = {};
+    array(row && row.attachments).forEach(function (att) {
+      var n = att && +att.n;
+      var path = str(att && att.path);
+      if (!(n > 0) || seen[n] || !path) return;
+      seen[n] = true;
+      out.push({ n: n, path: path, name: str(att.name) });
+    });
+    return out;
+  }
+
   function todoCopyRows(items) {
     return array(items).map(function (row) {
-      return { id: str(row.id) || todoNewId(), text: str(row.text),
-               depth: row.depth | 0, status: str(row.status),
-               question: str(row.question) };
+      var copy = { id: str(row.id) || todoNewId(), text: str(row.text),
+                   depth: row.depth | 0, status: str(row.status),
+                   question: str(row.question) };
+      // Only when there is something to hold, on both sides of the wire:
+      // the server leaves the field off a row without one, and the rail's
+      // "has anything changed" is a field-for-field comparison.
+      var shots = todoAttachmentsOn(row);
+      if (shots.length) copy.attachments = shots;
+      return copy;
     });
   }
+
+  // --- screenshots pasted into a row ---------------------------------------
+  //
+  // A Cmd+V whose clipboard holds an image lands as "[attachment #N]" in the
+  // row's text, at the caret, the way Claude Code's own composer says
+  // "[Image #1]" -- and the row remembers which file the marker names. N
+  // counts up across the whole list and is never reused, so a marker means
+  // the same file wherever the reader later moves it. Deleting the marker
+  // from the text un-cites the file: what leaves the rail (Copy TODOs, the
+  // copied prompt, a Build) resolves only the markers still present in some
+  // row, marker to path, so the session reading it can open them.
+
+  var TODO_MARKER = /\[attachment #(\d+)\]/g;
+
+  function todoAttach(items, index, caret, attachment) {
+    var rows = todoCopyRows(items);
+    var row = rows[index];
+    if (!row || !attachment || !str(attachment.path)) return null;
+    var next = 0;
+    rows.forEach(function (r) {
+      todoAttachmentsOn(r).forEach(function (a) { next = Math.max(next, a.n); });
+      // A marker typed or pasted in as text counts too: the number must
+      // never collide with one already on screen.
+      var m;
+      TODO_MARKER.lastIndex = 0;
+      while ((m = TODO_MARKER.exec(str(r.text)))) next = Math.max(next, +m[1]);
+    });
+    next += 1;
+    var marker = "[attachment #" + next + "]";
+    var text = row.text;
+    var at = (typeof caret === "number")
+      ? Math.max(0, Math.min(caret, text.length)) : text.length;
+    var head = text.slice(0, at), tail = text.slice(at);
+    if (head && !/\s$/.test(head)) head += " ";
+    if (tail && !/^\s/.test(tail)) tail = " " + tail;
+    row.text = head + marker + tail;
+    row.attachments = todoAttachmentsOn(row).concat([{
+      n: next, path: str(attachment.path), name: str(attachment.name) }]);
+    return { items: rows, index: index, caret: head.length + marker.length };
+  }
+
+  function todoAttachments(items) {
+    // The files the list still cites, ordered by number.
+    var cited = {};
+    array(items).forEach(function (row) {
+      var m;
+      TODO_MARKER.lastIndex = 0;
+      while ((m = TODO_MARKER.exec(str(row && row.text)))) cited[+m[1]] = true;
+    });
+    var out = [], seen = {};
+    array(items).forEach(function (row) {
+      todoAttachmentsOn(row).forEach(function (att) {
+        if (cited[att.n] && !seen[att.n]) { seen[att.n] = true; out.push(att); }
+      });
+    });
+    return out.sort(function (a, b) { return a.n - b.n; });
+  }
+
+  function todoAttachmentLines(items) {
+    return todoAttachments(items).map(function (att) {
+      return "[attachment #" + att.n + "]: " + att.path;
+    });
+  }
+
+  var TODO_ATTACH_HEAD = "Attachments (files the rows cite; open them for"
+    + " the rows that name them):\n";
 
   function todoNormalize(items) {
     var rows = todoCopyRows(items);
@@ -2154,7 +2369,12 @@
     // the TODOs alone, never on changes the notes happen to mention.
     var text = todoSerializeStates(items);
     var doc = str(notes).trim();
-    if (!text || !doc) return text;
+    if (!text) return text;
+    // The screenshots the rows cite, resolved to their files, right under
+    // the rows: part of the work, not of the context.
+    var shots = todoAttachmentLines(items);
+    if (shots.length) text += "\n" + TODO_ATTACH_HEAD + shots.join("\n") + "\n";
+    if (!doc) return text;
     return "TODOs (each with its current state):\n" + text
       + "\nCONTEXT — the goal's notes, for background only. Do NOT make"
       + " any changes specified in these notes; act only on the TODOs"
@@ -2558,7 +2778,16 @@
     var caret = where.collapsed ? where.bCaret : null;
     var mod = event.metaKey || event.ctrlKey;
     var handled = false;
-    if (mod && event.key === "a") {
+    if (event.key === "Escape") {
+      // The row under the caret, or the family it is out with, comes back
+      // from the build. A row that is not out is not Escape's business.
+      if (todoCancel(index)) {
+        event.preventDefault();
+        event.stopPropagation();
+        renderTodoRail(true);
+      }
+      return;
+    } else if (mod && event.key === "a") {
       // Every pickable row, picked for the build -- the same toggle as the
       // Select all control, not a text selection. Cmd+A again releases them.
       // The caret stays where it was, so the next Cmd+A (or any key) still
@@ -2682,6 +2911,76 @@
       out.push(i);
     }
     return out;
+  }
+
+  // --- taking a row back from the build ------------------------------------
+  //
+  // A row out with the builder -- queued, building, asking, or failed -- can
+  // be pulled back to the active band. The unit is the family, as it was for
+  // the pick: the control sits on the family's head (an out row with no out
+  // row above it), never on the rows nested under it, and cancelling the
+  // head cancels every out row in its family. Escape from a caret inside any
+  // row of the family, or from its answer box, is the same act.
+
+  var TODO_OUT = { queued: true, building: true, asking: true, failed: true };
+
+  function todoOut(row) {
+    return !!(row && TODO_OUT[str(row.status)]);
+  }
+
+  function todoCancelHead(items, index) {
+    var rows = array(items);
+    if (!todoOut(rows[index])) return -1;
+    var head = index, depth = rows[index].depth | 0;
+    for (var i = index - 1; i >= 0 && depth > 0; i--) {
+      if ((rows[i].depth | 0) < depth) {
+        depth = rows[i].depth | 0;
+        if (todoOut(rows[i])) head = i;
+      }
+    }
+    return head;
+  }
+
+  function todoCancelHeads(items) {
+    var rows = array(items), heads = [];
+    rows.forEach(function (row, i) {
+      if (todoOut(row) && todoCancelHead(rows, i) === i) heads.push(i);
+    });
+    return heads;
+  }
+
+  function todoCancelIds(items, index) {
+    var rows = array(items);
+    if (!todoOut(rows[index])) return [];
+    var ids = [];
+    // The family counts the head itself.
+    todoFamily(rows, index).forEach(function (i) {
+      if (todoOut(rows[i])) ids.push(rows[i].id);
+    });
+    return ids;
+  }
+
+  function todoCancel(index) {
+    var head = todoCancelHead(todoItems, index);
+    if (head < 0 || !todoGoalId) return false;
+    var ids = todoCancelIds(todoItems, head);
+    var headId = todoItems[head].id;
+    todoItems.forEach(function (row) {
+      if (ids.indexOf(row.id) >= 0) { row.status = ""; row.question = ""; }
+    });
+    todoBuildError = "";
+    // Back into the active band at once; the server's word follows.
+    todoItems = todoSectioned(todoItems);
+    todoFocusAt = { index: todoIndexOfId(headId), caret: null };
+    var goalId = todoGoalId;
+    post({ op: "cancel_todos", goal_id: goalId, ids: ids }).then(function (res) {
+      if ((!res || !res.ok) && todoGoalId === goalId) {
+        todoBuildError = (res && res.error) || "the build could not be cancelled";
+      }
+      refreshState();
+      renderTodoRail(true);
+    });
+    return true;
   }
 
   function todoTogglePick(id) {
@@ -2811,6 +3110,86 @@
     }
   }
 
+  function todoClipboardImages(data) {
+    // The image files on a clipboard, if any: a screenshot is one file with
+    // an image type, a copied image from a page the same. Text-only pastes
+    // have none, and stay on the beforeinput path.
+    var out = [];
+    if (!data) return out;
+    // FileList and DataTransferItemList are array-likes, not arrays.
+    var list = function (v) {
+      try { return Array.prototype.slice.call(v || []); } catch (e) { return []; }
+    };
+    var files = list(data.files);
+    if (!files.length && data.items) {
+      list(data.items).forEach(function (item) {
+        if (item && item.kind === "file" && /^image\//.test(str(item.type))) {
+          var file = item.getAsFile && item.getAsFile();
+          if (file) files.push(file);
+        }
+      });
+    }
+    files.forEach(function (file) {
+      if (file && /^image\//.test(str(file.type))) out.push(file);
+    });
+    return out;
+  }
+
+  function todoUpload(file) {
+    // The bytes as they are, to the workspace's own store; the answer is the
+    // path the row will remember.
+    return fetch("/api/attachment", {
+      method: "POST",
+      headers: { "Content-Type": str(file.type) || "image/png",
+                 "X-HC-Name": str(file.name) || "pasted image" },
+      body: file
+    }).then(function (r) { return r.json(); }).catch(function () { return null; });
+  }
+
+  var todoAttaching = 0;
+
+  function todoPasteImages(files, where) {
+    // Each image in turn: uploaded, then marked into the row at the caret.
+    // In turn rather than at once, so two screenshots pasted together get
+    // consecutive numbers in the order they were on the clipboard.
+    if (!todoItems || !files.length) return;
+    var ground = where
+      ? (where.collapsed
+         ? { items: todoItems, index: where.b, caret: where.bCaret }
+         : todoCut(todoItems, where.a, where.aCaret, where.b, where.bCaret, ""))
+      : { items: todoItems, index: todoItems.length - 1, caret: null };
+    if (!ground) return;
+    if (ground.items !== todoItems) todoApply(ground);
+    var index = ground.index, caret = ground.caret;
+    var goalId = todoGoalId;
+    todoAttaching += 1;
+    todoSavedLabel = "attaching…";
+    renderTodoRail(true);
+    var step = function (i) {
+      if (i >= files.length || todoGoalId !== goalId || !todoItems) {
+        todoAttaching -= 1;
+        if (!todoAttaching) todoSaveNow();
+        renderTodoRail(true);
+        return;
+      }
+      todoUpload(files[i]).then(function (res) {
+        if (res && res.ok && res.path && todoGoalId === goalId && todoItems) {
+          var row = todoItems[index];
+          var result = row && todoAttach(todoItems, index, caret,
+                                         { path: res.path, name: res.name });
+          if (result) {
+            todoApply(result);
+            caret = result.caret;
+          }
+        } else if (todoGoalId === goalId) {
+          todoBuildError = (res && res.error) || "the image could not be attached";
+        }
+        step(i + 1);
+      });
+    };
+    step(0);
+  }
+
   var todoDelegated = false;
 
   function todoDelegate() {
@@ -2823,10 +3202,19 @@
       var node = event.target;
       if (node === todoHost()) { todoKey(event); return; }
       if (node && node.getAttribute
-          && node.getAttribute("data-hc-todo-answer") !== null
-          && event.key === "Enter") {
-        event.preventDefault();
-        todoAnswer(node.getAttribute("data-hc-todo-answer"), node.value);
+          && node.getAttribute("data-hc-todo-answer") !== null) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          todoAnswer(node.getAttribute("data-hc-todo-answer"), node.value);
+        } else if (event.key === "Escape") {
+          // Withdrawing the question rather than answering it.
+          var asked = todoIndexOfId(node.getAttribute("data-hc-todo-answer"));
+          if (asked >= 0 && todoCancel(asked)) {
+            event.preventDefault();
+            event.stopPropagation();
+            renderTodoRail(true);
+          }
+        }
       }
     }, true);
     document.addEventListener("beforeinput", function (event) {
@@ -2846,6 +3234,18 @@
     document.addEventListener("copy", function (event) {
       if (todoSelection()) todoCopyEvent(event);
     }, true);
+    document.addEventListener("paste", function (event) {
+      // An image on the clipboard, pasted into the list: ours, before the
+      // browser gets to turn it into nothing (or, in a rich host, an <img>
+      // the model has no place for). Text pastes pass through untouched to
+      // the beforeinput path, which lands them as rows.
+      if (!todoTyping() || document.activeElement !== todoHost()) return;
+      var files = todoClipboardImages(event.clipboardData);
+      if (!files.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      todoPasteImages(files, todoSelection());
+    }, true);
     document.addEventListener("blur", function (event) {
       if (event.target === todoHost()) todoSaveNow();
     }, true);
@@ -2856,6 +3256,12 @@
       if (dash !== null) {
         todoTogglePick(dash);
         renderTodoRail(true);
+        return;
+      }
+      var cancelId = node.getAttribute("data-hc-todo-cancel");
+      if (cancelId !== null) {
+        event.preventDefault();
+        if (todoCancel(todoIndexOfId(cancelId))) renderTodoRail(true);
         return;
       }
       if (node.className === "hc-todo-copy") { todoCopyAll(); return; }
@@ -2904,9 +3310,21 @@
     } catch (e) { return "true"; }
   })();
 
-  function todoRowNode(row) {
+  function todoRowNode(row, head) {
     var wrap = document.createElement("div");
     wrap.className = "hc-todo";
+    if (head) {
+      // The way back from the build, in the tile's own lower-right corner:
+      // on the family's head only, since the family comes back whole.
+      wrap.setAttribute("data-hc-todo-head", "");
+      var cancel = document.createElement("span");
+      cancel.className = "hc-todo-cancel";
+      cancel.textContent = "×";
+      cancel.title = "cancel the build of this TODO (esc)";
+      cancel.setAttribute("data-hc-todo-cancel", row.id);
+      cancel.setAttribute("contenteditable", "false");
+      wrap.appendChild(cancel);
+    }
     var line = document.createElement("div");
     line.className = "hc-todo-row";
     line.style.paddingLeft = (row.depth * 20) + "px";
@@ -3083,6 +3501,7 @@
     // builder, then done ones. The caret cannot land on it, like the
     // gutters -- it is a line, not a row.
     var bands = todoBandOf(todoItems);
+    var heads = todoCancelHeads(todoItems);
     todoItems.forEach(function (row, i) {
       if (i && bands[i] !== bands[i - 1]) {
         var sep = document.createElement("div");
@@ -3090,7 +3509,7 @@
         sep.setAttribute("contenteditable", "false");
         list.appendChild(sep);
       }
-      list.appendChild(todoRowNode(row));
+      list.appendChild(todoRowNode(row, heads.indexOf(i) >= 0));
     });
     var focus = todoFocusAt;
     todoFocusAt = null;
@@ -4098,7 +4517,7 @@
       // The recommended prompt follows the same order as the pane it is
       // built from, so what the reader checked is what the agent is told.
       ["      const parts = [];\n      const obj = ctxGet('objective'); if (obj && obj.trim()) parts.push('Objective:\\n' + obj.trim());\n      const dec = ctxGet('decided'); if (dec && dec.trim()) parts.push('Established decisions:\\n' + dec.trim());\n      const blt = ctxGet('built'); if (blt && blt.trim()) parts.push('Already built:\\n' + blt.trim());\n      const blk = ctxGet('hit'); if (blk && blk.trim()) parts.push('Blockers & open questions:\\n' + blk.trim());\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n",
-       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = (t === ''), fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      const pre = secOf(''); if (pre) parts.push('Notes:\\n' + pre);\n      const titems = (Array.isArray(sel && sel.todo_items) ? sel.todo_items : []).filter(r => r && String(r.text || '').trim());\n      const todos = titems.length ? titems.map(r => '    '.repeat(r.depth | 0) + '- [' + (String(r.status || '') || 'active') + '] ' + r.text).join('\\n') : String((sel && sel.todos_md) || '').trim();\n      if (todos) parts.push('TODOs (each with its current state):\\n' + todos);\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
+       "      const parts = [];\n      const secOf = (t) => { const lines = String((sel && sel.notes) || '').split('\\n'); const body = []; let on = (t === ''), fence = null; for (let i = 0; i < lines.length; i += 1) { const line = lines[i], bare = line.replace(/^ */, ''); if (line.length - bare.length <= 3) { const m = /^(`{3,}|~{3,})(.*)$/.exec(bare); if (m) { const ch = m[1].charAt(0), run = m[1].length, rest = m[2]; if (fence === null) { if (!(ch === '`' && rest.indexOf('`') >= 0)) fence = [ch, run]; } else if (ch === fence[0] && run >= fence[1] && !rest.trim()) fence = null; if (on) body.push(line); continue; } } if (fence === null && line.indexOf('# ') === 0) { on = line.slice(2).trim() === t; continue; } if (on) body.push(line); } return body.join('\\n').trim(); };\n      const section = (t) => { const body = secOf(t); if (body) parts.push(t + ':\\n' + body); };\n      const obj = secOf('Objective') || String(ctxGet('objective') || '').trim(); if (obj) parts.push('Objective:\\n' + obj);\n      const pre = secOf(''); if (pre) parts.push('Notes:\\n' + pre);\n      const titems = (Array.isArray(sel && sel.todo_items) ? sel.todo_items : []).filter(r => r && String(r.text || '').trim());\n      const todos = titems.length ? titems.map(r => '    '.repeat(r.depth | 0) + '- [' + (String(r.status || '') || 'active') + '] ' + r.text).join('\\n') : String((sel && sel.todos_md) || '').trim();\n      if (todos) parts.push('TODOs (each with its current state):\\n' + todos);\n      const shots = (window.__hcPromptUI && window.__hcPromptUI.todoList) ? window.__hcPromptUI.todoList.attachmentLines(titems) : [];\n      if (shots.length) parts.push('Attachments (files the rows cite; open them for the rows that name them):\\n' + shots.join('\\n'));\n      if (trail && trail.length) parts.push('Where this sits:\\n' + trail.map((n, i) => '  '.repeat(i) + (i ? '\\u2514 ' : '') + (n.title || 'Untitled')).join('\\n'));\n      if (codeList.length) parts.push('Code context:\\n' + codeList.map(c => '- ' + c.label + ' (' + c.type + ')').join('\\n'));\n      if (docList.length) parts.push('Document context:\\n' + docList.map(d => '- ' + d.label).join('\\n'));\n      const said = (sel.prompts || []).slice().reverse();\n      if (said.length) parts.push('Related prompts, in my own words:\\n' + said.map(q => '- \"' + String(q.text || '').replace(/\\s+/g, ' ').trim() + '\"').join('\\n'));\n      section('In my words');\n      section('Decisions');\n      section('Built');\n      section('Blockers');\n      section('Open questions');\n"],
       // A prompt without its conversation is a quote without a source. The
       // separator belongs to the source, not to the line: chat prompt
       // records carry no session_id (chat_state writes id, ordinal, role,
@@ -4307,6 +4726,8 @@
   // browser triangle, no divider, no section heading. It was never a
   // styling problem, it was a stylesheet that was never on the page.
   var PANE_CSS = [
+      ".hc-chat-addbtn{flex:none;margin-right:7px;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-chat-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
       ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
@@ -4591,10 +5012,17 @@
       cut: todoCut,
       paste: todoPaste,
       parsePaste: todoParsePaste,
+      attach: todoAttach,
+      attachments: todoAttachments,
+      attachmentLines: todoAttachmentLines,
       selectionText: todoSelectionText,
       family: todoFamily,
       bands: todoBandOf,
       sectioned: todoSectioned,
+      cancelHead: todoCancelHead,
+      cancelHeads: todoCancelHeads,
+      cancelIds: todoCancelIds,
+      rowNode: todoRowNode,
     },
     holdRoot: holdRoot,
     releaseRoot: releaseRoot,

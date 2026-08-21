@@ -351,6 +351,90 @@ class TodoListModelTests(BridgeTestCase):
             "       out.indexOf('sel.todo_items') >= 0];", scope="chat")
         self.assertEqual([True, True], out)
 
+    # --- screenshots pasted into a row ----------------------------------------
+
+    SHOT_ROWS = (
+        "[{id: 't00000001', text: 'fix the header [attachment #1]', depth: 0,"
+        "  status: '', attachments: [{n: 1, path: '/s/one.png', name: 'one.png'}]},"
+        " {id: 't00000002', text: 'and the footer', depth: 0, status: ''},"
+        " {id: 't00000003', text: 'marker gone', depth: 0, status: '',"
+        "  attachments: [{n: 2, path: '/s/two.png', name: 'two.png'}]}]")
+
+    def test_a_pasted_image_lands_as_a_numbered_marker_on_the_row(self):
+        # The marker is numbered past every attachment the list already
+        # holds, goes in at the caret with a space before it when the text
+        # runs straight into it, and the row remembers the file.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var r = L.attach(" + self.SHOT_ROWS + ", 1, 14,"
+            "  {path: '/s/three.png', name: 'three.png'});"
+            "out = [r.items[1].text, r.items[1].attachments, r.index, r.caret,"
+            "       r.items[0].attachments.length];")
+        self.assertEqual(
+            ["and the footer [attachment #3]",
+             [{"n": 3, "path": "/s/three.png", "name": "three.png"}],
+             1, len("and the footer [attachment #3]"), 1], out)
+
+    def test_a_marker_pasted_mid_row_keeps_the_tail_after_it(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var r = L.attach([{id: 't00000001', text: 'ab cd', depth: 0, status: ''}],"
+            "  0, 2, {path: '/s/a.png', name: 'a.png'});"
+            "out = [r.items[0].text, r.caret];")
+        self.assertEqual(["ab [attachment #1] cd", len("ab [attachment #1]")], out)
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var r = L.attach([{id: 't00000001', text: '', depth: 0, status: ''}],"
+            "  0, 0, {path: '/s/a.png', name: 'a.png'});"
+            "out = r.items[0].text;")
+        self.assertEqual("[attachment #1]", out)
+
+    def test_attachment_lines_name_only_the_markers_still_in_some_row(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.attachmentLines(" + self.SHOT_ROWS + ");")
+        self.assertEqual(["[attachment #1]: /s/one.png"], out)
+
+    def test_the_todo_copy_ends_with_the_attachments_resolved(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.copyText(" + self.SHOT_ROWS + ", '# Decisions\\n- x\\n');")
+        self.assertEqual(
+            "TODOs (each with its current state):\n"
+            "- [active] fix the header [attachment #1]\n"
+            "- [active] and the footer\n"
+            "- [active] marker gone\n"
+            "\nAttachments (files the rows cite; open them for the rows"
+            " that name them):\n[attachment #1]: /s/one.png\n"
+            "\nCONTEXT — the goal's notes, for background only. Do NOT make"
+            " any changes specified in these notes; act only on the TODOs"
+            " above:\n# Decisions\n- x\n", out)
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.copyText(" + self.SHOT_ROWS + ", '');")
+        self.assertEqual(
+            "- [active] fix the header [attachment #1]\n"
+            "- [active] and the footer\n"
+            "- [active] marker gone\n"
+            "\nAttachments (files the rows cite; open them for the rows"
+            " that name them):\n[attachment #1]: /s/one.png\n", out)
+
+    def test_rows_keep_their_attachments_through_every_list_operation(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var items = " + self.SHOT_ROWS + ";"
+            "out = [L.normalize(items)[0].attachments.length,"
+            "       L.enter(items, 0, 3).items[0].attachments.length,"
+            "       L.indent(items, 1).items[0].attachments.length,"
+            "       'attachments' in L.normalize(items)[1]];")
+        self.assertEqual([1, 1, 1, False], out)
+
+    def test_the_copied_prompt_resolves_the_attachments_too(self):
+        out = self.patched_bundle(
+            "out = out.indexOf('Attachments (files the rows cite') >= 0;",
+            scope="chat")
+        self.assertTrue(out)
+
     def test_a_depth_jump_is_pulled_back_to_one_level(self):
         out = self.model("L.normalize(items).map(function (r) { return r.depth; })",
                          [("one", 0), ("deep", 3), ("deeper", 5)])
@@ -433,6 +517,72 @@ class TodoListModelTests(BridgeTestCase):
         out = self.band_model("L.bands(items)",
                               [("parent", 0, "done"), ("child", 1, "")])
         self.assertEqual([1, 1], out)
+
+    # --- the way back from the build ------------------------------------------
+    #
+    # Queued, building, asking, and failed rows can be taken back to active.
+    # The unit is the family: the control sits on the family's head, and
+    # cancelling the head cancels every out row under it.
+
+    def test_a_lone_out_row_is_its_own_head(self):
+        out = self.band_model("L.cancelHead(items, 1)",
+                              [("a", 0, ""), ("b", 0, "building"), ("c", 0, "")])
+        self.assertEqual(1, out)
+
+    def test_a_row_that_is_not_out_has_no_head(self):
+        out = self.band_model("L.cancelHead(items, 0)",
+                              [("a", 0, ""), ("b", 0, "done")])
+        self.assertEqual(-1, out)
+        self.assertEqual(-1, self.band_model("L.cancelHead(items, 1)",
+                                             [("a", 0, ""), ("b", 0, "done")]))
+
+    def test_an_out_child_under_an_out_parent_answers_to_the_parent(self):
+        spec = [("parent", 0, "building"), ("child", 1, "building"),
+                ("grandchild", 2, "queued"), ("sibling", 0, "asking")]
+        self.assertEqual(0, self.band_model("L.cancelHead(items, 2)", spec))
+        self.assertEqual(0, self.band_model("L.cancelHead(items, 1)", spec))
+        self.assertEqual(3, self.band_model("L.cancelHead(items, 3)", spec))
+
+    def test_an_out_child_under_an_unsent_parent_is_a_head_of_its_own(self):
+        # The only kind of pick that makes this: a child picked alone.
+        out = self.band_model("L.cancelHead(items, 1)",
+                              [("parent", 0, ""), ("child", 1, "building")])
+        self.assertEqual(1, out)
+
+    def test_heads_are_the_out_rows_with_no_out_row_above_them(self):
+        out = self.band_model(
+            "L.cancelHeads(items)",
+            [("p", 0, "building"), ("c", 1, "building"), ("d", 0, "done"),
+             ("q", 0, "queued"), ("u", 0, ""), ("uc", 1, "failed"),
+             ("a", 0, "")])
+        self.assertEqual([0, 3, 5], out)
+
+    def test_cancelling_a_head_takes_the_out_rows_of_its_family(self):
+        out = self.band_model(
+            "L.cancelIds(items, 0)",
+            [("p", 0, "building"), ("c", 1, "building"), ("done", 1, "done"),
+             ("fresh", 1, ""), ("sibling", 0, "queued")])
+        self.assertEqual(["t00000000", "t00000001"], out)
+
+    def test_the_cancel_control_is_drawn_on_heads_only(self):
+        drawn = self.band_model(
+            "JSON.stringify([0, 1].map(function (i) {"
+            "  var node = L.rowNode(items[i], i === 0);"
+            "  return [node.getAttribute('data-hc-todo-head') !== null,"
+            "          node.children.map(function (c) { return c.className; }),"
+            "          (node.children[0].getAttribute('data-hc-todo-cancel')),"
+            "          node.children[0].getAttribute('contenteditable')];"
+            "}))",
+            [("p", 0, "building"), ("c", 1, "building")])
+        head, child = json.loads(drawn)
+        self.assertEqual([True, ["hc-todo-cancel", "hc-todo-row"], "t00000000",
+                          "false"], head)
+        self.assertEqual([False, ["hc-todo-row"], None, None], child)
+
+    def test_the_cancel_control_takes_its_corner_from_the_stylesheet(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-todo-cancel{position:absolute;right:", css)
+        self.assertIn(".hc-todo[data-hc-todo-head] .hc-todo-row{padding-right", css)
 
     def test_a_band_keeps_the_order_its_rows_were_in(self):
         out = self.band_model(
@@ -2418,7 +2568,7 @@ class LiveFeedTests(BridgeTestCase):
             "JSON.stringify([slot.children.length,"
             " slot.children[0] && slot.children[0].textContent,"
             " slot.children[0] && slot.children[0].className]);")
-        self.assertEqual([1, "+ add a prompt", "hc-prompt-addbtn"],
+        self.assertEqual([2, "+ add a chat", "hc-chat-addbtn"],
                          json.loads(rendered))
 
     def test_the_button_finds_its_place_without_the_anchor(self):
@@ -2436,7 +2586,8 @@ class LiveFeedTests(BridgeTestCase):
             "JSON.stringify([found, drew, row.children.map(function (c) "
             "{ return c.className || c.textContent; })]);"))
         self.assertEqual([True, True,
-                          ["RELATED PROMPTS", "hc-prompt-addbtn"]], got)
+                          ["RELATED PROMPTS", "hc-chat-addbtn",
+                           "hc-prompt-addbtn"]], got)
 
     def test_the_anchor_still_wins_when_it_survives(self):
         got = self.run_js(
@@ -2471,8 +2622,8 @@ class LiveFeedTests(BridgeTestCase):
             "  window.__hcPromptUI.renderPromptAdd();"
             "  return row;"
             "}"
-            "var first = pane().children[1];"
-            "var second = pane().children[1];"     # the redraw
+            "var first = pane().querySelector('.hc-prompt-addbtn');"
+            "var second = pane().querySelector('.hc-prompt-addbtn');"     # the redraw
             + self.CLICK +
             "click(second);"
             "JSON.stringify([first !== second, !!document.querySelector('.hc-ask')]);")
@@ -2503,7 +2654,8 @@ class LiveFeedTests(BridgeTestCase):
             "document.body.appendChild(slot);"
             "window.__hcPromptUI.renderPromptAdd();"
             + self.CLICK +
-            "click(slot.children[0]); click(slot.children[0]);"
+            "var addbtn = slot.querySelector('.hc-prompt-addbtn');"
+            "click(addbtn); click(addbtn);"
             "made.filter(function (e) { return e.className === 'hc-ask' "
             "  && e.parentNode; }).length;")
         self.assertEqual(1, count)
@@ -2537,7 +2689,7 @@ class LiveFeedTests(BridgeTestCase):
             "window.__hcPromptUI.renderPromptAdd();"
             "window.__hcPromptUI.renderPromptAdd();"
             "slot.children.length;")
-        self.assertEqual(1, count)
+        self.assertEqual(2, count)
 
     PICK_STATE = None                       # built in the test, see below
 
@@ -2587,7 +2739,7 @@ class LiveFeedTests(BridgeTestCase):
             "document.body.appendChild(slot);"
             "window.__hcPromptUI.renderPromptAdd();"
             + self.CLICK +
-            "click(slot.children[0]);"
+            "click(slot.querySelector('.hc-prompt-addbtn'));"
             "document.querySelector('.hc-pick-list').children[0].onclick();"
             # the click resolves a promise; let its handlers run
             "Promise.resolve().then(function () {}).then(function () {})"
@@ -3634,8 +3786,8 @@ class ChatPromptLinkTests(BridgeTestCase):
             "document.body.appendChild(slot);"
             "var drew = window.__hcPromptUI.renderPromptAdd();"
             "JSON.stringify([drew, slot.children.length,"
-            " slot.children[0] && slot.children[0].textContent]);"))
-        self.assertEqual([True, 1, "+ add a prompt"], drawn)
+            " slot.querySelector('.hc-prompt-addbtn').textContent]);"))
+        self.assertEqual([True, 2, "+ add a prompt"], drawn)
 
     def test_the_picker_has_a_way_out_in_its_own_corner(self):
         got = json.loads(self.run_js(
@@ -3703,7 +3855,7 @@ class ChatPromptLinkTests(BridgeTestCase):
             "document.body.appendChild(slot);"
             "window.__hcPromptUI.renderPromptAdd();"
             + self.CLICK +
-            "click(slot.children[0]);"
+            "click(slot.querySelector('.hc-prompt-addbtn'));"
             "document.querySelector('.hc-pick-list').children[0].onclick();"
             "Promise.resolve().then(function () {}).then(function () {})"
             "  .then(function () { return JSON.stringify("
