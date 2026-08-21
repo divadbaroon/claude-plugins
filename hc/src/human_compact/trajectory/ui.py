@@ -247,6 +247,12 @@ def _save_goals(trajdir, goals, important, chat_scoped):
 # with the same cursor machinery as the workspace's own, and its user turns
 # join the related-prompts pool, tagged with the chat's label. No goals are
 # read from it and nothing is written to it.
+#
+# A link has a scope. Linked from the header it is GLOBAL: its prompts are
+# offered to every goal. Linked from a goal's own pane it is scoped to that
+# goal: offered to that goal and the goals under it, never to the goals
+# above it -- a chat brought in while working on a subgoal belongs to that
+# branch, not to the parent it hangs from. One row per (session, scope).
 
 def _linked_path(session_id, root):
     return CS.paths(session_id, root).session_dir / "linked_chats.json"
@@ -258,7 +264,7 @@ def _load_linked(session_id, root):
     except (OSError, ValueError):
         return []
     rows = value.get("chats") if isinstance(value, dict) else None
-    out = []
+    out, seen = [], set()
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
@@ -267,8 +273,36 @@ def _load_linked(session_id, root):
             CS.paths(sid, root)
         except ValueError:
             continue
-        out.append({"session_id": sid, "label": str(row.get("label") or sid[:8])})
+        goal_id = row.get("goal_id")
+        goal_id = goal_id if isinstance(goal_id, str) and goal_id else None
+        if (sid, goal_id) in seen:
+            continue
+        seen.add((sid, goal_id))
+        entry = {"session_id": sid, "label": str(row.get("label") or sid[:8])}
+        if goal_id:
+            entry["goal_id"] = goal_id
+        out.append(entry)
     return out
+
+
+def _linked_sessions(chats):
+    """Each linked session once, with the goal ids it is scoped to -- or
+    None when any of its links is global, which covers every goal."""
+    scopes = {}
+    labels = {}
+    for chat in chats:
+        sid = chat["session_id"]
+        labels.setdefault(sid, chat["label"])
+        goal_id = chat.get("goal_id")
+        if sid not in scopes:
+            scopes[sid] = set() if goal_id else None
+        if scopes[sid] is not None:
+            if goal_id:
+                scopes[sid].add(goal_id)
+            else:
+                scopes[sid] = None
+    return [(sid, labels[sid], None if goals is None else sorted(goals))
+            for sid, goals in scopes.items()]
 
 
 def _save_linked(session_id, root, chats):
@@ -297,8 +331,13 @@ def _discover_chats(own_session_id, root, limit=30):
             continue
         if not stat.st_size:
             continue
+        # Where the chat worked, when its manifest says: the project
+        # switcher groups chats by directory, and a name alone ("plugins")
+        # cannot tell two repositories with the same last segment apart.
+        cwd = _manifest_cwd(sid, root)
         rows.append({"session_id": sid,
                      "project": path.parent.name.split("-")[-1] or path.parent.name,
+                     "cwd": cwd,
                      "mtime": stat.st_mtime, "size": stat.st_size})
     rows.sort(key=lambda row: row["mtime"], reverse=True)
     return rows[:limit]
@@ -315,12 +354,19 @@ def _load_prompts(trajdir, chat_scoped=False):
         session_id, root = _chat_identity(trajdir)
         rows = list(CS.load_prompts(session_id, root))
         # Linked chats ride along, each row tagged with where it came from
-        # so the picker can say. Their stores are read-only here.
-        for chat in _load_linked(session_id, root):
+        # so the picker can say, and -- for a goal-scoped link -- with the
+        # goals it is for, so the picker offers it there and below and
+        # nowhere else. A global link carries no chat_goals. Their stores
+        # are read-only here.
+        for sid, label, goal_ids in _linked_sessions(_load_linked(session_id, root)):
             try:
-                for row in CS.load_prompts(chat["session_id"], root):
-                    if isinstance(row, dict):
-                        rows.append(dict(row, chat=chat["label"]))
+                for row in CS.load_prompts(sid, root):
+                    if not isinstance(row, dict):
+                        continue
+                    row = dict(row, chat=label)
+                    if goal_ids is not None:
+                        row["chat_goals"] = goal_ids
+                    rows.append(row)
             except (OSError, ValueError):
                 continue
     else:
@@ -509,6 +555,184 @@ def conversation_rows(trajdir, limit=200):
     # top-down as the analysis moves. Date breaks ties.
     rows.sort(key=lambda row: (row["turns"], row["meta"]), reverse=True)
     return rows
+
+
+MAX_TREE_ENTRIES = 4000
+_TREE_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv",
+              ".mypy_cache", ".pytest_cache", "dist", "build", ".next"}
+
+
+def project_tree(root, depth=3):
+    """The project's own files, bounded, for the workspace's file rail.
+
+    Containment is the job: every path is resolved and checked to be inside
+    *root* before it is named, so a symlink out of the project cannot be
+    listed and nothing above the project is reachable.
+    """
+    try:
+        base = Path(root).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return []
+    if not base.is_dir():
+        return []
+    budget = [MAX_TREE_ENTRIES]
+
+    def walk(directory, level):
+        if level > depth or budget[0] <= 0:
+            return []
+        try:
+            entries = sorted(directory.iterdir(),
+                             key=lambda e: (not e.is_dir(), e.name.lower()))
+        except OSError:
+            return []
+        out = []
+        for entry in entries:
+            if budget[0] <= 0:
+                break
+            if entry.name.startswith(".") and entry.name != ".claude-plugin":
+                continue
+            if entry.name in _TREE_SKIP:
+                continue
+            try:
+                entry.resolve().relative_to(base)
+            except (OSError, ValueError, RuntimeError):
+                continue
+            budget[0] -= 1
+            out.append({"n": entry.name + "/", "kids": walk(entry, level + 1)}
+                       if entry.is_dir() else {"n": entry.name})
+        return out
+
+    return walk(base, 1)
+
+
+def _project_identity(trajdir, chat_scoped, session_id):
+    """The directory this chat works in, named for the reader.
+
+    Empty rather than guessed: a workspace that cannot say where it is should
+    say nothing rather than invent a repository. The project is the Claude
+    Code project: the directory the chat was started in, which is what its
+    manifest recorded. Every chat in that directory is a chat of the same
+    project, and what the reader writes about the project (its objective)
+    is kept once per directory, not once per chat.
+    """
+    empty = {"cwd": "", "name": "", "branch": "", "remote": "",
+             "objective": ""}
+    if not (chat_scoped and session_id):
+        return empty
+    try:
+        _sid, root = _chat_identity(trajdir)
+    except (OSError, ValueError):
+        return empty
+    cwd = _manifest_cwd(str(session_id), root)
+    if not cwd:
+        return empty
+    path = Path(str(cwd))
+    return {"cwd": str(path), "name": path.name,
+            "branch": AE._git_branch(str(path)) or "",
+            "remote": _git_remote(str(path)),
+            "objective": _load_project(root, str(path)).get("objective", "")}
+
+
+def _manifest_cwd(session_id, root):
+    """The directory a chat's manifest names, read as written.
+
+    Read from the file rather than through load_manifest: that loader hands
+    back a blank default when the manifest's own session_id disagrees with
+    the directory's, which a seeded or copied workspace does -- and the
+    directory it was started in is still the directory it was started in.
+    """
+    try:
+        path = CS.paths(str(session_id), root).manifest
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    cwd = value.get("cwd") if isinstance(value, dict) else None
+    return cwd if isinstance(cwd, str) else ""
+
+
+# The project's own record: one file per directory, under the vault base
+# beside the chat sessions, so two chats in one repository read and write
+# the same objective. Keyed by the resolved path's digest, never by the
+# path itself, which is not a safe file name.
+PROJECT_OBJECTIVE_LIMIT = 2000
+
+
+def _project_path(root, cwd):
+    try:
+        resolved = str(Path(cwd).expanduser().resolve())
+    except (OSError, RuntimeError):
+        resolved = str(cwd)
+    digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:16]
+    return CS._state_base(root) / "projects" / f"{digest}.json"
+
+
+def _load_project(root, cwd):
+    if not cwd:
+        return {}
+    try:
+        value = json.loads(_project_path(root, cwd).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    out = {}
+    objective = value.get("objective")
+    if isinstance(objective, str):
+        out["objective"] = objective[:PROJECT_OBJECTIVE_LIMIT]
+    return out
+
+
+def _save_project(root, cwd, record):
+    from .secure_io import atomic_write_json
+    path = _project_path(root, cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, dict(record, cwd=str(cwd)), root=path.parent)
+
+
+PROJECT_FILE_LIMIT = 256 * 1024
+
+
+def project_file(root, relpath):
+    """One text file of the project, for the overview's README pane.
+
+    The same containment rule as the tree: the path is resolved and checked
+    to be inside *root* before it is read, so `../` and symlinks out of the
+    project read nothing. Bounded, and text only: a binary answers as such
+    rather than as mojibake.
+    """
+    try:
+        base = Path(root).expanduser().resolve(strict=True)
+        target = (base / str(relpath)).resolve(strict=True)
+        target.relative_to(base)
+    except (OSError, ValueError, RuntimeError):
+        return {"ok": False, "error": "no such file in the project"}
+    if not target.is_file():
+        return {"ok": False, "error": "not a file"}
+    try:
+        with open(target, "rb") as handle:
+            raw = handle.read(PROJECT_FILE_LIMIT + 1)
+    except OSError:
+        return {"ok": False, "error": "unreadable"}
+    if b"\0" in raw[:8192]:
+        return {"ok": False, "error": "binary file"}
+    truncated = len(raw) > PROJECT_FILE_LIMIT
+    text = raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")
+    return {"ok": True, "path": str(target.relative_to(base)),
+            "text": text, "truncated": truncated}
+
+
+def _git_remote(cwd):
+    """The origin URL as git records it, or "" -- never a placeholder."""
+    try:
+        text = (Path(cwd).expanduser().resolve() / ".git" / "config").read_text(
+            encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    block = re.search(r'\[remote "origin"\]([^\[]*)', text)
+    if not block:
+        return ""
+    url = re.search(r"url\s*=\s*(\S+)", block.group(1))
+    return url.group(1) if url else ""
 
 
 def setup_state(trajdir):
@@ -700,6 +924,9 @@ def _payload(trajdir=None, chat_scoped=None):
                    "agent_runs": runs,
                    "agent_claim": claim,
                    "scope": "chat" if chat_scoped else "global",
+                   # Where this chat works. Recorded in the manifest already; the
+                   # workspace could only name a project by guessing without it.
+                   "project": _project_identity(trajdir, chat_scoped, session),
                    "provider": _configured_provider(trajdir),
                    "revision": _goal_revision(goals, important)}
     if identity is not None:
@@ -710,6 +937,31 @@ def _payload(trajdir=None, chat_scoped=None):
         except Exception:  # noqa: BLE001 - the rail can do without it
             payload["build_session"] = None
     return payload
+
+
+def _handoff(trajdir=None, chat_scoped=None):
+    """The hand-off document for this workspace, written and returned.
+
+    The goal tree and prompts are read under the state lock; git runs
+    outside it, since a slow remote or `gh` call must not hold up the
+    pollers.
+    """
+    from . import handoff as HO
+    chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
+    trajdir = _scope(trajdir)
+    session = None
+    with _state_access(trajdir, chat_scoped):
+        goals, _important = _load_goals(trajdir, chat_scoped)
+        GM.sanitize(goals)
+        prompts = _load_prompts(trajdir, chat_scoped)
+        if chat_scoped:
+            session, _root = _chat_identity(trajdir)
+    try:
+        return HO.build(trajdir, goals["goals"], prompts, chat_scoped,
+                        session_id=session,
+                        generated_at=goals.get("generated_at", ""))
+    except Exception as exc:  # noqa: BLE001 - the button reports, never hangs
+        return {"ok": False, "error": str(exc)[:200]}
 
 
 def _apply(op, trajdir=None, chat_scoped=None):
@@ -876,6 +1128,22 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
+        if kind == "set_project_objective":
+            # What the project is for, in the reader's words: kept once per
+            # project directory, so every chat in it reads the same line.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            if not who["cwd"]:
+                return {"ok": False, "error": "this chat has no project directory"}
+            text = op.get("objective")
+            if not isinstance(text, str):
+                return {"ok": False, "error": "objective must be text"}
+            record = _load_project(root, who["cwd"])
+            record["objective"] = text.strip()[:PROJECT_OBJECTIVE_LIMIT]
+            _save_project(root, who["cwd"], record)
+            return {"ok": True, "objective": record["objective"]}
         if kind in ("link_chat", "unlink_chat"):
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
@@ -888,17 +1156,32 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             if sid == session_id:
                 return {"ok": False, "error": "this workspace already follows "
                                               "its own chat"}
+            # The scope: a goal id for a link made from that goal's pane,
+            # nothing for one made from the header. A goal-scoped link
+            # must name a goal this tree has, or it would be offered to
+            # no one and unlinkable from nowhere.
+            goal_id = str(op.get("goal_id") or "") or None
+            if goal_id and not any(g.get("id") == goal_id
+                                   for g in goals["goals"]):
+                return {"ok": False, "error": "no such goal"}
             chats = _load_linked(session_id, root)
+
+            def same(c):
+                return c["session_id"] == sid and c.get("goal_id") == goal_id
             if kind == "link_chat":
-                if any(c["session_id"] == sid for c in chats):
-                    return {"ok": True, "linked": [c["session_id"] for c in chats]}
-                label = " ".join(str(op.get("label") or "").split())[:60] or sid[:8]
-                # The linked chat's own store, so ingestion has somewhere to
-                # keep its cursor and prompts.
-                CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
-                chats.append({"session_id": sid, "label": label})
+                if not any(same(c) for c in chats):
+                    label = (" ".join(str(op.get("label") or "").split())[:60]
+                             or next((c["label"] for c in chats
+                                      if c["session_id"] == sid), sid[:8]))
+                    # The linked chat's own store, so ingestion has somewhere
+                    # to keep its cursor and prompts.
+                    CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
+                    entry = {"session_id": sid, "label": label}
+                    if goal_id:
+                        entry["goal_id"] = goal_id
+                    chats.append(entry)
             else:
-                chats = [c for c in chats if c["session_id"] != sid]
+                chats = [c for c in chats if not same(c)]
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
@@ -1115,6 +1398,30 @@ class H(BaseHTTPRequestHandler):
                 html = html.replace(
                     "</body>", '<script src="/bridge.js"></script>\n</body>', 1)
                 self._send(200, html.encode(), "text/html; charset=utf-8")
+            elif self.path.split("?", 1)[0] == "/api/tree":
+                # The project's files, for the overview's file pane. Where
+                # the project is comes from the chat's manifest; a workspace
+                # that does not know answers with an empty tree, not a guess.
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                self._send(200, {"ok": True, "root": who["cwd"],
+                                 "tree": (project_tree(who["cwd"])
+                                          if who["cwd"] else [])})
+            elif self.path.split("?", 1)[0] == "/api/file":
+                # One text file of the project, named relative to its root.
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                relpath = (query.get("path") or [""])[0]
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                if not who["cwd"] or not relpath:
+                    self._send(200, {"ok": False, "error": "no project"})
+                else:
+                    self._send(200, project_file(who["cwd"], relpath))
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
@@ -1132,6 +1439,13 @@ class H(BaseHTTPRequestHandler):
                     })
             elif self.path == "/api/state":
                 self._send(200, _payload(
+                    self.server.trajdir, self.server.chat_scoped))
+            elif self.path == "/api/handoff":
+                # The workspace as one markdown file for a teammate's agent:
+                # every goal's notes, prompt and TODO rows with their build
+                # states, plus the repository's git and GitHub metadata,
+                # under a prompt that has the agent render and open it.
+                self._send(200, _handoff(
                     self.server.trajdir, self.server.chat_scoped))
             elif (self.path == "/api/briefing"
                   or self.path.startswith("/api/briefing?")):
@@ -1383,8 +1697,10 @@ def _follow_transcript(server, stop, interval=None):
         first = False
         try:
             session_id, root = _chat_identity(server.trajdir)
-            targets = [session_id] + [chat["session_id"]
-                                      for chat in _load_linked(session_id, root)]
+            # Each linked session once, however many scopes link it: its
+            # transcript has one cursor.
+            targets = [session_id] + [sid for sid, _label, _goals
+                                      in _linked_sessions(_load_linked(session_id, root))]
         except (OSError, ValueError):
             continue
         for target in targets:
