@@ -2023,8 +2023,24 @@
       ".hc-settings-sec+.hc-settings-sec{border-top:1px solid var(--bd,#e3e3e3)}",
       ".hc-settings-sec-head{font-weight:600;color:var(--ink,#111)}",
       ".hc-settings-sec label{display:flex;align-items:center;gap:8px;cursor:pointer}",
-      ".hc-settings-sec input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}"
+      ".hc-settings-sec input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}",
+      // The hand-off, in the header slot before the bell: one click puts
+      // the whole workspace -- goals, notes, TODO states, git -- on the
+      // clipboard as markdown for a teammate's agent, and says so briefly.
+      ".hc-handoff{display:inline-flex;align-items:center;align-self:center}",
+      ".hc-handoff-btn{position:relative;display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px;font:10px/1 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-handoff-btn:hover{color:var(--ink,#111)}",
+      ".hc-handoff-btn[data-hc-handoff=\"busy\"]{color:var(--mut,#575757);cursor:progress}",
+      ".hc-handoff-btn[data-hc-handoff=\"copied\"]{color:var(--ok,#2f7d4f)}",
+      ".hc-handoff-btn[data-hc-handoff=\"failed\"]{color:var(--acc,#a5492a)}",
+      ".hc-handoff-said{display:none;white-space:nowrap}",
+      ".hc-handoff-btn[data-hc-handoff] .hc-handoff-said{display:inline}"
   ].join("");
+
+  var HANDOFF_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7\"></path><polyline points=\"16 6 12 2 8 6\"></polyline><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"15\"></line></svg>";
+  var HANDOFF_SAYS = { busy: "assembling…", copied: "copied ✓",
+                       failed: "copy failed" };
+  var HANDOFF_TITLE = "Hand off: copy the whole workspace as markdown for a teammate’s agent";
 
   var BELL_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"></path><path d=\"M13.7 21a2 2 0 0 1-3.4 0\"></path></svg>";
   var GEAR_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"></circle><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"></path></svg>";
@@ -2377,6 +2393,11 @@
         if (event.stopPropagation) event.stopPropagation();
       };
       // The bell toggles the center; the gear toggles the settings panel.
+      if (closestByClass(target, "hc-handoff-btn")) {
+        stop();
+        copyHandoff();
+        return;
+      }
       // One of the two is up at a time.
       if (closestByClass(target, "hc-bell")) {
         stop();
@@ -2736,6 +2757,155 @@
     } else if (!open && gear.getAttribute("data-hc-gear-open") !== null) {
       gear.removeAttribute("data-hc-gear-open"); changed = true;
     }
+    return changed;
+  }
+
+  // --- the hand-off, before the bell ----------------------------------------
+  // One click asks the server for the workspace as markdown -- every goal's
+  // notes, prompt and TODO rows with their build states, the repository's
+  // git and GitHub metadata, under a prompt for a teammate's agent -- and
+  // puts it on the clipboard. The server keeps a copy as handoff.md beside
+  // the goals. A clipboard that refuses (no focus, no permission) gets the
+  // file downloaded instead, so the click always yields the document.
+
+  var handoffState = "";           // "", busy, copied, failed
+  var handoffTimer = null;
+  var handoffLast = null;          // the last document fetched, for tests
+
+  function handoffSay(state) {
+    handoffState = state;
+    clearTimeout(handoffTimer);
+    if (state === "copied" || state === "failed") {
+      handoffTimer = setTimeout(function () {
+        handoffState = "";
+        renderHandoff();
+      }, 1800);
+    }
+    renderHandoff();
+  }
+
+  function handoffDownload(text, name) {
+    try {
+      var blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = name || "hc-handoff.md";
+      a.style.display = "none";
+      (document.body || document.documentElement).appendChild(a);
+      a.click();
+      setTimeout(function () {
+        if (a.parentNode) a.parentNode.removeChild(a);
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      }, 0);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function handoffToClipboard(text) {
+    // Answers with a promise of whether the text is on the clipboard. The
+    // async clipboard first; the hidden-textarea copy when that is missing
+    // or refuses. Safari wants the write inside the click: ClipboardItem
+    // with a promise of the text lets the write start in the gesture and
+    // the fetch resolve it, and is tried first when it exists.
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      (document.body || document.documentElement).appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy") === true; } catch (e) { ok = false; }
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+      return ok;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; },
+                                                      function () { return fallback(); });
+    }
+    return Promise.resolve(fallback());
+  }
+
+  function fetchHandoff() {
+    return fetch("/api/handoff", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!(body && body.ok && typeof body.markdown === "string")) {
+          throw new Error((body && body.error) || "no hand-off");
+        }
+        handoffLast = body;
+        return body;
+      });
+  }
+
+  function copyHandoff() {
+    if (handoffState === "busy") return null;
+    handoffSay("busy");
+    var onClipboard;
+    var fetched = fetchHandoff();
+    if (typeof ClipboardItem === "function" && navigator.clipboard
+        && navigator.clipboard.write) {
+      // Started inside the click, resolved by the fetch.
+      var textPromise = fetched.then(function (body) {
+        return new Blob([body.markdown], { type: "text/plain" });
+      });
+      var item;
+      try { item = new ClipboardItem({ "text/plain": textPromise }); } catch (e) { item = null; }
+      onClipboard = item
+        ? navigator.clipboard.write([item]).then(function () { return true; },
+                                                function () { return false; })
+        : Promise.resolve(false);
+      onClipboard = onClipboard.then(function (ok) {
+        return ok ? fetched.then(function () { return true; })
+                  : fetched.then(function (body) { return handoffToClipboard(body.markdown); });
+      });
+    } else {
+      onClipboard = fetched.then(function (body) { return handoffToClipboard(body.markdown); });
+    }
+    return onClipboard.then(function (ok) {
+      if (ok) { handoffSay("copied"); return true; }
+      var body = handoffLast;
+      if (body) handoffDownload(body.markdown, body.filename);
+      handoffSay("failed");
+      return false;
+    }, function () {
+      handoffSay("failed");
+      return false;
+    });
+  }
+
+  function renderHandoff() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-handoff");
+    if (!slot) return false;
+    ensureAlertStyles();
+    bindAlerts();
+    var btn = slot.querySelector(".hc-handoff-btn");
+    if (!btn) {
+      btn = document.createElement("span");
+      btn.className = "hc-handoff-btn";
+      btn.setAttribute("role", "button");
+      btn.setAttribute("aria-label", "Hand off to a teammate");
+      btn.title = HANDOFF_TITLE;
+      btn.innerHTML = HANDOFF_ICON;
+      var said = document.createElement("span");
+      said.className = "hc-handoff-said";
+      btn.appendChild(said);
+      slot.appendChild(btn);
+    }
+    var changed = false;
+    var was = btn.getAttribute("data-hc-handoff");
+    if (handoffState && was !== handoffState) {
+      btn.setAttribute("data-hc-handoff", handoffState); changed = true;
+    } else if (!handoffState && was !== null) {
+      btn.removeAttribute("data-hc-handoff"); changed = true;
+    }
+    var label = btn.querySelector(".hc-handoff-said");
+    var words = handoffState ? (HANDOFF_SAYS[handoffState] || "") : "";
+    if (label && label.textContent !== words) { label.textContent = words; changed = true; }
     return changed;
   }
 
@@ -5602,6 +5772,7 @@
       renderPanelToggles();
       installRailDrag();
       renderSessionChip();
+      renderHandoff();
       renderBell();
       renderGear();
       renderSearch();
@@ -5862,7 +6033,7 @@
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -6696,6 +6867,13 @@
     treeStep: treeStep,
     foldedIds: foldedIds,
     // TODO build alerts: the banner stack, the bell, the center, settings.
+    handoff: {
+      render: renderHandoff,
+      copy: copyHandoff,
+      fetch: fetchHandoff,
+      state: function () { return handoffState; },
+      last: function () { return handoffLast; },
+    },
     alerts: {
       track: trackTodoAlerts,
       diff: todoAlertsFrom,

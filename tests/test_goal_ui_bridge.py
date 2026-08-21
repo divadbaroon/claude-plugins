@@ -4522,8 +4522,8 @@ LAUNCH_CLASSES = (
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
-    "hc-panels", "hc-session", "hc-chats", "hc-alerts", "hc-settings",
-    "hc-updated",
+    "hc-panels", "hc-session", "hc-chats", "hc-handoff", "hc-alerts",
+    "hc-settings", "hc-updated",
     "hc-search", "hc-search-input", "hc-search-hits",
 )
 
