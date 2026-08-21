@@ -503,13 +503,69 @@
     };
   }
 
-  function toNode(goal, byParent, byId, runs, claim) {
+  // Which branches the reader has folded. A fold is a view preference the
+  // server never hears of, so a tree rebuilt from the payload -- at boot,
+  // and again after any server-side change -- opened every branch. The
+  // store this page keeps is the only record of it; a rebuilt tree reads
+  // it back, and so the base and the remote agree with the local copy on
+  // a key the merge would otherwise take for an edit.
+  function foldedIds() {
+    var folded = Object.create(null);
+    (function walk(list) {
+      array(list).forEach(function (node) {
+        if (!node || typeof node.id !== "string") return;
+        if (node.open === false) folded[node.id] = true;
+        walk(node.children);
+      });
+    })(readLocalGoals());
+    return folded;
+  }
+
+  // Left and right on the keyboard move across the hierarchy, where up and
+  // down walk the drawn rows. Right opens a folded branch, or steps into
+  // its first drawn child; left folds an open branch with something drawn
+  // under it, or steps out to the parent. A pure function of the tree, the
+  // rows on screen and the selection: it returns what to do, or null when
+  // the key means nothing here.
+  function treeStep(goals, rowIds, selId, back) {
+    if (typeof selId !== "string") return null;
+    var trail = null;
+    (function find(list, above) {
+      array(list).some(function (node) {
+        if (!node || trail) return !!trail;
+        var here = above.concat([node]);
+        if (node.id === selId) { trail = here; return true; }
+        find(node.children, here);
+        return !!trail;
+      });
+    })(goals, []);
+    if (!trail) return null;
+    var node = trail[trail.length - 1];
+    var kids = array(node.children);
+    var ids = array(rowIds);
+    var next = ids[ids.indexOf(selId) + 1];
+    var childDrawn = !!next && kids.some(function (k) {
+      return k && k.id === next;
+    });
+    if (!back) {
+      if (kids.length && node.open === false) {
+        return { fold: { id: node.id, open: true } };
+      }
+      return childDrawn ? { selId: next } : null;
+    }
+    if (childDrawn && node.open !== false) {
+      return { fold: { id: node.id, open: false } };
+    }
+    return trail.length > 1 ? { selId: trail[trail.length - 2].id } : null;
+  }
+
+  function toNode(goal, byParent, byId, runs, claim, folded) {
     return {
       id: goal.id,
       title: str(goal.title),
       prio: goal.priority || "normal",
       done: goal.status === "completed" || goal.status === "abandoned",
-      open: true,
+      open: !(folded && folded[goal.id]),
       status: goal.status === "in_progress" ? "inprog" : "todo",
       notes: str(goal.notes),
       todos_md: str(goal.todos_md),
@@ -522,7 +578,7 @@
       agent: agentOf(goal, runs, claim),
       artifact: artifactOf(goal, runs, details[goal.id]),
       children: array(byParent[goal.id]).map(function (child) {
-        return toNode(child, byParent, byId, runs, claim);
+        return toNode(child, byParent, byId, runs, claim, folded);
       })
     };
   }
@@ -545,8 +601,10 @@
     // the mapping is a pure function of one payload.
     var claim = (st && st.agent_claim && typeof st.agent_claim === "object")
       ? st.agent_claim : null;
+    var folded = foldedIds();
     return array(byParent[null]).map(function (goal) {
-      return toNode(goal, byParent, byId, (st && st.agent_runs) || {}, claim);
+      return toNode(goal, byParent, byId, (st && st.agent_runs) || {}, claim,
+                    folded);
     });
   }
 
@@ -4154,6 +4212,13 @@
       // cmd+enter or cmd+backspace should not pour goals in or out.
       ["this._kd = (e) => {\n      if (e.repeat) return;\n",
        "this._kd = (e) => {\n      if (e.repeat && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;\n"],
+      // Left and right move across the hierarchy: right opens a folded
+      // branch or steps into its first drawn child, left folds an open
+      // branch or steps out to the parent. The bridge's treeStep decides;
+      // a move scrolls the row into view the way up and down do.
+      ["if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (typing) return; nav(e.key === 'ArrowUp'); return; }\n",
+       "if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (typing) return; nav(e.key === 'ArrowUp'); return; }\n"
+       + "      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { if (typing) return; const step = window.__hcPromptUI && window.__hcPromptUI.treeStep(this.state.goals, this._rowIds || [], this.state.selId, e.key === 'ArrowLeft'); if (!step) return; e.preventDefault(); if (step.fold) this.set(s => ({ goals: this.up(s.goals, step.fold.id, x => ({ ...x, open: step.fold.open })) })); else this.set(() => ({ selId: step.selId, editId: null })); const ids = this._rowIds || [], nx = ids.indexOf(step.selId), el = this._treeEl; if (el && nx >= 0) { const top = nx * 29, bot = top + 29; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; } return; }\n"],
       // Done means the whole branch is done: the row's check marks every
       // child too and folds the branch shut. Unchecking reopens only the
       // goal itself -- what each child was before is not something to
@@ -4586,7 +4651,9 @@
     injectionLines: injectionLines,
     renderInjection: renderInjection,
     renderSessionChip: renderSessionChip,
-    askSource: askSource
+    askSource: askSource,
+    treeStep: treeStep,
+    foldedIds: foldedIds
   };
 
   seed();

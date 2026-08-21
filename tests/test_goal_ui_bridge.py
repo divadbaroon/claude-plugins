@@ -1682,6 +1682,141 @@ class LiveFeedTests(BridgeTestCase):
         self.assertTrue(all(c["done"] for c in marked["children"]))
         self.assertTrue(marked["children"][0]["children"][0]["done"])
 
+    # --- sideways on the keyboard -------------------------------------------
+    # Up and down walk the drawn rows; left and right move across the
+    # hierarchy: right opens a folded branch or steps into its first drawn
+    # child, left folds an open branch or steps out to the parent.
+
+    TREE = ("[{ id: 'p', open: true, children: ["
+            "   { id: 'c1', open: false, children: [{ id: 'c1a' }] },"
+            "   { id: 'c2', open: true, children: [] }] },"
+            " { id: 'q', open: true, children: [{ id: 'q1' }] }]")
+
+    def step(self, rows, sel, back, tree=None):
+        return self.run_js(
+            "out = window.__hcPromptUI.treeStep(%s, %s, %s, %s);"
+            % (tree or self.TREE, json.dumps(rows), json.dumps(sel),
+               "true" if back else "false"))
+
+    def test_right_on_an_open_branch_steps_into_its_first_drawn_child(self):
+        self.assertEqual({"selId": "c1"},
+                         self.step(["p", "c1", "c2", "q", "q1"], "p", False))
+
+    def test_right_on_a_folded_branch_opens_it_without_moving(self):
+        self.assertEqual({"fold": {"id": "c1", "open": True}},
+                         self.step(["p", "c1", "c2", "q", "q1"], "c1", False))
+
+    def test_right_on_a_leaf_or_an_open_branch_with_no_drawn_child_is_nothing(self):
+        self.assertIsNone(self.step(["p", "c1", "c2", "q", "q1"], "c2", False))
+        # Open, with children, but the filter hides every one of them: the
+        # row after it is a sibling, not a child, so there is nowhere to go.
+        self.assertIsNone(self.step(["p", "q"], "p", False))
+
+    def test_left_on_an_open_branch_with_drawn_children_folds_it(self):
+        self.assertEqual({"fold": {"id": "p", "open": False}},
+                         self.step(["p", "c1", "c2", "q", "q1"], "p", True))
+
+    def test_left_on_a_folded_branch_or_a_leaf_steps_out_to_the_parent(self):
+        self.assertEqual({"selId": "p"},
+                         self.step(["p", "c1", "c2", "q", "q1"], "c1", True))
+        self.assertEqual({"selId": "p"},
+                         self.step(["p", "c1", "c2", "q", "q1"], "c2", True))
+        # Open but nothing drawn under it: folding would change nothing
+        # the eye can see, so it steps out instead.
+        self.assertEqual({"selId": "p"},
+                         self.step(["p", "c2", "q"], "c2", True))
+
+    def test_left_on_a_folded_root_is_nothing(self):
+        self.assertIsNone(self.step(["p", "q"], "p", True,
+                                    tree="[{ id: 'p', open: false, children: "
+                                         "[{ id: 'x' }] }, { id: 'q' }]"))
+        self.assertIsNone(self.step(["p"], "nope", True))
+        self.assertIsNone(self.step(["p"], None, True))
+
+    def test_the_keyboard_handler_asks_treestep_for_left_and_right(self):
+        out = self.patched_bundle("out;")
+        self.assertIn("if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') "
+                      "{ if (typing) return; const step = "
+                      "window.__hcPromptUI && window.__hcPromptUI.treeStep("
+                      "this.state.goals, this._rowIds || [], "
+                      "this.state.selId, e.key === 'ArrowLeft');", out)
+        # Both outcomes are acted on: a fold rewrites the node, a move
+        # reselects and scrolls the row into view the way up/down do.
+        self.assertIn("if (step.fold) this.set(s => ({ goals: this.up("
+                      "s.goals, step.fold.id, x => ({ ...x, "
+                      "open: step.fold.open })) }));", out)
+        self.assertIn("else this.set(() => ({ selId: step.selId, "
+                      "editId: null }));", out)
+        # Up and down still walk the rows as before.
+        self.assertIn("if (e.key === 'ArrowDown' || e.key === 'ArrowUp') "
+                      "{ if (typing) return; nav(e.key === 'ArrowUp'); "
+                      "return; }", out)
+
+    # --- folds survive a reload ---------------------------------------------
+    # Which branches are folded is a view preference the server never hears
+    # of. A tree rebuilt from the payload used to open every branch, so a
+    # reload -- or the reload that follows any server-side change -- undid
+    # every fold the reader had made.
+
+    def test_a_tree_rebuilt_from_the_payload_keeps_the_readers_folds(self):
+        roots = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({ v: 7, goals: ["
+            "  { id: 'g1', open: false, children: ["
+            "    { id: 'g1a', open: true, children: [] }] }] });"
+            "window.__hcPromptUI.rootsFromState(%s);" % json.dumps(STATE))
+        self.assertFalse(roots[0]["open"])
+        self.assertTrue(roots[0]["children"][0]["open"])
+
+    def test_a_tree_with_nothing_remembered_opens_every_branch(self):
+        roots = self.roots()
+        self.assertTrue(roots[0]["open"])
+        self.assertTrue(roots[0]["children"][0]["open"])
+
+    def test_a_reload_keeps_the_folded_branches_folded(self):
+        # The boot path writes the store from the payload. The fold the
+        # store already held comes through, and so does the synced base --
+        # or the next merge would read the fold as an edit of the payload.
+        got = self.run_js(
+            "store['hc-vault-ui-v1'] = JSON.stringify({ v: 7, selId: 'g1',"
+            "  goals: [{ id: 'g1', open: false, children: ["
+            "    { id: 'g1a', open: true, children: [] }] }] });"
+            "window.__hcPromptUI.seedForTest();"
+            "var saved = JSON.parse(store['hc-vault-ui-v1']);"
+            "var base = JSON.parse(store['hc-vault-ui-sync-v1']);"
+            "out = [saved.goals[0].open, saved.goals[0].children[0].open,"
+            "       base.goals[0].open];")
+        self.assertEqual([False, True, False], got)
+
+    def test_a_fold_is_not_an_edit_the_server_is_asked_to_take(self):
+        # A server-side change arrives while a branch is folded here. The
+        # merge must not see the fold as a local edit of the payload -- that
+        # posted an import carrying nothing, and the reload after it
+        # unfolded the branch anyway.
+        got = json.loads(self.run_js(
+            "var reloads = 0;"
+            "window.location = { reload: function () { reloads++; } };"
+            "function state(rev, title) { return { scope: 'global',"
+            "  revision: rev, prompts: [], agent_runs: {},"
+            "  goals: [{ id: 'g1', title: title, parent_goal_id: null,"
+            "            status: 'active' },"
+            "          { id: 'g1a', title: 'sub', parent_goal_id: 'g1',"
+            "            status: 'active' }] }; }"
+            "window.__hcPromptUI.acceptState(state('r5', 'Ship it'));"
+            "window.__hcPromptUI.reconcileState(state('r5', 'Ship it'));"
+            "var before = reloads;"
+            "var saved = JSON.parse(store['hc-vault-ui-v1']);"
+            "saved.goals[0].open = false;"   # the reader folds g1
+            "store['hc-vault-ui-v1'] = JSON.stringify(saved);"
+            "calls.length = 0;"
+            "window.__hcPromptUI.acceptState(state('r6', 'Ship it now'));"
+            "window.__hcPromptUI.reconcileState(state('r6', 'Ship it now'));"
+            "var after = JSON.parse(store['hc-vault-ui-v1']);"
+            "var imports = calls.filter(function (c) {"
+            "  return String(c[0]).indexOf('/api/import') >= 0; }).length;"
+            "JSON.stringify([reloads - before, imports, after.goals[0].title,"
+            "  after.goals[0].open]);"))
+        self.assertEqual([1, 0, "Ship it now", False], got)
+
     def test_running_the_agent_is_the_only_way_to_get_a_plan(self):
         out = self.patched_bundle("out;")
         self.assertNotIn(">generate todos<", out)
