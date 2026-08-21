@@ -753,6 +753,31 @@ def _payload(trajdir=None, chat_scoped=None):
     return payload
 
 
+def _handoff(trajdir=None, chat_scoped=None):
+    """The hand-off document for this workspace, written and returned.
+
+    The goal tree and prompts are read under the state lock; git runs
+    outside it, since a slow remote or `gh` call must not hold up the
+    pollers.
+    """
+    from . import handoff as HO
+    chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
+    trajdir = _scope(trajdir)
+    session = None
+    with _state_access(trajdir, chat_scoped):
+        goals, _important = _load_goals(trajdir, chat_scoped)
+        GM.sanitize(goals)
+        prompts = _load_prompts(trajdir, chat_scoped)
+        if chat_scoped:
+            session, _root = _chat_identity(trajdir)
+    try:
+        return HO.build(trajdir, goals["goals"], prompts, chat_scoped,
+                        session_id=session,
+                        generated_at=goals.get("generated_at", ""))
+    except Exception as exc:  # noqa: BLE001 - the button reports, never hangs
+        return {"ok": False, "error": str(exc)[:200]}
+
+
 def _apply(op, trajdir=None, chat_scoped=None):
     result = _apply_locked(op, trajdir, chat_scoped)
     deferred = result.get("__deferred__") if isinstance(result, dict) else None
@@ -1188,6 +1213,13 @@ class H(BaseHTTPRequestHandler):
                     })
             elif self.path == "/api/state":
                 self._send(200, _payload(
+                    self.server.trajdir, self.server.chat_scoped))
+            elif self.path == "/api/handoff":
+                # The workspace as one markdown file for a teammate's agent:
+                # every goal's notes, prompt and TODO rows with their build
+                # states, plus the repository's git and GitHub metadata,
+                # under a prompt that has the agent render and open it.
+                self._send(200, _handoff(
                     self.server.trajdir, self.server.chat_scoped))
             elif (self.path == "/api/briefing"
                   or self.path.startswith("/api/briefing?")):
