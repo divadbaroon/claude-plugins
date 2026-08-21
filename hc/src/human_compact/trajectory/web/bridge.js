@@ -2466,7 +2466,9 @@
         when.className = "hc-alert-when";
         when.textContent = alertWhen(entry.at);
         title.appendChild(when);
-        title.appendChild(document.createTextNode(ALERT_SAYS[entry.kind]));
+        var says = document.createElement("span");
+        says.textContent = ALERT_SAYS[entry.kind];
+        title.appendChild(says);
         row.appendChild(title);
         var detail = document.createElement("div");
         detail.className = "hc-alert-detail";
@@ -2769,7 +2771,11 @@
       "[data-hc-launch] .hc-todos-list{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px 10px 4px;outline:none;caret-color:var(--ink)}",
       "[data-hc-launch] .hc-todo{position:relative}",
       "[data-hc-launch] .hc-todo[data-hc-todo-head] .hc-todo-row{padding-right:24px}",
-      "[data-hc-launch] .hc-todo-cancel{position:absolute;right:4px;bottom:1px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:4px;font:500 13px/15px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
+      // The x sits on the head's first line, level with the state badge --
+      // the tile's top, not its bottom, which for an asking row is under the
+      // question thread. 5px = the row's 2px top padding + half the gap
+      // between a 22.8px line box and a 16px control.
+      "[data-hc-launch] .hc-todo-cancel{position:absolute;top:5px;right:4px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:4px;font:500 13px/15px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
       "[data-hc-launch] .hc-todo:hover .hc-todo-cancel{opacity:1}",
       "[data-hc-launch] .hc-todo-cancel:hover{color:var(--del);background:var(--hov)}",
       "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px;padding:2px 6px;border-radius:5px}",
@@ -3666,6 +3672,9 @@
   // row of the family, or from its answer box, is the same act.
 
   var TODO_OUT = { queued: true, building: true, asking: true, failed: true };
+  // Out states a child under an out head does not badge: the head's badge
+  // already says the family is with the builder.
+  var TODO_CHILD_QUIET = { queued: true, building: true };
 
   function todoOut(row) {
     return !!(row && TODO_OUT[str(row.status)]);
@@ -4093,7 +4102,12 @@
     text.setAttribute("data-hc-todo-line", row.id);
     text.textContent = row.text;
     line.appendChild(text);
+    // The badge names the family's state on its head. A child under an out
+    // head that is merely along for the build -- building, queued -- says
+    // nothing the head has not; one that needs the user, or failed, still
+    // does. Done rows are their own band and always say so.
     var state = TODO_STATUS[row.status];
+    if (state && !head && TODO_CHILD_QUIET[row.status]) state = null;
     if (state) {
       var badge = document.createElement("span");
       badge.className = "hc-todo-status";

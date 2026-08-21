@@ -590,24 +590,28 @@ class TodoListModelTests(BridgeTestCase):
         # not at the bottom of the tile (which, for an asking row, is under
         # the question thread).
         drawn = self.band_model(
-            "var node = L.rowNode(items[0], true);"
-            "var css = window.__hcPromptUI.launchCss();"
-            "var m = /\\.hc-todo-cancel\\{([^}]*)\\}/.exec(css)[1];"
-            "JSON.stringify([node.children[0].className,"
-            "  /(^|;)top:/.test(m), /(^|;)bottom:/.test(m),"
-            "  node.querySelector('.hc-todo-status').textContent])",
+            "(function () {"
+            "  var node = L.rowNode(items[0], true);"
+            "  var css = window.__hcPromptUI.launchCss();"
+            "  var m = /\\.hc-todo-cancel\\{([^}]*)\\}/.exec(css)[1];"
+            "  return JSON.stringify([node.children[0].className,"
+            "    /(^|;)top:/.test(m), /(^|;)bottom:/.test(m),"
+            "    node.querySelector('.hc-todo-status').textContent]);"
+            "})()",
             [("p", 0, "asking")])
         self.assertEqual(["hc-todo-cancel", True, False, "needs you"], json.loads(drawn))
 
     def test_children_under_an_out_head_carry_no_building_badge(self):
         # The head says "building" for the family; its children are quiet.
         drawn = self.band_model(
-            "var heads = L.cancelHeads(items);"
-            "JSON.stringify(items.map(function (row, i) {"
-            "  var b = L.rowNode(row, heads.indexOf(i) >= 0)"
-            "    .querySelector('.hc-todo-status');"
-            "  return b ? b.textContent : null;"
-            "}))",
+            "(function () {"
+            "  var heads = L.cancelHeads(items);"
+            "  return JSON.stringify(items.map(function (row, i) {"
+            "    var b = L.rowNode(row, heads.indexOf(i) >= 0)"
+            "      .querySelector('.hc-todo-status');"
+            "    return b ? b.textContent : null;"
+            "  }));"
+            "})()",
             [("p", 0, "building"), ("c", 1, "building"), ("q", 1, "queued"),
              ("a", 1, "asking"), ("f", 1, "failed"), ("d", 1, "done"),
              ("lone", 0, "queued"), ("u", 0, ""), ("uc", 1, "building")])
