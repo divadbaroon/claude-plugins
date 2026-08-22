@@ -202,6 +202,12 @@ def snapshot(root: Optional[Path], cwd, user_id: str,
             "status": _text(goal.get("status")) or "active",
             "priority": _text(goal.get("priority")) or "normal",
             "origin": _text(goal.get("origin"), 200),
+            "relevance": (goal.get("relevance")
+                          if goal.get("relevance") in ("core", "supporting",
+                                                       "unrelated")
+                          else "core"),
+            "relevance_why": _text(goal.get("relevance_why"), 200),
+            "relevance_for": _text(goal.get("relevance_for"), 2000),
             "description": _text(goal.get("description")),
             "notes": _text(goal.get("notes")),
             "prompt": _text(goal.get("prompt")),

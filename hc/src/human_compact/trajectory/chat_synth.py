@@ -38,9 +38,36 @@ This is mutable user-supervised state, not a transcript summary.
 
 Evidence includes human prompts, visible assistant plans/progress, plan-tool
 updates, tool results, task events, compact summaries, and project context.
-Infer completion only from explicit completion evidence. Distinguish a goal
-from its implementation tasks. Prefer 1-4 top-level goals, depth at most 3.
+Infer completion only from explicit completion evidence.
+Prefer 1-4 top-level goals, depth at most 3.
+
+WHAT IS A GOAL AND WHAT IS A TODO. A goal is an outcome someone wanted. A
+todo is a step taken toward one. Steps go in that goal's "todos" -- its own
+checklist, shown beside it -- and never become goals of their own. Writing
+a step as a subgoal is the most common way to get this wrong: a tree of a
+dozen goals then grows forty leaves that are really a checklist, and every
+goal's list sits empty.
+
+  "Let two people share one goal tree"        -- a goal
+  "Add the members table"                     -- a todo of that goal
+  "Fix the ambiguous column in hc_add_member" -- a todo of that goal
+  "Make goal inference notice new turns"      -- a different goal
+
+A leaf with no children is almost always a todo that was written as a goal.
+Before making a subgoal, ask whether it is an outcome or a step; if it is a
+step, put it in the parent's todos instead. Give each goal the todos its
+evidence shows, done and undone alike.
 Never use private assistant thinking. Copy only supplied event ids.
+
+Each goal also carries "relevance": how it stands to the project's stated
+objective, given under OBJECTIVE below. Three answers only:
+  "core"       -- serves the objective directly
+  "supporting" -- does not, but unblocks something that does
+  "unrelated"  -- a genuinely different thread of work
+Judge the work, not the words: fixing a broken hook is not the objective and
+is usually "supporting", because the objective cannot be reached through it.
+Say why in one short clause. When no objective is given, every goal is
+"core" and why is empty -- there is nothing to be unrelated to.
 
 Each goal also has "sections": the goal's own markdown document, which the
 user reads and edits by hand. objective and in_my_words are plain sentences;
@@ -51,7 +78,10 @@ a section empty when it supports nothing. Never invent, pad, or restate the
 title.
 
 Return ONLY minified JSON:
-{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
+{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","relevance":"core|supporting|unrelated","relevance_why":"","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
+
+OBJECTIVE:
+<<OBJECTIVE>>
 
 PROJECT CONTEXT:
 <<CONTEXT>>
@@ -69,8 +99,40 @@ Return ONLY minified JSON {"operations":[...]} using these operations:
 {"op":"add_todo","goal_id":"","text":"","evidence_ids":[]}
 {"op":"complete_todo","goal_id":"","text_match":""}
 {"op":"set_status","goal_id":"","status":"active|in_progress|completed|abandoned"}
-{"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":""}
+{"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":"","status":"active|in_progress|completed|abandoned","relevance":"core|supporting|unrelated","relevance_why":""}
+{"op":"set_relevance","goal_id":"","relevance":"core|supporting|unrelated","relevance_why":""}
 {"op":"append_section","goal_id":"","section":"objective|in_my_words|decisions|built|blockers|open_questions","text":""}
+
+HOW EACH GOAL STANDS TO THE OBJECTIVE. Every goal gets one of three, judged
+against the OBJECTIVE below:
+
+  "core"       -- serves the objective directly
+  "supporting" -- does not, but unblocks something that does
+  "unrelated"  -- a genuinely different thread of work
+
+Judge the work, not the words. Most sessions contain all three, and a tree
+where everything is "core" usually means the question was not asked: fixing
+a broken tool, chasing a flaky test, or tuning something incidental is
+rarely the objective itself.
+
+  objective "Let two people share one goal tree"
+    "Add project membership so a teammate can sign in"  -- core
+    "Fix the hook so goal inference notices new turns"  -- supporting
+    "Diagnose why a queued build's rows failed"         -- unrelated
+
+Set it on every new_goal. Use set_relevance for a goal already in the tree
+whose standing the evidence now shows differently -- including one carrying
+"core" only because nothing judged it yet. With no objective, everything is
+"core".
+
+A new_goal carries the status the evidence shows it in. Work that began
+and finished inside this same evidence is created "completed", not
+"active": this window is the only time it will be looked at, so a goal born
+active here stays active for good. Use "active" only for work still open.
+
+add_todo puts a next action on that goal's own checklist, beside it. It is
+not a subgoal and does not appear in the tree: use new_goal only for a
+distinct objective, never for a step toward one that already exists.
 
 Rules: infer completion only from explicit evidence. A top-level new_goal needs
 an explicitly distinct objective in distinct_because. Prefer attaching evidence
@@ -82,6 +144,9 @@ the list sections). Never repeat a line the section already holds.
 
 CURRENT STATE:
 <<TREE>>
+
+OBJECTIVE:
+<<OBJECTIVE>>
 
 PROJECT CONTEXT:
 <<CONTEXT>>
@@ -159,6 +224,84 @@ def _referenced_files(cwd: Path, events: Iterable[Dict[str, Any]]) -> List[Path]
         if len(out) >= 4:
             break
     return out
+
+
+# Three answers, and the order is worth keeping: a goal that unblocks the
+# objective is not the same as one that has nothing to do with it, and only
+# the last is worth folding away. A binary judgement would hide the plumbing
+# that makes the objective reachable at all.
+RELEVANCE = ("core", "supporting", "unrelated")
+
+
+def _inherit_sources(proposed, project_sources):
+    """Give every goal the project's own context to stand on.
+
+    A source saved to the project -- the spec, the ticket, the design note --
+    is context for everything in it, and re-attaching it goal by goal is
+    work nobody should have to repeat. Inherited, never overwritten: a goal
+    that names its own sources keeps them, and the project's are added to
+    them rather than in place of them.
+    """
+    if not project_sources:
+        return
+    for goal in proposed.get("goals") or []:
+        own = goal.get("sources")
+        own = list(own) if isinstance(own, list) else []
+        seen = {str(s.get("label") or "").strip().lower()
+                for s in own if isinstance(s, dict)}
+        for src in project_sources:
+            label = str(src.get("label") or "").strip()
+            if not label or label.lower() in seen:
+                continue
+            seen.add(label.lower())
+            own.append({"id": src.get("id") or ("p%d" % (len(own) + 1)),
+                        "type": src.get("type") or "doc", "label": label,
+                        "from_project": True})
+        goal["sources"] = GM.normalize_sources(own)
+
+
+def _stamp_relevance_for(proposed, before, objective):
+    """Record which objective each fresh verdict was made against.
+
+    A verdict outlives the sentence that produced it. Keeping the two
+    together is what lets a reader -- or a later pass -- see that a goal was
+    ruled unrelated to something the project no longer says.
+    """
+    text = str(objective or "").strip()[:2000]
+    for goal in proposed.get("goals") or []:
+        gid = goal.get("id")
+        if gid not in before or before.get(gid) != goal.get("relevance"):
+            goal["relevance_for"] = text
+
+
+def project_context_sources(cwd_value: Optional[str], root=None):
+    """The sources saved to this project, for its goals to inherit."""
+    try:
+        from . import project_store as PS
+        return PS.load_project(root, cwd_value).get("sources") or []
+    except Exception:      # noqa: BLE001 - inference must not fail on this
+        return []
+
+
+def project_objective(cwd_value: Optional[str], root=None) -> str:
+    """What this project says it is for, if anything.
+
+    Written by the reader, never inferred -- which is why an empty one means
+    "no opinion" rather than "nothing matters". Everything is core then.
+    """
+    try:
+        from . import project_store as PS
+        return str(PS.load_project(root, cwd_value).get("objective") or "")
+    except Exception:      # noqa: BLE001 - inference must not fail on this
+        return ""
+
+
+def objective_block(objective: str) -> str:
+    text = str(objective or "").strip()
+    if not text:
+        return ("(none given -- every goal is \"core\" and relevance_why is "
+                "empty)")
+    return text[:2000]
 
 
 def project_context(cwd_value: Optional[str], events: Iterable[Dict[str, Any]]) -> str:
@@ -253,7 +396,8 @@ def _provider(provider=None):
     return P.make(kind, "synthesize", model)
 
 
-_INITIAL_FIELDS = ("status", "parent_goal_id", "description", "priority")
+_INITIAL_FIELDS = ("status", "parent_goal_id", "description", "priority",
+                   "relevance", "relevance_why")
 
 
 def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
@@ -283,19 +427,17 @@ def _normalize_initial(data: Dict[str, Any], valid_ids: set) -> Dict[str, Any]:
             eid for eid in (value.get("evidence_ids") or [])
             if isinstance(eid, str) and eid in valid_ids
         ][:40]
-        todos = []
+        # A goal's tasks go on its own checklist, beside it -- not into the
+        # tree as child goals. The legacy "todos" list is left empty so
+        # promote_todos, which turns that field into subgoals, finds
+        # nothing to promote.
+        goal["todo_items"] = []
         for todo in (value.get("todos") or [])[:30]:
-            if not isinstance(todo, dict) or not str(todo.get("text") or "").strip():
-                continue
-            todos.append({
-                "text": str(todo["text"])[:160],
-                "done": bool(todo.get("done")),
-                "evidence_ids": [
-                    eid for eid in todo.get("evidence_ids", [])
-                    if isinstance(eid, str) and eid in valid_ids
-                ][:20],
-            })
-        goal["todos"] = todos
+            text = todo.get("text") if isinstance(todo, dict) else todo
+            row = GM.add_todo_row(goal, text)
+            if row and isinstance(todo, dict) and todo.get("done"):
+                row["status"] = "done"
+        goal["todos"] = []
         sections = value.get("sections")
         if isinstance(sections, dict):
             goal["sections"] = {
@@ -633,11 +775,18 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 CS.set_analyzer_state(session_id, last_analyzed_ordinal=cursor, root=root)
                 continue
             goals, important, revision = _goal_snapshot(session_id, root)
+            judged_before = {g.get("id"): g.get("relevance")
+                             for g in goals.get("goals") or []}
             passes += 1
-            context = project_context(CS.load_manifest(session_id, root).get("cwd"), events)
+            cwd_value = CS.load_manifest(session_id, root).get("cwd")
+            context = project_context(cwd_value, events)
+            objective = project_objective(cwd_value, root)
+            objective_text = objective_block(objective)
+            project_sources = project_context_sources(cwd_value, root)
             valid_ids = {row["id"] for row in digest}
             if not goals.get("goals"):
                 prompt = (INITIAL_PROMPT.replace("<<CONTEXT>>", context)
+                          .replace("<<OBJECTIVE>>", objective_text)
                           .replace("<<EVENTS>>", json.dumps(digest, ensure_ascii=False)))
                 proposed = _normalize_initial(_provider(provider).generate_json(prompt), valid_ids)
                 proposed = _apply_sections(
@@ -648,6 +797,7 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 prompt = (INCREMENTAL_PROMPT
                           .replace("<<TREE>>", json.dumps(goals, ensure_ascii=False))
                           .replace("<<CONTEXT>>", context)
+                          .replace("<<OBJECTIVE>>", objective_text)
                           .replace("<<EVENTS>>", json.dumps(digest, ensure_ascii=False)))
                 response = _provider(provider).generate_json(prompt)
                 ops = _filtered_ops(response, valid_ids)
@@ -655,6 +805,13 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 step_changes = GM.apply_ops(
                     proposed, new_important, ops, max_new_top_level=1
                 )
+            # Stamp the objective onto the verdicts this pass actually made.
+            # Only those: a goal the model did not revisit was judged against
+            # whatever objective stood then, and saying otherwise would make
+            # a stale verdict look freshly considered.
+            _stamp_relevance_for(proposed, judged_before, objective)
+            _inherit_sources(proposed, project_sources)
+
             if not CS.save_goals(session_id, proposed, new_important, root,
                                  expected_revision=revision):
                 # A browser edit won the race. Recompute against the new state;

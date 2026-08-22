@@ -618,7 +618,8 @@ def fetch_project(project_id: str, root: Optional[Path] = None) -> Dict[str, Any
                   "prompt_count,goal_count", "project_id"),
         "goals": ("hc_goals", "id,user_id,session_id,local_id,parent_id,title,"
                   "status,priority,origin,description,notes,prompt,"
-                  "evidence_ids,updated_at", "project_id"),
+                  "evidence_ids,relevance,relevance_why,relevance_for,"
+                  "updated_at", "project_id"),
         "todos": ("hc_todos", "id,user_id,goal_id,local_id,position,depth,"
                   "text,status,question", "project_id"),
         "goal_sources": ("hc_goal_sources",
