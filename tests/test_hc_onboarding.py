@@ -250,7 +250,7 @@ class HcCommandGateTests(unittest.TestCase):
     """Only the launch surface is reachable without HC_EXPERIMENTAL=1."""
 
     LAUNCH_COMMANDS = {"install", "setup", "chat-ui", "chat-serve", "chat-hook",
-                       "chat-refresh", "global-hook"}
+                       "chat-refresh", "global-hook", "supabase"}
 
     def _cli(self):
         if str(HC_SRC) not in sys.path:

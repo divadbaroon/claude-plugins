@@ -42,6 +42,7 @@ _LAUNCH_COMMAND_HELP = (
     ("install", "install /goals-ui for Claude Code"),
     ("setup", "noninteractive npm onboarding"),
     ("chat-ui", "goal tree for one Claude chat"),
+    ("supabase", "connect this workspace to your own Supabase"),
     ("chat-serve", "session-scoped goal server (internal)"),
     ("chat-hook", "Claude Code chat-state hook (internal)"),
     ("chat-refresh", "session-scoped goal analyzer (internal)"),
@@ -1412,6 +1413,69 @@ def _healthy_chat_server(record, session_id, timeout=0.5):
     )
 
 
+def supabase_main(argv=None):
+    """Set up, sign in to, or sign out of the reader's own Supabase.
+
+    The password is typed here and exchanged once for tokens: it is not
+    stored, not logged, and not passed on the command line, where it would
+    sit in the shell's history for anyone who reads the file.
+    """
+    import getpass
+    ap = argparse.ArgumentParser(
+        prog="hc supabase",
+        description="Connect the goal workspace to your own Supabase project.")
+    ap.add_argument("action", choices=("setup", "login", "logout", "status"))
+    args = ap.parse_args(argv or [])
+    from .trajectory import supabase_client as SB
+
+    if args.action == "setup":
+        path, created = SB.write_template()
+        say(("wrote %s" if created else "%s is already there") % path)
+        say("Put your project URL and anon (public) key in it, then run"
+            " `hc supabase login`.")
+        say("Find both under Project Settings -> API in the Supabase"
+            " dashboard.")
+        say("Use the ANON key, not the service key: the workspace signs in"
+            " as you, and row security does the rest.")
+        return 0
+
+    if args.action == "logout":
+        SB.sign_out()
+        say("signed out; the stored tokens are gone")
+        return 0
+
+    if args.action == "status":
+        state = SB.status()
+        say(f"config    {state['config_path']}")
+        say(f"configured {'yes' if state['configured'] else 'no'}")
+        say(f"signed in  {'yes' if state['signed_in'] else 'no'}"
+            + (f" ({state['email']})" if state.get("email") else ""))
+        return 0
+
+    try:
+        config = SB.load_config()
+    except SB.SupabaseError as exc:
+        say(str(exc))
+        return 1
+    if not config["url"] or not config["anon_key"]:
+        say(f"fill in {SB.config_path()} first (run `hc supabase setup`)")
+        return 1
+    email = config.get("email") or ""
+    if not email or email == "you@example.com":
+        email = input("email: ").strip()
+    else:
+        say(f"email: {email}")
+    password = getpass.getpass("password (not stored): ")
+    try:
+        session = SB.sign_in(email, password)
+    except SB.SupabaseError as exc:
+        say(str(exc))
+        return 1
+    say(f"signed in as {session['email']}")
+    say("the workspace can now send this project from the project overview")
+    return 0
+
+
 def chat_serve_main(argv=None):
     """Run one scoped server in the detached child process."""
     ap = argparse.ArgumentParser(prog="hc chat-serve",
@@ -1624,6 +1688,8 @@ def hc_main():
         ui_main(rest)
     elif cmd == "chat-ui":
         chat_ui_main(rest)
+    elif cmd == "supabase":
+        raise SystemExit(supabase_main(rest) or 0)
     elif cmd == "chat-serve":
         chat_serve_main(rest)
     elif cmd == "chat-hook":
