@@ -1481,7 +1481,13 @@ def save_goals(
         _atomic_json(p.important, important)
         text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))
-        return True
+    # The project's own file -- one per directory, holding the goals of every
+    # chat started in it -- is a snapshot of what was just written, so it is
+    # refreshed here rather than by each of the many callers. Outside the
+    # lock, and imported here rather than at the top: it reads this module.
+    from . import project_store
+    project_store.refresh_for_session(session_id, root)
+    return True
 
 
 def _project_key(cwd: Path) -> str:

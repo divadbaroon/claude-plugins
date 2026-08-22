@@ -50,6 +50,7 @@ FETCH = (
     "  calls.push([url, opts && opts.body ? JSON.parse(opts.body) : null]);"
     "  var u = String(url); var body;"
     "  if (u.indexOf('/api/chats') >= 0) body = %s;"
+    "  else if (u.indexOf('/api/project.json') >= 0) body = %s;"
     "  else if (u.indexOf('/api/file') >= 0) body = %s;"
     "  else if (u.indexOf('/api/tree') >= 0) body = %s;"
     "  else body = { ok: true, objective: opts && opts.body ? JSON.parse(opts.body).objective : '' };"
@@ -57,14 +58,20 @@ FETCH = (
     "};"
 )
 
+RECORD = ('{\n "schema_version": 1,\n "project": {\n  "name": "myrepo"\n }\n}\n')
 
-def fetch_js(chats=CHATS, readme=None, tree=None):
+
+def fetch_js(chats=CHATS, readme=None, tree=None, record=None):
     readme = readme if readme is not None else {
         "ok": True, "path": "README.md", "text": "# myrepo\n\nhello", "truncated": False}
     tree = tree if tree is not None else {
         "ok": True, "root": "/Users/me/work/myrepo",
         "tree": [{"n": "src/", "kids": [{"n": "app.py"}]}, {"n": "README.md"}]}
-    return FETCH % (json.dumps(chats), json.dumps(readme), json.dumps(tree))
+    record = record if record is not None else {
+        "ok": True, "path": "/vault/projects/abc123.json", "written": True,
+        "text": RECORD, "truncated": False}
+    return FETCH % (json.dumps(chats), json.dumps(record), json.dumps(readme),
+                    json.dumps(tree))
 
 
 PRELUDE = (
@@ -259,7 +266,8 @@ class OverviewTests(BridgeTestCase):
             " texts(box, 'hc-overview-dir'), texts(box, 'hc-overview-file')]);")
         self.assertEqual([True, True, ["OVERVIEW", "GOALS"], "myrepo", "Ship the thing.",
                           "What are you trying to accomplish?", "myrepo", "Repository",
-                          "git@github.com:acme/myrepo.git · feat/x", ["README.md", "Files"],
+                          "git@github.com:acme/myrepo.git · feat/x",
+                          ["README.md", "Files", "project.json"],
                           "# myrepo\n\nhello", ["src/"], ["app.py", "README.md"]], got)
 
     def test_the_readme_pane_is_on_first_and_files_can_be_brought_up(self):
@@ -273,8 +281,46 @@ class OverviewTests(BridgeTestCase):
             "  if (String(c.className).indexOf('hc-overview-pane-tab') === 0) tabs.push(c); walk(c); }); })(box);"
             "click(tabs[1]); var after = panes();"
             "return JSON.stringify([before, after, tabs.map(function (t) { return t.className; })]);")
-        self.assertEqual([{"readme": True, "files": False}, {"readme": False, "files": True},
-                          ["hc-overview-pane-tab", "hc-overview-pane-tab hc-overview-pane-tab-on"]], got)
+        self.assertEqual([{"readme": True, "files": False, "json": False},
+                          {"readme": False, "files": True, "json": False},
+                          ["hc-overview-pane-tab", "hc-overview-pane-tab hc-overview-pane-tab-on",
+                           "hc-overview-pane-tab"]], got)
+
+    def test_the_json_pane_shows_the_projects_own_record(self):
+        got = self.open(
+            "P.setOverviewPane('json');"
+            "return JSON.stringify([box.querySelector('.hc-overview-json').textContent,"
+            " deepText(box.querySelector('.hc-overview-json-where')),"
+            " texts(box, 'hc-overview-more'),"
+            " calls.filter(function (c) { return String(c[0]).indexOf('/api/project.json') >= 0; }).length]);")
+        self.assertEqual([RECORD, "/vault/projects/abc123.json", [], 1], got)
+
+    def test_a_record_not_written_yet_and_a_truncated_one_say_so(self):
+        got = self.open(
+            "return JSON.stringify([deepText(box.querySelector('.hc-overview-json-where')),"
+            " texts(box, 'hc-overview-more')]);",
+            record={"ok": True, "path": "/vault/projects/abc123.json",
+                    "written": False, "text": "{}\n", "truncated": True})
+        self.assertEqual(["/vault/projects/abc123.json"
+                          " · not written yet; this is what it would hold",
+                          ["… truncated; the record is longer than this pane reads"]], got)
+
+    def test_a_chat_with_no_project_directory_has_no_record_to_read(self):
+        got = self.open(
+            "return JSON.stringify(texts(box, 'hc-overview-empty'));",
+            record={"ok": False, "error": "no project"})
+        self.assertEqual(["This chat has no project directory, so there is no record to read."],
+                         got)
+
+    def test_a_reopened_overview_reads_the_record_again(self):
+        # The README and the tree are cached per directory; the record is
+        # rewritten on every goal save, so it is read afresh each time.
+        got = self.open(
+            "P.closeOverview(); P.openOverview();"
+            "return later(function () { return JSON.stringify("
+            " ['/api/project.json', '/api/file', '/api/tree'].map(function (route) {"
+            "   return calls.filter(function (c) { return String(c[0]).indexOf(route) >= 0; }).length; })); });")
+        self.assertEqual([2, 1, 1], got)
 
     def test_a_missing_readme_and_an_empty_tree_say_so(self):
         got = self.open(

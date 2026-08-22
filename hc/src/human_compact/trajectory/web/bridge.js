@@ -178,10 +178,49 @@
         var error = new Error(body && body.error ? body.error :
           "request failed (" + response.status + ")");
         error.status = response.status;
+        // A refusal is an answer, not a broken request: a shared save that
+        // would not take some rows says which, and the caller needs that
+        // rather than only the fact that something went wrong.
+        error.body = body;
         throw error;
       }
       return body;
     });
+  }
+
+  // What a shared workspace said about a save: which rows would not take
+  // the edit, and why. Shown rather than swallowed -- the reader typed
+  // something and the tree is about to snap back to what the server has.
+  // Returns the words it said, or "" when there was nothing to say -- so
+  // what it decided can be checked without reaching into the page.
+  function reportSharedSave(result) {
+    if (!result || !sharedWorkspace()) return "";
+    var refused = array(result.refused);
+    var clashes = array(result.conflicts);
+    if (!refused.length && !clashes.length) return "";
+    var words;
+    if (clashes.length) {
+      var one = clashes[0];
+      words = (clashes.length === 1
+        ? "\u201c" + str(one.title) + "\u201d changed while you were "
+          + "editing \u2014 your copy was not saved; this is theirs"
+        : clashes.length + " goals changed while you were editing \u2014 "
+          + "none of those edits were saved");
+    } else {
+      var first = refused[0];
+      words = (refused.length === 1
+        ? (str(first.author) || "someone") + "\u2019s \u201c"
+          + str(first.title) + "\u201d \u2014 not yours to change"
+        : refused.length + " goals belong to other people and were not "
+          + "changed");
+    }
+    flashNote(words);
+    // The server sent what it now holds; show that rather than the edit
+    // that did not land.
+    if (result.state && result.state.goals) {
+      try { acceptState(result.state); } catch (e) {}
+    }
+    return words;
   }
 
   function postImport(goals, baseRevision) {
@@ -351,9 +390,12 @@
     postImport(merged, st.revision).then(function (result) {
       syncBusy = false;
       installGoals(merged, result.revision);
-    }).catch(function () {
+    }).catch(function (error) {
       syncBusy = false;
       lastObservedGoals = null;
+      // A shared save that refused rows is reported; anything else is a
+      // failure and the tree simply reloads.
+      if (reportSharedSave(error && error.body)) return;
       setTimeout(refreshState, 50);
     });
   }
@@ -630,6 +672,10 @@
       todo_items: array(goal.todo_items),
       prompt_md: str(goal.prompt_md),
       desc: str(goal.description),
+      // Whose goal this is, in a shared workspace. Empty everywhere else,
+      // and the chip does not draw when it is empty: a personal tree has
+      // one author, and saying so on every row would be noise.
+      who: str(goal.shared_author || (goal.shared_mine ? "you" : "")),
       labels: [],
       prompts: promptRows(goal, byId),
       ctx: contextOf(goal, details[goal.id]),
@@ -717,6 +763,7 @@
   }
 
   function acceptState(st) {
+    try { markReadonly(st); noteRowRights(st); } catch (e) {}
     if (!st || !Array.isArray(st.goals)) return false;
     serverState = {
       goals: st.goals,
@@ -742,7 +789,11 @@
       // The directory this chat works in -- the Claude Code project -- as
       // the manifest recorded it: name, branch, origin, and the objective
       // written for it. Empty when the manifest never said.
-      project: (st.project && typeof st.project === "object") ? st.project : null
+      project: (st.project && typeof st.project === "object") ? st.project : null,
+      // Present only in a shared workspace: whose goals these are, what
+      // this reader may change, and who else is here. Absent everywhere
+      // else, which is how the page tells the two apart.
+      shared: (st.shared && typeof st.shared === "object") ? st.shared : null
     };
     var fingerprint = JSON.stringify([
       serverState.goals.map(function (g) {
@@ -859,11 +910,44 @@
   }
 
   function post(body) {
+    // A read-only workspace refuses at the server too; stopping here means
+    // no optimistic redraw runs first and then has to be taken back.
+    if (document.documentElement
+        && document.documentElement.getAttribute("data-hc-readonly") !== null
+        && !(body && READ_OPS[body.op])) {
+      return Promise.resolve({ ok: false, readonly: true,
+                               error: "this is a shared workspace: it is read-only" });
+    }
     return fetch("/api/op", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     }).then(function (r) { return r.json(); }).catch(function () { return null; });
+  }
+
+  // The few operations that only read. Everything else is a write and is
+  // stopped while a workspace is read-only.
+  var READ_OPS = { list_shares: true, supabase_logout: true };
+
+  // Notes and the document pane are real editors; a caret that types and
+  // saves nothing is worse than no caret. Turned off while read-only, and
+  // turned back on if the same page ever stops being so.
+  function sealEditors() {
+    var on = document.documentElement
+      && document.documentElement.getAttribute("data-hc-readonly") !== null;
+    var fields = document.querySelectorAll(
+      "textarea,input[type=text],[contenteditable=true],[contenteditable='']");
+    for (var i = 0; i < fields.length; i += 1) {
+      var node = fields[i];
+      if (closestByClass(node, "hc-settings-panel")) continue;
+      if (node.getAttribute("contenteditable") !== null) {
+        node.setAttribute("contenteditable", on ? "false" : "true");
+      } else if (on) {
+        node.setAttribute("readonly", "readonly");
+      } else {
+        node.removeAttribute("readonly");
+      }
+    }
   }
 
   function syncNodeFields(roots) {
@@ -913,12 +997,13 @@
     }));
     syncBusy = true;
     postImport(goals, synced.revision).then(function (result) {
-      writeSync(result.revision, goals);
       syncBusy = false;
+      writeSync(result.revision, goals);
       refreshState();
-    }).catch(function () {
+    }).catch(function (error) {
       syncBusy = false;
       lastObservedGoals = null;
+      reportSharedSave(error && error.body);
       refreshState();
     });
   }
@@ -2028,6 +2113,15 @@
       ".hc-settings-sec-head{font-weight:600;color:var(--ink,#111)}",
       ".hc-settings-sec label{display:flex;align-items:center;gap:8px;cursor:pointer}",
       ".hc-settings-sec input[type=number]{width:52px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:2px 4px}",
+      ".hc-settings-sec input[type=text],.hc-settings-sec input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:4px 6px}",
+      ".hc-settings-field{display:flex;flex-direction:column;gap:3px;align-items:stretch;cursor:default}",
+      ".hc-settings-hint{color:var(--fnt,#9b9b9b);font-size:10px;overflow-wrap:anywhere}",
+      ".hc-settings-row{display:flex;gap:8px;align-items:center}",
+      ".hc-settings-btn{cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:5px 10px}",
+      ".hc-settings-btn[data-hc-quiet]{background:transparent;color:var(--mut,#575757);border-color:var(--bd2,#d5d5d5)}",
+      ".hc-settings-btn[data-hc-busy]{opacity:.55;cursor:default}",
+      ".hc-settings-say{font-size:10px;color:var(--mut,#575757);overflow-wrap:anywhere}",
+      ".hc-settings-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
       // The hand-off, in the header slot before the bell: one click puts
       // the whole workspace -- goals, notes, TODO states, git -- on the
       // clipboard as markdown for a teammate's agent, and says so briefly.
@@ -2420,6 +2514,18 @@
         if (closestByClass(target, "hc-settings-act")) {
           stop();
           closeSettingsPanel();
+          return;
+        }
+        var openId = target.getAttribute
+          && target.getAttribute("data-hc-open-shared");
+        if (openId) { stop(); openShared(openId); return; }
+        var sbBtn = closestByClass(target, "hc-settings-btn");
+        if (sbBtn) {
+          stop();
+          var what = sbBtn.getAttribute("data-hc-sb-do");
+          if (what === "join") joinShared();
+          else settingsSupabaseDo(what);
+          return;
         }
         // Clicks on the controls fall through to the inputs.
         return;
@@ -2713,6 +2819,28 @@
       ".hc-overview-pane{display:none}",
       ".hc-overview-pane[data-hc-pane-on]{display:block}",
       ".hc-overview-readme{margin:0;white-space:pre-wrap;word-break:break-word;font:12px/1.65 'Source Code Pro',monospace;color:var(--dtxt,#333);max-height:60vh;overflow-y:auto}",
+      ".hc-overview-json{margin:0;white-space:pre;overflow:auto;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);max-height:60vh}",
+      ".hc-overview-json-where{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-bottom:8px;overflow-wrap:anywhere}",
+      ".hc-overview-sync{display:flex;align-items:center;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--bd,#e3e3e3)}",
+      ".hc-overview-sync-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      ".hc-overview-sync-btn[data-hc-busy]{opacity:.55;cursor:default}",
+      ".hc-overview-sync-btn[data-hc-off]{background:transparent;color:var(--fnt,#9b9b9b);border-color:var(--bd2,#d5d5d5);cursor:default}",
+      ".hc-overview-sync-say{font:11px/1.5 'Source Code Pro',monospace;color:var(--mut,#575757);overflow-wrap:anywhere}",
+      ".hc-overview-sync-bad{color:var(--bad,#a12d2d)}",
+      ".hc-overview-share-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:transparent;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      ".hc-overview-share-btn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-overview-share-btn[data-hc-busy],.hc-overview-share-btn[data-hc-off]{opacity:.55;cursor:default}",
+      ".hc-overview-share-role{flex:none;cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
+      ".hc-overview-share-role:hover{color:var(--ink,#111)}",
+      ".hc-overview-code{margin-top:12px;display:none;flex-direction:column;gap:7px}",
+      ".hc-overview-code[data-hc-on]{display:flex}",
+      ".hc-overview-code-box{display:block;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:8px 10px;word-break:break-all}",
+      ".hc-overview-code-row{display:flex;gap:10px;align-items:center}",
+      ".hc-overview-code-warn{font-size:10.5px;color:var(--mut,#575757)}",
+      ".hc-overview-shares{margin-top:10px;display:flex;flex-direction:column;gap:4px}",
+      ".hc-overview-share-row{display:flex;gap:9px;align-items:baseline;font-size:10.5px;color:var(--mut,#575757)}",
+      ".hc-overview-share-x{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-share-x:hover{color:var(--bad,#a12d2d)}",
       ".hc-overview-empty{color:var(--fnt,#9b9b9b)}",
       ".hc-overview-tree{font:12px/1.8 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
       ".hc-overview-dir{cursor:pointer;user-select:none}",
@@ -2731,6 +2859,7 @@
   // What the overview fetched, and for which directory: a change of project
   // (a different chat's state landing here) empties it.
   var projectFetched = { cwd: null, tree: null, readme: null, chats: null };
+  var projectJsonPending = false;
 
   function ensureProjectStyles() {
     if (document.getElementById("hc-project-style")) return;
@@ -3081,6 +3210,56 @@
     objective.setAttribute("rows", "2");
     objective.value = str(who.objective);
     card.appendChild(objective);
+    // Sending the project up: the button says what it will do before it is
+    // pressed, and what happened after. Its state comes from the vault --
+    // whether keys are there at all, and whether a sign-in still stands --
+    // so an unconfigured workspace explains itself rather than failing on
+    // the press.
+    var sync = el("div", "hc-overview-sync");
+    var button = el("span", "hc-overview-sync-btn", "Save to Supabase");
+    button.setAttribute("role", "button");
+    button.setAttribute("data-hc-sync", "");
+    button.setAttribute("data-hc-off", "");
+    sync.appendChild(button);
+    // Reader or editor, chosen before the code is minted: the role is
+    // baked into the invitation, so it cannot be decided afterwards.
+    var role = el("span", "hc-overview-share-role", "");
+    role.setAttribute("data-hc-share-role", "reader");
+    role.setAttribute("role", "button");
+    role.setAttribute("title", "Click to change what this invite grants");
+    role.textContent = "as reader";
+    sync.appendChild(role);
+    var share = el("span", "hc-overview-share-btn", "Get invite code");
+    share.setAttribute("role", "button");
+    share.setAttribute("data-hc-share", "");
+    share.setAttribute("data-hc-off", "");
+    sync.appendChild(share);
+    sync.appendChild(el("span", "hc-overview-sync-say", "checking…"));
+    card.appendChild(sync);
+    // Where a freshly minted code is shown. It is shown once and nowhere
+    // else: only its hash is kept, here or in Postgres, so a reader who
+    // loses it mints another rather than looking it up.
+    var codeWrap = el("div", "hc-overview-code");
+    codeWrap.setAttribute("data-hc-code", "");
+    var codeBox = el("textarea", "hc-overview-code-box");
+    codeBox.setAttribute("readonly", "readonly");
+    codeBox.setAttribute("rows", "3");
+    codeBox.setAttribute("spellcheck", "false");
+    codeBox.setAttribute("data-hc-code-box", "");
+    codeWrap.appendChild(codeBox);
+    var codeRow = el("div", "hc-overview-code-row");
+    var copy = el("span", "hc-overview-share-btn", "Copy");
+    copy.setAttribute("role", "button");
+    copy.setAttribute("data-hc-code-copy", "");
+    codeRow.appendChild(copy);
+    codeRow.appendChild(el("span", "hc-overview-code-warn",
+      "An invitation: whoever redeems it signs in first, and joins under"
+      + " their own account. Shown once — copy it now."));
+    codeWrap.appendChild(codeRow);
+    card.appendChild(codeWrap);
+    var shares = el("div", "hc-overview-shares");
+    shares.setAttribute("data-hc-shares", "");
+    card.appendChild(shares);
     box.appendChild(card);
 
     box.appendChild(el("div", "hc-overview-label", "context"));
@@ -3113,7 +3292,8 @@
     if (!who.remote && !who.branch) meta.textContent = who.cwd;
     repo.appendChild(meta);
     var panes = el("div", "hc-overview-panes");
-    [["readme", "README.md"], ["files", "Files"]].forEach(function (spec) {
+    [["readme", "README.md"], ["files", "Files"],
+     ["json", "project.json"]].forEach(function (spec) {
       var tab = el("span", "hc-overview-pane-tab" + (spec[0] === overviewPane ? " hc-overview-pane-tab-on" : ""), spec[1]);
       tab.setAttribute("data-hc-overview-pane", spec[0]);
       tab.setAttribute("role", "button");
@@ -3130,6 +3310,11 @@
     if (overviewPane === "files") files.setAttribute("data-hc-pane-on", "");
     files.appendChild(el("div", "hc-overview-empty", "reading…"));
     repo.appendChild(files);
+    var record = el("div", "hc-overview-pane");
+    record.setAttribute("data-hc-pane", "json");
+    if (overviewPane === "json") record.setAttribute("data-hc-pane-on", "");
+    record.appendChild(el("div", "hc-overview-empty", "reading…"));
+    repo.appendChild(record);
     context.appendChild(repo);
     box.appendChild(context);
     return box;
@@ -3167,6 +3352,31 @@
     pane.appendChild(el("pre", "hc-overview-readme", result.text));
     if (result.truncated) {
       pane.appendChild(el("div", "hc-overview-more", "… truncated; the file is longer than this pane reads"));
+    }
+  }
+
+  // The project's own file: every chat's goals of this directory, with
+  // where each sits in its tree, its notes, its TODO rows and their
+  // statuses, its prompt and the prompts marked related to it. Shown as the
+  // file reads -- this is the record a collaborator would be handed, and a
+  // reader checking what is kept should see exactly what is in it.
+  function renderProjectJson(result) {
+    var pane = overviewPaneNode("json");
+    if (!pane) return;
+    wipe(pane);
+    if (!result || !result.ok) {
+      pane.appendChild(el("div", "hc-overview-empty",
+                          "This chat has no project directory, so there is no record to read."));
+      return;
+    }
+    var where = el("div", "hc-overview-json-where", str(result.path));
+    if (!result.written) {
+      where.appendChild(el("span", "", " · not written yet; this is what it would hold"));
+    }
+    pane.appendChild(where);
+    pane.appendChild(el("pre", "hc-overview-json", str(result.text)));
+    if (result.truncated) {
+      pane.appendChild(el("div", "hc-overview-more", "… truncated; the record is longer than this pane reads"));
     }
   }
 
@@ -3216,7 +3426,289 @@
       cache.tree = result || { ok: false };
       if (overviewShown()) renderTree(cache.tree);
     }));
+    jobs.push(loadProjectJson());
     return Promise.all(jobs);
+  }
+
+  // The record is not cached with the README and the tree: it is rewritten
+  // on every goal save, so an overview being opened reads it again rather
+  // than showing what the project held the last time it was looked at.
+  function loadProjectJson() {
+    if (projectJsonPending) return Promise.resolve(null);
+    projectJsonPending = true;
+    return fetchJSON("/api/project.json").then(function (result) {
+      projectJsonPending = false;
+      if (overviewShown()) renderProjectJson(result || { ok: false });
+      return result;
+    });
+  }
+
+  // What the button reads before it is pressed. Kept out of /api/state:
+  // it reaches the vault and, when a token has lapsed, the network -- and
+  // the goal tree should not wait on either.
+  function loadSyncStatus() {
+    return fetchJSON("/api/supabase").then(function (result) {
+      renderSyncStatus(result);
+      return result;
+    });
+  }
+
+  function syncNodes() {
+    if (!overviewBox) return null;
+    var button = overviewBox.querySelector("[data-hc-sync]");
+    var say = overviewBox.querySelector(".hc-overview-sync-say");
+    return button && say ? { button: button, say: say } : null;
+  }
+
+  function sayOn(node, text, bad) {
+    if (!node) return;
+    node.textContent = text;
+    if (bad) node.setAttribute("class", "hc-overview-sync-say hc-overview-sync-bad");
+    else node.setAttribute("class", "hc-overview-sync-say");
+  }
+
+  // A shared workspace refuses every write at the server. Saying so only
+  // in the reply is not enough: the controls are still there to press, and
+  // a button that does nothing reads as a broken page rather than a rule.
+  // Mark the document and let the styles below take them off it.
+  function markReadonly(state) {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute) return false;
+    var shared = state && state.shared;
+    if (shared && shared.readonly) {
+      root.setAttribute("data-hc-readonly", "");
+      showReadonlyNote(shared);
+      // The tree redraws constantly, so this runs on every state rather
+      // than once: a row drawn after the seal must be sealed too.
+      try { sealEditors(); } catch (e) {}
+      return true;
+    }
+    root.removeAttribute("data-hc-readonly");
+    return false;
+  }
+
+  // One line at the top saying what this is and why nothing can be typed.
+  function showReadonlyNote(shared) {
+    if (document.querySelector("[data-hc-note]")) return;
+    var note = el("div", "hc-ro-note");
+    note.setAttribute("data-hc-note", "shared");
+    var who = array(shared && shared.contributors).map(function (c) {
+      return str(c.name);
+    });
+    note.appendChild(el("span", "hc-ro-dot", "●"));
+    note.appendChild(el("span", "", "Shared workspace · read-only"
+      + (who.length ? " · with " + who.join(", ") : "")));
+    var host = document.body || document.documentElement;
+    if (host) host.appendChild(note);
+  }
+
+  function renderSyncStatus(state) {
+    renderShareState(state);
+    var nodes = syncNodes();
+    if (!nodes) return;
+    nodes.button.removeAttribute("data-hc-busy");
+    if (!state || !state.ok) {
+      nodes.button.setAttribute("data-hc-off", "");
+      sayOn(nodes.say, "the workspace could not read its Supabase settings", true);
+      return;
+    }
+    if (!state.configured) {
+      nodes.button.setAttribute("data-hc-off", "");
+      sayOn(nodes.say, "not connected · run `hc supabase setup`, then put your"
+                       + " project URL and anon key in " + str(state.config_path));
+      return;
+    }
+    if (!state.signed_in) {
+      nodes.button.setAttribute("data-hc-off", "");
+      sayOn(nodes.say, "connected, not signed in · run `hc supabase login`");
+      return;
+    }
+    nodes.button.removeAttribute("data-hc-off");
+    sayOn(nodes.say, "signed in as " + str(state.email || "you")
+                     + " · sends this project's goals, TODO rows and notes");
+  }
+
+  // Sharing needs the same sign-in the send does, so the two buttons turn
+  // on together.
+  function renderShareState(state) {
+    var nodes = shareNodes();
+    if (!nodes || !nodes.button) return;
+    if (state && state.ok && state.configured && state.signed_in) {
+      nodes.button.removeAttribute("data-hc-off");
+      loadShares();
+    } else {
+      nodes.button.setAttribute("data-hc-off", "");
+    }
+  }
+
+  // Which goals this reader may change. Empty in a personal workspace,
+  // where the question does not arise and every row is theirs.
+  var lockedRows = {};
+  var rowAuthors = {};
+
+  function noteRowRights(st) {
+    lockedRows = {};
+    rowAuthors = {};
+    if (!st || !st.shared) return;
+    array(st.goals).forEach(function (g) {
+      if (!g || typeof g.id !== "string") return;
+      if (g.shared_readonly) lockedRows[g.id] = true;
+      rowAuthors[g.id] = str(g.shared_author);
+    });
+  }
+
+  // The artifact draws rows without ids on them, so the id is read back
+  // from the selection the same way the rest of the bridge does.
+  function rowGoalId(node) {
+    var row = closestByClass(node, "hc-row");
+    if (!row) return "";
+    var id = row.getAttribute && row.getAttribute("data-hc-goal");
+    return id || "";
+  }
+
+  function editableRow(node) {
+    if (!sharedWorkspace()) return true;
+    var id = rowGoalId(node);
+    if (!id) return true;
+    return !lockedRows[id];
+  }
+
+  function sayNotYours(node) {
+    var id = rowGoalId(node);
+    var who = (id && rowAuthors[id]) || "someone else";
+    flashNote(who + "'s goal — you can read it here, not change it");
+  }
+
+  // A line at the foot, briefly. Reuses the read-only note's place so a
+  // shared workspace has one voice rather than two.
+  var noteTimer = null;
+  function flashNote(words) {
+    var note = document.querySelector("[data-hc-note]");
+    if (!note) {
+      note = el("div", "hc-ro-note");
+      note.setAttribute("data-hc-note", "shared");
+      (document.body || document.documentElement).appendChild(note);
+    }
+    wipe(note);
+    note.appendChild(el("span", "hc-ro-dot", "●"));
+    note.appendChild(el("span", "", words));
+    if (noteTimer) clearTimeout(noteTimer);
+    noteTimer = setTimeout(function () {
+      var live = document.querySelector("[data-hc-note]");
+      if (live && live.parentNode) live.parentNode.removeChild(live);
+      noteTimer = null;
+    }, 4000);
+  }
+
+  function sharedWorkspace() {
+    return !!(serverState && serverState.shared);
+  }
+
+  function shareNodes() {
+    if (!overviewBox) return null;
+    return {
+      button: overviewBox.querySelector("[data-hc-share]"),
+      wrap: overviewBox.querySelector("[data-hc-code]"),
+      box: overviewBox.querySelector("[data-hc-code-box]"),
+      list: overviewBox.querySelector("[data-hc-shares]"),
+      say: overviewBox.querySelector(".hc-overview-sync-say")
+    };
+  }
+
+  // The open shares, without their tokens -- those are gone. Shown so a
+  // reader can see how many doors are open and shut one.
+  function renderShares(rows) {
+    var nodes = shareNodes();
+    if (!nodes || !nodes.list) return;
+    wipe(nodes.list);
+    array(rows).filter(function (r) { return r && !r.revoked_at; })
+      .forEach(function (row) {
+        var line = el("div", "hc-overview-share-row");
+        var x = el("span", "hc-overview-share-x", "×");
+        x.setAttribute("role", "button");
+        x.setAttribute("data-hc-share-revoke", str(row.id));
+        line.appendChild(x);
+        // What the code grants, which is the part worth seeing at a
+        // glance: an editor invite is the one to be careful with.
+        line.appendChild(el("span", "", "joins as " + (str(row.role) || "reader")));
+        // `uses` counts redemptions -- someone joining with it. Opening the
+        // shared workspace from here is not one, and saying "opened" made
+        // an unredeemed code look like it had failed.
+        line.appendChild(el("span", "", Number(row.uses) > 0
+          ? "redeemed " + row.uses + (Number(row.uses) === 1 ? " time" : " times")
+          : "not redeemed yet"));
+        if (row.expires_at) {
+          line.appendChild(el("span", "", "expires " + String(row.expires_at).slice(0, 10)));
+        }
+        nodes.list.appendChild(line);
+      });
+  }
+
+  function loadShares() {
+    return post({ op: "list_shares" }).then(function (result) {
+      if (result && result.ok) renderShares(result.shares);
+      return result;
+    });
+  }
+
+  function makeShare() {
+    var nodes = shareNodes();
+    if (!nodes || !nodes.button || nodes.button.hasAttribute("data-hc-off")
+        || nodes.button.hasAttribute("data-hc-busy")) return false;
+    nodes.button.setAttribute("data-hc-busy", "");
+    sayOn(nodes.say, "minting an invite…");
+    var chip = overviewBox
+      && overviewBox.querySelector("[data-hc-share-role]");
+    var wanted = chip ? chip.getAttribute("data-hc-share-role") : "reader";
+    post({ op: "create_share", label: "shared from the workspace",
+           expires_in_days: 30, role: wanted }).then(function (result) {
+      var live = shareNodes();
+      if (!live) return;
+      if (live.button) live.button.removeAttribute("data-hc-busy");
+      if (!result || !result.ok || !result.code) {
+        sayOn(live.say, (result && result.error) || "could not make a share",
+              true);
+        return;
+      }
+      if (live.wrap) live.wrap.setAttribute("data-hc-on", "");
+      var handOver = result.code;
+      if (live.box) { live.box.value = handOver; live.box.focus(); live.box.select(); }
+      sayOn(live.say, "invite ready · joins as "
+        + str(result.role || "reader") + " · expires in 30 days");
+      // The same clipboard path the hand-off uses: async first,
+      // hidden-textarea when that is missing or refuses.
+      handoffToClipboard(handOver);
+      loadShares();
+    });
+    return true;
+  }
+
+  function revokeShare(id) {
+    post({ op: "revoke_share", id: id }).then(function () { loadShares(); });
+    return true;
+  }
+
+  function runSync() {
+    var nodes = syncNodes();
+    if (!nodes || nodes.button.hasAttribute("data-hc-off")
+        || nodes.button.hasAttribute("data-hc-busy")) return false;
+    nodes.button.setAttribute("data-hc-busy", "");
+    sayOn(nodes.say, "sending…");
+    post({ op: "sync_supabase" }).then(function (result) {
+      var live = syncNodes();
+      if (!live) return;
+      live.button.removeAttribute("data-hc-busy");
+      if (!result || !result.ok) {
+        sayOn(live.say, (result && result.error) || "the send did not go through",
+              true);
+        return;
+      }
+      var sent = result.sent || {};
+      sayOn(live.say, "sent · " + (sent.goals || 0) + " goals, "
+                      + (sent.todos || 0) + " TODO rows, "
+                      + (sent.chats || 0) + " chats");
+    });
+    return true;
   }
 
   function renderOverview() {
@@ -3257,6 +3749,11 @@
     closeProjectMenu();
     root.setAttribute("data-hc-overview", "");
     renderOverview();
+    // A reopened overview keeps the box it drew before, whose record is as
+    // old as that drawing; the fetch is a no-op when renderOverview just
+    // made a new one and started the same read.
+    loadProjectJson();
+    loadSyncStatus();
     return true;
   }
 
@@ -3273,10 +3770,10 @@
   }
 
   function setOverviewPane(name) {
-    if (name !== "readme" && name !== "files") return false;
+    if (["readme", "files", "json"].indexOf(name) < 0) return false;
     overviewPane = name;
     if (!overviewBox) return true;
-    ["readme", "files"].forEach(function (pane) {
+    ["readme", "files", "json"].forEach(function (pane) {
       var node = overviewPaneNode(pane);
       if (!node) return;
       if (pane === name) node.setAttribute("data-hc-pane-on", "");
@@ -3338,6 +3835,37 @@
       if (tab) {
         stop();
         if (tab.getAttribute("data-hc-overview-tab") === "goals") closeOverview();
+        return;
+      }
+      var revoke = target.getAttribute
+        && target.getAttribute("data-hc-share-revoke");
+      if (revoke) { stop(); revokeShare(revoke); return; }
+      var roleChip = closestByClass(target, "hc-overview-share-role");
+      if (roleChip) {
+        stop();
+        var next = roleChip.getAttribute("data-hc-share-role") === "editor"
+          ? "reader" : "editor";
+        roleChip.setAttribute("data-hc-share-role", next);
+        roleChip.textContent = "as " + next;
+        return;
+      }
+      var shareBtn = closestByClass(target, "hc-overview-share-btn");
+      if (shareBtn) {
+        stop();
+        if (shareBtn.getAttribute("data-hc-code-copy") !== null) {
+          var boxNode = overviewBox
+            && overviewBox.querySelector("[data-hc-code-box]");
+          if (boxNode) { boxNode.focus(); boxNode.select();
+                         handoffToClipboard(boxNode.value); }
+        } else {
+          makeShare();
+        }
+        return;
+      }
+      var sendUp = closestByClass(target, "hc-overview-sync-btn");
+      if (sendUp) {
+        stop();
+        runSync();
         return;
       }
       var paneTab = closestByClass(target, "hc-overview-pane-tab");
@@ -3445,7 +3973,298 @@
     l2.appendChild(text("seconds"));
     sec.appendChild(l2);
     box.appendChild(sec);
+
+    // Supabase: where this workspace's projects are sent. The URL and the
+    // anon key are typed and kept; the password is typed and is not -- it
+    // buys a token on its way past and the field is emptied behind it.
+    var sb = document.createElement("div");
+    sb.className = "hc-settings-sec";
+    sb.setAttribute("data-hc-settings-sec", "supabase");
+    var sbh = document.createElement("div");
+    sbh.className = "hc-settings-sec-head";
+    sbh.textContent = "Supabase";
+    sb.appendChild(sbh);
+    var field = function (label, name, type, placeholder) {
+      var wrap = document.createElement("label");
+      wrap.className = "hc-settings-field";
+      wrap.appendChild(text(label));
+      var input = document.createElement("input");
+      input.type = type;
+      input.setAttribute("type", type);
+      input.setAttribute("data-hc-sb", name);
+      input.setAttribute("placeholder", placeholder);
+      input.setAttribute("spellcheck", "false");
+      input.setAttribute("autocomplete", "off");
+      input.setAttribute("autocapitalize", "off");
+      wrap.appendChild(input);
+      sb.appendChild(wrap);
+      return input;
+    };
+    field("Project URL", "url", "text", "https://your-ref.supabase.co");
+    field("Anon (public) key", "anon_key", "text", "eyJ…");
+    var keyHint = document.createElement("div");
+    keyHint.className = "hc-settings-hint";
+    keyHint.textContent = "Project Settings → API. Use the anon key, never"
+      + " the service key.";
+    sb.appendChild(keyHint);
+    var saveRow = document.createElement("div");
+    saveRow.className = "hc-settings-row";
+    var save = document.createElement("span");
+    save.className = "hc-settings-btn";
+    save.setAttribute("role", "button");
+    save.setAttribute("data-hc-sb-do", "save");
+    save.textContent = "Connect";
+    saveRow.appendChild(save);
+    sb.appendChild(saveRow);
+    field("Display name", "display_name", "text", "David");
+    var nameHint = document.createElement("div");
+    nameHint.className = "hc-settings-hint";
+    nameHint.textContent = "What your goals are signed with in a shared"
+      + " workspace.";
+    sb.appendChild(nameHint);
+    field("Email", "email", "text", "you@example.com");
+    var pw = field("Password", "password", "password", "not stored");
+    pw.setAttribute("autocomplete", "new-password");
+    var pwHint = document.createElement("div");
+    pwHint.className = "hc-settings-hint";
+    pwHint.textContent = "Exchanged once for a token. Never written to disk"
+      + " and never sent back to this page.";
+    sb.appendChild(pwHint);
+    var authRow = document.createElement("div");
+    authRow.className = "hc-settings-row";
+    var signIn = document.createElement("span");
+    signIn.className = "hc-settings-btn";
+    signIn.setAttribute("role", "button");
+    signIn.setAttribute("data-hc-sb-do", "login");
+    signIn.textContent = "Sign in";
+    authRow.appendChild(signIn);
+    var signOut = document.createElement("span");
+    signOut.className = "hc-settings-btn";
+    signOut.setAttribute("data-hc-quiet", "");
+    signOut.setAttribute("role", "button");
+    signOut.setAttribute("data-hc-sb-do", "logout");
+    signOut.textContent = "Sign out";
+    authRow.appendChild(signOut);
+    sb.appendChild(authRow);
+    var say = document.createElement("div");
+    say.className = "hc-settings-say";
+    say.setAttribute("data-hc-sb-say", "");
+    say.textContent = "checking…";
+    sb.appendChild(say);
+    box.appendChild(sb);
+
+    // Joining someone else's project. A code carries where to go as well
+    // as the token, so this works before Supabase is configured at all --
+    // the only thing it cannot do without is an account to join to.
+    var join = document.createElement("div");
+    join.className = "hc-settings-sec";
+    join.setAttribute("data-hc-settings-sec", "shared");
+    var jh = document.createElement("div");
+    jh.className = "hc-settings-sec-head";
+    jh.textContent = "Shared workspaces";
+    join.appendChild(jh);
+    var jwrap = document.createElement("label");
+    jwrap.className = "hc-settings-field";
+    jwrap.appendChild(text("Invite code"));
+    var jin = document.createElement("input");
+    jin.type = "text";
+    jin.setAttribute("type", "text");
+    jin.setAttribute("data-hc-join", "");
+    jin.setAttribute("placeholder", "hcjoin1_…");
+    jin.setAttribute("spellcheck", "false");
+    jin.setAttribute("autocomplete", "off");
+    jwrap.appendChild(jin);
+    join.appendChild(jwrap);
+    var jrow = document.createElement("div");
+    jrow.className = "hc-settings-row";
+    var jbtn = document.createElement("span");
+    jbtn.className = "hc-settings-btn";
+    jbtn.setAttribute("role", "button");
+    jbtn.setAttribute("data-hc-sb-do", "join");
+    jbtn.textContent = "Join";
+    jrow.appendChild(jbtn);
+    join.appendChild(jrow);
+    var jlist = document.createElement("div");
+    jlist.className = "hc-settings-sec";
+    jlist.setAttribute("data-hc-shared-list", "");
+    jlist.style.padding = "0";
+    join.appendChild(jlist);
+    var jsay = document.createElement("div");
+    jsay.className = "hc-settings-say";
+    jsay.setAttribute("data-hc-join-say", "");
+    join.appendChild(jsay);
+    box.appendChild(join);
     return box;
+  }
+
+  // The panel is drawn once and filled from the server: the key is shown
+  // back so a reader can see which project they are pointed at, the
+  // password field is left empty always.
+  function settingsSupabaseFill(state) {
+    if (!settingsPanelBox) return;
+    var at = function (name) {
+      return settingsPanelBox.querySelector('[data-hc-sb="' + name + '"]');
+    };
+    var say = settingsPanelBox.querySelector("[data-hc-sb-say]");
+    if (!say) return;
+    if (!state || !state.ok) {
+      say.setAttribute("data-hc-bad", "");
+      say.textContent = "could not read the Supabase settings";
+      return;
+    }
+    say.removeAttribute("data-hc-bad");
+    var email = at("email");
+    if (email && !email.value) email.value = str(state.email);
+    var named = at("display_name");
+    if (named && document.activeElement !== named) {
+      named.value = str(state.display_name);
+    }
+    var pw = at("password");
+    if (pw) pw.value = "";
+    if (!state.configured) {
+      say.textContent = "not connected · paste the project URL and anon key,"
+        + " then Connect";
+    } else if (!state.signed_in) {
+      say.textContent = "connected · sign in to send projects";
+    } else {
+      say.textContent = "signed in as " + str(state.email || "you")
+        + " · the project overview can send this project";
+    }
+  }
+
+  // The projects this account has been let into. Opening one is a second
+  // window on a second port -- this one stays the reader's own.
+  function renderSharedList(rows) {
+    if (!settingsPanelBox) return;
+    var host = settingsPanelBox.querySelector("[data-hc-shared-list]");
+    if (!host) return;
+    wipe(host);
+    array(rows).forEach(function (row) {
+      if (!row || !row.id) return;
+      var line = el("div", "hc-settings-row");
+      var open = el("span", "hc-settings-btn", "Open");
+      open.setAttribute("data-hc-quiet", "");
+      open.setAttribute("role", "button");
+      open.setAttribute("data-hc-open-shared", str(row.id));
+      line.appendChild(open);
+      line.appendChild(el("span", "hc-settings-say",
+                          str(row.name) || "untitled project"));
+      host.appendChild(line);
+    });
+  }
+
+  function loadSharedList() {
+    return post({ op: "shared_projects" }).then(function (result) {
+      if (result && result.ok) renderSharedList(result.projects);
+      return result;
+    });
+  }
+
+  function joinSay(words, bad) {
+    if (!settingsPanelBox) return;
+    var node = settingsPanelBox.querySelector("[data-hc-join-say]");
+    if (!node) return;
+    node.textContent = words || "";
+    if (bad) node.setAttribute("data-hc-bad", "");
+    else node.removeAttribute("data-hc-bad");
+  }
+
+  function openShared(projectId) {
+    joinSay("opening…");
+    return post({ op: "open_shared", project_id: projectId })
+      .then(function (result) {
+        if (!result || !result.ok || !result.url) {
+          joinSay((result && result.error) || "could not open it", true);
+          return null;
+        }
+        joinSay("opened at " + result.url);
+        try { window.open(result.url, "_blank"); } catch (e) {}
+        return result.url;
+      });
+  }
+
+  function joinShared() {
+    if (!settingsPanelBox) return false;
+    var field = settingsPanelBox.querySelector("[data-hc-join]");
+    var code = field ? String(field.value || "").trim() : "";
+    if (!code) { joinSay("paste the invite code first", true); return false; }
+    joinSay("joining…");
+    post({ op: "redeem_invite", code: code }).then(function (result) {
+      if (!result || !result.ok) {
+        joinSay((result && result.error) || "that invitation is not open", true);
+        return;
+      }
+      if (field) field.value = "";
+      if (result.already) {
+        // Redeeming your own project's code joins nobody -- the counter on
+        // that invite stays at nothing, and saying "joined" here made the
+        // list underneath look wrong.
+        joinSay("that is your own project — nothing to join"
+                + (result.url ? " · opening it" : ""));
+      } else {
+        joinSay("joined " + (str(result.name) || "the project")
+                + " as " + (str(result.role) || "reader")
+                + (result.url ? " · opening…" : ""));
+      }
+      loadSharedList();
+      if (result.url) { try { window.open(result.url, "_blank"); } catch (e) {} }
+    });
+    return true;
+  }
+
+  function settingsSupabaseLoad() {
+    return fetchJSON("/api/supabase").then(function (result) {
+      settingsSupabaseFill(result);
+      // The overview's button reads the same state; keep the two agreeing.
+      if (overviewShown()) renderSyncStatus(result);
+      if (result && result.ok && result.signed_in) loadSharedList();
+      return result;
+    });
+  }
+
+  function settingsSupabaseDo(what) {
+    if (!settingsPanelBox) return false;
+    var at = function (name) {
+      var node = settingsPanelBox.querySelector('[data-hc-sb="' + name + '"]');
+      return node ? String(node.value || "").trim() : "";
+    };
+    var say = settingsPanelBox.querySelector("[data-hc-sb-say]");
+    var button = settingsPanelBox.querySelector(
+      '[data-hc-sb-do="' + what + '"]');
+    if (button && button.hasAttribute("data-hc-busy")) return false;
+    if (button) button.setAttribute("data-hc-busy", "");
+    if (say) { say.removeAttribute("data-hc-bad"); say.textContent = "working…"; }
+    var body = { op: "supabase_logout" };
+    if (what === "save") {
+      body = { op: "set_supabase_config", url: at("url"),
+               anon_key: at("anon_key"), email: at("email"),
+               display_name: at("display_name") };
+    } else if (what === "login") {
+      var node = settingsPanelBox.querySelector('[data-hc-sb="password"]');
+      body = { op: "supabase_login", email: at("email"),
+               password: node ? String(node.value || "") : "",
+               display_name: at("display_name") };
+      // Out of the page the moment it is on its way: the reply never
+      // carries it back, and nothing redraws it.
+      if (node) node.value = "";
+    }
+    post(body).then(function (result) {
+      var live = settingsPanelBox
+        && settingsPanelBox.querySelector('[data-hc-sb-do="' + what + '"]');
+      if (live) live.removeAttribute("data-hc-busy");
+      var line = settingsPanelBox
+        && settingsPanelBox.querySelector("[data-hc-sb-say]");
+      if (!result || !result.ok) {
+        if (line) {
+          line.setAttribute("data-hc-bad", "");
+          line.textContent = (result && result.error) || "that did not work";
+        }
+        return;
+      }
+      settingsSupabaseFill(result);
+      if (overviewShown()) renderSyncStatus(result);
+    });
+    return true;
   }
 
   function renderSettingsPanel() {
@@ -3467,6 +4286,9 @@
     settingsPanelBox = settingsPanelNode();
     (document.body || document.documentElement).appendChild(settingsPanelBox);
     renderSettingsPanel();
+    // Whether it is connected, and as whom: read when the panel opens, not
+    // held from the last time it did.
+    settingsSupabaseLoad();
     renderGear();
     return settingsPanelBox;
   }
@@ -3870,6 +4692,18 @@
       // bridge measures the brand and writes --hc-pills-left.
       "[data-hc-launch] .hc-titlerow{position:fixed;top:0;left:var(--hc-pills-left,120px);height:37px;margin:0;padding:0!important;align-items:center!important;z-index:20}",
       "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
+      // Read-only: the controls that write are taken off the page rather
+      // than left to fail. Anything that only reads -- folding, selecting,
+      // the search, the panes -- is untouched.
+      "[data-hc-launch][data-hc-readonly] [title=\"Delete goal\"]{display:none!important}",
+      "[data-hc-launch][data-hc-readonly] .hc-todo-build,[data-hc-launch][data-hc-readonly] .hc-todo-cancel,[data-hc-launch][data-hc-readonly] .hc-todo-copy,[data-hc-launch][data-hc-readonly] .hc-todo-reopen,[data-hc-launch][data-hc-readonly] .hc-todo-reply,[data-hc-launch][data-hc-readonly] .hc-rail-generate,[data-hc-launch][data-hc-readonly] .hc-rail-select{display:none!important}",
+      "[data-hc-launch][data-hc-readonly] .hc-overview-sync,[data-hc-launch][data-hc-readonly] .hc-overview-code,[data-hc-launch][data-hc-readonly] .hc-overview-shares{display:none!important}",
+      "[data-hc-launch][data-hc-readonly] .hc-src-rm,[data-hc-launch][data-hc-readonly] .hc-overview-objective{display:none!important}",
+      // A caret in a field nothing will save is the cruellest part of it.
+      "[data-hc-launch][data-hc-readonly] textarea,[data-hc-launch][data-hc-readonly] [contenteditable]{caret-color:transparent!important;cursor:default!important}",
+      "[data-hc-launch] .hc-ro-note{position:fixed;left:0;right:0;bottom:0;z-index:100004;display:flex;align-items:center;justify-content:center;gap:8px;padding:5px 12px;background:var(--panel2,#f6f6f6);border-top:1px solid var(--bd,#e3e3e3);color:var(--mut,#575757);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      "[data-hc-launch] .hc-ro-dot{color:var(--acc,#a5492a);font-size:8px}",
+      "[data-hc-launch] .hc-who{flex:none;font:600 12.5px 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap}",
       "[data-hc-launch] .hc-chiprow{gap:6px!important}",
       "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
       "[data-hc-launch] .hc-chip:hover{border-color:var(--bd2);text-decoration:none!important}",
@@ -6192,6 +7026,19 @@
       drag = null;
       document.documentElement.removeAttribute("data-hc-dragging");
     });
+    // Rename-on-double-click is bound inside the artifact's own row, so a
+    // row that may not be edited has to stop the event before it gets
+    // there. Whole-workspace when the reader may write nothing; per row
+    // when they may write some of it.
+    document.addEventListener("dblclick", function (e) {
+      var whole = document.documentElement
+        && document.documentElement.getAttribute("data-hc-readonly") !== null;
+      if (whole || !editableRow(e.target)) {
+        if (!whole) sayNotYours(e.target);
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    }, true);
     document.addEventListener("dblclick", function (e) {
       var hit = dividerAt(e.clientX, e.clientY);
       if (!hit) return;
@@ -6721,10 +7568,17 @@
     // bridge never reaches this function at all.
     var chat = (typeof window !== "undefined" && window.__hcScope === "chat");
     var parts = [
+      // Whose goal each row is, in a shared workspace. The row
+      // model carries it and the line draws it; both are inert
+      // when nothing sets it, which is every personal workspace.
+      ["id: n.id, isReal: true, isAdd: false, title: n.title || 'Untitled', rawTitle: n.title,",
+       "id: n.id, isReal: true, isAdd: false, title: n.title || 'Untitled', rawTitle: n.title, who: n.who || '',"],
+      ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
+       "<sc-if value=\"{{ row.who }}\" hint-placeholder-val=\"{{ '' }}\"><span class=\"hc-who\">{{ row.who }}:</span></sc-if>\n<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"],
       // One line per goal. At rail width a wrapped title overlapped
       // the row under it, so the row says which span is the title.
       ["<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">",
-       chat ? "<div class=\"hc-row\" sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"
+       chat ? "<div class=\"hc-row\" data-hc-goal=\"{{ row.id }}\" sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"
             : "<div sc-camel-on-click=\"{{ row.sel }}\" sc-camel-on-double-click=\"{{ row.edit }}\" sc-camel-on-mouse-down=\"{{ row.dragStart }}\" ref=\"{{ row.rowRef }}\" style=\"display:flex;align-items:center;gap:7px;height:29px;padding:0 8px;border-radius:2px;cursor:pointer;background:{{ row.bg }};opacity:{{ row.dragOp }};box-shadow:{{ row.dropShadow }}\" style-hover=\"background:{{ row.hovBg }}\">"],
       ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
        chat ? "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span class=\"hc-rowtitle\" style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"
@@ -7623,6 +8477,22 @@
     renderOverview: renderOverview,
     overviewShown: overviewShown,
     setOverviewPane: setOverviewPane,
+    loadProjectJson: loadProjectJson,
+    loadSyncStatus: loadSyncStatus,
+    settingsSupabaseLoad: settingsSupabaseLoad,
+    settingsSupabaseFill: settingsSupabaseFill,
+    settingsSupabaseDo: settingsSupabaseDo,
+    joinShared: joinShared,
+    openShared: openShared,
+    loadSharedList: loadSharedList,
+    renderSharedList: renderSharedList,
+    renderSyncStatus: renderSyncStatus,
+    runSync: runSync,
+    reportSharedSave: reportSharedSave,
+    makeShare: makeShare,
+    loadShares: loadShares,
+    renderShares: renderShares,
+    revokeShare: revokeShare,
     saveObjective: saveObjective,
     projectCss: function () { return PROJECT_CSS; },
     projectTheme: projectTheme,
@@ -7704,7 +8574,10 @@
     watchSelection();
     watchPane();
     watchRunFeed();
-    setInterval(refreshState, 1500);
+    // A personal workspace reads files on the same disk; a shared one asks
+    // Postgres across a network. Same poll for both would be a query every
+    // second and a half for an answer that rarely changes.
+    setInterval(refreshState, sharedWorkspace() ? 5000 : 1500);
     setTimeout(refreshState, 0);
   }
   if (document.readyState === "loading") {
