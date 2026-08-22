@@ -617,7 +617,7 @@ def _project_identity(trajdir, chat_scoped, session_id):
     is kept once per directory, not once per chat.
     """
     empty = {"cwd": "", "name": "", "branch": "", "remote": "",
-             "objective": ""}
+             "objective": "", "description": "", "sources": []}
     if not (chat_scoped and session_id):
         return empty
     try:
@@ -628,10 +628,38 @@ def _project_identity(trajdir, chat_scoped, session_id):
     if not cwd:
         return empty
     path = Path(str(cwd))
+    record = _load_project(root, str(path))
     return {"cwd": str(path), "name": path.name,
             "branch": AE._git_branch(str(path)) or "",
             "remote": _git_remote(str(path)),
-            "objective": _load_project(root, str(path)).get("objective", "")}
+            "objective": record.get("objective", ""),
+            # Written beside the objective and read back here: the overview
+            # offers a field for it, and a description kept only in the
+            # project file would be invisible until that file was opened.
+            "description": record.get("description", ""),
+            # What the reader attached to the project: the overview lists
+            # them beside the repository and reads each one on demand.
+            "sources": record.get("sources", [])}
+
+
+def _all_projects(root, active=""):
+    """What the switcher lists: the projects somebody made.
+
+    It used to also list every directory this machine had ever run Claude
+    Code in, which is a list of where you have been rather than a list of
+    what you are working on -- ~/Downloads was on it. A project is made by
+    hand now; the one being looked at is on the list whether or not it has
+    a record yet, because leaving it off would say it does not exist.
+    """
+    rows = {PS._resolved(row["cwd"]): row for row in PS.list_projects(root)}
+    here = PS._resolved(active) if active else ""
+    if here and here not in rows:
+        rows[here] = {"cwd": active, "name": Path(here).name or here,
+                      "objective": "", "description": "",
+                      "generated_at": "", "goals": 0, "chats": 0}
+    return sorted(rows.values(),
+                  key=lambda row: (row.get("generated_at") or "",
+                                   row.get("name") or ""), reverse=True)
 
 
 def _manifest_cwd(session_id, root):
@@ -692,6 +720,57 @@ def project_file(root, relpath):
     text = raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")
     return {"ok": True, "path": str(target.relative_to(base)),
             "text": text, "truncated": truncated}
+
+
+def source_body(root, cwd, source):
+    """What one attached source says, for the overview's right-hand pane.
+
+    Each kind is read the way that kind can be read, and a kind that cannot
+    be read from here says so rather than being faked:
+
+    * a document is a file of the project, under the same containment rule
+      the file pane uses -- a path outside the project reads nothing;
+    * a conversation is a chat of this vault, shown as its turns;
+    * a repository is a name and a link. Nothing is fetched over the
+      network: this pane reads the disk.
+    """
+    kind = str((source or {}).get("type") or "")
+    label = str((source or {}).get("label") or "")
+    if kind == "chat":
+        session = label.strip()
+        try:
+            CS.paths(session, root)
+        except ValueError:
+            return {"ok": False, "kind": kind,
+                    "error": "that is not a chat of this vault"}
+        rows = CS.load_prompts(session, root)
+        turns = [{"role": str(r.get("role") or "user"),
+                  "text": str(r.get("text") or "")[:2000],
+                  "created_at": str(r.get("created_at") or "")}
+                 for r in rows if isinstance(r, dict)][-40:]
+        if not turns:
+            return {"ok": False, "kind": kind,
+                    "error": "that chat has no turns yet"}
+        return {"ok": True, "kind": kind, "turns": turns,
+                "total": len(rows)}
+    if kind == "github":
+        return {"ok": True, "kind": kind, "label": label}
+    if not cwd:
+        return {"ok": False, "kind": kind, "error": "no project"}
+    if label.startswith(("http://", "https://")):
+        return {"ok": True, "kind": kind, "label": label}
+    # An absolute path inside the project is named relative to it; one
+    # outside is refused by project_file's own containment check.
+    rel = label
+    try:
+        base = Path(cwd).expanduser().resolve()
+        here = Path(label).expanduser()
+        if here.is_absolute():
+            rel = str(here.resolve().relative_to(base))
+    except (OSError, ValueError, RuntimeError):
+        return {"ok": False, "kind": kind,
+                "error": "that file is outside the project"}
+    return dict(project_file(cwd, rel), kind=kind)
 
 
 def project_json(root, cwd):
@@ -928,6 +1007,83 @@ def open_shared(project_id, trajdir=None):
             return {"ok": False, "error": "no free port for a shared workspace"}
         _SHARED_SERVERS[pid] = started
         return {"ok": True, "url": started["url"], "already": False}
+
+
+_PROJECT_SERVERS = {}
+
+
+def open_project(cwd, trajdir=None):
+    """Bring up another project's workspace beside this one.
+
+    A workspace is chat-scoped -- it serves one session's goals -- so the
+    newest chat started in that directory is the one opened. A directory the
+    vault has never held a chat for has nothing to serve, and says so rather
+    than opening an empty page.
+    """
+    root = None
+    if trajdir is not None:
+        try:
+            _, root = _chat_identity(_scope(trajdir))
+        except Exception:
+            root = None
+    key = PS._resolved(cwd)
+    sessions = PS.project_sessions(root, cwd)
+    if not sessions:
+        return {"ok": False,
+                "error": "no chat has been started in that directory yet"}
+    session_id = sessions[-1]
+    with _SHARED_GUARD:
+        held = _PROJECT_SERVERS.get(key)
+        if held and held.get("thread") and held["thread"].is_alive():
+            return {"ok": True, "url": held["url"], "already": True,
+                    "session_id": held["session_id"]}
+        started = _serve_session(session_id, root)
+        if not started:
+            return {"ok": False, "error": "no free port for a workspace"}
+        started["session_id"] = session_id
+        _PROJECT_SERVERS[key] = started
+        return {"ok": True, "url": started["url"], "already": False,
+                "session_id": session_id}
+
+
+def _serve_session(session_id, root, port=8870):
+    """A second chat-scoped server, in a thread of this process."""
+    try:
+        session_dir = CS.paths(str(session_id), root).session_dir
+    except ValueError:
+        return None
+    holder = {}
+    ready = threading.Event()
+
+    def note(url, _srv):
+        holder["url"] = url
+        ready.set()
+
+    thread = threading.Thread(
+        target=lambda: run(port=port, open_browser=False, trajdir=session_dir,
+                           ready_callback=note, label="Project",
+                           idle_timeout=None, replace=False),
+        daemon=True)
+    thread.start()
+    if not ready.wait(12) or not holder.get("url"):
+        return None
+    return {"url": holder["url"], "thread": thread}
+
+
+def new_project(cwd):
+    """Make a directory a project: write it an empty record so the switcher
+    can see it before any chat has been started there."""
+    text = str(cwd or "").strip()
+    if not text:
+        return {"ok": False, "error": "give a directory"}
+    try:
+        where = Path(text).expanduser()
+    except (OSError, RuntimeError, ValueError):
+        return {"ok": False, "error": "that is not a directory path"}
+    if not where.is_dir():
+        return {"ok": False, "error": "no such directory: " + str(where)}
+    PS.touch(None, str(where))
+    return {"ok": True, "cwd": str(where.resolve()), "name": where.name}
 
 
 def _empty_shared(project_id):
@@ -1194,6 +1350,17 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
+        if kind == "open_project":
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            where = op.get("cwd")
+            if not isinstance(where, str) or not where:
+                return {"ok": False, "error": "which project?"}
+            return open_project(where, trajdir)
+        if kind == "new_project":
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            return new_project(op.get("cwd"))
         if kind == "set_project_objective":
             # What the project is for, in the reader's words: kept once per
             # project directory, so every chat in it reads the same line.
@@ -1448,6 +1615,23 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             child["status"] = ("active" if child["status"] == "completed"
                                else "completed")
             child["updated_at"] = GM._now()
+        elif kind == "set_relevance" and g:
+            # Promoting a goal out of the fold. The verdict is a model's
+            # judgement; the reader's overrules it, and is stamped against
+            # the objective standing now so it is not later called stale.
+            wanted = op.get("relevance")
+            if wanted not in ("core", "supporting", "unrelated"):
+                return {"ok": False, "error": "unknown relevance"}
+            g["relevance"] = wanted
+            g["relevance_why"] = "set by hand"
+            try:
+                from . import chat_synth as CSY
+                session_id, root = _chat_identity(trajdir)
+                cwd = CS.load_manifest(session_id, root).get("cwd")
+                g["relevance_for"] = CSY.project_objective(cwd, root)
+            except Exception:  # noqa: BLE001 - the verdict still stands
+                pass
+            g["updated_at"] = GM._now()
         elif kind == "add_todo" and g and op.get("text", "").strip():
             goals["goals"].append(GM.new_goal(
                 GM.child_goal_id(goals, g["id"]),
@@ -1618,6 +1802,25 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "root": who["cwd"],
                                  "tree": (project_tree(who["cwd"])
                                           if who["cwd"] else [])})
+            elif self.path.split("?", 1)[0] == "/api/source":
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                want = (query.get("id") or [""])[0]
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                root = (_chat_identity(trajdir)[1]
+                        if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                found = None
+                for row in who.get("sources") or []:
+                    if str(row.get("id")) == want:
+                        found = row
+                        break
+                if found is None:
+                    self._send(200, {"ok": False, "error": "no such source"})
+                else:
+                    self._send(200, source_body(root, who["cwd"], found))
             elif self.path.split("?", 1)[0] == "/api/file":
                 # One text file of the project, named relative to its root.
                 from urllib.parse import parse_qs, urlsplit
@@ -1651,6 +1854,17 @@ class H(BaseHTTPRequestHandler):
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
                 self._send(200, js, "application/javascript")
+            elif self.path == "/api/projects":
+                if not self.server.chat_scoped:
+                    self._send(200, {"ok": False, "error": "chat scope only"})
+                else:
+                    session_id, root = _chat_identity(self.server.trajdir)
+                    who = _project_identity(
+                        self.server.trajdir, True, session_id)
+                    self._send(200, {"ok": True,
+                                     "active": who["cwd"],
+                                     "projects": _all_projects(
+                                         root, who["cwd"])})
             elif self.path == "/api/chats":
                 if not self.server.chat_scoped:
                     self._send(200, {"ok": False, "error": "chat scope only"})
@@ -2000,12 +2214,40 @@ def _follow_transcript(server, stop, interval=None):
                     continue
                 CS.ingest_transcript(target, transcript, root=root)
                 seen[target] = mark
+                # Having noticed the work, ask for it to be done. Ingestion
+                # marks the analyzer "pending" -- a state that means "there
+                # is work and nobody is doing it", and so should never be
+                # somewhere the system rests. Until now only a hook started
+                # a worker, so a chat whose hooks were quiet ingested every
+                # turn faithfully and analysed none of them.
+                #
+                # spawn_refresh coalesces: with a worker already running this
+                # only records the request, so a busy chat does not pile up
+                # processes.
+                _request_analysis(target, root)
             except (OSError, ValueError, TypeError, TimeoutError):
                 # The lock was busy, or the file moved between stat and
                 # read: the next tick tries again from the manifest's cursor.
                 continue
             except Exception:  # noqa: BLE001 - never take the server down
                 continue
+
+
+def _request_analysis(session_id, root):
+    """Start a worker for freshly ingested turns, if one is not already up.
+
+    Best effort by design: inference is worth having and never worth taking
+    the workspace down for, so every failure here is swallowed and the next
+    tick tries again from the same pending state.
+    """
+    try:
+        from . import chat_synth
+    except Exception:      # noqa: BLE001
+        return
+    try:
+        chat_synth.spawn_refresh(session_id, root)
+    except Exception:      # noqa: BLE001 - a stalled analyzer, not a dead server
+        pass
 
 
 def _resolved_idle_timeout(value, chat_scoped):
@@ -2245,6 +2487,14 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "important_item_ids": prev.get("important_item_ids", []),
                         "prompt_ids": prev.get("prompt_ids", []),
                         "sources": prev.get("sources", []),
+                        # Carried, not recomputed. The browser posts the
+                        # whole tree back on every edit and this rebuilds
+                        # each goal from a fixed field list -- so a field
+                        # missing here is not merely unsaved, it is erased
+                        # by the next thing the reader types.
+                        "relevance": prev.get("relevance", "core"),
+                        "relevance_why": prev.get("relevance_why", ""),
+                        "relevance_for": prev.get("relevance_for", ""),
                         "opening": prev.get("opening", ""),
                         "auto_prompt_ids": prev.get("auto_prompt_ids", []),
                         "detached_prompt_ids": prev.get("detached_prompt_ids", []),

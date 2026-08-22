@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import chat_state  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
+from human_compact.trajectory import project_store as PS  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
 
 from test_chat_ui_server import get_json, post_json  # noqa: E402
@@ -117,7 +118,8 @@ class ProjectTests(unittest.TestCase):
             out = post_json(url + "/api/op", {"op": "set_project_objective",
                                               "objective": "x"})
         self.assertEqual({"cwd": "", "name": "", "branch": "", "remote": "",
-                          "objective": ""}, who)
+                          "objective": "", "description": "",
+                          "sources": []}, who)
         self.assertEqual([], tree["tree"])
         self.assertFalse(out["ok"])
 
@@ -217,3 +219,43 @@ class ProjectTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectListTests(unittest.TestCase):
+    """A project is made by hand, and the switcher lists only those.
+
+    It used to also list every directory this machine had run Claude Code
+    in, read out of the transcripts under ~/.claude/projects. That is a
+    list of where you have been rather than of what you are working on --
+    ~/Downloads and /private/tmp were on it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_a_directory_with_chats_but_no_record_is_not_a_project(self):
+        session = "chat-here"
+        paths = chat_state.paths(session, self.root)
+        paths.session_dir.mkdir(parents=True)
+        paths.manifest.write_text(json.dumps(
+            {"session_id": session, "cwd": str(self.root / "wandered")}))
+        self.assertEqual([], PS.list_projects(self.root))
+
+    def test_a_record_makes_it_one(self):
+        PS.touch(self.root, str(self.root / "made"))
+        self.assertEqual(["made"],
+                         [r["name"] for r in PS.list_projects(self.root)])
+
+    def test_touching_a_project_twice_leaves_what_was_written(self):
+        PS.save_project(self.root, str(self.root / "made"),
+                        {"objective": "Ship it."})
+        PS.touch(self.root, str(self.root / "made"))
+        self.assertEqual("Ship it.",
+                         PS.load_project(self.root, str(self.root / "made"))["objective"])
+
+    def test_the_one_being_looked_at_is_listed_even_with_no_record(self):
+        here = str(self.root / "unwritten")
+        rows = ui._all_projects(self.root, here)
+        self.assertEqual([here], [r["cwd"] for r in rows])

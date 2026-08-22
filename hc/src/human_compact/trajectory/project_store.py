@@ -165,6 +165,56 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     return section
 
 
+def list_projects(root: Optional[Path]) -> List[Dict[str, Any]]:
+    """Every project this vault has a file for, newest first.
+
+    The files are keyed by a digest of the directory, so the directory has
+    to be read back out of each one rather than recovered from its name. A
+    file whose ``cwd`` is missing is skipped: without it there is nothing to
+    point the switcher at.
+    """
+    base = CS._state_base(root) / "projects"
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        entries = sorted(base.glob("*.json"))
+    except OSError:
+        return []
+    for entry in entries:
+        try:
+            value = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        section = value.get("project")
+        section = section if isinstance(section, dict) else {}
+        cwd = section.get("cwd") or value.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            continue
+        key = _resolved(cwd)
+        out[key] = {
+            "cwd": cwd,
+            "name": str(section.get("name") or Path(key).name or key),
+            "objective": str(section.get("objective") or ""),
+            "description": str(section.get("description") or ""),
+            "generated_at": str(value.get("generated_at") or ""),
+            "goals": len(value.get("goals") or []),
+            "chats": len(value.get("chats") or []),
+        }
+    return sorted(out.values(),
+                  key=lambda row: (row["generated_at"], row["name"]),
+                  reverse=True)
+
+
+def touch(root: Optional[Path], cwd) -> Dict[str, Any]:
+    """Write an empty record for a directory that has none, so it is a
+    project the switcher can see before any chat has been started in it."""
+    if read_file(root, cwd).get("project"):
+        return load_project(root, cwd)
+    save_project(root, cwd, {})
+    return load_project(root, cwd)
+
+
 def project_sessions(root: Optional[Path], cwd) -> List[str]:
     """Every chat started in this directory, oldest state first.
 
@@ -257,6 +307,12 @@ def _goal_record(goal: Dict[str, Any], goals: List[Dict[str, Any]],
         "status": str(goal.get("status") or "active"),
         "priority": str(goal.get("priority") or "normal"),
         "origin": str(goal.get("origin") or ""),
+        # How this goal stands to the project's objective, and the objective
+        # it was judged against -- a verdict outlives the sentence that made
+        # it, so the two travel together.
+        "relevance": str(goal.get("relevance") or "core"),
+        "relevance_why": str(goal.get("relevance_why") or ""),
+        "relevance_for": str(goal.get("relevance_for") or ""),
         "description": str(goal.get("description") or ""),
         "updated_at": goal.get("updated_at"),
         "location": _location(goal, goals, session_id),
