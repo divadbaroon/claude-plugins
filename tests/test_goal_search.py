@@ -231,8 +231,29 @@ class SearchPatchTests(BridgeTestCase):
         box = out.index('<div class="hc-search">')
         self.assertEqual(head + len('<span class="hc-rail-count">{{ goalCount }}</span></div>'),
                          box, "nothing stands between the heading and the box")
+        # The input is a field with a glass in front of it and a way to
+        # empty it behind, not a bare line of placeholder under a heading.
+        self.assertIn('<div class="hc-search-field">', out)
+        self.assertIn('<span class="hc-search-glyph">', out)
+        self.assertIn("<circle", out)
         self.assertIn('<input class="hc-search-input" type="search"', out)
+        self.assertIn('<span class="hc-search-clear" role="button"', out)
         self.assertIn('<div class="hc-search-hits"></div>', out)
+        self.assertLess(out.index('class="hc-search-glyph"'),
+                        out.index('class="hc-search-input"'))
+        self.assertLess(out.index('class="hc-search-input"'),
+                        out.index('class="hc-search-clear"'))
+
+    def test_the_field_is_a_bordered_box_that_lights_on_focus(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn("[data-hc-launch] .hc-search-field{flex:none;display:flex;"
+                      "align-items:center;gap:8px;box-sizing:border-box;"
+                      "border:1px solid var(--bd2);border-radius:8px;", css)
+        self.assertIn(".hc-search-field:focus-within{border-color:var(--acc)}", css)
+        # The × is there only when there is something to clear.
+        self.assertIn(".hc-search-clear{flex:none;display:none;", css)
+        self.assertIn(".hc-search-field[data-hc-typed] .hc-search-clear{display:block}",
+                      css)
 
     def test_a_global_vault_gets_no_box(self):
         out = self.patched_bundle("out;", scope="global")
@@ -257,5 +278,192 @@ class SearchPatchTests(BridgeTestCase):
         self.assertIn(".hc-rail-left[data-hc-searching]>:not(.hc-rail-head):not(.hc-search){display:none!important}", css)
 
 
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class SearchFieldTests(BridgeTestCase):
+    """A field that looks like one.
+
+    It was a bare line of placeholder text under the GOALS heading, with no
+    border and nothing to say it could be typed into. It is a bordered box
+    with a glass in it now, and a × once there is something to clear.
+    """
+
+    # The field as the patch writes it, built here the way the artifact's
+    # own template would: the harness has no HTML parser, so the shape the
+    # patch introduces is asserted separately, in SearchPatchTests.
+    PRELUDE = (
+        "var rail = document.createElement('div'); rail.className = 'hc-rail-left';"
+        "var box = document.createElement('div'); box.className = 'hc-search';"
+        "var field = document.createElement('div'); field.className = 'hc-search-field';"
+        "var glyph = document.createElement('span'); glyph.className = 'hc-search-glyph';"
+        "var input = document.createElement('input'); input.className = 'hc-search-input';"
+        "input.setAttribute('placeholder', 'Search goals, notes, TODOs, prompts');"
+        "var clear = document.createElement('span'); clear.className = 'hc-search-clear';"
+        "var hits = document.createElement('div'); hits.className = 'hc-search-hits';"
+        "field.appendChild(glyph); field.appendChild(input); field.appendChild(clear);"
+        "box.appendChild(field); box.appendChild(hits);"
+        "rail.appendChild(box); app.appendChild(rail);"
+        "window.__hcPromptUI.acceptState({ goals: [], prompts: [], scope: 'chat' });"
+        "window.__hcPromptUI.search.render();"
+        "var fire = function (type, target) {"
+        "  listeners.filter(function (l) { return l[0] === type; })"
+        "    .forEach(function (l) { l[1]({ type: type, target: target,"
+        "      key: '', preventDefault: function () {},"
+        "      stopPropagation: function () {} }); }); };"
+    )
+
+    def field(self, tail):
+        return json.loads(self.run_js(self.PRELUDE + tail))
+
+    def test_the_clear_appears_only_once_something_is_typed(self):
+        got = self.field(
+            "var empty = field.getAttribute('data-hc-typed');"
+            "input.value = 'ship'; fire('input', input);"
+            "var typed = field.getAttribute('data-hc-typed');"
+            "input.value = ''; fire('input', input);"
+            "JSON.stringify([empty, typed, field.getAttribute('data-hc-typed')]);")
+        self.assertEqual([None, "", None], got)
+
+    def test_a_field_holding_only_spaces_still_offers_to_be_cleared(self):
+        # The tree is not searched for whitespace, but there is something in
+        # the box and the reader should be able to get rid of it.
+        got = self.field(
+            "input.value = '   '; fire('input', input);"
+            "JSON.stringify([field.getAttribute('data-hc-typed'),"
+            " document.querySelector('.hc-rail-left')"
+            "   .getAttribute('data-hc-searching')]);")
+        self.assertEqual(["", None], got)
+
+    def test_clicking_the_clear_empties_the_box_and_keeps_the_caret(self):
+        got = self.field(
+            "input.value = 'ship'; fire('input', input);"
+            "var focused = 0; input.focus = function () { focused += 1; };"
+            "fire('click', clear);"
+            "JSON.stringify([input.value, field.getAttribute('data-hc-typed'),"
+            " focused, document.querySelector('.hc-rail-left')"
+            "   .getAttribute('data-hc-searching')]);")
+        self.assertEqual(["", None, 1, None], got)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class RelevanceFilterTests(BridgeTestCase):
+    """Seeing the tree through one of its relevance tags.
+
+    Inference judges every goal core, supporting or unrelated against the
+    project's stated objective. The verdict was readable one goal at a time
+    and nowhere else; this is the other half. It lives under the search
+    field because it answers the same question the search does -- show me
+    less than everything.
+    """
+
+    TREE = [
+        {"id": "g1", "title": "Share a goal tree", "parent_goal_id": None,
+         "status": "active", "relevance": "core"},
+        {"id": "g1a", "title": "Invite codes", "parent_goal_id": "g1",
+         "status": "active", "relevance": "core"},
+        {"id": "g2", "title": "Settings panel", "parent_goal_id": None,
+         "status": "active", "relevance": "supporting"},
+        {"id": "g3", "title": "Rename a tab", "parent_goal_id": None,
+         "status": "active", "relevance": "unrelated"},
+        {"id": "g3a", "title": "and its shared counterpart",
+         "parent_goal_id": "g3", "status": "active", "relevance": "core"},
+        {"id": "g4", "title": "Dropped", "parent_goal_id": None,
+         "status": "abandoned", "relevance": "unrelated"},
+    ]
+
+    def rail(self, tail, goals=None):
+        rows = goals if goals is not None else self.TREE
+        return json.loads(self.run_js(
+            "var R = window.__hcPromptUI.relevance;"
+            "var rail = document.createElement('div'); rail.className = 'hc-rail-left';"
+            "var box = document.createElement('div'); box.className = 'hc-search';"
+            "var field = document.createElement('div'); field.className = 'hc-search-field';"
+            "var hits = document.createElement('div'); hits.className = 'hc-search-hits';"
+            "box.appendChild(field); box.appendChild(hits);"
+            "var tree = document.createElement('div'); tree.className = 'hc-tree';"
+            + json.dumps([r["id"] for r in rows])
+            + ".forEach(function (id) {"
+            "  var row = document.createElement('div'); row.className = 'hc-row';"
+            "  row.setAttribute('data-hc-goal', id); tree.appendChild(row); });"
+            "rail.appendChild(box); rail.appendChild(tree); app.appendChild(rail);"
+            "window.__hcPromptUI.acceptState({ goals: %s, prompts: [],"
+            "  scope: 'chat', session_id: 'abc' });"
+            "R.render(); R.apply();"
+            "var chips = function () { var out = [];"
+            "  (function walk(n) { (n.children || []).forEach(function (c) {"
+            "    if (c.getAttribute('data-hc-rel') !== null) out.push(c); walk(c); }); })(box);"
+            "  return out; };"
+            "var shown = function () { return (tree.children || [])"
+            "  .filter(function (r) { return r.getAttribute('data-hc-rel-off') === null; })"
+            "  .map(function (r) { return r.getAttribute('data-hc-goal'); }); };"
+            "var deepText = function (n) { return String(n.textContent || '') +"
+            "  (n.children || []).map(deepText).join(''); };"
+            "var click = function (node) {"
+            "  listeners.filter(function (l) { return l[0] === 'click'; })"
+            "    .forEach(function (l) { l[1]({ target: node,"
+            "      preventDefault: function () {}, stopPropagation: function () {} }); }); };"
+            % json.dumps(rows) + tail))
+
+    def test_the_bar_counts_each_tag_and_abandoned_goals_count_for_none(self):
+        got = self.rail(
+            "JSON.stringify([chips().map(deepText), R.counts()]);")
+        self.assertEqual([["All5", "On objective3", "Supporting1",
+                           "Off objective1"],
+                          {"all": 5, "core": 3, "supporting": 1,
+                           "unrelated": 1}], got)
+
+    def test_picking_a_tag_hides_the_rows_that_do_not_carry_it(self):
+        got = self.rail(
+            "click(chips()[2]);"
+            "JSON.stringify([R.filter(), shown(),"
+            " chips().map(function (c) { return c.getAttribute('data-hc-on'); })]);")
+        self.assertEqual(["supporting", ["g2"],
+                          [None, None, "", None]], got)
+
+    def test_a_matching_goal_keeps_the_goals_above_it(self):
+        # g3a is core under an unrelated parent. Hiding g3 would leave g3a
+        # at the root of a tree it does not belong to.
+        got = self.rail(
+            "click(chips()[1]);"
+            "JSON.stringify([shown()]);")
+        self.assertEqual([["g1", "g1a", "g3", "g3a"]], got)
+
+    def test_picking_the_same_tag_again_puts_the_whole_tree_back(self):
+        # g4 is abandoned: it is counted for no tag, so it answers to none
+        # of them either -- a tombstone that survived a filter would make
+        # the chip's number disagree with the tree.
+        got = self.rail(
+            "click(chips()[3]); var only = shown();"
+            "click(chips()[3]);"
+            "JSON.stringify([only, R.filter(), shown()]);")
+        self.assertEqual([["g3"], "",
+                          ["g1", "g1a", "g2", "g3", "g3a", "g4"]], got)
+
+    def test_all_puts_it_back_too(self):
+        got = self.rail(
+            "click(chips()[3]); click(chips()[0]);"
+            "JSON.stringify([R.filter(), shown().length]);")
+        self.assertEqual(["", 6], got)
+
+    def test_a_tree_of_one_tag_offers_nothing_to_choose_between(self):
+        got = self.rail(
+            "JSON.stringify([chips().length,"
+            " box.querySelector('.hc-relbar').getAttribute('data-hc-on')]);",
+            goals=[{"id": "g1", "title": "One", "parent_goal_id": None,
+                    "status": "active", "relevance": "core"}])
+        self.assertEqual([0, None], got)
+
+    def test_an_untagged_goal_reads_as_on_objective(self):
+        # The tag was added after the tree; a goal from before it carries
+        # none, and inference's own default is core.
+        got = self.rail(
+            "JSON.stringify([R.counts()]);",
+            goals=[{"id": "g1", "title": "Old", "parent_goal_id": None,
+                    "status": "active"},
+                   {"id": "g2", "title": "New", "parent_goal_id": None,
+                    "status": "active", "relevance": "unrelated"}])
+        self.assertEqual([{"all": 2, "core": 1, "supporting": 0,
+                           "unrelated": 1}], got)

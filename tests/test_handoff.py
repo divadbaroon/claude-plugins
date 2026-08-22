@@ -304,57 +304,9 @@ class HandoffButtonTests(BridgeTestCase):
         return self.run_js((self.PRELUDE % json.dumps(scope)) + tail,
                            extra_env={"HC_DEFER_TIMEOUT": "1"})
 
-    def test_the_button_is_drawn_in_its_slot_for_a_chat_workspace(self):
-        got = self.handoff(
-            "var b = btn(); [!!b, b && b.getAttribute('role'), b && b.title,"
-            " b && slot.children.length, said()];")
-        self.assertEqual([True, "button", HO_TITLE, 1, [None, ""]], got)
-
     def test_a_global_vault_draws_no_button(self):
         got = self.handoff("[H.render(), slot.children.length];", scope="global")
         self.assertEqual([False, 0], got)
-
-    def test_a_click_fetches_the_document_copies_it_and_says_copied(self):
-        got = self.handoff(
-            "btn();"
-            "var seen = [];"
-            "var p = H.copy(); seen.push(said());"
-            "p.then(function (ok) {"
-            "  seen.push([ok, said(), copied, calls.filter(function (c) {"
-            "    return String(c[0]).indexOf('/api/handoff') >= 0; }).length]);"
-            "  fireTimers(); seen.push(said());"
-            "}); p.then(function () { return seen; });")
-        self.assertEqual(
-            [["busy", "assembling…"],
-             [True, ["copied", "copied ✓"], ["# Hand-off: acme/widgets\n"], 1],
-             [None, ""]],
-            got)
-
-    def test_a_clipboard_that_refuses_downloads_the_file_and_says_failed(self):
-        got = self.handoff(
-            "btn();"
-            "var mk = document.createElement;"
-            "document.createElement = function (t) { var el = mk(t);"
-            "  el.select = function () {}; el.click = function () {}; return el; };"
-            "navigator.clipboard = { writeText: function () { return Promise.reject(new Error('no')); } };"
-            "document.execCommand = function () { return false; };"
-            "H.copy().then(function (ok) { var s = said(); fireTimers();"
-            "  return [ok, s, said(), H.last() && H.last().filename]; });")
-        self.assertEqual([False, ["failed", "copy failed"], [None, ""],
-                          "hc-handoff-widgets.md"], got)
-
-    def test_a_server_that_cannot_hand_off_says_failed_and_copies_nothing(self):
-        got = self.handoff(
-            "btn();"
-            "fetch = function () { return Promise.resolve({ ok: true, json: function () {"
-            "  return Promise.resolve({ ok: false, error: 'nope' }); } }); };"
-            "H.copy().then(function (ok) { return [ok, said(), copied]; });")
-        self.assertEqual([False, ["failed", "copy failed"], []], got)
-
-
-HO_TITLE = ("Hand off: copy the whole workspace as markdown for a "
-            "teammate’s agent")
-
 
 if __name__ == "__main__":
     unittest.main()

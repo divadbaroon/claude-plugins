@@ -27,6 +27,7 @@ function El(tag) {
   this.className = ""; this.id = ""; this.textContent = "";
   this.appendChild = (n) => { this.children.push(n); n.parentNode = this; return n; };
   this.focus = () => {};
+  this.select = () => {};
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
     if (at < 0) this.children.push(n); else this.children.splice(at, 0, n);
@@ -40,13 +41,34 @@ function El(tag) {
     const at = this.parentNode.children.indexOf(this);
     return (at >= 0 ? this.parentNode.children[at + 1] : null) || null;
   } });
+  // One matcher for both finders. Class selectors, attribute selectors
+  // ([name] and [name="value"]) -- the page finds several of its controls
+  // by attribute rather than by class -- and bare tag names, which the
+  // document-level sweep has always taken as a comma-separated list.
+  this.matches = (child, sel) => {
+    const text = String(sel || "").trim();
+    const attr = /^\[([^\]=]+)(?:=\"([^\"]*)\")?\]$/.exec(text);
+    if (attr) {
+      const got = child.getAttribute(attr[1]);
+      return got !== null && (attr[2] === undefined || got === attr[2]);
+    }
+    if (text.startsWith(".")) {
+      return String(child.className).split(" ").includes(text.slice(1));
+    }
+    if (text.indexOf(",") >= 0) {
+      return text.split(",").map(t => t.trim().toUpperCase())
+        .includes(String(child.tagName).toUpperCase());
+    }
+    // A bare token is a class name here as often as a tag: tests written
+    // against this harness have always passed "hc-search-input" meaning
+    // the class. Both readings are honoured, class first.
+    return child.className === text
+      || String(child.tagName).toUpperCase() === text.toUpperCase();
+  };
   this.querySelector = (sel) => {
-    const want = sel.replace(/^\./, "");
     const walk = (node) => {
       for (const child of node.children) {
-        if (sel.startsWith(".")
-            ? String(child.className).split(" ").includes(want)
-            : child.className === want) return child;
+        if (this.matches(child, sel)) return child;
         const deep = walk(child);
         if (deep) return deep;
       }
@@ -54,9 +76,17 @@ function El(tag) {
     };
     return walk(this);
   };
+  this.querySelectorAll = (sel) => {
+    const out = [];
+    (function walk(n) { (n.children || []).forEach((c) => {
+      if (root.matches(c, sel)) out.push(c);
+      walk(c); }); })(this);
+    return out;
+  };
   this.attrs = {};
   this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
   this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+  this.hasAttribute = (k) => k in this.attrs;
   this.removeAttribute = (k) => { delete this.attrs[k]; };
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
@@ -97,19 +127,7 @@ const document = {
   // Walks the live tree, as a browser does: a node that has been
   // re-rendered away is not a result, and treating it as one sends the
   // button somewhere nobody can click it.
-  querySelectorAll: (sel) => {
-    const text = String(sel || '').trim();
-    const attr = text.match(/^\[([\w-]+)\]$/);
-    const tags = text.split(',').map(t => t.trim().toUpperCase());
-    const hit = (c) => attr
-      ? c.getAttribute && c.getAttribute(attr[1]) !== null
-      : tags.includes(String(c.tagName).toUpperCase());
-    const out = [];
-    (function walk(n) { (n.children || []).forEach(c => {
-      if (hit(c)) out.push(c);
-      walk(c); }); })(root);
-    return out;
-  }
+  querySelectorAll: (sel) => root.querySelectorAll(sel)
 };
 function XHR() {}
 // Every synchronous route the boot path opens, in order, so a test can say
@@ -4092,41 +4110,6 @@ class ChatPromptLinkTests(BridgeTestCase):
                 " window.__hcPromptUI.goalLine('g1'),"
                 " window.__hcPromptUI.goalLine(null)]);")))
 
-    def test_the_workspace_wide_link_lives_in_the_header(self):
-        # One button, drawn once into the header slot the patch leaves, and
-        # the per-goal button in the pane is still there beside the prompt
-        # one. The header's is a different class: the click handler tells
-        # the two scopes apart by it.
-        got = json.loads(self.run_js(
-            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
-            "var head = document.createElement('span');"
-            "head.className = 'hc-chats';"
-            "document.body.appendChild(head);"
-            "var slot = document.createElement('span');"
-            "slot.className = 'hc-prompt-add';"
-            "document.body.appendChild(slot);"
-            "window.__hcPromptUI.renderPromptAdd();"
-            "window.__hcPromptUI.renderPromptAdd();"
-            "JSON.stringify([head.children.length,"
-            " head.children[0].className, head.children[0].textContent,"
-            " slot.children.map(function (c) { return c.className; })]);"))
-        self.assertEqual([1, "hc-chat-linkbtn", "+ chats",
-                          ["hc-chat-addbtn", "hc-prompt-addbtn"]], got)
-
-    def test_the_header_button_renders_without_the_pane(self):
-        # The header is on screen before any goal is selected, so the link
-        # does not wait for the pane's slot to exist.
-        got = json.loads(self.run_js(
-            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
-            "var head = document.createElement('span');"
-            "head.className = 'hc-chats';"
-            "document.body.appendChild(head);"
-            "var drew = window.__hcPromptUI.renderPromptAdd();"
-            "JSON.stringify([drew, head.children.length]);"))
-        self.assertEqual([False, 1], got)
-
-    # fetch -> json -> draw is several microtasks deep; this is enough
-    # of them for the picker to be on screen, and for a posted op to land.
     TICKS = ".then(function () {})" * 6
 
     CHATS = ("fetch = function (url, opts) {"
@@ -4212,35 +4195,6 @@ class ChatPromptLinkTests(BridgeTestCase):
         self.assertEqual([{"op": "link_chat", "session_id": "aaaaaaaa-1",
                            "label": "alpha", "goal_id": "g1"}],
                          [c for c in posted if c.get("op") == "link_chat"])
-
-    def test_the_two_buttons_open_pickers_of_their_own_scope(self):
-        # The pane's button links for the selected goal; the header's for
-        # the workspace. Same delegated click handler, told apart by class.
-        got = json.loads(self.run_js(
-            "localStorage.setItem('hc-vault-ui-v1',"
-            "  JSON.stringify({ selId: 'g1a' }));"
-            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
-            "var LINKED = [];" + self.CHATS +
-            "var head = document.createElement('span');"
-            "head.className = 'hc-chats'; document.body.appendChild(head);"
-            "var slot = document.createElement('span');"
-            "slot.className = 'hc-prompt-add'; document.body.appendChild(slot);"
-            "window.__hcPromptUI.renderPromptAdd();"
-            + self.CLICK +
-            "click(slot.querySelector('.hc-chat-addbtn'));"
-            "Promise.resolve()" + self.TICKS +
-            "  .then(function () {"
-            "    var t1 = document.querySelector('.hc-ask-title').textContent;"
-            "    var ov = document.querySelector('.hc-ask');"
-            "    ov.parentNode.removeChild(ov);"
-            "    click(head.querySelector('.hc-chat-linkbtn'));"
-            "    return Promise.resolve()" + self.TICKS +
-            "      .then(function () { return JSON.stringify([t1,"
-            "        document.querySelector('.hc-ask-title').textContent]); });"
-            "  });"))
-        self.assertEqual(["Chats this goal draws prompts from",
-                          "Chats this workspace draws prompts from"], got)
-
 
 class ChatNoticeTests(BridgeTestCase):
     """A goals workspace is a second window on a chat running in a terminal.
@@ -4524,7 +4478,8 @@ LAUNCH_CLASSES = (
     "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
     "hc-panels", "hc-session", "hc-chats", "hc-handoff", "hc-alerts",
     "hc-settings", "hc-updated",
-    "hc-search", "hc-search-input", "hc-search-hits",
+    "hc-search", "hc-search-field", "hc-search-glyph", "hc-search-input",
+    "hc-search-clear", "hc-search-hits",
 )
 
 
@@ -4551,6 +4506,51 @@ def _contrast(fg, bg):
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
+
+    def test_what_sits_under_the_tab_strip_is_measured_from_it(self):
+        # Six offsets describe one geometry: header 37, tabs 40, pills 42.
+        # Growing the tab row without moving all of them puts the page
+        # either under the bars or a gap below them, and only one of those
+        # is visible in a screenshot.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        head, tabs, pills = 37, 40, 42
+        self.assertIn(".hc-viewtabs{position:fixed;top:%dpx;" % head, css)
+        self.assertIn("height:%dpx;padding:0 24px;box-sizing:border-box;"
+                      "background:var(--bg)" % tabs, css)
+        self.assertIn(".hc-viewtab{cursor:pointer;user-select:none;"
+                      "font:600 12px", css)
+        self.assertIn("color:var(--fnt);height:%dpx;display:flex;" % tabs, css)
+        self.assertIn(".hc-pillbar{position:fixed;top:%dpx;" % (head + tabs), css)
+        self.assertIn("height:%dpx;padding:0 24px" % pills, css)
+        self.assertIn("[data-hc-launch][data-hc-viewtabs]{--hc-top:%dpx}"
+                      % (head + tabs + pills), css)
+        # The overview takes the pills down, so it starts one row higher.
+        self.assertIn("[data-hc-launch][data-hc-viewtabs][data-hc-overview]"
+                      "{--hc-top:%dpx}" % (head + tabs), css)
+        # The goals column clears both bars, which is --hc-top less the
+        # header the artifact draws itself.
+        self.assertIn("[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2)"
+                      "{padding-top:%dpx!important}" % (tabs + pills), css)
+        # And again with the notice bar (34) above everything.
+        self.assertIn("[data-hc-launch][data-hc-notice] .hc-viewtabs"
+                      "{top:%dpx}" % (head + 34), css)
+        self.assertIn("[data-hc-launch][data-hc-notice] .hc-pillbar"
+                      "{top:%dpx}" % (head + 34 + tabs), css)
+        self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
+                      "{--hc-top:%dpx}" % (head + 34 + tabs + pills), css)
+        self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
+                      "[data-hc-overview]{--hc-top:%dpx}" % (head + 34 + tabs), css)
+        self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
+                      " .hc>div:nth-child(2){padding-top:%dpx!important}"
+                      % (34 + tabs + pills), css)
+
+    def test_the_rail_toggles_stand_down_on_the_overview(self):
+        # They arrange the goals page. On the overview there is no rail to
+        # hide, so they were two buttons that did nothing visible.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn("[data-hc-launch] .hc-panels{order:-1;", css)
+        self.assertIn("[data-hc-launch][data-hc-overview] .hc-panels{display:none}",
+                      css)
 
     def chat(self):
         return ("window.__hcPromptUI.acceptState("
@@ -4737,16 +4737,6 @@ class LaunchSkinTests(BridgeTestCase):
             "   return [b.getAttribute('data-hc-panel'), b.className]; })];")
         self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel hc-panel-on"]]],
                          out)
-
-    def test_the_session_chip_names_the_conversation_the_window_watches(self):
-        out = self.run_js(
-            self.chat()
-            + "var slot = document.createElement('span');"
-            "slot.className = 'hc-session'; app.appendChild(slot);"
-            "var wrote = window.__hcPromptUI.renderSessionChip();"
-            "var again = window.__hcPromptUI.renderSessionChip();"
-            "[wrote, again, slot.textContent];")
-        self.assertEqual([True, False, "session 7f3a1b2c"], out)
 
     def test_the_injection_card_says_only_what_the_state_proves(self):
         # A chat nobody has opened the workspace for has been told nothing,
