@@ -18,6 +18,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
+from . import project_store as PS
 from . import secure_io as SIO
 
 
@@ -247,6 +248,12 @@ def _save_goals(trajdir, goals, important, chat_scoped):
 # with the same cursor machinery as the workspace's own, and its user turns
 # join the related-prompts pool, tagged with the chat's label. No goals are
 # read from it and nothing is written to it.
+#
+# A link has a scope. Linked from the header it is GLOBAL: its prompts are
+# offered to every goal. Linked from a goal's own pane it is scoped to that
+# goal: offered to that goal and the goals under it, never to the goals
+# above it -- a chat brought in while working on a subgoal belongs to that
+# branch, not to the parent it hangs from. One row per (session, scope).
 
 def _linked_path(session_id, root):
     return CS.paths(session_id, root).session_dir / "linked_chats.json"
@@ -258,7 +265,7 @@ def _load_linked(session_id, root):
     except (OSError, ValueError):
         return []
     rows = value.get("chats") if isinstance(value, dict) else None
-    out = []
+    out, seen = [], set()
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
@@ -267,8 +274,36 @@ def _load_linked(session_id, root):
             CS.paths(sid, root)
         except ValueError:
             continue
-        out.append({"session_id": sid, "label": str(row.get("label") or sid[:8])})
+        goal_id = row.get("goal_id")
+        goal_id = goal_id if isinstance(goal_id, str) and goal_id else None
+        if (sid, goal_id) in seen:
+            continue
+        seen.add((sid, goal_id))
+        entry = {"session_id": sid, "label": str(row.get("label") or sid[:8])}
+        if goal_id:
+            entry["goal_id"] = goal_id
+        out.append(entry)
     return out
+
+
+def _linked_sessions(chats):
+    """Each linked session once, with the goal ids it is scoped to -- or
+    None when any of its links is global, which covers every goal."""
+    scopes = {}
+    labels = {}
+    for chat in chats:
+        sid = chat["session_id"]
+        labels.setdefault(sid, chat["label"])
+        goal_id = chat.get("goal_id")
+        if sid not in scopes:
+            scopes[sid] = set() if goal_id else None
+        if scopes[sid] is not None:
+            if goal_id:
+                scopes[sid].add(goal_id)
+            else:
+                scopes[sid] = None
+    return [(sid, labels[sid], None if goals is None else sorted(goals))
+            for sid, goals in scopes.items()]
 
 
 def _save_linked(session_id, root, chats):
@@ -297,8 +332,13 @@ def _discover_chats(own_session_id, root, limit=30):
             continue
         if not stat.st_size:
             continue
+        # Where the chat worked, when its manifest says: the project
+        # switcher groups chats by directory, and a name alone ("plugins")
+        # cannot tell two repositories with the same last segment apart.
+        cwd = _manifest_cwd(sid, root)
         rows.append({"session_id": sid,
                      "project": path.parent.name.split("-")[-1] or path.parent.name,
+                     "cwd": cwd,
                      "mtime": stat.st_mtime, "size": stat.st_size})
     rows.sort(key=lambda row: row["mtime"], reverse=True)
     return rows[:limit]
@@ -315,12 +355,19 @@ def _load_prompts(trajdir, chat_scoped=False):
         session_id, root = _chat_identity(trajdir)
         rows = list(CS.load_prompts(session_id, root))
         # Linked chats ride along, each row tagged with where it came from
-        # so the picker can say. Their stores are read-only here.
-        for chat in _load_linked(session_id, root):
+        # so the picker can say, and -- for a goal-scoped link -- with the
+        # goals it is for, so the picker offers it there and below and
+        # nowhere else. A global link carries no chat_goals. Their stores
+        # are read-only here.
+        for sid, label, goal_ids in _linked_sessions(_load_linked(session_id, root)):
             try:
-                for row in CS.load_prompts(chat["session_id"], root):
-                    if isinstance(row, dict):
-                        rows.append(dict(row, chat=chat["label"]))
+                for row in CS.load_prompts(sid, root):
+                    if not isinstance(row, dict):
+                        continue
+                    row = dict(row, chat=label)
+                    if goal_ids is not None:
+                        row["chat_goals"] = goal_ids
+                    rows.append(row)
             except (OSError, ValueError):
                 continue
     else:
@@ -511,6 +558,188 @@ def conversation_rows(trajdir, limit=200):
     return rows
 
 
+MAX_TREE_ENTRIES = 4000
+_TREE_SKIP = {".git", "node_modules", "__pycache__", ".venv", "venv",
+              ".mypy_cache", ".pytest_cache", "dist", "build", ".next"}
+
+
+def project_tree(root, depth=3):
+    """The project's own files, bounded, for the workspace's file rail.
+
+    Containment is the job: every path is resolved and checked to be inside
+    *root* before it is named, so a symlink out of the project cannot be
+    listed and nothing above the project is reachable.
+    """
+    try:
+        base = Path(root).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return []
+    if not base.is_dir():
+        return []
+    budget = [MAX_TREE_ENTRIES]
+
+    def walk(directory, level):
+        if level > depth or budget[0] <= 0:
+            return []
+        try:
+            entries = sorted(directory.iterdir(),
+                             key=lambda e: (not e.is_dir(), e.name.lower()))
+        except OSError:
+            return []
+        out = []
+        for entry in entries:
+            if budget[0] <= 0:
+                break
+            if entry.name.startswith(".") and entry.name != ".claude-plugin":
+                continue
+            if entry.name in _TREE_SKIP:
+                continue
+            try:
+                entry.resolve().relative_to(base)
+            except (OSError, ValueError, RuntimeError):
+                continue
+            budget[0] -= 1
+            out.append({"n": entry.name + "/", "kids": walk(entry, level + 1)}
+                       if entry.is_dir() else {"n": entry.name})
+        return out
+
+    return walk(base, 1)
+
+
+def _project_identity(trajdir, chat_scoped, session_id):
+    """The directory this chat works in, named for the reader.
+
+    Empty rather than guessed: a workspace that cannot say where it is should
+    say nothing rather than invent a repository. The project is the Claude
+    Code project: the directory the chat was started in, which is what its
+    manifest recorded. Every chat in that directory is a chat of the same
+    project, and what the reader writes about the project (its objective)
+    is kept once per directory, not once per chat.
+    """
+    empty = {"cwd": "", "name": "", "branch": "", "remote": "",
+             "objective": ""}
+    if not (chat_scoped and session_id):
+        return empty
+    try:
+        _sid, root = _chat_identity(trajdir)
+    except (OSError, ValueError):
+        return empty
+    cwd = _manifest_cwd(str(session_id), root)
+    if not cwd:
+        return empty
+    path = Path(str(cwd))
+    return {"cwd": str(path), "name": path.name,
+            "branch": AE._git_branch(str(path)) or "",
+            "remote": _git_remote(str(path)),
+            "objective": _load_project(root, str(path)).get("objective", "")}
+
+
+def _manifest_cwd(session_id, root):
+    """The directory a chat's manifest names, read as written.
+
+    Read from the file rather than through load_manifest: that loader hands
+    back a blank default when the manifest's own session_id disagrees with
+    the directory's, which a seeded or copied workspace does -- and the
+    directory it was started in is still the directory it was started in.
+    """
+    try:
+        path = CS.paths(str(session_id), root).manifest
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    cwd = value.get("cwd") if isinstance(value, dict) else None
+    return cwd if isinstance(cwd, str) else ""
+
+
+# The project's own record: one file per directory, under the vault base
+# beside the chat sessions, so two chats in one repository read and write
+# the same objective -- and read the same goals, which the same file holds
+# for every chat started there. Its shape and its writers live in
+# project_store; these are the names this module already called them by.
+PROJECT_OBJECTIVE_LIMIT = PS.PROJECT_OBJECTIVE_LIMIT
+_project_path = PS.project_path
+_load_project = PS.load_project
+_save_project = PS.save_project
+
+
+PROJECT_FILE_LIMIT = 256 * 1024
+
+
+def project_file(root, relpath):
+    """One text file of the project, for the overview's README pane.
+
+    The same containment rule as the tree: the path is resolved and checked
+    to be inside *root* before it is read, so `../` and symlinks out of the
+    project read nothing. Bounded, and text only: a binary answers as such
+    rather than as mojibake.
+    """
+    try:
+        base = Path(root).expanduser().resolve(strict=True)
+        target = (base / str(relpath)).resolve(strict=True)
+        target.relative_to(base)
+    except (OSError, ValueError, RuntimeError):
+        return {"ok": False, "error": "no such file in the project"}
+    if not target.is_file():
+        return {"ok": False, "error": "not a file"}
+    try:
+        with open(target, "rb") as handle:
+            raw = handle.read(PROJECT_FILE_LIMIT + 1)
+    except OSError:
+        return {"ok": False, "error": "unreadable"}
+    if b"\0" in raw[:8192]:
+        return {"ok": False, "error": "binary file"}
+    truncated = len(raw) > PROJECT_FILE_LIMIT
+    text = raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")
+    return {"ok": True, "path": str(target.relative_to(base)),
+            "text": text, "truncated": truncated}
+
+
+def project_json(root, cwd):
+    """The project's own record, as text, for the overview's JSON pane.
+
+    The file as it stands on disk, byte for byte: what a reader opening it
+    in an editor would see, indentation and all. A directory whose file has
+    never been written -- no chat in it has saved a goal yet -- gets the
+    record it would hold, built now and not saved, marked ``written``
+    false, so the pane shows the project rather than an absence.
+
+    Bounded like the README pane: a project of many chats can outgrow what
+    a pane should hand a browser, and a bound that says it was reached is
+    better than one that quietly is not.
+    """
+    if not cwd:
+        return {"ok": False, "error": "no project"}
+    path = PS.project_path(root, cwd)
+    written = True
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(PROJECT_FILE_LIMIT + 1)
+    except OSError:
+        written = False
+        try:
+            raw = (json.dumps(PS.build(root, cwd), indent=1)
+                   + "\n").encode("utf-8")
+        except (OSError, ValueError, TypeError):
+            return {"ok": False, "error": "unreadable"}
+    return {"ok": True, "path": str(path), "written": written,
+            "truncated": len(raw) > PROJECT_FILE_LIMIT,
+            "text": raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")}
+
+
+def _git_remote(cwd):
+    """The origin URL as git records it, or "" -- never a placeholder."""
+    try:
+        text = (Path(cwd).expanduser().resolve() / ".git" / "config").read_text(
+            encoding="utf-8", errors="ignore")
+    except OSError:
+        return ""
+    block = re.search(r'\[remote "origin"\]([^\[]*)', text)
+    if not block:
+        return ""
+    url = re.search(r"url\s*=\s*(\S+)", block.group(1))
+    return url.group(1) if url else ""
+
+
 def setup_state(trajdir):
     """What onboarding still has to answer, read from the vault itself.
 
@@ -649,6 +878,67 @@ def _injection_state(session_id, root):
     }
 
 
+def _remember_name(SB, name, root):
+    """Store the chosen name, if one was given and we are signed in.
+
+    Best effort on purpose: failing to record a name must not turn a
+    successful sign-in into a failed one.
+    """
+    text = str(name or "").strip()
+    if not text:
+        return
+    try:
+        SB.set_display_name(text, root)
+    except SB.SupabaseError:
+        pass
+    except (OSError, ValueError):
+        pass
+
+
+def _supabase_status(SB, root):
+    """The panel's view of the connection, with the name it signed up as."""
+    state = dict(SB.status(root), ok=True)
+    if state.get("signed_in"):
+        try:
+            state["display_name"] = SB.display_name(root)
+        except (SB.SupabaseError, OSError, ValueError):
+            state["display_name"] = ""
+    else:
+        state["display_name"] = ""
+    return state
+
+
+# The shared workspaces this process has opened, by project. One server
+# per project rather than one per click: opening the same project twice
+# should be the same window, not a second one on a second port.
+_SHARED_SERVERS = {}
+_SHARED_GUARD = threading.Lock()
+
+
+def open_shared(project_id, trajdir=None):
+    """Start a shared workspace for one project, or hand back the one that
+    is already up."""
+    pid = str(project_id)
+    with _SHARED_GUARD:
+        held = _SHARED_SERVERS.get(pid)
+        if held and held.get("thread") and held["thread"].is_alive():
+            return {"ok": True, "url": held["url"], "already": True}
+        started = run_shared(pid, open_browser=False, trajdir=trajdir)
+        if not started:
+            return {"ok": False, "error": "no free port for a shared workspace"}
+        _SHARED_SERVERS[pid] = started
+        return {"ok": True, "url": started["url"], "already": False}
+
+
+def _empty_shared(project_id):
+    """What a shared workspace serves when the project will not load: the
+    shape the page needs, with nothing in it."""
+    from . import shared_state
+    payload = shared_state.build({}, None, {})
+    payload["shared"]["project_id"] = project_id
+    return payload
+
+
 def _payload(trajdir=None, chat_scoped=None):
     chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
     trajdir = _scope(trajdir)
@@ -700,6 +990,9 @@ def _payload(trajdir=None, chat_scoped=None):
                    "agent_runs": runs,
                    "agent_claim": claim,
                    "scope": "chat" if chat_scoped else "global",
+                   # Where this chat works. Recorded in the manifest already; the
+                   # workspace could only name a project by guessing without it.
+                   "project": _project_identity(trajdir, chat_scoped, session),
                    "provider": _configured_provider(trajdir),
                    "revision": _goal_revision(goals, important)}
     if identity is not None:
@@ -710,6 +1003,31 @@ def _payload(trajdir=None, chat_scoped=None):
         except Exception:  # noqa: BLE001 - the rail can do without it
             payload["build_session"] = None
     return payload
+
+
+def _handoff(trajdir=None, chat_scoped=None):
+    """The hand-off document for this workspace, written and returned.
+
+    The goal tree and prompts are read under the state lock; git runs
+    outside it, since a slow remote or `gh` call must not hold up the
+    pollers.
+    """
+    from . import handoff as HO
+    chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
+    trajdir = _scope(trajdir)
+    session = None
+    with _state_access(trajdir, chat_scoped):
+        goals, _important = _load_goals(trajdir, chat_scoped)
+        GM.sanitize(goals)
+        prompts = _load_prompts(trajdir, chat_scoped)
+        if chat_scoped:
+            session, _root = _chat_identity(trajdir)
+    try:
+        return HO.build(trajdir, goals["goals"], prompts, chat_scoped,
+                        session_id=session,
+                        generated_at=goals.get("generated_at", ""))
+    except Exception as exc:  # noqa: BLE001 - the button reports, never hangs
+        return {"ok": False, "error": str(exc)[:200]}
 
 
 def _apply(op, trajdir=None, chat_scoped=None):
@@ -876,6 +1194,165 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
+        if kind == "set_project_objective":
+            # What the project is for, in the reader's words: kept once per
+            # project directory, so every chat in it reads the same line.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            if not who["cwd"]:
+                return {"ok": False, "error": "this chat has no project directory"}
+            text = op.get("objective")
+            if not isinstance(text, str):
+                return {"ok": False, "error": "objective must be text"}
+            record = _load_project(root, who["cwd"])
+            record["objective"] = text.strip()[:PROJECT_OBJECTIVE_LIMIT]
+            _save_project(root, who["cwd"], record)
+            return {"ok": True, "objective": record["objective"]}
+        if kind == "set_project_meta":
+            # The rest of what belongs to the project rather than to any one
+            # chat: a longer description, and the sources saved to it. Kept
+            # beside the objective in the same per-directory file, so every
+            # chat started there reads them.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            if not who["cwd"]:
+                return {"ok": False, "error": "this chat has no project directory"}
+            record = _load_project(root, who["cwd"])
+            if "description" in op:
+                text = op.get("description")
+                if not isinstance(text, str):
+                    return {"ok": False, "error": "description must be text"}
+                record["description"] = text.strip()[
+                    :PS.PROJECT_DESCRIPTION_LIMIT]
+            if "sources" in op:
+                if not isinstance(op.get("sources"), list):
+                    return {"ok": False, "error": "sources must be a list"}
+                record["sources"] = GM.normalize_sources(op["sources"])
+            _save_project(root, who["cwd"], record)
+            saved = _load_project(root, who["cwd"])
+            return {"ok": True, "description": saved.get("description", ""),
+                    "sources": saved.get("sources", [])}
+        if kind in ("set_supabase_config", "supabase_login",
+                    "supabase_logout"):
+            # Connecting the workspace to the reader's own Supabase, from
+            # the settings panel rather than a hand-edited file. The URL and
+            # the anon key are kept; the PASSWORD IS NOT -- it is exchanged
+            # once for tokens on its way through and never written down.
+            from . import supabase_client as SB
+            root = None
+            if chat_scoped:
+                _, root = _chat_identity(trajdir)
+            try:
+                if kind == "set_supabase_config":
+                    SB.save_config(op.get("url"), op.get("anon_key"),
+                                   op.get("email") or "", root)
+                    _remember_name(SB, op.get("display_name"), root)
+                elif kind == "supabase_logout":
+                    SB.sign_out(root)
+                else:
+                    email = op.get("email")
+                    password = op.get("password")
+                    if not isinstance(email, str) or not isinstance(password, str):
+                        return {"ok": False,
+                                "error": "an email and a password are needed"}
+                    if not email.strip() or not password:
+                        return {"ok": False,
+                                "error": "an email and a password are needed"}
+                    SB.sign_in(email.strip(), password, root)
+                    # Once signed in, the name can be written: it belongs
+                    # to the account, and there was no account before now.
+                    _remember_name(SB, op.get("display_name"), root)
+            except SB.SupabaseError as exc:
+                return {"ok": False, "error": str(exc)}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)[:200]}
+            # Always answered with the state, never with what was sent: the
+            # panel redraws from this, and a reply that echoed a password
+            # back would put it somewhere new.
+            return _supabase_status(SB, root)
+        if kind in ("redeem_invite", "open_shared", "shared_projects"):
+            # Joining someone else's project, and opening it. The workspace
+            # a code leads to is a second window on a second port -- never
+            # this one, which is the reader's own.
+            from . import supabase_client as SB
+            root = None
+            if chat_scoped:
+                _, root = _chat_identity(trajdir)
+            try:
+                if kind == "shared_projects":
+                    return SB.shared_projects(root)
+                if kind == "redeem_invite":
+                    joined = SB.redeem(str(op.get("code") or ""), root)
+                    opened = open_shared(joined["project_id"], trajdir)
+                    return dict(joined, **{"url": opened.get("url", ""),
+                                           "opened": opened.get("ok", False)})
+                pid = op.get("project_id")
+                if not isinstance(pid, str) or not pid:
+                    return {"ok": False, "error": "which project?"}
+                return open_shared(pid, trajdir)
+            except SB.SupabaseError as exc:
+                return {"ok": False, "error": str(exc)}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)[:200]}
+        if kind in ("create_share", "list_shares", "revoke_share"):
+            # Handing this project to someone with no account here. The
+            # token comes back from Postgres once and is not stored on
+            # either side -- only its hash is -- so the reply below is the
+            # only time the workspace ever holds it.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            if not who["cwd"] and kind != "revoke_share":
+                return {"ok": False, "error": "this chat has no project directory"}
+            from . import supabase_client as SB
+            try:
+                if kind == "create_share":
+                    days = op.get("expires_in_days")
+                    if days is not None:
+                        try:
+                            days = max(1, min(365, int(days)))
+                        except (TypeError, ValueError):
+                            days = 30
+                    wanted = op.get("role")
+                    if wanted not in ("reader", "editor"):
+                        wanted = "reader"
+                    return SB.create_share(
+                        root, who["cwd"], str(op.get("label") or "")[:120],
+                        days, kind="invite", role=wanted)
+                if kind == "list_shares":
+                    return SB.list_shares(root, who["cwd"])
+                share_id = op.get("id")
+                if not isinstance(share_id, str) or not share_id:
+                    return {"ok": False, "error": "which share?"}
+                return SB.revoke_share(root, share_id)
+            except SB.SupabaseError as exc:
+                return {"ok": False, "error": str(exc)}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)[:200]}
+        if kind == "sync_supabase":
+            # The project, up to the reader's own Supabase. Everything the
+            # send needs is on disk already: the keys in the vault, the
+            # rows built from the same stores the pane reads. Failures come
+            # back as a sentence rather than a traceback -- the button is
+            # where they will be read.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            if not who["cwd"]:
+                return {"ok": False, "error": "this chat has no project directory"}
+            from . import supabase_client as SB
+            try:
+                return SB.sync_project(root, who["cwd"])
+            except SB.SupabaseError as exc:
+                return {"ok": False, "error": str(exc)}
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": f"could not send: {exc}"}
         if kind in ("link_chat", "unlink_chat"):
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
@@ -888,17 +1365,32 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             if sid == session_id:
                 return {"ok": False, "error": "this workspace already follows "
                                               "its own chat"}
+            # The scope: a goal id for a link made from that goal's pane,
+            # nothing for one made from the header. A goal-scoped link
+            # must name a goal this tree has, or it would be offered to
+            # no one and unlinkable from nowhere.
+            goal_id = str(op.get("goal_id") or "") or None
+            if goal_id and not any(g.get("id") == goal_id
+                                   for g in goals["goals"]):
+                return {"ok": False, "error": "no such goal"}
             chats = _load_linked(session_id, root)
+
+            def same(c):
+                return c["session_id"] == sid and c.get("goal_id") == goal_id
             if kind == "link_chat":
-                if any(c["session_id"] == sid for c in chats):
-                    return {"ok": True, "linked": [c["session_id"] for c in chats]}
-                label = " ".join(str(op.get("label") or "").split())[:60] or sid[:8]
-                # The linked chat's own store, so ingestion has somewhere to
-                # keep its cursor and prompts.
-                CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
-                chats.append({"session_id": sid, "label": label})
+                if not any(same(c) for c in chats):
+                    label = (" ".join(str(op.get("label") or "").split())[:60]
+                             or next((c["label"] for c in chats
+                                      if c["session_id"] == sid), sid[:8]))
+                    # The linked chat's own store, so ingestion has somewhere
+                    # to keep its cursor and prompts.
+                    CS.paths(sid, root).session_dir.mkdir(parents=True, exist_ok=True)
+                    entry = {"session_id": sid, "label": label}
+                    if goal_id:
+                        entry["goal_id"] = goal_id
+                    chats.append(entry)
             else:
-                chats = [c for c in chats if c["session_id"] != sid]
+                chats = [c for c in chats if not same(c)]
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
@@ -1115,6 +1607,46 @@ class H(BaseHTTPRequestHandler):
                 html = html.replace(
                     "</body>", '<script src="/bridge.js"></script>\n</body>', 1)
                 self._send(200, html.encode(), "text/html; charset=utf-8")
+            elif self.path.split("?", 1)[0] == "/api/tree":
+                # The project's files, for the overview's file pane. Where
+                # the project is comes from the chat's manifest; a workspace
+                # that does not know answers with an empty tree, not a guess.
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                self._send(200, {"ok": True, "root": who["cwd"],
+                                 "tree": (project_tree(who["cwd"])
+                                          if who["cwd"] else [])})
+            elif self.path.split("?", 1)[0] == "/api/file":
+                # One text file of the project, named relative to its root.
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                relpath = (query.get("path") or [""])[0]
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                if not who["cwd"] or not relpath:
+                    self._send(200, {"ok": False, "error": "no project"})
+                else:
+                    self._send(200, project_file(who["cwd"], relpath))
+            elif self.path == "/api/supabase":
+                from . import supabase_client as SB
+                root = None
+                if self.server.chat_scoped:
+                    _, root = _chat_identity(self.server.trajdir)
+                self._send(200, _supabase_status(SB, root))
+            elif self.path.split("?", 1)[0] == "/api/project.json":
+                # The project's own record: one file per directory, holding
+                # every goal of every chat started there. Read from the vault
+                # base, not from the project directory -- it is what the
+                # workspace knows about the project, not a file of it.
+                trajdir = self.server.trajdir
+                session, root = ((_chat_identity(trajdir))
+                                 if self.server.chat_scoped else (None, None))
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                self._send(200, project_json(root, who["cwd"]))
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
@@ -1130,8 +1662,28 @@ class H(BaseHTTPRequestHandler):
                         "linked": linked,
                         "available": _discover_chats(session_id, root),
                     })
-            elif self.path == "/api/state":
-                self._send(200, _payload(
+            elif self.path.split("?", 1)[0] == "/api/state":
+                shared = getattr(self.server, "shared_project", None)
+                if shared:
+                    # A shared workspace stands on no vault: its state is
+                    # the rows Postgres has, in the shape the tree reads.
+                    from . import supabase_client as SB
+                    try:
+                        self._send(200, SB.shared_payload(
+                            shared,
+                            force="fresh=1" in self.path))
+                    except SB.SupabaseError as exc:
+                        self._send(200, dict(_empty_shared(shared),
+                                             shared_error=str(exc)))
+                else:
+                    self._send(200, _payload(
+                        self.server.trajdir, self.server.chat_scoped))
+            elif self.path == "/api/handoff":
+                # The workspace as one markdown file for a teammate's agent:
+                # every goal's notes, prompt and TODO rows with their build
+                # states, plus the repository's git and GitHub metadata,
+                # under a prompt that has the agent render and open it.
+                self._send(200, _handoff(
                     self.server.trajdir, self.server.chat_scoped))
             elif (self.path == "/api/briefing"
                   or self.path.startswith("/api/briefing?")):
@@ -1293,6 +1845,29 @@ class H(BaseHTTPRequestHandler):
                 if not isinstance(body, dict):
                     self._send(400, {"ok": False, "error": "expected an operation"})
                     return
+                if getattr(self.server, "shared_project", None):
+                    # A shared workspace writes through one door. Everything
+                    # else is still refused here rather than left for each
+                    # operation to discover on its own.
+                    if body.get("op") == "shared_edit_goal":
+                        from . import shared_edit as SE
+                        from . import supabase_client as SB
+                        try:
+                            self._send(200, SE.update_goal(
+                                str(body.get("id") or ""),
+                                body.get("expect"),
+                                body.get("fields") or {},
+                                project_id=self.server.shared_project))
+                        except SB.SupabaseError as exc:
+                            self._send(200, {"ok": False, "error": str(exc)})
+                        except (OSError, ValueError) as exc:
+                            self._send(200, {"ok": False,
+                                             "error": str(exc)[:200]})
+                        return
+                    self._send(200, {"ok": False, "error":
+                                     "this is a shared workspace: only your "
+                                     "own goals can be edited here"})
+                    return
                 with self.server.state_lock:
                     result = _apply(
                         body, self.server.trajdir, self.server.chat_scoped)
@@ -1305,6 +1880,18 @@ class H(BaseHTTPRequestHandler):
                     })
                     return
                 nested = body.get("goals")
+                shared = getattr(self.server, "shared_project", None)
+                if shared:
+                    from . import shared_edit as SE
+                    from . import supabase_client as SB
+                    try:
+                        out = SE.apply_tree(shared, nested)
+                    except SB.SupabaseError as exc:
+                        out = {"ok": False, "error": str(exc)}
+                    except (OSError, ValueError) as exc:
+                        out = {"ok": False, "error": str(exc)[:200]}
+                    self._send(409 if out.get("conflict") else 200, out)
+                    return
                 expected_revision = body.get("base_revision")
                 if not isinstance(expected_revision, str):
                     self._send(400, {
@@ -1326,9 +1913,14 @@ class H(BaseHTTPRequestHandler):
             self._finish_request()
 
 
-def _configure_server(server, trajdir, chat_scoped, follow=True):
+def _configure_server(server, trajdir, chat_scoped, follow=True,
+                      shared_project=None):
     server.trajdir = trajdir
     server.chat_scoped = chat_scoped
+    # A shared workspace has no vault behind it. trajdir still points
+    # somewhere real -- the static files and the lock live there -- but the
+    # state comes from Postgres and nothing here writes.
+    server.shared_project = shared_project
     server.state_lock = threading.RLock()
     server.expected_host = f"127.0.0.1:{server.server_address[1]}"
     server.activity_lock = threading.Lock()
@@ -1383,8 +1975,10 @@ def _follow_transcript(server, stop, interval=None):
         first = False
         try:
             session_id, root = _chat_identity(server.trajdir)
-            targets = [session_id] + [chat["session_id"]
-                                      for chat in _load_linked(session_id, root)]
+            # Each linked session once, however many scopes link it: its
+            # transcript has one cursor.
+            targets = [session_id] + [sid for sid, _label, _goals
+                                      in _linked_sessions(_load_linked(session_id, root))]
         except (OSError, ValueError):
             continue
         for target in targets:
@@ -1441,6 +2035,42 @@ def _watch_idle(server, timeout, stop):
         if expired:
             server.shutdown()
             return
+
+
+def run_shared(project_id, port=8850, open_browser=True, trajdir=None,
+               ready_callback=None, label="Shared goals"):
+    """One shared project, on its own local port.
+
+    Deliberately a separate server rather than a mode of the personal one:
+    two workspaces, two windows, two addresses. Which tree you are looking
+    at should never be a thing you have to work out.
+    """
+    trajdir = _scope(trajdir)
+    for candidate in range(port, port + 20):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), H)
+            _configure_server(server, trajdir, False, follow=False,
+                              shared_project=str(project_id))
+            break
+        except OSError:
+            continue
+    else:
+        print("  no free port found")
+        return None
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    print(f"\n  {label} · {url}", flush=True)
+    print("  read-only · Ctrl-C to stop\n", flush=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True,
+                              name="hc-shared")
+    thread.start()
+    if ready_callback:
+        ready_callback(url, server)
+    if open_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:      # noqa: BLE001 - a printed url still works
+            pass
+    return {"url": url, "server": server, "thread": thread}
 
 
 def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,

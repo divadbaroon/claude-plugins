@@ -231,6 +231,60 @@ TODO_INDENT = "    "
 TODO_STATUSES = ("", "queued", "building", "asking", "done", "failed")
 _TODO_ID = re.compile(r"^t[0-9a-z]{4,24}$")
 
+# A screenshot pasted into a row: the row's text gets "[attachment #N]" where
+# the caret was, and the row's `attachments` remembers which file each N
+# names. N counts up across the whole list, never reused, so a marker means
+# the same file wherever it is later moved. A marker the reader deletes from
+# the text un-cites its file: what leaves the rail names only the markers
+# still present in some row.
+_MARKER = re.compile(r"\[attachment #(\d+)\]")
+MAX_ATTACHMENTS = 20
+
+
+def normalize_attachments(value) -> list:
+    out, seen = [], set()
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            n = int(item.get("n"))
+        except (TypeError, ValueError):
+            continue
+        path = str(item.get("path") or "")[:1000]
+        if n <= 0 or n in seen or not path:
+            continue
+        seen.add(n)
+        out.append({"n": n, "path": path,
+                    "name": str(item.get("name") or "")[:200]})
+        if len(out) >= MAX_ATTACHMENTS:
+            break
+    return out
+
+
+def todo_attachments(items) -> list:
+    """The files the list still cites: each row's attachments whose marker
+    appears in SOME row's text, ordered by number."""
+    cited = set()
+    for row in items or []:
+        if isinstance(row, dict):
+            cited.update(int(n) for n in _MARKER.findall(str(row.get("text") or "")))
+    out, seen = [], set()
+    for row in items or []:
+        if not isinstance(row, dict):
+            continue
+        for att in normalize_attachments(row.get("attachments")):
+            if att["n"] in cited and att["n"] not in seen:
+                seen.add(att["n"])
+                out.append(att)
+    return sorted(out, key=lambda a: a["n"])
+
+
+def render_attachments(items) -> str:
+    """One line per cited file, marker to path; "" when nothing is cited."""
+    lines = [f"[attachment #{a['n']}]: {a['path']}"
+             for a in todo_attachments(items)]
+    return "\n".join(lines) + "\n" if lines else ""
+
 
 def todo_id() -> str:
     """A fresh id for a list row: short, opaque, never shown."""
@@ -295,10 +349,17 @@ def normalize_todo_items(value) -> list:
         status = str(row.get("status") or "")
         if status not in TODO_STATUSES:
             status = ""
-        out.append({"id": rid, "text": str(row.get("text") or ""),
-                    "depth": depth, "status": status,
-                    "question": str(row.get("question") or "")[:400]
-                    if status == "asking" else ""})
+        clean = {"id": rid, "text": str(row.get("text") or ""),
+                 "depth": depth, "status": status,
+                 "question": str(row.get("question") or "")[:400]
+                 if status == "asking" else ""}
+        # Only present when there is something to hold: the browser's rows
+        # and the server's must compare equal field for field, and a row
+        # without a screenshot has no field at all on either side.
+        attachments = normalize_attachments(row.get("attachments"))
+        if attachments:
+            clean["attachments"] = attachments
+        out.append(clean)
     ceiling = 0
     for row in out:
         row["depth"] = max(0, min(row["depth"], ceiling))

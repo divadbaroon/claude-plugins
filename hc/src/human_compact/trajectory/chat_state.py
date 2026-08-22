@@ -28,6 +28,7 @@ from .goals import (  # noqa: F401
     normalize_sources,
     overlay_todo_store,
     promote_todos,
+    render_attachments,
     split_doc,
     split_todo_store,
     strip_todo_items,
@@ -1375,6 +1376,13 @@ def _goal_context_text(
                 lines.append(f"{indent}  - TODOS:")
                 lines.extend(f"{indent}    {line}".rstrip()
                              for line in todos_md.splitlines())
+                # The files those rows cite by "[attachment #N]", so a
+                # marker in the list above is never a dangling reference.
+                shots = render_attachments(goal.get("todo_items"))
+                if shots:
+                    lines.append(f"{indent}  - ATTACHMENTS:")
+                    lines.extend(f"{indent}    {line}".rstrip()
+                                 for line in shots.splitlines())
             if priority != "normal":
                 lines.append(f"{indent}  - PRIORITY: {priority}")
             # What the user attached as background for this goal, named by
@@ -1473,7 +1481,13 @@ def save_goals(
         _atomic_json(p.important, important)
         text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))
-        return True
+    # The project's own file -- one per directory, holding the goals of every
+    # chat started in it -- is a snapshot of what was just written, so it is
+    # refreshed here rather than by each of the many callers. Outside the
+    # lock, and imported here rather than at the top: it reads this module.
+    from . import project_store
+    project_store.refresh_for_session(session_id, root)
+    return True
 
 
 def _project_key(cwd: Path) -> str:
