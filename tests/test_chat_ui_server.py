@@ -43,7 +43,7 @@ def goal(goal_id, title, prompt_ids=None):
 def open_prompt_tab(page):
     """The rail opens on TODOs; the assembled prompt is the other tab."""
     page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
-    page.wait_for_selector("textarea.hc-rail-code", state="visible", timeout=10_000)
+    page.wait_for_selector(".hc-rail-copy", state="visible", timeout=10_000)
 
 
 def write_scope(path, goals, prompts):
@@ -616,7 +616,7 @@ class ChatUiServerTests(unittest.TestCase):
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
                 open_prompt_tab(page)
-                expect(page.locator(".hc-rail-code")).to_be_visible()
+                expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
                 copy.click()
@@ -664,10 +664,8 @@ class ChatUiServerTests(unittest.TestCase):
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
                 open_prompt_tab(page)
-                code = page.locator(".hc-rail-code")
-                expect(code).to_be_visible()
-                # The field holds only the reader's words -- none yet -- and
-                # the assembled context rides along on copy. Read the copy.
+                expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
+                # What the tab prints is what Copy takes. Read the copy.
                 context = page.context
                 context.grant_permissions(["clipboard-read",
                                            "clipboard-write"])
@@ -1552,12 +1550,10 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_have_count(1)
 
                 open_prompt_tab(page)
-                # The field is for the reader's own words: the context the
-                # goal assembles is not printed in it (it is prepended on
-                # copy), so a goal with nothing written shows an empty field.
-                expect(rail.locator("textarea.hc-rail-code")).to_have_count(1)
-                draft = rail.locator(".hc-rail-code").input_value()
-                self.assertEqual("", draft)
+                # The tab prints the prompt and offers no box to type in:
+                # what is on screen is the whole of what a build would send.
+                expect(rail.locator(".hc-rail-ctx-body")).to_have_count(1)
+                expect(rail.locator("textarea.hc-rail-code")).to_have_count(0)
 
                 # Nothing here starts a run; every op behind one refuses.
                 expect(page.get_by_text("run agent", exact=True)
@@ -1577,8 +1573,8 @@ class ChatUiServerTests(unittest.TestCase):
                 # The label only changes once the clipboard has it.
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
-                # With nothing written, what leaves is the assembled prompt
-                # itself -- the field being empty does not empty the copy.
+                # What leaves is the assembled prompt itself -- the same
+                # string the tab is printing.
                 copied = page.evaluate("() => navigator.clipboard.readText()")
                 self.assertIn("Objective:\nShip the document pane.", copied)
                 self.assertIn("Decisions:\n- we chose sqlite", copied)
@@ -1586,13 +1582,15 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_an_edited_prompt_is_kept_in_the_document_and_copied(self):
+    def test_the_prompt_is_assembled_from_the_document_and_copied(self):
         """It is assembled, not authored, and reading it changes nothing.
 
-        The old box kept no edit -- not across a reload, not across a
-        CONTEXT -> PROMPT round trip -- while the copy beside it said to edit
-        it here. The rail is a rendering of the goal's document, so there is
-        no edit to lose and nothing it can write back.
+        The tab was a box to type in with the assembled prompt printed above
+        it: the reader's paragraph landed in the goal's `prompt_md` and the
+        string that mattered was the one they could not touch. Only the
+        prompt is left. It is a rendering of the goal's document, so there is
+        no edit to lose and nothing it can write back -- and what Copy takes
+        is exactly what is on screen.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1623,43 +1621,31 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
                 open_prompt_tab(page)
-                code = page.locator(".hc-rail-code")
-                self.assertEqual("", code.input_value())
+                # No box to type in, and the objective from the document is
+                # in what the tab prints.
+                expect(page.locator("textarea.hc-rail-code")).to_have_count(0)
+                body = page.locator(".hc-rail-ctx-body")
+                expect(body).to_contain_text("Ship the document pane.",
+                                             timeout=15_000)
 
-                # An edit is the reader's, and it is kept where the rest of
-                # their writing is kept: a section of the goal's document.
-                # Browser storage would not do -- every /goals-ui opens a new
-                # port, and a new port is a new origin with nothing saved.
-                code.click()
-                page.keyboard.type("EDITED BY HAND")
-                page.wait_for_timeout(2_500)
+                # Reading it writes nothing back: the goal's own prompt field
+                # is still empty, and the document it was assembled from is
+                # untouched.
                 stored_goal = [g for g in get_json(url + "/api/state")["goals"]
                                if g["id"] == "a1"][0]
-                # Its own field, beside the document -- never in it.
-                self.assertIn("EDITED BY HAND", stored_goal["prompt_md"])
-                self.assertNotIn("EDITED BY HAND", stored_goal["notes"])
+                self.assertEqual("", stored_goal["prompt_md"])
                 self.assertNotIn("# Prompt", stored_goal["notes"])
-                # The objective it was assembled from is untouched by the edit.
                 self.assertIn("# Objective\nShip the document pane.",
                               stored_goal["notes"])
                 self.assertEqual("", stored_goal["description"])
 
-                page.reload(wait_until="domcontentloaded")
-                expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
-                open_prompt_tab(page)
-                expect(page.locator(".hc-rail-code")).to_have_value(
-                    __import__("re").compile("EDITED BY HAND"))
-
-                # Copy takes the assembled context AND the reader's words:
-                # what is on screen is theirs alone, what leaves is whole.
+                # Copy takes what is on screen, whole.
                 copy = page.get_by_text("Copy prompt", exact=True)
                 copy.click()
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
                 copied = page.evaluate("() => navigator.clipboard.readText()")
                 self.assertIn("Objective:\nShip the document pane.", copied)
-                self.assertTrue(copied.rstrip().endswith("EDITED BY HAND"),
-                                copied)
                 self.assertNotIn("Implement this goal for me.", copied)
                 context.close()
             finally:

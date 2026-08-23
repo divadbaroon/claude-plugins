@@ -58,6 +58,7 @@ from .secure_io import atomic_write_json
 SCHEMA_VERSION = 1
 PROJECT_OBJECTIVE_LIMIT = 2000
 PROJECT_DESCRIPTION_LIMIT = 8000
+PROJECT_NAME_LIMIT = 80
 
 
 def _now() -> str:
@@ -70,6 +71,77 @@ def _resolved(cwd) -> str:
         return str(Path(str(cwd)).expanduser().resolve())
     except (OSError, RuntimeError):
         return str(cwd)
+
+
+def _slug(name: str) -> str:
+    """A name as a directory name: its words, lowercased, joined by dashes.
+
+    Only ever a file name -- what the project is called is written in its
+    record, so a slug that collapses two spellings into one folder still
+    shows the reader the name they typed.
+    """
+    flat = "".join(c.lower() if c.isalnum() else "-" for c in str(name))
+    return "-".join(part for part in flat.split("-") if part)[:60]
+
+
+def workspace_home(root: Optional[Path], name) -> Optional[Path]:
+    """Where a project made from a name alone keeps its directory.
+
+    Everything here is keyed by a directory, and a project typed as a name
+    has none yet -- so it is given one, inside the vault beside the records
+    rather than anywhere on the reader's disk. ``None`` when the name has no
+    letters or digits in it at all and so cannot become a folder.
+    """
+    slug = _slug(name)
+    if not slug:
+        return None
+    return CS._state_location(root)[1] / "workspaces" / slug
+
+
+def project_named(root: Optional[Path], name) -> Optional[Dict[str, Any]]:
+    """The project already called this, if there is one.
+
+    Two projects with one name are two answers to "which one did I mean",
+    so a name that is taken is reported back rather than quietly reused --
+    the reader picks the one they meant off the list, or renames the one
+    they are making. Matched as a reader reads a name, ignoring case and
+    spacing, and also by the folder a name is given, so a project renamed
+    since it was made is still found by the home it sits in.
+    """
+    wanted = " ".join(str(name or "").split()).casefold()
+    home = workspace_home(root, name)
+    seat = _resolved(home) if home is not None else ""
+    for row in list_projects(root):
+        here = " ".join(str(row.get("name") or "").split()).casefold()
+        if wanted and here == wanted:
+            return row
+        if seat and _resolved(row.get("cwd")) == seat:
+            return row
+    return None
+
+
+def create_named(root: Optional[Path], name) -> Optional[str]:
+    """Make a project out of a name: give it a home, write it a record, and
+    keep the name as it was typed.
+
+    Idempotent by name: typing one that already exists hands back the
+    project it names rather than a second copy of it, and leaves everything
+    written about it alone. Whether being handed the first one is what the
+    reader wanted is not settled here -- ``project_named`` is what asks that
+    question, before this is called.
+    """
+    text = str(name or "").strip()[:PROJECT_NAME_LIMIT]
+    home = workspace_home(root, text)
+    if home is None:
+        return None
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    cwd = str(home)
+    if not read_file(root, cwd).get("project"):
+        save_project(root, cwd, {"name": text})
+    return cwd
 
 
 def project_path(root: Optional[Path], cwd) -> Path:
@@ -110,6 +182,13 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     section = read_file(root, cwd).get("project")
     section = section if isinstance(section, dict) else {}
     out: Dict[str, Any] = {}
+    # What the reader calls it. A directory name is where a project sits
+    # rather than what it is called, so a name they wrote wins over it --
+    # and only a written one is carried here, so an unnamed project still
+    # falls back to its directory.
+    name = section.get("name")
+    if isinstance(name, str) and name.strip():
+        out["name"] = name.strip()[:PROJECT_NAME_LIMIT]
     objective = section.get("objective")
     if isinstance(objective, str):
         out["objective"] = objective[:PROJECT_OBJECTIVE_LIMIT]
@@ -152,7 +231,11 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     objective = str(authored.get("objective") or "")[:PROJECT_OBJECTIVE_LIMIT]
     description = str(authored.get("description") or "")[
         :PROJECT_DESCRIPTION_LIMIT]
-    section = {"cwd": str(cwd), "name": Path(str(cwd)).name,
+    # The directory's name is the fallback, not the answer: a project can be
+    # renamed, and what it is called is written here rather than recovered
+    # from the path it happens to sit at.
+    named = str(authored.get("name") or "").strip()[:PROJECT_NAME_LIMIT]
+    section = {"cwd": str(cwd), "name": named or Path(str(cwd)).name,
                "objective": objective,
                "description": description or objective,
                "sources": GM.normalize_sources(authored.get("sources"))}

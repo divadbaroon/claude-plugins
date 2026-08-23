@@ -52,6 +52,28 @@ class ClaudeCLIProviderTests(unittest.TestCase):
         self.assertIn("--no-session-persistence", command)
 
     @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_a_plain_answer_is_asked_for_without_tools(self, run):
+        # One question about text the prompt already carries. A subprocess
+        # that goes reading the project for it spends the deadline instead.
+        run.return_value = Mock(returncode=0, stdout="  it says hello  ",
+                                stderr="")
+
+        result = providers.ClaudeCLI("sonnet").generate_plain("what does it say?")
+
+        self.assertEqual("  it says hello  ", result)
+        command = run.call_args.args[0]
+        self.assertEqual("", command[command.index("--tools") + 1])
+        # Not an extraction call: the reader's own effort still applies.
+        self.assertNotIn("--effort", command)
+
+    def test_a_provider_with_no_plain_answer_gives_its_ordinary_one(self):
+        class Only(providers.Base):
+            def generate(self, prompt):
+                return "said once"
+
+        self.assertEqual("said once", Only("m").generate_plain("ask"))
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
     def test_timeout_reports_the_enforced_deadline(self, run):
         run.side_effect = subprocess.TimeoutExpired(["claude"], 180)
 

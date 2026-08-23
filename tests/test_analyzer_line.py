@@ -49,28 +49,24 @@ class AnalyzerLineTests(BridgeTestCase):
         self.assertIn("1,807", said)
 
     def test_pending_is_not_reading(self):
-        # "pending" means queued with nobody holding the lease -- which is
-        # exactly what a dead hook leaves behind. Calling it "reading" would
-        # claim progress that is not happening, which is the ambiguity this
-        # line exists to remove.
+        # "pending" means queued with nobody holding the lease. It must not
+        # claim progress that is not happening -- and a queue depth is not
+        # something the reader can act on, so it says nothing at all.
         said = self.line({"status": "pending", "last_analyzed_ordinal": 0,
                           "requested_ordinal": 12})
-        self.assertIn("waiting to read", said)
-        self.assertNotIn("reading this chat", said)
+        self.assertEqual("", said)
 
-    def test_behind_with_nobody_working_says_it_is_waiting(self):
-        # This is what a dead hook leaves behind, and it used to look
-        # identical to nothing at all.
-        said = self.line({"status": "idle", "last_analyzed_ordinal": 100,
-                          "requested_ordinal": 103})
-        self.assertIn("waiting to read", said)
-        self.assertIn("3 new messages", said)
+    def test_behind_with_nobody_working_says_nothing(self):
+        # The backlog count used to sit in the corner of the tree as a
+        # permanent number. It named work nobody could do anything about.
+        self.assertEqual("", self.line({"status": "idle",
+                                        "last_analyzed_ordinal": 100,
+                                        "requested_ordinal": 103}))
 
-    def test_one_message_is_not_pluralised(self):
-        self.assertIn("1 new message",
-                      self.line({"status": "idle",
-                                 "last_analyzed_ordinal": 10,
-                                 "requested_ordinal": 11}))
+    def test_a_single_unread_message_is_silent_too(self):
+        self.assertEqual("", self.line({"status": "idle",
+                                        "last_analyzed_ordinal": 10,
+                                        "requested_ordinal": 11}))
 
     def test_an_error_is_said_plainly(self):
         said = self.line({"status": "error", "last_analyzed_ordinal": 3,

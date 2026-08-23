@@ -293,6 +293,50 @@ class TodoAlertTests(BridgeTestCase):
                                         ("t2", "b", "failed")]}))))
         self.assertEqual([[0, 2], 0, 0], out)
 
+    def test_a_cleared_bell_counts_the_next_alert_from_one(self):
+        out = self.alerts(
+            "accept(%s); accept(%s);"
+            "var before = badge();"
+            "A.clear();"
+            "var cleared = badge();"
+            "accept(%s);"
+            "[before, cleared, badge(), A.log().length];"
+            % (json.dumps(goals({"g1": [("t1", "a", "building"),
+                                        ("t2", "b", "building"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "failed"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "failed"),
+                                        ("t3", "c", "done")]}))))
+        self.assertEqual([["2", "2"], [None, "0"], ["1", "1"], 1], out)
+
+    def test_a_clear_in_another_page_is_not_undone_by_this_one(self):
+        # Two workspace pages on one store. The other one cleared the log
+        # while this one was holding a copy of it; the alert that lands here
+        # next is added to what is stored, not to what was remembered, and
+        # the bell reads 1 rather than what it read before the clear plus 1.
+        out = self.alerts(
+            "accept(%s); accept(%s);"
+            "var mine = badge();"
+            # The other page's clear, as this one's storage listener finds it.
+            "store['hc-alerts-log-v1'] = '[]';"
+            "A.changedElsewhere();"
+            "var after = [badge(), A.log().length, stack().length];"
+            "accept(%s);"
+            "[mine, after, badge(), A.log().length];"
+            % (json.dumps(goals({"g1": [("t1", "a", "building"),
+                                        ("t2", "b", "building"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "failed"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "failed"),
+                                        ("t3", "c", "done")]}))))
+        self.assertEqual([["2", "2"], [[None, "0"], 0, 0], ["1", "1"], 1], out)
+
     def test_the_log_survives_a_reload(self):
         # Second harness run on the same localStorage: the center still
         # lists what happened, unread as it was left.

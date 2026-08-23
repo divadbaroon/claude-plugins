@@ -149,6 +149,79 @@ class SourceListTests(Overview, BridgeTestCase):
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class AddSourceModalTests(Overview, BridgeTestCase):
+    """The picker is a dialog over the page, not a fold in the column.
+
+    It used to unfold inside the 220px source list, where a conversation
+    list of sixty rows pushed the rest of the page off the screen. The form
+    is the same one; where it opens, and what closes it, is not.
+    """
+
+    def test_the_form_lives_in_a_dialog_outside_the_source_list(self):
+        got = self.open(
+            "var modal = box.querySelector('[data-hc-addmodal]');"
+            "var form = box.querySelector('[data-hc-addform]');"
+            "var list = box.querySelector('[data-hc-srcs]');"
+            "return JSON.stringify([!!modal, modal.getAttribute('data-hc-on'),"
+            " form.parentNode.getAttribute('data-hc-modal-card'),"
+            " list.contains(form), modal.parentNode === box]);")
+        self.assertEqual([True, None, "", False, True], got)
+
+    def test_opening_marks_the_dialog_and_the_form_together(self):
+        got = self.open(
+            "click(box.querySelector('.hc-overview-addsrc'));"
+            "var modal = box.querySelector('[data-hc-addmodal]');"
+            "var form = box.querySelector('[data-hc-addform]');"
+            "return JSON.stringify([P.addSourceShown(),"
+            " modal.getAttribute('data-hc-on'), form.getAttribute('data-hc-on')]);")
+        self.assertEqual([True, "", ""], got)
+
+    def test_the_x_the_backdrop_and_escape_all_close_it(self):
+        got = self.open(
+            "var modal = box.querySelector('[data-hc-addmodal]');"
+            "var add = box.querySelector('.hc-overview-addsrc');"
+            "click(add); click(modal.querySelector('[data-hc-addclose]'));"
+            "var byX = P.addSourceShown();"
+            "click(add); click(modal); var byBack = P.addSourceShown();"
+            "click(add); key('Escape', document.body);"
+            "return JSON.stringify([byX, byBack, P.addSourceShown(),"
+            " P.overviewShown()]);")
+        # Escape takes the dialog and stops there: the page under it stays.
+        self.assertEqual([False, False, False, True], got)
+
+    def test_a_click_on_the_card_is_not_a_click_out_of_it(self):
+        got = self.open(
+            "click(box.querySelector('.hc-overview-addsrc'));"
+            "click(box.querySelector('[data-hc-modal-card]'));"
+            "return JSON.stringify(P.addSourceShown());")
+        self.assertTrue(got)
+
+    def test_attaching_something_closes_the_dialog_over_the_list(self):
+        got = self.open(
+            "click(box.querySelector('.hc-overview-addsrc'));"
+            "var form = box.querySelector('[data-hc-addform]');"
+            "click(form.querySelector('[data-hc-kind=\"doc\"]'));"
+            "form.querySelector('[data-hc-src-label]').value = 'docs/plan.md';"
+            "click(form.querySelector('[data-hc-src-add]'));"
+            "return later(function () { return JSON.stringify("
+            "  [P.addSourceShown()]); });",
+            state=state_with([SOURCES[1]]))
+        self.assertEqual([False], got)
+
+    def test_a_refused_attach_leaves_it_open_to_be_corrected(self):
+        got = self.open(
+            "click(box.querySelector('.hc-overview-addsrc'));"
+            "var form = box.querySelector('[data-hc-addform]');"
+            "click(form.querySelector('[data-hc-kind=\"doc\"]'));"
+            "form.querySelector('[data-hc-src-label]').value = 'docs/architecture.md';"
+            "click(form.querySelector('[data-hc-src-add]'));"
+            "return JSON.stringify([P.addSourceShown(),"
+            " form.querySelector('[data-hc-src-say]').textContent]);",
+            state=state_with([SOURCES[1]]))
+        self.assertEqual([True, "already attached"], got)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class AddSourceTests(Overview, BridgeTestCase):
 
     def test_the_form_offers_the_three_kinds_and_opens_shut(self):
@@ -330,3 +403,119 @@ class ConversationPickerTests(Overview, BridgeTestCase):
             "  box.querySelector('[data-hc-src-chats]'), 'hc-overview-srcsay'));",
             state=state_with([]), chats={"ok": True, "linked": [], "available": []})
         self.assertEqual(["no other chats to attach"], got)
+
+
+# The rail under a goal's title, as the artifact leaves it: a label, then
+# whatever that one goal has attached, then the control that attaches more.
+RAIL = (
+    "var rail = document.createElement('span'); rail.className = 'hc-sources';"
+    "var lab = document.createElement('span');"
+    "lab.className = 'hc-sources-label'; lab.textContent = 'SOURCES';"
+    "rail.appendChild(lab);"
+    "var own = document.createElement('span'); own.className = 'hc-src';"
+    "var ownLab = document.createElement('span');"
+    "ownLab.className = 'hc-src-label'; ownLab.textContent = 'goal-note.md';"
+    "own.appendChild(ownLab); rail.appendChild(own);"
+    "var plus = document.createElement('span');"
+    "plus.className = 'hc-src-add'; plus.textContent = '+ Add source';"
+    "rail.appendChild(plus); app.appendChild(rail);"
+    "var chips = function () { return rail.children.filter(function (c) {"
+    "  return c.getAttribute('data-hc-ctxsrc') !== null; }); };"
+    "var tags = function () { return chips().map(function (c) {"
+    "  return deepText(c.querySelector('.hc-src-tag')); }); };"
+    "var names = function () { return chips().map(function (c) {"
+    "  return deepText(c.querySelector('.hc-src-label')); }); };"
+)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class InheritedSourceTests(BridgeTestCase):
+    """The overview's context, drawn on every goal that inherits it.
+
+    A goal sits inside the project, so the repository and everything the
+    overview attaches are context it was written against. The rail under
+    the title showed only what that one goal had attached, which in a fresh
+    workspace was nothing at all.
+    """
+
+    def rail(self, tail, state=None):
+        return json.loads(self.run_js(
+            PRELUDE + fetch_js() + RAIL
+            + "P.acceptState(%s);" % json.dumps(state or state_with())
+            + tail))
+
+    def test_the_rail_carries_the_repository_and_everything_attached_to_it(self):
+        got = self.rail(
+            "var drew = P.renderInheritedSources();"
+            "return JSON.stringify([drew, tags(), names(),"
+            " texts(rail, 'hc-src-label')]);")
+        self.assertEqual(
+            [True,
+             ["REPO", "CHAT", "DOC", "GITHUB"],
+             ["myrepo", "Claude session: aaaaaaaa", "architecture.md",
+              "acme/other"],
+             # the inherited ones read first, before the goal's own
+             ["myrepo", "Claude session: aaaaaaaa", "architecture.md",
+              "acme/other", "goal-note.md"]], got)
+
+    def test_a_project_with_nothing_attached_still_names_its_repository(self):
+        got = self.rail(
+            "P.renderInheritedSources();"
+            "return JSON.stringify([tags(), names()]);",
+            state=state_with([]))
+        self.assertEqual([["REPO"], ["myrepo"]], got)
+
+    def test_a_second_pass_neither_duplicates_them_nor_keeps_a_stale_one(self):
+        got = self.rail(
+            "var first = P.renderInheritedSources();"
+            "var again = P.renderInheritedSources();"
+            "var many = chips().length;"
+            "P.acceptState(%s);" % json.dumps(state_with([SOURCES[1]]))
+            + "var moved = P.renderInheritedSources();"
+            "return JSON.stringify([first, again, many, moved, names(),"
+            " texts(rail, 'hc-src-label')]);")
+        self.assertEqual([True, False, 4, True,
+                          ["myrepo", "architecture.md"],
+                          ["myrepo", "architecture.md", "goal-note.md"]], got)
+
+    def test_an_inherited_source_carries_no_remove_and_says_where_it_is_from(self):
+        got = self.rail(
+            "P.renderInheritedSources();"
+            "return JSON.stringify([chips().map(function (c) {"
+            "  return c.querySelector('.hc-src-rm') === null; }),"
+            " chips()[0].getAttribute('title'),"
+            " chips()[0].getAttribute('role')]);")
+        self.assertEqual([[True, True, True, True],
+                          "myrepo — from the overview", "button"], got)
+
+    def test_clicking_one_opens_the_overview_on_it(self):
+        got = self.rail(
+            "P.renderProjectChip(); P.renderInheritedSources();"
+            "click(chips()[2]);"
+            "return later(function () {"
+            "  var box = document.querySelector('.hc-overview');"
+            "  var on = []; (function walk(n) { (n.children || []).forEach("
+            "    function (c) { if (c.getAttribute('data-hc-source') !== null"
+            "      && c.getAttribute('data-hc-on') !== null) {"
+            "      on.push(deepText(c.querySelector('.hc-overview-src-name'))); }"
+            "    walk(c); }); })(box);"
+            "  return JSON.stringify([P.overviewShown(), on]); });")
+        self.assertEqual([True, ["architecture.md"]], got)
+
+    def test_a_workspace_with_no_project_draws_nothing(self):
+        got = self.rail(
+            "var drew = P.renderInheritedSources();"
+            "return JSON.stringify([drew, chips().length]);",
+            state=chat_state(project=False))
+        self.assertEqual([False, 0], got)
+
+    def test_the_sweep_is_what_puts_them_back_after_a_re_render(self):
+        got = self.rail(
+            "P.renderInheritedSources();"
+            "chips().forEach(function (c) { rail.removeChild(c); });"
+            "var gone = chips().length;"
+            "var back = P.renderInheritedSources();"
+            "return JSON.stringify([gone, back, names()]);")
+        self.assertEqual([0, True,
+                          ["myrepo", "Claude session: aaaaaaaa",
+                           "architecture.md", "acme/other"]], got)

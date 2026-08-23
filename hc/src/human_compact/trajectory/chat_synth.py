@@ -832,8 +832,45 @@ def refresh(session_id: str, root: Optional[Path] = None, provider=None) -> Dict
                 "needs_handoff": False}
 
 
+def inference_off(session_id: str = "", root: Optional[Path] = None) -> bool:
+    """Whether this chat has been told to stop inferring goals.
+
+    Kept as a file beside the chat's own state, not as an environment
+    variable: analysis is started from three places -- the server's
+    transcript follower, the hooks, and the CLI -- and only the first of
+    them inherits the server's environment. A switch the hooks cannot see
+    is not a switch. The variable still works, for a one-off run.
+    """
+    if str(os.environ.get("HC_CHAT_INFER", "")).strip() in ("0", "off", "no",
+                                                            "false"):
+        return True
+    if not session_id:
+        return False
+    try:
+        return _infer_off_path(session_id, root).exists()
+    except (OSError, ValueError):
+        return False
+
+
+def _infer_off_path(session_id: str, root: Optional[Path] = None) -> Path:
+    return CS.paths(session_id, root).session_dir / "inference_off"
+
+
+def set_inference(session_id: str, on: bool, root: Optional[Path] = None) -> bool:
+    """Turn goal inference for this chat on or off, and say what it now is."""
+    path = _infer_off_path(session_id, root)
+    if on:
+        path.unlink(missing_ok=True)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("inference is off for this chat\n", encoding="utf-8")
+    return not path.exists()
+
+
 def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any]:
     """Request analysis and start one detached, coalescing worker process."""
+    if inference_off(session_id, root):
+        return {"status": "off", "session_id": session_id}
     p = CS.paths(session_id, root)
     with CS.session_lock(session_id, root, wait_s=5):
         worker = _worker_path(session_id, root)

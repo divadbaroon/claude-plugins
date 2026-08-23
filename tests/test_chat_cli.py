@@ -665,6 +665,82 @@ class ChatCliTests(unittest.TestCase):
                     except ChildProcessError:
                         pass
 
+    def test_a_server_is_out_of_date_only_once_its_code_moves_past_it(self):
+        stamp = self.cli._package_code_stamp()
+        self.assertTrue(stamp)
+        self.assertTrue(
+            self.cli._server_outran_its_code({"started_at": stamp - 60}))
+        self.assertFalse(
+            self.cli._server_outran_its_code({"started_at": stamp + 60}))
+        # A record with no start time is not evidence of anything.
+        self.assertFalse(self.cli._server_outran_its_code({"started_at": 0}))
+        self.assertFalse(self.cli._server_outran_its_code(None))
+
+    def test_reopening_replaces_a_server_older_than_the_code_it_serves(self):
+        pids = []
+        try:
+            for _ in range(2):
+                with (mock.patch.object(self.cli, "_request_chat_refresh"),
+                      contextlib.redirect_stdout(io.StringIO())):
+                    self.assertEqual(0, self.cli.chat_ui_main(
+                        ["--session", SID, "--cwd", "/repo", "--no-open"]))
+                record = self.cli._read_server_registry(CS.paths(SID).session_dir)
+                pids.append(record["pid"])
+                # Back-date the running server to before this package was last
+                # edited: that is what an open workspace becomes the moment a
+                # build touches the code behind it.
+                aged = dict(record)
+                aged["started_at"] = self.cli._package_code_stamp() - 60
+                self.cli._write_server_registry(CS.paths(SID).session_dir, aged)
+
+            self.assertNotEqual(pids[0], pids[1])
+            # The replaced one is stopped, not merely left behind: a second
+            # server on the old port would keep answering the old tab.
+            self.assertFalse(self.cli._pid_alive(pids[0]))
+            fresh = self.cli._read_server_registry(CS.paths(SID).session_dir)
+            self.assertEqual(pids[1], fresh["pid"])
+            self.assertTrue(self.cli._healthy_chat_server(fresh, SID))
+        finally:
+            for pid in pids:
+                if not self.cli._pid_alive(pid):
+                    continue
+                os.kill(pid, signal.SIGTERM)
+            for process in list(self.cli._DETACHED_PROCESSES):
+                if process.pid in pids:
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+
+    def test_a_running_build_keeps_the_workspace_it_is_reading(self):
+        self._register_server()
+        aged = self.cli._read_server_registry(CS.paths(SID).session_dir)
+        aged["started_at"] = self.cli._package_code_stamp() - 60
+        self.cli._write_server_registry(CS.paths(SID).session_dir, aged)
+        builds = CS.paths(SID).session_dir / "builds"
+        builds.mkdir(parents=True, exist_ok=True)
+        (builds / "g1.json").write_text(json.dumps({
+            "goal_id": "g1", "status": "running", "pid": os.getpid(),
+        }), encoding="utf-8")
+        self.assertTrue(self.cli._chat_server_is_building(CS.paths(SID).session_dir))
+
+        output = io.StringIO()
+        with (mock.patch.object(self.cli, "_healthy_chat_server", return_value=True),
+              mock.patch.object(self.cli, "_stop_chat_server") as stopped,
+              mock.patch.object(self.cli, "_request_chat_refresh"),
+              mock.patch("webbrowser.open")):
+            self.assertEqual(0, self.cli.chat_hook_main(
+                [], stdin=io.StringIO(json.dumps({
+                    "session_id": SID,
+                    "hook_event_name": "UserPromptExpansion",
+                    "cwd": "/repo",
+                })), stdout=output))
+
+        stopped.assert_not_called()
+        reason = json.loads(output.getvalue())["reason"]
+        self.assertTrue(reason.startswith("goals-ui: http://127.0.0.1:9012/"))
+        self.assertIn("a build is in flight", reason)
+
     def test_refresh_worker_hands_off_remaining_bounded_evidence(self):
         from human_compact.trajectory import chat_synth
 

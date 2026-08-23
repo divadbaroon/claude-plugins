@@ -28,6 +28,11 @@ function El(tag) {
   this.appendChild = (n) => { this.children.push(n); n.parentNode = this; return n; };
   this.focus = () => {};
   this.select = () => {};
+  // One rectangle for every node. Nothing here lays anything out, so the
+  // number matters only to code that has to put a floating thing somewhere
+  // -- a test that cares about where sets `rect` on the node itself.
+  this.rect = { left: 40, right: 120, top: 60, bottom: 76, width: 80, height: 16 };
+  this.getBoundingClientRect = () => this.rect;
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
     if (at < 0) this.children.push(n); else this.children.splice(at, 0, n);
@@ -119,6 +124,12 @@ const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
   body: root, title: "Goals",
   addEventListener: (type, fn) => listeners.push([type, fn]),
+  // A dialog that listens for Escape at the document takes its listener
+  // away again when it closes; without this the close throws.
+  removeEventListener: (type, fn) => {
+    const at = listeners.findIndex(l => l[0] === type && l[1] === fn);
+    if (at >= 0) listeners.splice(at, 1);
+  },
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
   querySelector: (s) => (s === ".hc" ? app : root.querySelector(s)),
@@ -161,6 +172,11 @@ const sandbox = {
       : (opts && opts.body && JSON.parse(opts.body).op === "launch_agent_run"
          && process.env.HC_FAIL_LAUNCH === "1")
       ? { ok: false, error: "no project directory is recorded" }
+      : (opts && opts.body && JSON.parse(opts.body).op === "prompt_preview")
+      // The composed prompt and what it costs with no rows in it -- the rail
+      // prices its TODO rows against the second number.
+      ? { ok: true, prompt: "# Project\nRouter\n\n# The work\n\n- a row\n",
+          context_tokens: 1400 }
       : (opts && opts.body && JSON.parse(opts.body).op === "preview_agent_run")
       ? { ok: true, goal_id: "g1", title: "Restyle UI to match Pentimento",
           cwd: "/repo", command: "hc work g1", add_dirs: ["/repo"],
@@ -866,6 +882,173 @@ class TodoSectionTests(BridgeTestCase):
 
     def test_the_round_trip_of_an_untouched_section_changes_nothing(self):
         self.assertEqual(self.DOC, self.write(self.read()))
+
+
+class TodoCostTests(BridgeTestCase):
+    """The number in a row's lower right: the context its build opens on.
+
+    The same measurement the Prompt tab prints above the field -- the composed
+    prompt, counted -- so the two surfaces cannot disagree about what a row
+    costs. What the work on top of it will spend is a guess and lives in the
+    tooltip, labelled as one. A row that HAS been built prints what it actually
+    cost instead, and no "~".
+    """
+
+    COST = {"context_tokens": 2000, "row_tokens": 30000, "row_chars": 80,
+            "samples": 4}
+
+    def cost(self, row, cost=None):
+        state = {"scope": "chat", "goals": [], "prompts": [],
+                 "build_cost": self.COST if cost is None else cost}
+        return self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "out = window.__hcPromptUI.todoList.cost(%s);"
+            % (json.dumps(state), json.dumps(row)))
+
+    def row(self, text, **rest):
+        row = {"id": "taaaa0001", "text": text, "depth": 0, "status": "",
+               "question": ""}
+        row.update(rest)
+        return row
+
+    def test_a_row_is_priced_at_the_context_its_build_opens_on(self):
+        # 2000 of context, plus the 20 the row's own 80 characters add. The
+        # work is not in the number -- a corner that read "32k" for a row the
+        # Prompt tab priced at 2k was two answers to one question.
+        out = self.cost(self.row("x" * 80))
+        self.assertEqual("~2k tok", out["label"])
+        self.assertFalse(out["measured"])
+        # but it is still said, where it can be called a guess
+        self.assertIn("30k more", out["title"])
+        self.assertIn("over your last 4 builds", out["title"])
+
+    def test_a_longer_row_carries_more_of_itself(self):
+        # The context is the same string whatever the row says; only the row's
+        # own text grows.
+        self.assertEqual("~2.1k tok", self.cost(self.row("x" * 400))["label"])
+        self.assertEqual("~3k tok", self.cost(self.row("x" * 4000))["label"])
+        self.assertEqual("~2k tok", self.cost(self.row("x" * 20))["label"])
+
+    def test_the_work_in_the_tooltip_still_leans_on_the_row_s_length(self):
+        # Length is a weak signal about work: it may nudge the guess, up to
+        # 2.5x the median build, never set it.
+        self.assertIn("75k more", self.cost(self.row("x" * 400))["title"])
+        self.assertIn("75k more", self.cost(self.row("x" * 4000))["title"])
+        self.assertIn("15k more", self.cost(self.row("x" * 20))["title"])
+
+    def test_a_chat_that_has_built_nothing_says_where_the_number_came_from(self):
+        out = self.cost(self.row("x" * 80),
+                        dict(self.COST, samples=0))
+        self.assertIn("until this chat has built something", out["title"])
+
+    def test_a_built_row_prints_what_it_actually_spent(self):
+        out = self.cost(self.row("Add the route", status="done", tokens=8400))
+        self.assertEqual("8.4k tok", out["label"])
+        self.assertTrue(out["measured"])
+        self.assertIn("spent", out["title"])
+
+    def test_a_row_out_with_the_builder_is_past_being_estimated(self):
+        self.assertIsNone(self.cost(self.row("Add the route", status="building")))
+        self.assertIsNone(self.cost(self.row("Add the route", status="queued")))
+        # A row that came back failed is going out again: price it.
+        self.assertIsNotNone(self.cost(self.row("Add the route", status="failed")))
+
+    def test_an_empty_row_says_nothing(self):
+        self.assertIsNone(self.cost(self.row("")))
+        self.assertIsNone(self.cost(self.row("   ")))
+
+    def test_without_the_server_s_word_no_estimate_is_invented(self):
+        # An older server, or a global vault, sends no cost block: the corner
+        # stays empty rather than showing a number nothing stands behind.
+        self.assertIsNone(self.cost(self.row("Add the route"), cost={}))
+
+    def test_the_label_never_claims_more_precision_than_it_has(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = [L.costLabel(940), L.costLabel(8437), L.costLabel(31700),"
+            "       L.costLabel(0)];")
+        self.assertEqual(["940", "8.4k", "32k", ""], out)
+
+    def test_the_number_is_drawn_last_in_the_row_and_takes_no_caret(self):
+        state = {"scope": "chat", "goals": [], "prompts": [],
+                 "build_cost": self.COST}
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "var slot = node.querySelector('.hc-todo-cost');"
+            "out = [slot.textContent, slot.getAttribute('contenteditable'),"
+            "  node.querySelector('.hc-todo-row').children.map("
+            "    function (c) { return c.className; })];"
+            % (json.dumps(state), json.dumps(self.row("x" * 80))))
+        self.assertEqual("~2k tok", out[0])
+        self.assertEqual("false", out[1], "an island, like the gutter")
+        self.assertEqual(["hc-todo-dash", "hc-todo-line", "hc-todo-cost"], out[2])
+
+    def test_the_stylesheet_puts_it_in_the_lower_right(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-todo-cost{flex:none;align-self:flex-end", css)
+
+
+class BuildWatchTests(BridgeTestCase):
+    """The line under the rows while a build is out.
+
+    A row that says "building" says nothing about what that means. The panel
+    says how far in the run is, roughly how much longer it has -- from what a
+    row has taken in this chat before -- and the last thing the agent did.
+    """
+
+    RUN = {"status": "running", "running": True, "rows": 2,
+           "elapsed_s": 130, "eta_s": 350, "per_row_s": 240, "measured": True,
+           "lines": 12, "can_open": True, "error": "",
+           "last": {"at": "2026-08-23T21:04:09+00:00", "kind": "tool",
+                    "text": "edited build.py"}}
+
+    def line(self, run="the run above"):
+        return self.run_js(
+            "out = window.__hcPromptUI.todoList.watchLine(%s);"
+            % json.dumps(self.RUN if run == "the run above" else run))
+
+    def test_a_running_build_says_how_long_it_has_been_and_has_left(self):
+        out = self.line()
+        self.assertEqual("building · 2m in · about 6m left", out["meta"])
+        self.assertEqual("edited build.py", out["last"])
+        self.assertTrue(out["running"])
+        self.assertIn("from this chat's own finished builds", out["title"])
+
+    def test_an_estimate_that_has_run_out_says_so_rather_than_sliding(self):
+        out = self.line(dict(self.RUN, eta_s=0))
+        self.assertIn("longer than usual", out["meta"])
+        self.assertNotIn("left", out["meta"])
+
+    def test_an_unmeasured_estimate_says_it_is_a_default(self):
+        out = self.line(dict(self.RUN, measured=False))
+        self.assertIn("until this chat has built", out["title"])
+
+    def test_a_build_that_has_stopped_is_not_given_a_countdown(self):
+        out = self.line(dict(self.RUN, status="waiting", running=False,
+                             eta_s=None))
+        self.assertEqual("waiting on your answer · 2m in", out["meta"])
+        self.assertFalse(out["running"])
+        self.assertTrue(out["canOpen"], "its session can still be opened")
+
+    def test_a_goal_with_no_build_has_no_panel(self):
+        self.assertIsNone(self.line(None))
+        self.assertIsNone(self.line({}))
+
+    def test_durations_are_short_and_even(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = [L.duration(0), L.duration(45), L.duration(130),"
+            "       L.duration(3600), L.duration(4500)];")
+        self.assertEqual(["0s", "45s", "2m", "1h", "1h 15m"], out)
+
+    def test_the_stylesheet_marks_a_running_build(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-todo-watch{", css)
+        self.assertIn("hc-todo-pulse", css)
+        # A guest reading someone else's workspace may see the log; opening a
+        # window on their machine is not theirs to do.
+        self.assertIn("[data-hc-readonly] [data-hc-todo-term]", css)
 
 
 class RailSyncTests(BridgeTestCase):
@@ -4389,6 +4572,32 @@ class ChatNoticeTests(BridgeTestCase):
             defer=True)
         self.assertEqual(0, out)
 
+    def test_a_workspace_whose_server_stopped_says_so_until_one_lands(self):
+        # Reopening a workspace that is running older code than the plugin
+        # replaces it, which leaves this window pointed at a process that has
+        # ended. Nothing else on the page changes when that happens, so
+        # silence reads as a page that broke rather than one that closed.
+        out = self.notices(
+            "var alive = false;"
+            "fetch = function () { return alive"
+            "  ? Promise.resolve({ ok: true, json: function () {"
+            "      return Promise.resolve({ goals: [], prompts: [],"
+            "        scope: 'chat', session_id: 's' }); } })"
+            "  : Promise.reject(new Error('gone')); };"
+            "var R = window.__hcPromptUI.refreshState;"
+            "var seen = [];"
+            "R().then(function () { seen.push(stack().length); return R(); })"
+            "  .then(function () { seen.push(stack().length); return R(); })"
+            "  .then(function () { seen.push(drawn()); alive = true; return R(); })"
+            "  .then(function () { seen.push(stack().length); return seen; });")
+        self.assertEqual(
+            [0, 0,
+             [["hc-notice", "This workspace is no longer running",
+               "It was stopped or restarted — the newer one opens in its own "
+               "tab. Nothing typed here is being saved."]],
+             0],
+            out)
+
     def test_the_banner_is_small_and_drawn_from_the_page_tokens(self):
         css = self.run_js("window.__hcPromptUI.noticeCss();")
         self.assertIn("position:fixed", css)
@@ -4471,7 +4680,7 @@ LAUNCH_CLASSES = (
     "hc-row", "hc-rowtitle",
     "hc-shell", "hc-main",
     "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
-    "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
+    "hc-rail-right", "hc-rail-actions", "hc-rail-copy",
     "hc-rail-none",
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
@@ -4508,17 +4717,17 @@ class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
 
     def test_what_sits_under_the_tab_strip_is_measured_from_it(self):
-        # Six offsets describe one geometry: header 37, tabs 40, pills 42.
+        # Six offsets describe one geometry: header 37, tabs 32, pills 42.
         # Growing the tab row without moving all of them puts the page
         # either under the bars or a gap below them, and only one of those
         # is visible in a screenshot.
         css = self.run_js("window.__hcPromptUI.launchCss();")
-        head, tabs, pills = 37, 40, 42
+        head, tabs, pills = 37, 32, 42
         self.assertIn(".hc-viewtabs{position:fixed;top:%dpx;" % head, css)
         self.assertIn("height:%dpx;padding:0 24px;box-sizing:border-box;"
                       "background:var(--bg)" % tabs, css)
         self.assertIn(".hc-viewtab{cursor:pointer;user-select:none;"
-                      "font:600 12px", css)
+                      "font:600 11px", css)
         self.assertIn("color:var(--fnt);height:%dpx;display:flex;" % tabs, css)
         self.assertIn(".hc-pillbar{position:fixed;top:%dpx;" % (head + tabs), css)
         self.assertIn("height:%dpx;padding:0 24px" % pills, css)

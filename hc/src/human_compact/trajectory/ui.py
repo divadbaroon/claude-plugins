@@ -7,6 +7,7 @@ import json
 import os
 import re
 import socketserver
+import sys
 import threading
 import time
 import webbrowser
@@ -57,6 +58,14 @@ EXPERIMENTAL_OPS = frozenset({
 })
 EXPERIMENTAL_ROUTES = ("/api/briefing", "/api/briefings", "/api/plan",
                        "/api/review", "/api/setup", "/api/conversation")
+# The operations that edit one goal and are refused when that goal is not in
+# this workspace. Kept beside the branch that applies them so the refusal can
+# name the real reason rather than call the operation itself unknown.
+GOAL_OPS = frozenset({
+    "rename_goal", "set_status", "set_priority", "set_notes", "set_sources",
+    "set_opening", "set_description", "toggle_todo", "set_relevance",
+    "add_todo",
+})
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
 
 
@@ -89,6 +98,34 @@ def _version():
         return version("human-compact")
     except Exception:                     # noqa: BLE001 - a label, never logic
         return "unknown"
+
+
+def _code_stamp():
+    """The newest edit time among this package's own Python files, or 0.0."""
+    newest = 0.0
+    try:
+        for path in Path(__file__).resolve().parent.glob("*.py"):
+            newest = max(newest, path.stat().st_mtime)
+    except OSError:                       # noqa: BLE001 - a hint, never logic
+        return 0.0
+    return newest
+
+
+# When this process read its own code. The browser's half of the workspace is
+# re-read from disk on every page load and this half is not, so editing the
+# plugin with a workspace open leaves a new page talking to an old server --
+# which answers the controls added since with "unknown operation". The page
+# cannot tell that from a bug unless it is told, so it is.
+_CODE_STAMP = _code_stamp()
+
+
+def _server_is_stale():
+    """Whether this package has been edited since this process started."""
+    now = _code_stamp()
+    # A second of slack: a file copied into place can carry a timestamp a
+    # hair past the read that took it, and a workspace should not open under
+    # a warning about an edit nobody made.
+    return bool(now and _CODE_STAMP and now > _CODE_STAMP + 1.0)
 
 
 def _registry_path(trajdir):
@@ -629,7 +666,10 @@ def _project_identity(trajdir, chat_scoped, session_id):
         return empty
     path = Path(str(cwd))
     record = _load_project(root, str(path))
-    return {"cwd": str(path), "name": path.name,
+    # Named by the reader when they have named it; the directory's own name
+    # is the fallback, not the answer -- a project can be renamed without
+    # moving.
+    return {"cwd": str(path), "name": record.get("name") or path.name,
             "branch": AE._git_branch(str(path)) or "",
             "remote": _git_remote(str(path)),
             "objective": record.get("objective", ""),
@@ -803,6 +843,291 @@ def project_json(root, cwd):
     return {"ok": True, "path": str(path), "written": written,
             "truncated": len(raw) > PROJECT_FILE_LIMIT,
             "text": raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")}
+
+
+README_NAMES = ("README.md", "readme.md", "README.markdown", "README")
+
+
+def project_readme(cwd):
+    """The project's front page, under whatever name it was given.
+
+    Every repository has one and almost none of them agree on the case, so
+    the few spellings that actually turn up are tried in order and the first
+    that reads is the one shown -- nothing is merged, and a project that has
+    no front page says so rather than answering with an empty pane.
+    """
+    if not cwd:
+        return {"ok": False, "error": "no project"}
+    for name in README_NAMES:
+        found = project_file(cwd, name)
+        if found.get("ok"):
+            return found
+    return {"ok": False, "error": "this project has no README"}
+
+
+# What one question is allowed to carry, and how much of a source is read
+# to answer it. Both are bounds on what leaves this machine, not on what a
+# model could hold: a question is a sentence and a README is not a corpus.
+ASK_QUESTION_LIMIT = 2000
+ASK_CONTEXT_LIMIT = 60 * 1024
+
+
+def ask_source(root, cwd, source, question, engine=None):
+    """Answer one question about one piece of this project's context.
+
+    The context is that one source and nothing else -- the repository's
+    README and where it sits, a document's text, or a conversation's turns.
+    A question asked in front of one pane is answered from that pane, so an
+    answer can be checked against what is on screen beside it.
+
+    Nothing is stored: the question goes to the configured provider and the
+    answer comes back to the caller. A source that cannot be read from here
+    (a link, a repository nobody has cloned) is refused rather than asked
+    about from its name alone.
+    """
+    words = " ".join(str(question or "").split())[:ASK_QUESTION_LIMIT]
+    if not words:
+        return {"ok": False, "error": "ask something first"}
+    if source is None:
+        if not cwd:
+            return {"ok": False, "error":
+                    "this chat has no project directory to read"}
+        body = project_readme(cwd)
+        parts = ["# The repository", "", "directory: " + str(cwd)]
+        if body.get("ok"):
+            parts += ["", "## " + str(body.get("path")), "",
+                      str(body.get("text"))]
+        else:
+            parts += ["", "It has no README to read."]
+        text = "\n".join(parts)
+    else:
+        body = source_body(root, cwd, source)
+        if not body.get("ok"):
+            return {"ok": False,
+                    "error": str(body.get("error") or "could not read it")}
+        if str(body.get("kind")) == "chat":
+            text = "\n\n".join(
+                ["# The conversation", ""] +
+                ["%s: %s" % (str(turn.get("role")), str(turn.get("text")))
+                 for turn in body.get("turns") or []])
+        elif isinstance(body.get("text"), str):
+            text = "\n".join(["# " + str(body.get("path")
+                                          or source.get("label") or "the file"),
+                              "", str(body.get("text"))])
+        else:
+            return {"ok": False, "error":
+                    "that is a link, not something this pane can read"}
+    ask = [
+        "You are answering ONE question about ONE piece of a project's",
+        "context, quoted in full below. Answer from that text and from",
+        "nothing else: where it does not say, say that it does not say",
+        "rather than filling the gap from what projects like this usually",
+        "do. Be brief -- a few sentences or a short list. Markdown is fine.",
+        "No preamble, no restating of the question.",
+        "", "# The context", "", text[:ASK_CONTEXT_LIMIT], "",
+        "# The question", "", words,
+    ]
+    out = _answer(ask, engine)
+    if not out.get("ok"):
+        return out
+    return {"ok": True, "asked": words, "answer": out["answer"]}
+
+
+def _answer(lines, engine=None):
+    """Put one assembled prompt to the configured provider.
+
+    Nothing here decides what a question is worth asking about -- the caller
+    has already built the prompt. This is only the round trip, and the ways
+    it can come back with no answer said the same way in both places that
+    ask: what the provider said went wrong when it could name it, and one
+    guess at the usual cause when it could not.
+    """
+    from . import providers as PROVIDERS
+    try:
+        engine = engine or PROVIDERS.make(
+            os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize")
+        # A question is a question, not an agent turn. Providers that know
+        # the difference are asked for the plain round trip; a test double
+        # with one method keeps being called the one way it has.
+        speak = getattr(engine, "generate_plain", None) or engine.generate
+        answer = speak("\n".join(lines) + "\n")
+    except PROVIDERS.ProviderError as exc:
+        # What went wrong, in the provider's own words. A CLI that is not
+        # installed, one that ran out of time and one whose login was
+        # refused used to read identically here, and want three different
+        # things from the person looking at the message.
+        return {"ok": False, "error": " ".join(str(exc).split())[:200]}
+    except Exception:  # noqa: BLE001 - any other provider failure is "no answer"
+        return {"ok": False, "error":
+                "the answer could not be generated (is the claude CLI on "
+                "PATH?)"}
+    answer = str(answer or "").strip()
+    if not answer:
+        return {"ok": False, "error": "the model answered with nothing"}
+    return {"ok": True, "answer": answer}
+
+
+# What one highlighted passage may carry, and how much of the goal around it
+# travels with the question. A passage is what a cursor was dragged over and
+# a goal is not a corpus: both are bounds on what leaves this machine.
+ASK_SELECTION_LIMIT = 4000
+ASK_GOAL_LIMIT = 24 * 1024
+
+# How much of a panel's own conversation travels with a follow-up. "What
+# about the second one?" is only a question if what came before it is there
+# too -- but a panel is a conversation, not a transcript to replay whole.
+ASK_TURN_LIMIT = 6
+ASK_ANSWER_LIMIT = 2000
+
+
+def _lineage(goals, goal_id):
+    """*goal_id* and every goal above it, outermost first.
+
+    An empty list when there is no such goal -- a passage highlighted
+    somewhere the tree does not reach is still a passage, and gets asked
+    about on its own rather than under a goal invented for it.
+    """
+    by_id = {}
+    for goal in goals or []:
+        if isinstance(goal, dict) and goal.get("id") is not None:
+            by_id[str(goal["id"])] = goal
+    chain, seen = [], set()
+    at = by_id.get(str(goal_id or ""))
+    while isinstance(at, dict) and str(at.get("id")) not in seen:
+        seen.add(str(at.get("id")))
+        chain.append(at)
+        at = by_id.get(str(at.get("parent_goal_id") or ""))
+    chain.reverse()
+    return chain
+
+
+def _row_depth(row):
+    try:
+        return max(0, min(8, int(row.get("depth") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def goal_context(goals, goal_id, objective=""):
+    """The goal a highlighted passage sits in, written out for a model.
+
+    Its ancestors by title alone -- they are where it sits, not what it is
+    about -- and then the goal itself whole: what it is called, how it
+    stands, the notes someone wrote on it, and its TODO rows with the state
+    the builder left each one in. The objective leads, when the project has
+    one, because half the questions worth asking about a goal are about how
+    it serves that.
+    """
+    chain = _lineage(goals, goal_id)
+    if not chain:
+        return ""
+    parts = []
+    objective = " ".join(str(objective or "").split())
+    if objective:
+        parts += ["# The objective", "", objective, ""]
+    if len(chain) > 1:
+        parts += ["# Where it sits", ""]
+        parts += ["%s- %s" % ("  " * n, str(g.get("title") or "Untitled"))
+                  for n, g in enumerate(chain[:-1])]
+        parts += [""]
+    goal = chain[-1]
+    parts += ["# The goal", "",
+              "title: " + str(goal.get("title") or "Untitled"),
+              "status: " + str(goal.get("status") or "active")]
+    notes = str(goal.get("notes") or "").strip()
+    if notes:
+        parts += ["", "## Its notes", "", notes]
+    rows = [r for r in (goal.get("todo_items") or []) if isinstance(r, dict)]
+    if rows:
+        parts += ["", "## Its TODO rows", ""]
+        for row in rows:
+            state = str(row.get("status") or "").strip()
+            parts.append("%s- %s%s" % (
+                "  " * _row_depth(row), str(row.get("text") or ""),
+                (" [%s]" % state) if state else ""))
+    return "\n".join(parts)[:ASK_GOAL_LIMIT]
+
+
+def _earlier_turns(turns):
+    """The panel's own conversation so far, oldest first, as prompt lines.
+
+    Only pairs that finished: a question whose answer never arrived is not
+    something the next answer can build on, and a half turn quoted back at
+    the model reads as an answer it already gave.
+    """
+    said = []
+    for turn in list(turns or [])[-ASK_TURN_LIMIT:]:
+        if not isinstance(turn, dict):
+            continue
+        asked = " ".join(
+            str(turn.get("question") or "").split())[:ASK_QUESTION_LIMIT]
+        answer = str(turn.get("answer") or "").strip()[:ASK_ANSWER_LIMIT]
+        if asked and answer:
+            said += ["Q: " + asked, "", "A: " + answer, ""]
+    return said
+
+
+def ask_selection(goals, goal_id, selection, question, objective="",
+                  turns=None, engine=None):
+    """Answer one question about a passage someone highlighted.
+
+    A goal, a subgoal, a TODO row, a line of notes: whatever the cursor was
+    dragged over is the subject, and the goal it sits in is quoted around it
+    so the answer knows what the passage belongs to. Nothing else of the
+    workspace travels -- the other goals in the tree are not the question.
+
+    Unlike a question about a document, this one may be a question about
+    what to do next, so the model is allowed to suggest -- and told to say
+    which part is a suggestion rather than something the workspace records.
+
+    A question is rarely the only one. *turns* is what the same panel has
+    already asked and been told, so a follow-up can be a follow-up rather
+    than a question that has to restate everything before it.
+
+    Nothing is stored: the answer goes back to the caller and the goal's own
+    record is untouched. The conversation lives in the panel that is holding
+    it and dies with it. This is a way to think beside the tree, not a way
+    to write into it.
+    """
+    words = " ".join(str(question or "").split())[:ASK_QUESTION_LIMIT]
+    if not words:
+        return {"ok": False, "error": "ask something first"}
+    passage = str(selection or "").strip()[:ASK_SELECTION_LIMIT]
+    if not passage:
+        return {"ok": False, "error": "highlight something first"}
+    around = goal_context(goals, goal_id, objective)
+    ask = [
+        "You are answering ONE question about a passage someone highlighted",
+        "in the goal workspace of a project. The passage is quoted below,",
+        "with the goal it sits in around it.",
+        "",
+        "Answer from that. Where the workspace does not say, say that it",
+        "does not say rather than filling the gap from what projects like",
+        "this usually do. When the question asks you to brainstorm, suggest",
+        "or weigh options, do that -- and mark plainly which part is your",
+        "suggestion rather than something the workspace already records.",
+        "",
+        "Be brief -- a few sentences or a short list. Markdown is fine. No",
+        "preamble, no restating of the question.",
+    ]
+    said = _earlier_turns(turns)
+    if said:
+        ask += ["",
+                "This is a conversation already under way. Everything below",
+                "was said in it, about the same passage; the last question",
+                "is the one to answer, and it may lean on what came before",
+                "without repeating it."]
+    if around:
+        ask += ["", "# The goal it sits in", "", around]
+    ask += ["", "# The highlighted passage", "", passage]
+    if said:
+        ask += ["", "# What has been asked and answered so far", ""] + said
+    ask += ["", "# The question", "", words]
+    out = _answer(ask, engine)
+    if not out.get("ok"):
+        return out
+    return {"ok": True, "asked": words, "selection": passage,
+            "answer": out["answer"]}
 
 
 def _git_remote(cwd):
@@ -1029,8 +1354,13 @@ def open_project(cwd, trajdir=None):
     key = PS._resolved(cwd)
     sessions = PS.project_sessions(root, cwd)
     if not sessions:
-        return {"ok": False,
-                "error": "no chat has been started in that directory yet"}
+        # A project made from a name has a directory and nothing else in it
+        # yet. A workspace serves one chat's goals, so there is none to open
+        # -- and the way to get one is to work there, which is worth saying
+        # with the directory in it rather than as a bare refusal.
+        return {"ok": False, "cwd": str(cwd),
+                "error": "nothing has been worked on there yet — "
+                         "run claude in " + str(cwd)}
     session_id = sessions[-1]
     with _SHARED_GUARD:
         held = _PROJECT_SERVERS.get(key)
@@ -1070,19 +1400,310 @@ def _serve_session(session_id, root, port=8870):
     return {"url": holder["url"], "thread": thread}
 
 
-def new_project(cwd):
-    """Make a directory a project: write it an empty record so the switcher
-    can see it before any chat has been started there."""
-    text = str(cwd or "").strip()
+def _looks_like_a_path(text):
+    """Whether what was typed names a place on disk rather than a project.
+
+    A name is the ordinary way in, so only text that could not be one --
+    text with a separator in it, or a leading ``~`` or ``.`` -- is read as a
+    directory. "My redesign" is a name; "~/Projects/redesign" is a path.
+    """
+    return (text.startswith(("~", "/", "./", "../"))
+            or "/" in text or os.sep in text)
+
+
+# A repository is written one of three ways -- an http(s) URL, an ssh or git
+# one, or the scp-like ``git@host:owner/repo`` -- and a repository is checked
+# for before a path is, because every one of these has a slash in it and
+# would otherwise be read as a folder that is not there.
+_REPO_URL = re.compile(
+    r"^(?:https?://|ssh://|git://|git\+ssh://)[^\s]+$|"
+    r"^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]+$")
+
+
+def _looks_like_a_repo(text):
+    """Whether what was typed is a repository to clone rather than a name.
+
+    Only the transports git is asked to speak here. ``ext::`` and ``file::``
+    are URLs git understands and are not among them: the first runs a command
+    of the URL's choosing, and neither is what anybody means by "the repo".
+    """
+    words = str(text or "").strip()
+    if not words or words.startswith("-"):
+        return False
+    if words.lower().startswith(("ext::", "file::", "file://")):
+        return False
+    return bool(_REPO_URL.match(words))
+
+
+def _repo_name(url):
+    """The repository's own name, off the end of its URL: the folder a clone
+    would have made, without the ``.git``."""
+    text = str(url or "").strip().rstrip("/")
+    text = text.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+    return text[:-4] if text.endswith(".git") else text
+
+
+def _clone(url, into):
+    """Run the clone, and answer with what went wrong, or "" if nothing did.
+
+    The argument list is git's, never a shell's, and ``--`` ends the options
+    so a URL that begins with a dash is a URL rather than a flag. Credential
+    prompts are turned off: this is run by a server nobody is looking at, and
+    a private repository must fail saying so rather than hang on a password
+    question asked into a terminal that is not there.
+    """
+    import subprocess
+
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="",
+               SSH_ASKPASS="", GCM_INTERACTIVE="never")
+    try:
+        done = subprocess.run(["git", "clone", "--", str(url), str(into)],
+                              capture_output=True, text=True, env=env,
+                              timeout=15 * 60)
+    except FileNotFoundError:
+        return "git is not installed on this machine"
+    except subprocess.TimeoutExpired:
+        return "that clone took too long — try it in a terminal"
+    except OSError as exc:
+        return str(exc)[:200]
+    if done.returncode:
+        said = (done.stderr or done.stdout or "").strip().splitlines()
+        return said[-1][:200] if said else "git could not clone that"
+    return ""
+
+
+def _taken(taken):
+    """The answer for a name somebody already used.
+
+    A refusal rather than the project that has it: the reader is making a
+    second thing and would not be able to tell the two apart afterwards.
+    ``duplicate`` is what the box reads to put the cursor back in the name.
+    """
+    return {"ok": False, "duplicate": True,
+            "name": str(taken.get("name") or ""),
+            "cwd": str(taken.get("cwd") or ""),
+            "error": 'a project is already called "%s" — name this one '
+                     'something else' % str(taken.get("name") or "")}
+
+
+def _made(root, where, name, **extra):
+    """The answer for a project that now exists: where it is, what it is
+    called, and whether it has anything in it yet.
+
+    ``setup`` is the whole of the onboarding question: a project with no
+    chats and no objective knows nothing about itself that the reader has
+    not typed, so the two questions worth asking are asked at once, here,
+    rather than waiting for a chat to be started in it.
+    """
+    record = PS.load_project(root, where)
+    chats = len(PS.project_sessions(root, where))
+    return dict({"ok": True, "cwd": str(where),
+                 "name": record.get("name") or name,
+                 "chats": chats,
+                 "setup": not chats and not record.get("objective")}, **extra)
+
+
+def clone_project(url, name="", root=None):
+    """Make a project out of a repository: clone it, and let where it landed
+    be the project's directory.
+
+    The clone goes into a home of its own beside the other projects rather
+    than anywhere on the reader's disk, for the same reason a named project
+    does -- nobody asked to choose a parent folder, and a repository that is
+    a project is one whether or not it sits under ~/Projects.
+    """
+    address = str(url or "").strip()
+    if not _looks_like_a_repo(address):
+        return {"ok": False, "error": "that is not a repository URL"}
+    text = str(name or "").strip()[:PS.PROJECT_NAME_LIMIT] or _repo_name(address)
+    home = PS.workspace_home(root, text)
+    if home is None:
+        return {"ok": False, "error": "give the project a name"}
+    taken = PS.project_named(root, text)
+    if taken:
+        return _taken(taken)
+    try:
+        if home.exists() and any(home.iterdir()):
+            return _taken({"name": text, "cwd": str(home)})
+        home.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    trouble = _clone(address, home)
+    if trouble:
+        return {"ok": False, "error": trouble}
+    PS.save_project(root, str(home), {"name": text})
+    return _made(root, str(home), text, cloned=address)
+
+
+def new_project(name, cwd=None, root=None, repo=None):
+    """Make a project: from a name, from a repository, or from a directory
+    that already exists.
+
+    Typing a name is the ordinary way -- a project is somewhere to keep an
+    objective, goals and sources, and most have no directory to point at
+    when they are made, so one is minted for them inside the vault. Give a
+    repository and it is cloned into that home instead, so the project is
+    the code from the first moment. A path is still taken when one is typed,
+    so a repository already on disk can become the project it is; that
+    directory has to exist, since a mistyped path should be reported rather
+    than quietly created.
+
+    Either half of what the browser sends is accepted in either field: a
+    reader who types a path -- or a repository URL -- into the name box means
+    that, and the box has one line in it.
+    """
+    text = str(name or cwd or "").strip()
+    address = str(repo or "").strip()
+    if address or _looks_like_a_repo(text):
+        url = address or text
+        # The name box holds the URL itself when that is all that was typed;
+        # when a name was typed beside it, that is what to call the project.
+        called = "" if text == url or _looks_like_a_repo(text) else text
+        return clone_project(url, called, root)
     if not text:
-        return {"ok": False, "error": "give a directory"}
+        return {"ok": False, "error": "give the project a name"}
+    if not _looks_like_a_path(text):
+        taken = PS.project_named(root, text)
+        if taken:
+            return _taken(taken)
+        where = PS.create_named(root, text)
+        if not where:
+            return {"ok": False, "error": "give the project a name"}
+        return _made(root, where, text)
     try:
         where = Path(text).expanduser()
     except (OSError, RuntimeError, ValueError):
         return {"ok": False, "error": "that is not a directory path"}
     if not where.is_dir():
         return {"ok": False, "error": "no such directory: " + str(where)}
-    PS.touch(None, str(where))
+    PS.touch(root, str(where))
+    return _made(root, str(where.resolve()), where.name)
+
+
+def project_setup(cwd, objective=None, description=None, root=None):
+    """Answer the two questions a new project is asked: what it is for, and
+    what is worth knowing before anything starts.
+
+    Written against the project that was just made rather than the one this
+    workspace serves -- the new one has no chat yet, so no workspace of its
+    own to write them in, and asking now is the difference between a project
+    that knows what it is for and one that waits for a chat to say.
+    """
+    where = str(cwd or "").strip()
+    if not where:
+        return {"ok": False, "error": "which project?"}
+    if not PS.read_file(root, where).get("project"):
+        return {"ok": False, "error": "that project has not been made yet"}
+    record = PS.load_project(root, where)
+    if objective is not None:
+        if not isinstance(objective, str):
+            return {"ok": False, "error": "objective must be text"}
+        record["objective"] = objective.strip()[:PROJECT_OBJECTIVE_LIMIT]
+    if description is not None:
+        if not isinstance(description, str):
+            return {"ok": False, "error": "description must be text"}
+        record["description"] = description.strip()[
+            :PS.PROJECT_DESCRIPTION_LIMIT]
+    _save_project(root, where, record)
+    saved = PS.load_project(root, where)
+    return {"ok": True, "cwd": where,
+            "objective": saved.get("objective", ""),
+            "description": saved.get("description", "")}
+
+
+def _chooser_command(here):
+    """The folder question this machine already knows how to ask, or None.
+
+    Every desktop ships a folder chooser; none of them is the same program.
+    The one that belongs to the platform is asked for rather than a file
+    browser drawn in the page, because the reader knows their own already --
+    its sidebar, its recent places, its search.
+    """
+    import shutil
+    import sys
+
+    if sys.platform == "darwin":
+        # AppleScript strings take backslash and quote the way C does.
+        def quoted(text):
+            body = str(text).replace("\\", "\\\\").replace('"', '\\"')
+            return '"' + body + '"'
+
+        ask = ["choose folder with prompt "
+               + quoted("Choose a folder for this project")]
+        if here:
+            ask.append("default location POSIX file " + quoted(here))
+        # Brought to the front first, or the dialog opens behind the browser:
+        # this is asked for by a server nobody is looking at, not by an app
+        # already in front. Wrapped, because a chooser that opens in the
+        # background is a smaller problem than one that does not open.
+        return ["osascript", "-e", "try\n\tactivate\nend try",
+                "-e", "POSIX path of (" + " ".join(ask) + ")"]
+    if os.name == "nt":
+        return ["powershell", "-NoProfile", "-STA", "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                "$d.Description = 'Choose a folder for this project'; "
+                + (("$d.SelectedPath = '%s'; " % str(here).replace("'", "''"))
+                   if here else "")
+                + "if ($d.ShowDialog() -eq 'OK') { Write-Output $d.SelectedPath }"]
+    if shutil.which("zenity"):
+        return ["zenity", "--file-selection", "--directory",
+                "--title=Choose a folder for this project"] + (
+                    ["--filename=" + here.rstrip("/") + "/"] if here else [])
+    if shutil.which("kdialog"):
+        return ["kdialog", "--getexistingdirectory",
+                here or os.path.expanduser("~")]
+    return None
+
+
+def pick_directory(start=None):
+    """Open this machine's folder chooser and report what was picked.
+
+    Typing a path works for a path you can spell; pointing at one is what
+    everybody actually wants, so the platform's own dialog is opened and the
+    chosen directory comes back as text for the box to hold. Closing the
+    dialog is not a failure -- it comes back cancelled, and the form is left
+    exactly as it was.
+    """
+    import subprocess
+
+    here = ""
+    if start:
+        try:
+            spot = Path(str(start)).expanduser()
+            here = str(spot) if spot.is_dir() else ""
+        except (OSError, RuntimeError, ValueError):
+            here = ""
+    command = _chooser_command(here)
+    if not command:
+        return {"ok": False,
+                "error": "no folder chooser on this machine — type a path"}
+    try:
+        # No deadline worth enforcing is shorter than a person deciding, and
+        # a stuck dialog should not outlive the workspace either.
+        done = subprocess.run(command, capture_output=True, text=True,
+                              timeout=15 * 60)
+    except FileNotFoundError:
+        return {"ok": False,
+                "error": "no folder chooser on this machine — type a path"}
+    except subprocess.TimeoutExpired:
+        return {"ok": True, "cancelled": True}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    picked = str(done.stdout or "").strip()
+    if not picked:
+        # Cancelling is how every one of these dialogs reports "never mind":
+        # an empty answer, a non-zero exit, or both. A chooser that could not
+        # open at all says something on the way out, and that is worth
+        # repeating rather than passing off as a change of mind.
+        trouble = str(done.stderr or "").strip()
+        if done.returncode and trouble and "-128" not in trouble \
+                and "cancel" not in trouble.lower():
+            return {"ok": False, "error": trouble.splitlines()[-1][:200]}
+        return {"ok": True, "cancelled": True}
+    where = Path(picked).expanduser()
+    if not where.is_dir():
+        return {"ok": False, "error": "no such directory: " + str(where)}
     return {"ok": True, "cwd": str(where.resolve()), "name": where.name}
 
 
@@ -1156,8 +1777,17 @@ def _payload(trajdir=None, chat_scoped=None):
         try:
             from . import build as BUILD
             payload["build_session"] = BUILD.session_state(*identity)
+            # What a build of one row costs here: the context every build
+            # opens on, and what this chat's own finished runs have spent.
+            # The rail prices its rows from these two numbers.
+            payload["build_cost"] = BUILD.cost(*identity)
+            # And what each build is doing right now: a line each, so a row
+            # that says "building" can say what that means.
+            payload["build_runs"] = BUILD.live(*identity)
         except Exception:  # noqa: BLE001 - the rail can do without it
             payload["build_session"] = None
+            payload["build_cost"] = None
+            payload["build_runs"] = {}
     return payload
 
 
@@ -1195,6 +1825,15 @@ def _apply(op, trajdir=None, chat_scoped=None):
     kind, session_id, root, goal_id, op = deferred
     if kind == "reopen_session":
         return BUILD.reopen(session_id, root)
+    if kind == "build_log":
+        # What the build has been doing, whole: the rail asks for this only
+        # when the reader opens the log, since the state carries the last
+        # line already.
+        return {"ok": True, "goal_id": goal_id,
+                "lines": BUILD.load_activity(session_id, root, goal_id),
+                "run": BUILD.live(session_id, root).get(goal_id)}
+    if kind == "watch_build":
+        return BUILD.watch(session_id, root, goal_id)
     if kind == "build_todos":
         ids = op.get("ids")
         return BUILD.start(session_id, root, goal_id,
@@ -1360,7 +1999,28 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
         if kind == "new_project":
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
-            return new_project(op.get("cwd"))
+            # Written where the switcher reads: the list is built with the
+            # root this chat's session directory sits in, so a project
+            # written under any other one would be invisible the moment it
+            # was made.
+            try:
+                _, root = _chat_identity(trajdir)
+            except Exception:                                # noqa: BLE001
+                root = None
+            return new_project(op.get("name"), op.get("cwd"), root,
+                               op.get("repo"))
+        if kind == "project_setup":
+            # The two questions a project that has never been worked in is
+            # asked, answered against that project rather than this one: it
+            # has no chat yet, and so no workspace of its own to answer in.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            try:
+                _, root = _chat_identity(trajdir)
+            except Exception:                                # noqa: BLE001
+                root = None
+            return project_setup(op.get("cwd"), op.get("objective"),
+                                 op.get("description"), root)
         if kind == "set_project_objective":
             # What the project is for, in the reader's words: kept once per
             # project directory, so every chat in it reads the same line.
@@ -1389,6 +2049,15 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             if not who["cwd"]:
                 return {"ok": False, "error": "this chat has no project directory"}
             record = _load_project(root, who["cwd"])
+            if "name" in op:
+                # What the reader calls this project, which is not the same
+                # question as which directory it sits in. Blanking it falls
+                # back to the directory's own name rather than leaving a
+                # project with no name at all.
+                text = op.get("name")
+                if not isinstance(text, str):
+                    return {"ok": False, "error": "name must be text"}
+                record["name"] = text.strip()[:PS.PROJECT_NAME_LIMIT]
             if "description" in op:
                 text = op.get("description")
                 if not isinstance(text, str):
@@ -1402,6 +2071,9 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             _save_project(root, who["cwd"], record)
             saved = _load_project(root, who["cwd"])
             return {"ok": True, "description": saved.get("description", ""),
+                    # The name as it now reads, which is the directory's own
+                    # when nothing was written for it.
+                    "name": saved.get("name") or Path(who["cwd"]).name,
                     "sources": saved.get("sources", [])}
         if kind in ("set_supabase_config", "supabase_login",
                     "supabase_logout"):
@@ -1561,7 +2233,8 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
-                    "generate_prompt", "reopen_session"):
+                    "generate_prompt", "prompt_preview", "reopen_session",
+                    "build_log", "watch_build"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -1574,6 +2247,24 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 return {"__deferred__": (kind, session_id, root, None, op)}
             if not g:
                 return {"ok": False, "error": "goal not found in this chat"}
+            if kind == "prompt_preview":
+                # Read-only, and answered here rather than deferred: it
+                # composes a string from the goals already loaded under this
+                # lock and spawns nothing. The rail prints it above the
+                # reader's own words, so the context a build opens on is
+                # visible before the build rather than only inside it.
+                from . import build as BUILD
+                ids = op.get("ids")
+                return {"ok": True,
+                        "prompt": BUILD.preview(
+                            session_id, root, goals, important, g,
+                            ids if isinstance(ids, list) else []),
+                        # The same string with no rows in it. The rail prices
+                        # each TODO against this, so the number in a row's
+                        # corner and the count above the field are one
+                        # measurement rather than two.
+                        "context_tokens": BUILD.preview_context_tokens(
+                            session_id, root, goals, important, g)}
             if kind == "generate_prompt":
                 text = _generate_prompt(session_id, root, goals, important, g)
                 if not text:
@@ -1672,7 +2363,18 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 gid, (op.get("title") or "Untitled").strip()[:120], parent,
                 origin="user"))
         else:
-            return {"ok": False, "error": "unknown or invalid op"}
+            # Two different failures used to wear one message. "Unknown" is
+            # an operation this build has never had -- most often a page
+            # newer than the process answering it, since the browser's half
+            # is re-read from disk on every load and this half is not. A
+            # goal-scoped operation whose goal is gone is a different thing,
+            # and neither is helped by being told the other's story.
+            if kind in GOAL_OPS:
+                return {"ok": False,
+                        "error": ("goal not found in this workspace" if not g
+                                  else "nothing to apply to that goal")}
+            return {"ok": False,
+                    "error": "unknown operation: " + str(kind or "")[:60]}
         GM.sanitize(goals)
         _save_goals(trajdir, goals, important, chat_scoped)
         return {"ok": True}
@@ -1758,6 +2460,13 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        # Nothing this server sends may be held. It carries no validators --
+        # no ETag, no Last-Modified -- so a browser is free to guess a
+        # freshness lifetime for the page and the bundle, and a guess of a
+        # few minutes serves yesterday's workspace out of the cache after
+        # the server has been restarted with today's. The JSON routes ask
+        # for no-store on their own; the page and the script could not.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(data)
 
@@ -1834,6 +2543,15 @@ class H(BaseHTTPRequestHandler):
                     self._send(200, {"ok": False, "error": "no project"})
                 else:
                     self._send(200, project_file(who["cwd"], relpath))
+            elif self.path == "/api/readme":
+                # The project's front page, for the overview's repository
+                # pane. One route rather than the browser guessing at four
+                # spellings of README, one round trip at a time.
+                trajdir = self.server.trajdir
+                session = (_chat_identity(trajdir)[0]
+                           if self.server.chat_scoped else None)
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                self._send(200, project_readme(who["cwd"]))
             elif self.path == "/api/supabase":
                 from . import supabase_client as SB
                 root = None
@@ -1853,7 +2571,14 @@ class H(BaseHTTPRequestHandler):
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
-                self._send(200, js, "application/javascript")
+                # Written by the process that will have to answer this page's
+                # operations, before the page's own script runs: whether the
+                # two halves of the workspace came from the same edit is
+                # something only this side knows.
+                stamp = ("window.__hcServerStale = %s;\n"
+                         % ("true" if _server_is_stale() else "false"))
+                self._send(200, stamp.encode("utf-8") + js,
+                           "application/javascript")
             elif self.path == "/api/projects":
                 if not self.server.chat_scoped:
                     self._send(200, {"ok": False, "error": "chat scope only"})
@@ -2082,10 +2807,75 @@ class H(BaseHTTPRequestHandler):
                                      "this is a shared workspace: only your "
                                      "own goals can be edited here"})
                     return
+                if body.get("op") == "pick_directory":
+                    # Outside the state lock on purpose: the chooser waits on
+                    # a person browsing their own disk, and nothing else in
+                    # the workspace should stop while they look. It reads no
+                    # goals and writes none, so there is nothing to hold.
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok": False,
+                                         "error": "chat scope only"})
+                        return
+                    self._send(200, pick_directory(body.get("start")))
+                    return
                 with self.server.state_lock:
                     result = _apply(
                         body, self.server.trajdir, self.server.chat_scoped)
                 self._send(200, result)
+            elif self.path == "/api/ask":
+                if not isinstance(body, dict):
+                    self._send(400, {"ok": False, "error": "expected a question"})
+                    return
+                if getattr(self.server, "shared_project", None):
+                    self._send(200, {"ok": False, "error":
+                                     "a shared workspace has no files here to "
+                                     "read"})
+                    return
+                # Outside the state lock on purpose: this waits on a model
+                # for as long as the provider's own deadline allows, and a
+                # workspace whose every other request stops for three
+                # minutes is a workspace that looks broken.
+                trajdir = self.server.trajdir
+                session, root = ((_chat_identity(trajdir))
+                                 if self.server.chat_scoped else (None, None))
+                who = _project_identity(trajdir, self.server.chat_scoped, session)
+                want = str(body.get("id") or "")
+                found = None
+                if want:
+                    for row in who.get("sources") or []:
+                        if str(row.get("id")) == want:
+                            found = row
+                            break
+                    if found is None:
+                        self._send(200, {"ok": False, "error": "no such source"})
+                        return
+                self._send(200, ask_source(root, who["cwd"], found,
+                                           body.get("question")))
+            elif self.path == "/api/ask_selection":
+                # A question about a passage highlighted in the tree, the
+                # rail or the notes. Reads goals, not files, so a shared
+                # workspace can ask it too -- and, like /api/ask, waits on a
+                # model outside the state lock so nothing else stops for it.
+                if not isinstance(body, dict):
+                    self._send(400, {"ok": False, "error": "expected a question"})
+                    return
+                shared = getattr(self.server, "shared_project", None)
+                if shared:
+                    from . import supabase_client as SB
+                    try:
+                        state = SB.shared_payload(shared)
+                    except SB.SupabaseError as exc:
+                        self._send(200, {"ok": False, "error": str(exc)[:200]})
+                        return
+                else:
+                    state = _payload(self.server.trajdir,
+                                     self.server.chat_scoped)
+                self._send(200, ask_selection(
+                    state.get("goals") or [], body.get("goal"),
+                    body.get("text"), body.get("question"),
+                    objective=str((state.get("project") or {}).get(
+                        "objective") or ""),
+                    turns=body.get("turns")))
             elif self.path == "/api/import":
                 if not isinstance(body, dict):
                     self._send(400, {
@@ -2262,6 +3052,97 @@ def _resolved_idle_timeout(value, chat_scoped):
     return seconds if seconds > 0 else None
 
 
+def _builds_running(server):
+    """Whether any build of this workspace still has a process out.
+
+    Both halves matter. ``build._RUNS`` holds the runs this process started;
+    the records on disk hold the ones a previous process did, which outlive
+    it. Restarting on top of either is how a build loses its reader and
+    leaves its rows saying "building" for ever.
+    """
+    try:
+        from . import build as BUILD
+    except Exception:                                    # noqa: BLE001
+        return False
+    try:
+        with BUILD._RUNS_GUARD:
+            if any(run.alive() for run in BUILD._RUNS.values()):
+                return True
+    except Exception:                                    # noqa: BLE001
+        return True          # unreadable is not the same as finished
+    if not getattr(server, "chat_scoped", False):
+        return False
+    try:
+        session_id, root = _chat_identity(server.trajdir)
+        folder = BUILD._builds_dir(session_id, root)
+        for record in folder.glob("*.json"):
+            if record.name in ("later.json", "usage.json"):
+                continue
+            try:
+                held = json.loads(record.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (isinstance(held, dict) and held.get("status") == "running"
+                    and _pid_alive(held.get("pid"))):
+                return True
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+def _watch_code(server, stop, interval=5.0):
+    """Re-exec this server once its own code has moved on without it.
+
+    The workspace serves the plugin, and the plugin is what a build of this
+    project edits -- so the process answering the page is routinely older
+    than the code the page was drawn from. Every control added by that edit
+    fails against it, which the page says out loud; this makes the saying
+    unnecessary most of the time.
+
+    Three things hold it back, and each of them has cost somebody a
+    workspace before: a request in flight, a build with a process out, and
+    a run of edits that has not settled. The last is why the stamp must be
+    unchanged for two ticks -- an editor part-way through writing a package
+    is not a version to restart onto.
+    """
+    seen = None
+    settled = 0
+    while not stop.wait(interval):
+        if not _server_is_stale():
+            seen, settled = None, 0
+            continue
+        stamp = _code_stamp()
+        if stamp != seen:
+            seen, settled = stamp, 1
+            continue
+        settled += 1
+        if settled < 2:
+            continue
+        with server.activity_lock:
+            busy = bool(server.active_requests)
+        if busy or _builds_running(server):
+            continue
+        print("\n  code changed on disk · restarting", flush=True)
+        try:
+            server.follow_stop.set()
+        except Exception:                                # noqa: BLE001
+            pass
+        try:
+            server.server_close()
+        except Exception:                                # noqa: BLE001
+            pass
+        # Same argv, same port, same pid: the browser's next poll lands on
+        # the replacement. execv drops this image, so nothing below runs.
+        try:
+            os.execv(sys.executable, [sys.executable, "-m", "human_compact.cli"]
+                     + sys.argv[1:])
+        except OSError:
+            # Could not become the new server; the old one is already
+            # unbound, so end rather than serve from a closed socket.
+            server.shutdown()
+            return
+
+
 def _watch_idle(server, timeout, stop):
     interval = min(60.0, max(0.05, timeout / 4))
     while not stop.wait(interval):
@@ -2374,6 +3255,13 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
                 daemon=True,
             )
             idle_thread.start()
+        # A workspace that serves the plugin outlives its own code the
+        # moment a build edits it. Watch for that and become the new
+        # version, rather than asking the reader to.
+        if str(os.environ.get("HC_AUTO_RELOAD", "")).strip() not in ("0", "off",
+                                                                     "no"):
+            threading.Thread(target=_watch_code, args=(srv, idle_stop),
+                             daemon=True).start()
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n  stopped")
@@ -2395,14 +3283,30 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
             idle_thread.join(timeout=1)
 
 
+# The states in which a row is with the builder and its text is the build's:
+# "failed" is not among them -- a row that came back needing another go is
+# the reader's again, to reword or to clear.
+OUT_WITH_BUILDER = ("queued", "building", "asking")
+
+
 def _merge_todo_items(posted, previous):
     """The browser's rows with the server's build state laid back over them.
 
     A row is matched by id. Text, depth and order are whatever the browser
-    sent (that is the edit); status and question are whatever the server had
-    for that id (that is the run). A row the browser no longer sends is gone;
-    a row it sends that the server never saw starts blank. A browser that
-    posted no list at all (an older cached page) keeps the server's rows.
+    sent (that is the edit); status, question and what the build spent are
+    whatever the server had for that id (that is the run). A row the browser
+    no longer sends is gone; a row it sends that the server never saw starts
+    blank. A browser that posted no list at all (an older cached page) keeps
+    the server's rows.
+
+    One exception, and it is about the row rather than the edit: while a row
+    is out with the builder its text is what was SENT, and a blank posted
+    over it is a page that had not yet learned what the row says -- an import
+    composed before the reader finished typing it, arriving after the build
+    that carried the finished text. Taking that blank leaves a row that says
+    "building" with nothing written on it, and the browser then lays that
+    blank back over the reader's own copy. Take the edit here only when there
+    is one to take.
     """
     if not isinstance(posted, list):
         return GM.normalize_todo_items(previous)
@@ -2410,9 +3314,16 @@ def _merge_todo_items(posted, previous):
     out = []
     for row in GM.normalize_todo_items(posted):
         was = held.get(row["id"])
+        row.pop("tokens", None)
         if was is not None:
             row["status"] = was.get("status", "")
             row["question"] = was.get("question", "")
+            if (row["status"] in OUT_WITH_BUILDER
+                    and not row["text"].strip()
+                    and str(was.get("text") or "").strip()):
+                row["text"] = was["text"]
+            if was.get("tokens"):
+                row["tokens"] = was["tokens"]
         else:
             row["status"] = ""
             row["question"] = ""

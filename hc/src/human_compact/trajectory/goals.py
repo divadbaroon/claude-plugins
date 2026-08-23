@@ -359,6 +359,15 @@ def normalize_todo_items(value) -> list:
         attachments = normalize_attachments(row.get("attachments"))
         if attachments:
             clean["attachments"] = attachments
+        # What building this row actually spent, once it has been built alone
+        # -- the rail prints it in place of its estimate. Same rule: absent
+        # until there is a number, on both sides of the wire.
+        try:
+            tokens = int(row.get("tokens") or 0)
+        except (TypeError, ValueError):
+            tokens = 0
+        if tokens > 0:
+            clean["tokens"] = tokens
         out.append(clean)
     ceiling = 0
     for row in out:
