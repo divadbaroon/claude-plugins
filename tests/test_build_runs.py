@@ -260,6 +260,11 @@ class BuildRunTests(unittest.TestCase):
         self.assertEqual(("", ""), self.rows()["taaaa0003"])
         run = BUILD._run_for(self.session, self.root, "g1")
         self.assertTrue(self.wait_for(lambda: not run.alive()))
+        # The reader thread writes the record's verdict a beat after the
+        # process is gone; wait for the word rather than for the exit.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
+            == "waiting"))
         record = BUILD.load_run(self.session, self.root, "g1")
         self.assertEqual("waiting", record["status"])
 

@@ -373,15 +373,16 @@ class ProjectMenuTests(BridgeTestCase):
             "        error: 'unknown or invalid op' }); } }); };"
             "  click(menu.querySelector('.hc-project-browse'));"
             "  return later(function () { var say = menu.querySelector('.hc-project-say');"
-            "    var note = document.querySelector('.hc-notice-title');"
+            "    var A = window.__hcPromptUI.alerts; var log = A.log();"
             "    return JSON.stringify([say.textContent, say.getAttribute('data-hc-bad'),"
-            "      note ? note.textContent : null]); }); });"))
-        # And the banner is raised on the way past: the menu closes, the
-        # restart does not stop being the fix.
+            "      log.length, log[0] && log[0].kind, A.unread()]); }); });"))
+        # And the card is raised on the way past -- where a finished TODO's
+        # is: an entry behind the bell, unread, so the mark outlives the menu
+        # and the restart does not stop being the fix. (The banner itself has
+        # come and gone by the time this looks: later() runs the clock out.)
         self.assertEqual(
             ["this workspace's server is older than this page — "
-             "restart it and try again", "",
-             "This workspace is running older code than the plugin on disk"],
+             "restart it and try again", "", 1, "server_stale", 1],
             got)
 
     def test_an_empty_box_asks_for_a_name_rather_than_a_directory(self):

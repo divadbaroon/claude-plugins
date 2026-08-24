@@ -270,7 +270,7 @@ class RouteTests(unittest.TestCase):
         vault = self.root / "vault"
         write_scope(vault, [goal("v1", "Vault goal")], [])
         with server_for(vault, chat_scoped=False) as url:
-            body = get_json(url + "/api/handoff")
+            body = get_json(url + "/api/handoff", timeout=20)
         self.assertTrue(body["ok"], body)
         self.assertIn("### Vault goal  `[active]`", body["markdown"])
         self.assertIn("from the global vault.", body["markdown"])
