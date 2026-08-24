@@ -80,7 +80,10 @@ else:
         say("Moving on.")
         print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
         raise SystemExit(0)
-    say("Thanks: %s" % msg["answer"])
+    if "reopened" in msg:
+        say("Fixing: %s" % msg["reopened"])
+    else:
+        say("Thanks: %s" % msg["answer"])
     say('{"id": "%s", "state": "DONE"}' % msg["id"])
     print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
 '''
@@ -229,6 +232,104 @@ class BuildRunTests(unittest.TestCase):
         goals, _ = chat_state.load_goals(self.session, self.root)
         self.assertEqual("Update the docs, please",
                          GM.by_id(goals, "g1")["todo_items"][0]["text"])
+
+
+class ReopenTests(BuildRunTests):
+    """A row came back done and the reader disagrees."""
+
+    def history(self, row_id="taaaa0001"):
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        row = next(r for r in GM.by_id(goals, "g1")["todo_items"]
+                   if r["id"] == row_id)
+        return row.get("history") or []
+
+    def finish(self, row_id="taaaa0001"):
+        os.environ["STUB_FINISH"] = "1"
+        out = BUILD.start(self.session, self.root, "g1", [row_id])
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()[row_id][0] == "done"), self.rows())
+
+    def test_a_reopened_row_goes_back_into_the_same_session_with_the_note(self):
+        self.finish()
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        out = BUILD.reopen(self.session, self.root, "g1", "taaaa0001",
+                           "  truncation still happens in the subagent path ")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["resumed"], out)
+        self.assertEqual(2, out["run"], "the run now happening")
+        # The run that ended keeps its verdict and what the reader said.
+        self.assertEqual(
+            [{"state": "done",
+              "note": "truncation still happens in the subagent path"}],
+            self.history())
+        # And the row is out again, then done again -- history intact.
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"), self.rows())
+        self.assertEqual(1, len(self.history()))
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual(2, len(calls))
+        self.assertIn("--resume", calls[1]["args"],
+                      "the session that did run 1 is the one told what was wrong")
+        self.assertEqual(
+            {"id": "taaaa0001",
+             "reopened": "truncation still happens in the subagent path"},
+            json.loads(calls[1]["prompt"]))
+        # The goal it belongs to is working again, not finished.
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        self.assertEqual("in_progress", GM.by_id(goals, "g1")["status"])
+
+    def test_a_row_not_finished_and_a_note_that_is_blank_are_both_refused(self):
+        blank = BUILD.reopen(self.session, self.root, "g1", "taaaa0001", "   ")
+        self.assertFalse(blank["ok"])
+        self.assertIn("went wrong", blank["error"])
+        # taaaa0003 has never run: there is nothing to disagree with yet.
+        fresh = BUILD.reopen(self.session, self.root, "g1", "taaaa0003", "no")
+        self.assertFalse(fresh["ok"])
+        self.assertIn("finished", fresh["error"])
+        missing = BUILD.reopen(self.session, self.root, "g1", "tzzzz9999", "no")
+        self.assertFalse(missing["ok"])
+        self.assertEqual([], self.history())
+
+    def test_with_no_session_left_a_fresh_run_opens_on_the_whole_history(self):
+        self.finish()
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        # The record of run 1 is gone -- a restart, an older build.
+        BUILD._RUNS.clear()
+        BUILD._run_path(self.session, self.root, "g1").unlink()
+        os.environ["STUB_FINISH"] = "1"
+        out = BUILD.reopen(self.session, self.root, "g1", "taaaa0001",
+                           "you removed the cap but it still truncates")
+        self.assertTrue(out["ok"], out)
+        self.assertFalse(out["resumed"], out)
+        self.assertTrue(self.wait_for(
+            lambda: len(self.log.read_text().splitlines()) == 2))
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertNotIn("--resume", calls[1]["args"])
+        self.assertIn("- Add the route [taaaa0001]", calls[1]["prompt"])
+        self.assertIn('(run 1 ended done; the user reopened it: "you removed'
+                      ' the cap but it still truncates")', calls[1]["prompt"])
+
+    def test_the_op_route_reaches_reopen(self):
+        self.finish()
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "reopen_todo", "goal_id": "g1",
+                         "id": "taaaa0001", "note": "not good enough"},
+                        trajdir, True)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual([{"state": "done", "note": "not good enough"}],
+                         self.history())
+        # A stale browser copy posting the tree does not erase the history.
+        ui._import([{"id": "g1", "title": "Ship the router", "children": [],
+                     "todo_items": [{"id": "taaaa0001", "text": "Add the route",
+                                     "depth": 0, "status": "", "question": ""}]}],
+                   trajdir, True)
+        self.assertEqual([{"state": "done", "note": "not good enough"}],
+                         self.history())
 
 
 class QueueBehindARunTests(BuildRunTests):
@@ -402,6 +503,33 @@ class SessionBuildTests(unittest.TestCase):
         with self.transcript.open("a") as fh:
             fh.write(json.dumps({"type": "assistant", "message": {"content": [
                 {"type": "text", "text": text}]}}) + "\n")
+
+    def test_a_reopened_row_queues_and_the_hook_tells_the_session_what_was_wrong(self):
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        BUILD.deliver(self.session, self.root, "Stop")
+        self.say('{"id": "taaaa0001", "state": "DONE"}')
+        BUILD.scan_transcript(self.session, self.root, str(self.transcript))
+        self.assertEqual("done", self.rows()["taaaa0001"][0])
+
+        out = BUILD.reopen(self.session, self.root, "g1", "taaaa0001",
+                           "the cap is gone but it still truncates")
+        self.assertTrue(out["ok"] and out["queued"], out)
+        self.assertEqual("queued", self.rows()["taaaa0001"][0])
+        text = BUILD.deliver(self.session, self.root, "Stop")
+        self.assertIn("reopened a row you had already marked DONE", text)
+        self.assertIn('{"id": "taaaa0001", "reopened": "the cap is gone but'
+                      ' it still truncates"}', text)
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        # And it finishes again, with the run that ended kept under it.
+        self.say('{"id": "taaaa0001", "state": "DONE"}')
+        BUILD.scan_transcript(self.session, self.root, str(self.transcript))
+        self.assertEqual("done", self.rows()["taaaa0001"][0])
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        row = next(r for r in GM.by_id(goals, "g1")["todo_items"]
+                   if r["id"] == "taaaa0001")
+        self.assertEqual([{"state": "done",
+                           "note": "the cap is gone but it still truncates"}],
+                         row["history"])
 
     def test_build_queues_and_the_stop_hook_hands_it_to_the_session(self):
         out = BUILD.start(self.session, self.root, "g1", ["taaaa0001"])

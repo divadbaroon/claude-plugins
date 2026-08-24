@@ -165,6 +165,9 @@ class ChatUiServerTests(unittest.TestCase):
             )
             # Reported so a launcher can tell a stale server from a current one.
             self.assertIsInstance(health["version"], str)
+            # ...and whether the source on disk has already moved past it.
+            self.assertIs(False, health["source_stale"])
+            self.assertIs(False, state_a["source_stale"])
 
             self.assertEqual(
                 {"ok": True},
@@ -984,11 +987,15 @@ class ChatUiServerTests(unittest.TestCase):
 
     @staticmethod
     def chip_style(page, label):
-        """Weight and colour of one filter chip, as the reader sees them."""
+        """Weight and colour of one filter chip, as the reader sees them.
+
+        The chip is a name and, in its own element, the count: matched on
+        the two together, the way the row reads.
+        """
         return page.evaluate(
             """label => {
-              const el = [...document.querySelectorAll('span')].find(
-                e => !e.children.length && e.textContent.trim() === label);
+              const el = [...document.querySelectorAll('.hc-chip')].find(
+                e => e.textContent.trim() === label);
               if (!el) return null;
               const cs = getComputedStyle(el);
               return { weight: cs.fontWeight, color: cs.color };
@@ -1051,9 +1058,13 @@ class ChatUiServerTests(unittest.TestCase):
                 # The Conversations page lists a vault's whole history; this
                 # scope has one conversation and no route that serves the list.
                 expect(page.get_by_text("Conversations", exact=True)).to_be_hidden()
-                # The page heading went with it: this window has one page,
-                # and the goal rail is where its name lives now.
-                expect(page.get_by_text("GOALS", exact=True)).to_be_visible()
+                # The page heading went with it: the goal rail is where its
+                # name lives now, and the header's second row is where the
+                # page is chosen.
+                expect(page.locator(".hc-rail-left .hc-rail-name")
+                       ).to_have_text("GOALS")
+                expect(page.locator('[data-hc-subtab="goals"]')
+                       ).to_have_attribute("data-hc-subtab-on", "")
                 self.assertEqual("goals", page.evaluate(
                     "JSON.parse(localStorage.getItem('hc-vault-ui-v1')).page"))
 
@@ -1722,13 +1733,13 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_a_finished_turn_arrives_as_a_bar_under_the_header(self):
-        """The banner reports on the workspace, so it takes the top of it.
+    def test_a_finished_turn_arrives_as_a_card_with_the_builds(self):
+        """A chat answering is news of the same kind as a build coming back.
 
-        Same nodes and the same timers as the corner toast it replaces -- the
-        close button and the hover hold are covered above. What is new is
-        where it sits, and that the columns give it a line rather than having
-        it painted over them.
+        So it arrives in the same corner, counts on the same bell, and takes
+        no line from the columns: the bar under the header that used to
+        report this pushed the whole workspace down every time the terminal
+        finished a turn.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1749,46 +1760,52 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-left")).to_be_visible(
                     timeout=10_000)
-                # The pills live in the header now, so the line the banner
-                # takes is measured against the columns under it.
+                # What the columns do while the terminal works is nothing:
+                # measured before, and again while a card is up.
                 rail_before = page.locator(".hc-rail-left").bounding_box()
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
+                card = page.locator(".hc-alert[data-hc-alert-kind"
+                                    "=\"session_stopped\"]")
+                expect(card).to_have_count(1, timeout=4_000)
                 # What a Stop hook proves is that the turn ended. It does not
                 # prove a goal moved or a task closed, so it does not say so.
-                expect(banner.locator(".hc-notice-title")).to_have_text(
+                expect(card.locator(".hc-alert-title")).to_have_text(
                     "Claude finished responding")
-                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                expect(card.locator(".hc-alert-detail")).to_have_text(
                     "Done. Tests pass.")
+                # And it names no goal: there is no one row it reports on.
+                expect(card.locator(".hc-alert-goal")).to_have_count(0)
 
-                box = banner.bounding_box()
-                self.assertLess(box["x"], 20, "a bar starts at the edge")
-                self.assertGreater(box["width"], 1_000, "a bar spans the page")
-                self.assertLess(box["y"], 80, "and sits under the header")
-                # It has its own line: the columns move down for it rather
-                # than being painted over.
-                moved = page.locator(".hc-rail-left").bounding_box()
-                self.assertGreater(moved["y"], rail_before["y"] + 20)
-                self.assertGreater(moved["y"], box["y"] + box["height"] - 2)
+                box = card.bounding_box()
+                self.assertGreater(box["x"], 900, "a card sits on the right")
+                self.assertLess(box["width"], 400, "a card is not a bar")
+                self.assertLess(box["y"], 100, "under the header")
+                # The columns are where they were: it is an overlay, not a
+                # line the workspace has to give up.
+                held = page.locator(".hc-rail-left").bounding_box()
+                self.assertAlmostEqual(rail_before["y"], held["y"], delta=2)
 
-                # And the columns give the line back when it goes.
-                banner.locator(".hc-notice-close").click()
-                expect(banner).to_have_count(0, timeout=2_000)
+                # It counts on the bell with the builds, and × reads it.
+                count = page.locator(".hc-alerts .hc-bell-count")
+                expect(count).to_have_text("1", timeout=2_000)
+                card.locator(".hc-alert-close").click()
+                expect(card).to_have_count(0, timeout=2_000)
+                expect(count).to_have_text("0")
                 back = page.locator(".hc-rail-left").bounding_box()
                 self.assertAlmostEqual(rail_before["y"], back["y"], delta=2)
             finally:
                 browser.close()
 
     def test_a_source_added_here_outlives_the_page_and_the_server(self):
-        """SOURCES is a rail of chips, and each chip is a stored record.
+        """SOURCES is one line naming the records, and a box that edits them.
 
-        The pane that held these as three textboxes is dormant; the rail is
-        the control that came back. Nothing new is written -- both lists are
-        the artifact's own, so an edit lands on set_sources by the path that
-        was already there.
+        The pane that held these as three textboxes is dormant, and the rail
+        of pills it became is gone too: adding and removing happen in one
+        box, and the line under the title names what is attached. Nothing
+        new is written -- both lists are the artifact's own, so an edit
+        lands on set_sources by the path that was already there.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1814,31 +1831,40 @@ class ChatUiServerTests(unittest.TestCase):
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
                     page.goto(url, wait_until="domcontentloaded")
-                    expect(page.locator(".hc-sources")).to_be_visible(
-                        timeout=10_000)
+                    line = page.locator(".hc-sources")
+                    expect(line).to_be_visible(timeout=10_000)
+                    expect(line.locator(".hc-sources-sum")).to_have_text(
+                        "none attached")
+                    # No pill anywhere on the page: the rail is gone.
                     expect(page.locator(".hc-src")).to_have_count(0)
 
-                    page.get_by_text("+ Add source", exact=True).click()
-                    dialog = page.locator(".hc-ask-box")
-                    expect(dialog).to_be_visible()
+                    line.get_by_text("+ Add source", exact=True).click()
+                    box = page.locator(".hc-srcs-box")
+                    expect(box).to_be_visible()
+                    expect(box.locator(".hc-srcs-none")).to_be_visible()
                     # Which kind, then the value: the store keeps three, and
-                    # a placeholder row is not one of them.
-                    dialog.get_by_text("GitHub repo", exact=True).click()
-                    dialog.locator("input").fill("owner/repo")
+                    # a placeholder row is not one of them. The box stays up
+                    # for the next one.
+                    box.get_by_text("GitHub repo", exact=True).click()
+                    box.locator("input").fill("owner/repo")
                     page.keyboard.press("Enter")
-
-                    chip = page.locator(".hc-src")
-                    expect(chip).to_have_count(1)
-                    expect(chip.locator(".hc-src-tag")).to_have_text("GITHUB")
-                    expect(chip.locator(".hc-src-label")).to_have_text(
+                    rows = box.locator(".hc-srcs-row")
+                    expect(rows).to_have_count(1)
+                    expect(rows.first.locator(".hc-srcs-tag")).to_have_text(
+                        "GITHUB")
+                    expect(rows.first.locator(".hc-srcs-label")).to_have_text(
                         "owner/repo")
 
-                    page.get_by_text("+ Add source", exact=True).click()
-                    page.locator(".hc-ask-box").get_by_text(
-                        "Document", exact=True).click()
-                    page.locator(".hc-ask-box input").fill("design.md")
-                    page.keyboard.press("Enter")
-                    expect(page.locator(".hc-src")).to_have_count(2)
+                    box.get_by_text("Document", exact=True).click()
+                    box.locator("input").fill("design.md")
+                    box.get_by_text("Attach", exact=True).click()
+                    expect(rows).to_have_count(2)
+                    box.get_by_text("Done", exact=True).click()
+                    expect(box).to_have_count(0)
+                    expect(line.locator(".hc-sources-sum")).to_have_text(
+                        "owner/repo, design.md")
+                    expect(line.locator(".hc-src-add")).to_have_text(
+                        "Edit sources")
 
                     deadline = time.monotonic() + 6
                     stored = []
@@ -1854,8 +1880,8 @@ class ChatUiServerTests(unittest.TestCase):
 
                     # A reload of the same page reads them back.
                     page.reload(wait_until="domcontentloaded")
-                    expect(page.locator(".hc-src")).to_have_count(
-                        2, timeout=10_000)
+                    expect(page.locator(".hc-sources-sum")).to_have_text(
+                        "owner/repo, design.md", timeout=10_000)
 
                     # And so does a browser that never saw the page that
                     # wrote them: the record is the server's, not the tab's.
@@ -1871,13 +1897,21 @@ class ChatUiServerTests(unittest.TestCase):
                         viewport={"width": 1400, "height": 900})
                     page = fresh.new_page()
                     page.goto(second, wait_until="domcontentloaded")
-                    expect(page.locator(".hc-src")).to_have_count(
-                        2, timeout=10_000)
+                    expect(page.locator(".hc-sources-sum")).to_have_text(
+                        "owner/repo, design.md", timeout=10_000)
 
-                    # Removing one is the same round trip in reverse.
-                    page.locator(".hc-src").first.locator(
-                        ".hc-src-rm").click()
-                    expect(page.locator(".hc-src")).to_have_count(1)
+                    # Removing one is the same round trip in reverse, from
+                    # inside the box.
+                    page.get_by_text("Edit sources", exact=True).click()
+                    box = page.locator(".hc-srcs-box")
+                    rows = box.locator(".hc-srcs-row")
+                    expect(rows).to_have_count(2)
+                    rows.first.locator(".hc-srcs-rm").click()
+                    expect(rows).to_have_count(1)
+                    page.keyboard.press("Escape")
+                    expect(box).to_have_count(0)
+                    expect(page.locator(".hc-sources-sum")).to_have_text(
+                        "design.md")
                     deadline = time.monotonic() + 6
                     while time.monotonic() < deadline:
                         stored = sources(second)
@@ -2095,7 +2129,7 @@ class ChatUiServerTests(unittest.TestCase):
                 # Two polls' worth: the state carrying the old notice has
                 # certainly landed by now.
                 page.wait_for_timeout(3_500)
-                expect(page.locator(".hc-notice")).to_have_count(0)
+                expect(page.locator(".hc-alert")).to_have_count(0)
                 self.assertEqual(title, page.title())
 
                 chat_state.add_notice(
@@ -2103,25 +2137,44 @@ class ChatUiServerTests(unittest.TestCase):
                     "Explore: Analysis complete. Found 3 potential issues",
                     self.root)
 
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
-                expect(banner.locator(".hc-notice-title")
+                card = page.locator(".hc-alert")
+                expect(card).to_have_count(1, timeout=4_000)
+                expect(card.locator(".hc-alert-title")
                        ).to_have_text("A subagent returned")
-                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                expect(card.locator(".hc-alert-detail")).to_have_text(
                     "Explore: Analysis complete. Found 3 potential issues")
-                expect(banner.locator(".hc-notice-close")).to_be_visible()
+                expect(card.locator(".hc-alert-close")).to_be_visible()
                 # A workspace on another screen has to be able to say so
                 # from the tab strip alone, without losing which conversation
                 # it is watching.
                 self.assertEqual("\u25cf " + title, page.title())
 
-                # It takes itself away; nothing here was clicked.
-                expect(banner).to_have_count(0, timeout=12_000)
-                self.assertEqual(title, page.title())
+                # It takes itself away; nothing here was clicked. What it
+                # leaves behind is the point of moving it here: the reader
+                # who was looking at the terminal for those six seconds
+                # still finds it on the bell, and the tab still says so.
+                expect(card).to_have_count(0, timeout=12_000)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("1")
+                self.assertEqual("\u25cf " + title, page.title())
 
                 # And it is not shown twice for the same event.
                 page.wait_for_timeout(3_500)
-                expect(banner).to_have_count(0)
+                expect(card).to_have_count(0)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("1")
+
+                # Reading it in the center is what takes the mark off.
+                page.locator(".hc-alerts .hc-bell").click()
+                center = page.locator(".hc-alert-center")
+                expect(center).to_have_count(1, timeout=2_000)
+                expect(center.locator(".hc-alert-row")).to_have_count(1)
+                center.locator(
+                    ".hc-alert-center-act[data-hc-alert-act=\"read-all\"]"
+                ).click()
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("0")
+                self.assertEqual(title, page.title())
             finally:
                 browser.close()
 
@@ -2151,20 +2204,23 @@ class ChatUiServerTests(unittest.TestCase):
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
-                expect(banner.locator(".hc-notice-title")
+                card = page.locator(".hc-alert")
+                expect(card).to_have_count(1, timeout=4_000)
+                expect(card.locator(".hc-alert-title")
                        ).to_have_text("Claude finished responding")
 
                 # Reading it holds it open past the moment it would have gone.
-                banner.hover()
+                card.hover()
                 page.wait_for_timeout(9_000)
-                expect(banner).to_have_count(1)
+                expect(card).to_have_count(1)
 
                 self.assertEqual("\u25cf " + title, page.title())
 
-                banner.locator(".hc-notice-close").click()
-                expect(banner).to_have_count(0, timeout=2_000)
+                # \u00d7 dismisses it as read, which is what clears the tab.
+                card.locator(".hc-alert-close").click()
+                expect(card).to_have_count(0, timeout=2_000)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("0")
                 self.assertEqual(title, page.title())
             finally:
                 browser.close()
@@ -2385,6 +2441,8 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
         return { hdr: r('.hc>div:first-child'), l: r('.hc-rail-left'),
                  m: r('.hc-main'), rt: r('.hc-rail-right'),
                  pills: r('.hc-titlerow'), brand: r('.hc-brand'),
+                 crumb: r('.hc-project'), sub: r('.hc-subbar'),
+                 tabs: r('.hc-subtabs'),
                  brandFont: getComputedStyle(document.querySelector('.hc-brand')).fontFamily };
     }"""
 
@@ -2404,10 +2462,11 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 page.wait_for_selector("text=one goal", timeout=10000)
                 page.wait_for_timeout(1500)
                 g = page.evaluate(self.GEO)
-                # Header, then columns from its bottom edge to the window's.
-                self.assertEqual((0, 0, 1440, 37), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
+                # Header -- two rows -- then columns from its bottom edge to
+                # the window's.
+                self.assertEqual((0, 0, 1440, 74), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
                 for col in ("l", "m", "rt"):
-                    self.assertEqual(37, round(g[col]["y"]), col)
+                    self.assertEqual(74, round(g[col]["y"]), col)
                     self.assertEqual(900, round(g[col]["bottom"]), col)
                 # Flush: left rail at 0, main starts where it ends, right
                 # rail ends at the window.
@@ -2415,10 +2474,20 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 self.assertEqual(round(g["l"]["right"]), round(g["m"]["x"]))
                 self.assertEqual(round(g["m"]["right"]), round(g["rt"]["x"]))
                 self.assertEqual(1440, round(g["rt"]["right"]))
-                # The pills sit inside the header, after the brand; the brand
-                # is set in a serif.
-                self.assertLess(g["pills"]["y"], 37)
-                self.assertGreater(g["pills"]["x"], g["brand"]["right"])
+                # The brand and the crumb naming the project are on the
+                # first row; the tabs and the filter counts share the second,
+                # one at each end. The brand is set in a serif.
+                self.assertLess(g["brand"]["bottom"], 37)
+                self.assertGreater(g["crumb"]["x"], g["brand"]["right"])
+                self.assertLess(g["crumb"]["bottom"], 37)
+                # The second row ends on the header's own rule, one pixel
+                # above where the columns start.
+                self.assertEqual(37, round(g["sub"]["y"]))
+                self.assertEqual(73, round(g["sub"]["bottom"]))
+                self.assertEqual(37, round(g["pills"]["y"]))
+                self.assertEqual(73, round(g["pills"]["bottom"]))
+                self.assertGreater(g["pills"]["x"], g["tabs"]["right"])
+                self.assertEqual(1424, round(g["pills"]["right"]))
                 self.assertIn("Georgia", g["brandFont"])
 
                 # Drag the goals divider 80px right; the rail follows.
@@ -2448,6 +2517,80 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 self.assertEqual(0, g["l"]["width"])
                 self.assertEqual(0, round(g["m"]["x"]))
                 self.assertEqual(360, round(g["rt"]["width"]))
+            finally:
+                browser.close()
+
+
+class HeaderRowBrowserTests(unittest.TestCase):
+    """The header names the project, and its second row switches the page."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.project = root / "widgets"
+        self.project.mkdir()
+        self.a = root / "chat-a"
+        write_scope(self.a, [goal("g1", "one goal"),
+                             goal("g2", "another goal")], [])
+        (self.a / "manifest.json").write_text(json.dumps(
+            {"session_id": "chat-a", "cwd": str(self.project)}))
+        from human_compact.trajectory import ui as UI
+        UI._project_cache.update({"key": None, "at": 0.0, "value": None})
+
+    def test_the_crumb_names_the_project_and_the_tabs_switch_the_page(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover - exercised when installed
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(executable_path=chrome,
+                                                 headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-project-name", timeout=10000)
+                page.wait_for_timeout(800)
+                # The crumb is the directory the session ran in, and it says
+                # the whole path when the pointer rests on it.
+                crumb = page.locator(".hc-project-name")
+                self.assertEqual("widgets",
+                                 crumb.locator(".hc-project-label").inner_text())
+                self.assertIn(str(self.project), crumb.get_attribute("title"))
+                # It opens a menu of the same facts, and Escape closes it.
+                crumb.click()
+                page.wait_for_selector(".hc-project-menu", timeout=5000)
+                self.assertIn(str(self.project),
+                              page.locator(".hc-project-menu").inner_text())
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
+                self.assertEqual(0, page.locator(".hc-project-menu").count())
+                # GOALS is the page it opens on; the tree is on screen and
+                # the overview is not.
+                self.assertEqual(0, page.locator(".hc-ov").count())
+                self.assertIsNotNone(
+                    page.locator('[data-hc-subtab="goals"]')
+                        .get_attribute("data-hc-subtab-on"))
+                # OVERVIEW puts the project and what the tree adds up to over
+                # the columns; the counts are the workspace's own.
+                page.click('[data-hc-subtab="overview"]')
+                page.wait_for_selector(".hc-ov", timeout=5000)
+                page.wait_for_timeout(400)
+                text = page.locator(".hc-ov").inner_text()
+                self.assertIn("widgets", text)
+                self.assertIn(str(self.project), text)
+                self.assertIn("2 active", " ".join(text.split()))
+                self.assertIsNotNone(
+                    page.locator('[data-hc-subtab="overview"]')
+                        .get_attribute("data-hc-subtab-on"))
+                # And GOALS brings the tree back, untouched.
+                page.click('[data-hc-subtab="goals"]')
+                page.wait_for_timeout(400)
+                self.assertEqual(0, page.locator(".hc-ov").count())
+                page.wait_for_selector("text=one goal", timeout=5000)
             finally:
                 browser.close()
 
@@ -2681,3 +2824,43 @@ class GoalDocumentRoundTripTests(unittest.TestCase):
                 self.document,
                 get_json(url + "/api/state")["goals"][0]["notes"],
             )
+
+
+class SourceStaleTests(unittest.TestCase):
+    """A server's handlers are frozen at import; the page is read from disk
+    per request. `_source_stale` is how the process admits the two parted."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="hc-src-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        (self.root / "trajectory").mkdir()
+        self.ui_py = self.root / "trajectory" / "ui.py"
+        self.ui_py.write_text("# frozen\n")
+        self.cache = self.root / "trajectory" / "__pycache__"
+        self.cache.mkdir()
+        (self.cache / "ui.cpython.pyc").write_bytes(b"")
+        (self.root / "trajectory" / "web").mkdir()
+        self.bridge = self.root / "trajectory" / "web" / "bridge.js"
+        self.bridge.write_text("// served from disk\n")
+
+    def test_sources_older_than_the_load_are_not_stale(self):
+        loaded = self.ui_py.stat().st_mtime + 5
+        self.assertFalse(ui._source_stale(self.root, loaded_at=loaded))
+
+    def test_a_python_file_newer_than_the_load_is_stale(self):
+        loaded = self.ui_py.stat().st_mtime - 5
+        self.assertTrue(ui._source_stale(self.root, loaded_at=loaded))
+
+    def test_only_python_counts(self):
+        # bridge.js and a .pyc written after the load are not staleness: the
+        # one is read per request, the other is this very process's cache.
+        loaded = self.ui_py.stat().st_mtime + 5
+        os.utime(self.bridge, (loaded + 60, loaded + 60))
+        os.utime(self.cache / "ui.cpython.pyc", (loaded + 60, loaded + 60))
+        self.assertFalse(ui._source_stale(self.root, loaded_at=loaded))
+
+    def test_the_running_package_is_fresh_at_import(self):
+        # The real package, judged against its own load: nothing in it was
+        # written after the test process imported ui, so the memoised answer
+        # a live server hands to /api/health is False.
+        self.assertFalse(ui._source_stale())

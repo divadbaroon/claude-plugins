@@ -25,6 +25,43 @@ DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
 MAX_JSON_BYTES = 2 * 1024 * 1024
 SERVER_REGISTRY = "server.json"
 
+# The moment this module's code was read. The handlers below are frozen at
+# import while bridge.js and the HTML are read from disk on every request,
+# so a server can outlive its own source: the page gains a button whose
+# route the process never learned. `_source_stale` is how it admits that.
+_LOADED_AT = time.time()
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+_STALE_CACHE = [0.0, False]          # [checked_at, answer]; a 2s memo
+
+
+def _source_stale(root=None, loaded_at=None, now=None):
+    """Whether any Python file of the package is newer than this process's
+    copy of it. Only `.py` counts: the web assets are served from disk and
+    are never behind. Cheap (a few dozen stats) and memoised for 2s, since
+    it rides on /api/state."""
+    root = Path(root) if root is not None else _PACKAGE_ROOT
+    loaded_at = _LOADED_AT if loaded_at is None else loaded_at
+    now = time.time() if now is None else now
+    cached = root == _PACKAGE_ROOT and loaded_at == _LOADED_AT
+    if cached and now - _STALE_CACHE[0] < 2.0:
+        return _STALE_CACHE[1]
+    stale = False
+    try:
+        for path in root.rglob("*.py"):
+            if "__pycache__" in path.parts:
+                continue
+            try:
+                if path.stat().st_mtime > loaded_at:
+                    stale = True
+                    break
+            except OSError:
+                continue
+    except OSError:
+        stale = False
+    if cached:
+        _STALE_CACHE[0], _STALE_CACHE[1] = now, stale
+    return stale
+
 # Screenshots pasted into a TODO row arrive on /api/attachment as raw image
 # bytes and are kept under the workspace's own directory. A retina capture
 # runs to several megabytes; twenty-five is room for any of them and a wall
@@ -742,7 +779,10 @@ def _payload(trajdir=None, chat_scoped=None):
                    "agent_claim": claim,
                    "scope": "chat" if chat_scoped else "global",
                    "provider": _configured_provider(trajdir),
-                   "revision": _goal_revision(goals, important)}
+                   "revision": _goal_revision(goals, important),
+                   # The page polls this; a server behind its own source
+                   # says so here, so a missing route is named as that.
+                   "source_stale": _source_stale()}
     if identity is not None:
         payload["injection"] = _injection_state(*identity)
         try:
@@ -778,6 +818,50 @@ def _handoff(trajdir=None, chat_scoped=None):
         return {"ok": False, "error": str(exc)[:200]}
 
 
+# What the header crumb names, and what the overview reads. git is shelled
+# out to, so the answer is held for a few seconds: the crumb is drawn on a
+# 700ms sweep and would otherwise fork a process behind every one.
+_PROJECT_TTL = 10.0
+_project_cache = {"key": None, "at": 0.0, "value": None}
+
+
+def _project(trajdir=None, chat_scoped=None):
+    """The directory this workspace stands in front of, and its git facts."""
+    from . import handoff as HO
+    chat_scoped = trajdir is not None if chat_scoped is None else chat_scoped
+    trajdir = _scope(trajdir)
+    cwd = HO.workspace_cwd(trajdir, chat_scoped)
+    now = time.monotonic()
+    if (_project_cache["key"] == cwd
+            and now - _project_cache["at"] < _PROJECT_TTL):
+        return _project_cache["value"]
+    try:
+        git = HO.git_metadata(cwd, with_gh=False)
+    except Exception:  # noqa: BLE001 - the crumb names the directory regardless
+        git = {}
+    github = git.get("github") or {}
+    root = str(git.get("root") or cwd)
+    value = {
+        "ok": True,
+        "name": Path(root).name or root,
+        "cwd": cwd,
+        "root": root,
+        "git": bool(git.get("available")),
+        "branch": str(git.get("branch") or ""),
+        "head": str(git.get("head_short") or ""),
+        "subject": str(git.get("head_subject") or ""),
+        "remote": str(git.get("remote") or ""),
+        "github": str(github.get("url") or ""),
+        "slug": str(github.get("slug") or ""),
+        "ahead": git.get("ahead"),
+        "behind": git.get("behind"),
+        "dirty": int(git.get("dirty_count") or 0),
+        "commits": list(git.get("commits") or [])[:5],
+    }
+    _project_cache.update({"key": cwd, "at": now, "value": value})
+    return value
+
+
 def _apply(op, trajdir=None, chat_scoped=None):
     result = _apply_locked(op, trajdir, chat_scoped)
     deferred = result.get("__deferred__") if isinstance(result, dict) else None
@@ -795,6 +879,9 @@ def _apply(op, trajdir=None, chat_scoped=None):
         ids = op.get("ids")
         return BUILD.cancel(session_id, root, goal_id,
                             ids if isinstance(ids, list) else [])
+    if kind == "reopen_todo":
+        return BUILD.reopen(session_id, root, goal_id,
+                            str(op.get("id") or ""), str(op.get("note") or ""))
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -983,7 +1070,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
-                    "generate_prompt", "reopen_session"):
+                    "reopen_todo", "generate_prompt", "reopen_session"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -1221,6 +1308,11 @@ class H(BaseHTTPRequestHandler):
                 # under a prompt that has the agent render and open it.
                 self._send(200, _handoff(
                     self.server.trajdir, self.server.chat_scoped))
+            elif self.path == "/api/project":
+                # The crumb after the brand, and the facts the OVERVIEW tab
+                # reads: which directory this workspace is a second view of.
+                self._send(200, _project(
+                    self.server.trajdir, self.server.chat_scoped))
             elif (self.path == "/api/briefing"
                   or self.path.startswith("/api/briefing?")):
                 # Exactly what a session launched on this goal would receive,
@@ -1305,6 +1397,11 @@ class H(BaseHTTPRequestHandler):
                     "version": _version(),
                     "session_id": (self.server.trajdir.name
                                    if self.server.chat_scoped else None),
+                    # True once the source on disk has moved past the code
+                    # this process runs: a launcher should replace it, and
+                    # the page should say so rather than report a missing
+                    # route as a failed feature.
+                    "source_stale": _source_stale(),
                 })
             else:
                 self._send(404, {"error": "not found"})
@@ -1617,10 +1714,11 @@ def _merge_todo_items(posted, previous):
     """The browser's rows with the server's build state laid back over them.
 
     A row is matched by id. Text, depth and order are whatever the browser
-    sent (that is the edit); status and question are whatever the server had
-    for that id (that is the run). A row the browser no longer sends is gone;
-    a row it sends that the server never saw starts blank. A browser that
-    posted no list at all (an older cached page) keeps the server's rows.
+    sent (that is the edit); status, question and the row's run history are
+    whatever the server had for that id (that is the run). A row the browser
+    no longer sends is gone; a row it sends that the server never saw starts
+    blank. A browser that posted no list at all (an older cached page) keeps
+    the server's rows.
     """
     if not isinstance(posted, list):
         return GM.normalize_todo_items(previous)
@@ -1628,9 +1726,12 @@ def _merge_todo_items(posted, previous):
     out = []
     for row in GM.normalize_todo_items(posted):
         was = held.get(row["id"])
+        row.pop("history", None)
         if was is not None:
             row["status"] = was.get("status", "")
             row["question"] = was.get("question", "")
+            if was.get("history"):
+                row["history"] = was["history"]
         else:
             row["status"] = ""
             row["question"] = ""

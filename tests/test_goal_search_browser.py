@@ -111,6 +111,54 @@ class GoalSearchBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_magnifier_marks_the_field_instead_of_placeholder_words(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-rail-left .hc-search-input", timeout=15000)
+                box = page.locator(".hc-search-input")
+                glass = page.locator(".hc-search-icon")
+                expect(glass).to_be_visible()
+                # Nothing but the glass says "search": no words in the field.
+                self.assertEqual("", box.get_attribute("placeholder") or "")
+                # The mask resolved (an unknown url would compute to none),
+                # and it is painted in the rail's own ink.
+                mask = page.evaluate(
+                    "() => { const s = getComputedStyle("
+                    "  document.querySelector('.hc-search-icon'));"
+                    "  return [s.maskImage || s.webkitMaskImage, s.backgroundColor,"
+                    "          s.pointerEvents]; }")
+                self.assertIn("data:image/svg+xml", mask[0])
+                self.assertNotEqual("none", mask[0])
+                self.assertEqual("none", mask[2])
+                # It sits in the input's left gutter, clear of the caret.
+                geom = page.evaluate(
+                    "() => { const g = document.querySelector('.hc-search-icon')"
+                    "   .getBoundingClientRect();"
+                    "  const i = document.querySelector('.hc-search-input');"
+                    "  const r = i.getBoundingClientRect();"
+                    "  const pad = parseFloat(getComputedStyle(i).paddingLeft);"
+                    "  return [g.width, g.height, g.left - r.left, pad]; }")
+                self.assertEqual([11, 11], geom[:2])
+                self.assertLess(geom[2] + geom[0], geom[3] + 1)
+                page.screenshot(path="/tmp/hc-search-glass.png")
+                # Typing lights it, clearing dims it back.
+                dim = page.evaluate("() => getComputedStyle("
+                                    "document.querySelector('.hc-search-icon'))"
+                                    ".backgroundColor")
+                box.click()
+                page.keyboard.type("rail")
+                expect(page.locator(".hc-search-hit").first).to_be_visible()
+                lit = page.evaluate("() => getComputedStyle("
+                                    "document.querySelector('.hc-search-icon'))"
+                                    ".backgroundColor")
+                self.assertNotEqual(dim, lit)
+                page.screenshot(path="/tmp/hc-search-glass-lit.png")
+            finally:
+                browser.close()
+
 
 if __name__ == "__main__":
     unittest.main()

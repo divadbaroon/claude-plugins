@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 import shutil
 import stat
 import subprocess
@@ -1372,19 +1373,21 @@ def _pid_alive(pid):
         return False
 
 
-def _healthy_chat_server(record, session_id, timeout=0.5):
+def _probe_chat_server(record, session_id, timeout=0.5):
+    """The health body of the server *record* names, if it is alive, on
+    loopback, and answers as this chat; else None."""
     import http.client
     import json
     import urllib.parse
     if not isinstance(record, dict) or not _pid_alive(record.get("pid")):
-        return False
+        return None
     url = record.get("url")
     if not isinstance(url, str):
-        return False
+        return None
     parsed = urllib.parse.urlparse(url)
     if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
             or parsed.path not in ("", "/")):
-        return False
+        return None
     connection = None
     try:
         # Speak HTTP directly to loopback. urllib inherits corporate/system
@@ -1398,18 +1401,56 @@ def _healthy_chat_server(record, session_id, timeout=0.5):
         response = connection.getresponse()
         body = json.loads(response.read())
     except (OSError, ValueError, TypeError, http.client.HTTPException):
-        return False
+        return None
     finally:
         if connection is not None:
             connection.close()
-    return (
-        isinstance(body, dict)
-        and
-        response.status == 200
-        and body.get("ok") is True
-        and body.get("scope") == "chat"
-        and body.get("session_id") == session_id
-    )
+    if (isinstance(body, dict)
+            and response.status == 200
+            and body.get("ok") is True
+            and body.get("scope") == "chat"
+            and body.get("session_id") == session_id):
+        return body
+    return None
+
+
+def _healthy_chat_server(record, session_id, timeout=0.5):
+    """Alive, ours, and running the code that is on disk. A server that
+    answers but admits `source_stale` is not reused: its page is read fresh
+    from disk while its routes are frozen at start, so the browser would show
+    buttons the process cannot serve. One that does not report the field at
+    all predates it, which is the same thing."""
+    body = _probe_chat_server(record, session_id, timeout)
+    return body is not None and body.get("source_stale") is False
+
+
+def _stale_chat_server(record, session_id, timeout=0.5):
+    body = _probe_chat_server(record, session_id, timeout)
+    return body is not None and body.get("source_stale") is not False
+
+
+def _retire_chat_server(record, session_dir, timeout=6.0):
+    """Stop the chat server *record* names -- only ever called once the probe
+    has confirmed the pid answers as this chat -- and clear its registry."""
+    pid = record.get("pid") if isinstance(record, dict) else None
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except (OSError, TypeError, ValueError):
+        pass
+    else:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not _pid_alive(pid):
+                break
+            time.sleep(0.05)
+        else:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except OSError:
+                pass
+    current = _read_server_registry(session_dir)
+    if current and current.get("pid") == pid:
+        _server_registry(session_dir).unlink(missing_ok=True)
 
 
 def chat_serve_main(argv=None):
@@ -1514,6 +1555,12 @@ def chat_ui_main(argv=None):
 
     with CS.session_lock(args.session, wait_s=8):
         record = _read_server_registry(p.session_dir)
+        # A server that answers as this chat but runs code older than the
+        # source on disk is replaced, not reused: left alone it would keep
+        # the old port, and the next launch would only find it again.
+        if _stale_chat_server(record, args.session):
+            _retire_chat_server(record, p.session_dir)
+            record = None
         if not _healthy_chat_server(record, args.session):
             log_path = p.session_dir / "server.log"
             log_path.touch(mode=0o600, exist_ok=True)

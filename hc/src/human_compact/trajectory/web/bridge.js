@@ -732,6 +732,10 @@
       claim: (st.agent_claim && typeof st.agent_claim === "object")
         ? st.agent_claim : null,
       scope: st.scope === "chat" ? "chat" : "global",
+      // The server admits it runs code older than the source on disk. This
+      // page is read fresh; its routes are not. A missing route is then a
+      // stale server, not a failed feature, and is named as such.
+      sourceStale: st.source_stale === true,
       // Which Claude conversation this window is a second view of. Only the
       // server knows; it is what names the tab.
       sessionId: str(st.session_id),
@@ -1706,31 +1710,29 @@
   // This page is a second window on a conversation happening in a terminal,
   // usually on another screen. The one thing it can say that the terminal
   // cannot is that the terminal is finished. Hooks record a notice when the
-  // session stops, when a subagent returns and when the session ends; this
-  // draws it and then gets out of the way. Chat scope only: a global vault
-  // stands behind no one session, so it has nothing to report.
+  // session stops, when a subagent returns and when the session ends.
+  //
+  // What arrives here is drawn where a finished TODO is drawn: a card in the
+  // top-right corner, an entry behind the bell, one unread count. A synced
+  // chat answering is news of the same kind as a build coming back, and a
+  // reader watching one corner should not have to watch two -- so this
+  // module keeps only the part the alert stack cannot know: which rows are
+  // new, and which of them this page has already had its chance to show.
+  // Chat scope only: a global vault stands behind no one session, so it has
+  // nothing to report.
 
-  var NOTICE_MS = 8000;
   // Three is what fits above the fold without covering the page it reports on.
   var NOTICE_MAX = 3;
   var NOTICE_MARK = "● ";
   // Exactly what one hook payload proves, and no further. A Stop means the
   // turn ended -- not that goals moved, that tasks closed, or that anything
   // succeeded. A map with no prototype so a kind named "constructor" reads
-  // as unknown rather than as a function.
-  var NOTICE_SAYS = Object.create(null);
-  NOTICE_SAYS.session_stopped = "Claude finished responding";
-  NOTICE_SAYS.subagent_returned = "A subagent returned";
-  NOTICE_SAYS.session_ended = "Session ended";
-
-  var NOTICE_CSS = [
-      ".hc-notice-stack{position:fixed;right:16px;bottom:16px;z-index:100001;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
-      ".hc-notice{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
-      ".hc-notice-title{font-weight:600;color:var(--ink,#111)}",
-      ".hc-notice-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".hc-notice-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
-      ".hc-notice-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}"
-  ].join("");
+  // as unknown rather than as a function. The sentence each one says lives
+  // in ALERT_SAYS with the builder's, because one node draws them both.
+  var NOTICE_KINDS = Object.create(null);
+  NOTICE_KINDS.session_stopped = true;
+  NOTICE_KINDS.subagent_returned = true;
+  NOTICE_KINDS.session_ended = true;
 
   // Everything this page has already had its chance to show. The store keeps
   // its last twenty rows and state is polled every 1.5s, so without this the
@@ -1739,34 +1741,6 @@
   // Anything older than this window belongs to the part of the conversation
   // it was not open for. Replaying that would report old news as new.
   var noticeSince = Date.now();
-  var noticeTimers = Object.create(null);
-  var noticeBox = null;
-  var noticeMarked = false;
-  var noticeBound = false;
-
-  function ensureNoticeStyles() {
-    if (document.getElementById("hc-notice-style")) return;
-    var style = document.createElement("style");
-    style.id = "hc-notice-style";
-    style.textContent = NOTICE_CSS;
-    (document.head || document.documentElement).appendChild(style);
-  }
-
-  function noticeStack() {
-    return (noticeBox && noticeBox.parentNode) ? noticeBox : null;
-  }
-
-  function noticeHost() {
-    if (noticeStack()) return noticeBox;
-    ensureNoticeStyles();
-    noticeBox = document.createElement("div");
-    noticeBox.className = "hc-notice-stack";
-    // Parented on the body, outside the artifact's own subtree: the artifact
-    // rebuilds that subtree whenever its state changes, and anything living
-    // inside it is silently dropped.
-    (document.body || document.documentElement).appendChild(noticeBox);
-    return noticeBox;
-  }
 
   function pageTitle() {
     // Named after the session rather than the goal tree: a day with several
@@ -1784,95 +1758,15 @@
       return false;
     }
     // Derived, never remembered. Restoring a title by putting back the
-    // string that was there when the banner appeared restores whatever the
-    // artifact had most recently wiped it to; recomputing cannot.
-    var want = (noticeMarked ? NOTICE_MARK : "") + pageTitle();
+    // string that was there when the mark appeared restores whatever the
+    // artifact had most recently wiped it to; recomputing cannot. The mark
+    // follows the unread count rather than a card standing on screen: a
+    // reader who was looking elsewhere for the six seconds a card is up is
+    // exactly the reader the tab strip is for.
+    var want = (alertUnread() ? NOTICE_MARK : "") + pageTitle();
     if (document.title === want) return false;
     document.title = want;
     return true;
-  }
-
-  function markNoticeTitle() {
-    noticeMarked = true;
-    applyPageTitle();
-  }
-
-  function unmarkNoticeTitle() {
-    if (!noticeMarked) return;
-    noticeMarked = false;
-    applyPageTitle();
-  }
-
-  function noticeIdOf(box) {
-    return (box && box.getAttribute) ? str(box.getAttribute("data-hc-notice")) : "";
-  }
-
-  function holdNotice(box) {
-    var id = noticeIdOf(box);
-    if (!id || !noticeTimers[id]) return;
-    clearTimeout(noticeTimers[id]);
-    delete noticeTimers[id];
-  }
-
-  function armNotice(box) {
-    var id = noticeIdOf(box);
-    if (!id) return;
-    holdNotice(box);
-    noticeTimers[id] = setTimeout(function () { dropNotice(box); }, NOTICE_MS);
-  }
-
-  function dropNotice(box) {
-    if (!box) return;
-    holdNotice(box);
-    if (box.parentNode) box.parentNode.removeChild(box);
-    var host = noticeStack();
-    if (!host || !host.children || !host.children.length) unmarkNoticeTitle();
-    // The banner has a line of its own in the launch layout, so its arrival
-    // and its departure both move the page. Waiting for the next sweep to
-    // notice would make the columns jump a beat after it.
-    mirrorRootState();
-  }
-
-  function closestNotice(node) {
-    while (node && node !== document) {
-      var name = node.className ? String(node.className) : "";
-      if (name.split(" ").indexOf("hc-notice") >= 0) return node;
-      node = node.parentNode;
-    }
-    return null;
-  }
-
-  function bindNotices() {
-    // Delegated, like the other controls here. These nodes come and go on
-    // their own timers, so a listener bound to one of them is a listener
-    // that outlives the thing it was for.
-    if (noticeBound || !document.addEventListener) return;
-    noticeBound = true;
-    document.addEventListener("click", function (event) {
-      var target = event && event.target;
-      var name = (target && target.className) ? String(target.className) : "";
-      if (name.indexOf("hc-notice-close") < 0) return;
-      var box = closestNotice(target);
-      if (!box) return;
-      if (event.preventDefault) event.preventDefault();
-      if (event.stopPropagation) event.stopPropagation();
-      dropNotice(box);
-    }, true);
-    // Eight seconds is not long enough to read a line and think about it, so
-    // the clock stops while the pointer is on it.
-    document.addEventListener("mouseover", function (event) {
-      var box = closestNotice(event && event.target);
-      if (box) holdNotice(box);
-    }, true);
-    document.addEventListener("mouseout", function (event) {
-      var box = closestNotice(event && event.target);
-      if (!box) return;
-      // mouseout also fires crossing from the headline to the detail line.
-      // Leaving one of its own children is not leaving it.
-      var to = event.relatedTarget;
-      if (to && box.contains && box.contains(to)) return;
-      armNotice(box);
-    }, true);
   }
 
   function noticesToShow(rows, since, seen) {
@@ -1880,59 +1774,44 @@
     array(rows).forEach(function (row) {
       if (!row || typeof row !== "object") return;
       var id = str(row.id);
-      var says = NOTICE_SAYS[str(row.kind)];
+      var kind = str(row.kind);
       var at = Date.parse(str(row.at));
-      if (!id || typeof says !== "string" || seen[id]) return;
+      if (!id || !NOTICE_KINDS[kind] || seen[id]) return;
       if (!isFinite(at) || at <= since) return;
       // Marked here rather than at draw time: one this page decided not to
       // draw is not one it should draw 1.5s later, when it is older still.
       seen[id] = true;
-      fresh.push({ id: id, says: says, detail: str(row.detail) });
+      fresh.push({ id: id, kind: kind, detail: str(row.detail) });
     });
     return fresh.slice(-NOTICE_MAX);
   }
 
-  function noticeNode(row) {
-    var box = document.createElement("div");
-    box.className = "hc-notice";
-    box.setAttribute("data-hc-notice", row.id);
-    var close = document.createElement("span");
-    close.className = "hc-notice-close";
-    close.textContent = "×";
-    close.setAttribute("role", "button");
-    close.setAttribute("aria-label", "Dismiss");
-    box.appendChild(close);
-    var title = document.createElement("div");
-    title.className = "hc-notice-title";
-    title.textContent = row.says;
-    box.appendChild(title);
-    // A hook that carried nothing to quote gets a headline and no blank line
-    // pretending there was something to say.
-    if (row.detail) {
-      var detail = document.createElement("div");
-      detail.className = "hc-notice-detail";
-      detail.textContent = row.detail;
-      box.appendChild(detail);
-    }
-    return box;
-  }
-
+  // Into the same log the builder writes to, and out through the same card.
+  // No goal and no row: a turn ending is about the conversation, not about
+  // one line of work, so clicking it has nowhere to go and says so by
+  // moving nothing.
   function showNotices(rows) {
     if (serverState.scope !== "chat") return 0;
     var fresh = noticesToShow(rows, noticeSince, noticeSeen);
     if (!fresh.length) return 0;
-    var host = noticeHost();
-    bindNotices();
+    var log = loadAlertLog();
     var made = fresh.map(function (row) {
-      return host.appendChild(noticeNode(row));
+      alertSeq += 1;
+      var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
+                    kind: row.kind, goalId: "", goalTitle: "", rowId: "",
+                    text: row.detail, question: "",
+                    at: Date.now(), read: false };
+      log.unshift(entry);
+      return entry;
     });
-    while (host.children.length > NOTICE_MAX) dropNotice(host.children[0]);
-    // Marked before the timers start: on a page whose clock is running fast
-    // enough to dismiss one immediately, marking afterwards leaves the tab
-    // claiming a banner nobody can see.
-    markNoticeTitle();
-    mirrorRootState();
-    made.forEach(function (box) { armNotice(box); });
+    saveAlertLog();
+    if (alertSettings().banners) {
+      made.forEach(function (entry) { showAlertBanner(entry); });
+    }
+    renderBell();
+    renderAlertCenter();
+    // The bell's badge and the tab's mark are the same fact seen twice.
+    applyPageTitle();
     return fresh.length;
   }
 
@@ -1962,6 +1841,10 @@
   ALERT_SAYS.done = "TODO finished";
   ALERT_SAYS.failed = "TODO failed";
   ALERT_SAYS.asking = "Claude has a question";
+  // What a synced chat did, said in the same three lines a build gets.
+  ALERT_SAYS.session_stopped = "Claude finished responding";
+  ALERT_SAYS.subagent_returned = "A subagent returned";
+  ALERT_SAYS.session_ended = "Session ended";
 
   var ALERT_CSS = [
       ".hc-alert-stack{position:fixed;top:calc(var(--hc-top,37px) + 10px);right:16px;z-index:100002;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
@@ -1974,6 +1857,48 @@
       ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-alert-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
       ".hc-alert-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}",
+      // What the crumb opens: the same facts the overview leads with, at
+      // the size of a menu. Parented on <body>, so it is placed against the
+      // viewport rather than inside a column that scrolls away from it.
+      ".hc-project-menu{position:fixed;top:calc(var(--hc-row,37px) + 4px);left:120px;z-index:100003;width:360px;max-width:calc(100vw - 32px);border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-project-menu-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
+      ".hc-project-menu-act{font-weight:400;color:var(--mut,#575757);cursor:pointer;user-select:none}",
+      ".hc-project-menu-act:hover{color:var(--ink,#111)}",
+      ".hc-project-menu .hc-ov-facts{padding:8px 11px}",
+      ".hc-project-menu-more{padding:7px 11px 9px;border-top:1px solid var(--bd,#e3e3e3);color:var(--fnt,#9b9b9b)}",
+      // The OVERVIEW page: what this workspace stands in front of, and what
+      // the tree in front of it adds up to. Fixed under the header, over
+      // the columns, so switching tabs never disturbs the artifact's own
+      // layout -- GOALS is exactly what it was when it is switched back.
+      ".hc-ov{position:fixed;top:var(--hc-top,74px);left:0;right:0;bottom:0;z-index:16;overflow-y:auto;box-sizing:border-box;padding:26px 28px 40px;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.7 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-ov-card{max-width:760px}",
+      ".hc-ov-name{font:600 17px Georgia,'Iowan Old Style','Times New Roman',serif;letter-spacing:.1px;margin-bottom:10px}",
+      ".hc-ov-facts{display:flex;flex-direction:column;gap:2px}",
+      ".hc-ov-fact{display:flex;gap:14px;align-items:baseline}",
+      ".hc-ov-fact-k{flex:none;width:96px;font:600 9px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-ov-fact-v{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;color:var(--dtxt,#333)}",
+      "a.hc-ov-fact-v{color:var(--acc,#a5492a);text-decoration:none}",
+      "a.hc-ov-fact-v:hover{text-decoration:underline}",
+      ".hc-ov-sec{max-width:760px;margin-top:24px;padding-top:14px;border-top:1px solid var(--bd,#e3e3e3)}",
+      ".hc-ov-label{font:600 9px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b);margin-bottom:8px}",
+      ".hc-ov-nums{display:flex;flex-wrap:wrap;gap:22px;color:var(--mut,#575757)}",
+      ".hc-ov-num b{font-weight:600;color:var(--ink,#111);font-size:14px}",
+      ".hc-ov-commits{display:flex;flex-direction:column;gap:3px}",
+      ".hc-ov-commit{display:flex;gap:12px;align-items:baseline;min-width:0}",
+      ".hc-ov-sha{flex:none;color:var(--fnt,#9b9b9b)}",
+      ".hc-ov-subject{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dtxt,#333)}",
+      ".hc-ov-when{flex:none;color:var(--fnt,#9b9b9b)}",
+      ".hc-ov-empty{color:var(--fnt,#9b9b9b)}",
+      // Both are parented on <body>, outside the subtree the theme's
+      // variables are declared in, so the dark palette is spelled out for
+      // them the way it is for the alert stack.
+      "[data-hc-theme=\"dark\"] .hc-ov{background:#0d1117;color:#e6edf3}",
+      "[data-hc-theme=\"dark\"] .hc-project-menu{background:#161b22;color:#e6edf3;border-color:#30363d;box-shadow:0 10px 30px rgba(0,0,0,.5)}",
+      "[data-hc-theme=\"dark\"] .hc-project-menu-head,[data-hc-theme=\"dark\"] .hc-project-menu-more,[data-hc-theme=\"dark\"] .hc-ov-sec{border-color:#21262d}",
+      "[data-hc-theme=\"dark\"] .hc-ov-fact-v,[data-hc-theme=\"dark\"] .hc-ov-subject{color:#c9d1d9}",
+      "[data-hc-theme=\"dark\"] .hc-ov-nums{color:#8b949e}",
+      "[data-hc-theme=\"dark\"] .hc-ov-num b{color:#e6edf3}",
+      "[data-hc-theme=\"dark\"] .hc-ov-fact-k,[data-hc-theme=\"dark\"] .hc-ov-label,[data-hc-theme=\"dark\"] .hc-ov-sha,[data-hc-theme=\"dark\"] .hc-ov-when,[data-hc-theme=\"dark\"] .hc-ov-empty,[data-hc-theme=\"dark\"] .hc-project-menu-more,[data-hc-theme=\"dark\"] .hc-project-menu-act{color:#6e7681}",
       // The bell, in the header slot the template leaves for it.
       ".hc-alerts{display:inline-flex;align-items:center;align-self:center}",
       ".hc-bell{position:relative;display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
@@ -2032,14 +1957,15 @@
       ".hc-handoff-btn:hover{color:var(--ink,#111)}",
       ".hc-handoff-btn[data-hc-handoff=\"busy\"]{color:var(--mut,#575757);cursor:progress}",
       ".hc-handoff-btn[data-hc-handoff=\"copied\"]{color:var(--ok,#2f7d4f)}",
-      ".hc-handoff-btn[data-hc-handoff=\"failed\"]{color:var(--acc,#a5492a)}",
+      ".hc-handoff-btn[data-hc-handoff=\"failed\"],.hc-handoff-btn[data-hc-handoff=\"stale\"]{color:var(--acc,#a5492a)}",
       ".hc-handoff-said{display:none;white-space:nowrap}",
       ".hc-handoff-btn[data-hc-handoff] .hc-handoff-said{display:inline}"
   ].join("");
 
   var HANDOFF_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7\"></path><polyline points=\"16 6 12 2 8 6\"></polyline><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"15\"></line></svg>";
   var HANDOFF_SAYS = { busy: "assembling…", copied: "copied ✓",
-                       failed: "copy failed" };
+                       failed: "copy failed",
+                       stale: "server outdated · rerun /goals-ui" };
   var HANDOFF_TITLE = "Hand off: copy the whole workspace as markdown for a teammate’s agent";
 
   var BELL_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9\"></path><path d=\"M13.7 21a2 2 0 0 1-3.4 0\"></path></svg>";
@@ -2147,6 +2073,7 @@
     saveAlertLog();
     renderBell();
     renderAlertCenter();
+    applyPageTitle();
     return true;
   }
 
@@ -2155,7 +2082,9 @@
     loadAlertLog().forEach(function (row) {
       if (!row.read) { row.read = true; changed = true; }
     });
-    if (changed) { saveAlertLog(); renderBell(); renderAlertCenter(); }
+    if (changed) {
+      saveAlertLog(); renderBell(); renderAlertCenter(); applyPageTitle();
+    }
     return changed;
   }
 
@@ -2165,6 +2094,7 @@
     dropAllAlerts();
     renderBell();
     renderAlertCenter();
+    applyPageTitle();
   }
 
   // The transitions worth a word, between two states of the goals.
@@ -2239,6 +2169,7 @@
     }
     renderBell();
     renderAlertCenter();
+    applyPageTitle();
     return made;
   }
 
@@ -2268,6 +2199,10 @@
 
   function alertDetailOf(entry) {
     if (entry.kind === "asking" && entry.question) return entry.question;
+    // A hook that carried nothing to quote gets a headline and no blank
+    // line pretending there was something to say. A TODO always has a row
+    // to name, so an empty one there is a bug worth seeing.
+    if (NOTICE_KINDS[entry.kind]) return entry.text;
     return entry.text || "(untitled TODO)";
   }
 
@@ -2287,14 +2222,20 @@
     title.className = "hc-alert-title";
     title.textContent = ALERT_SAYS[entry.kind];
     box.appendChild(title);
-    var detail = document.createElement("div");
-    detail.className = "hc-alert-detail";
-    detail.textContent = alertDetailOf(entry);
-    box.appendChild(detail);
-    var goal = document.createElement("div");
-    goal.className = "hc-alert-goal";
-    goal.textContent = entry.goalTitle;
-    box.appendChild(goal);
+    var said = alertDetailOf(entry);
+    if (said) {
+      var detail = document.createElement("div");
+      detail.className = "hc-alert-detail";
+      detail.textContent = said;
+      box.appendChild(detail);
+    }
+    // A session card names no goal: there is no line under it to carry.
+    if (entry.goalTitle) {
+      var goal = document.createElement("div");
+      goal.className = "hc-alert-goal";
+      goal.textContent = entry.goalTitle;
+      box.appendChild(goal);
+    }
     return box;
   }
 
@@ -2357,6 +2298,10 @@
     markAlertRead(id, true);
     dropAlertBanner(alertBannerFor(id));
     closeAlertCenter();
+    // A session card reports on the conversation, not on a row. Reading it
+    // is the whole of it: moving the rail to a goal it never named would
+    // take the reader off whatever they were working on.
+    if (NOTICE_KINDS[entry.kind]) return true;
     railTab = "todos";
     if (entry.goalId) {
       if (typeof window !== "undefined" && typeof window.__hcSelectGoal === "function") {
@@ -2579,7 +2524,8 @@
       if (!log.length) {
         var empty = document.createElement("div");
         empty.className = "hc-alert-center-empty";
-        empty.textContent = "Nothing yet. Builds that finish, fail, or ask land here.";
+        empty.textContent = "Nothing yet. Builds that finish, fail, or ask "
+          + "land here, and so does a synced chat answering.";
         list.appendChild(empty);
       }
       log.forEach(function (entry) {
@@ -2598,14 +2544,19 @@
         says.textContent = ALERT_SAYS[entry.kind];
         title.appendChild(says);
         row.appendChild(title);
-        var detail = document.createElement("div");
-        detail.className = "hc-alert-detail";
-        detail.textContent = alertDetailOf(entry);
-        row.appendChild(detail);
-        var goal = document.createElement("div");
-        goal.className = "hc-alert-goal";
-        goal.textContent = entry.goalTitle;
-        row.appendChild(goal);
+        var said = alertDetailOf(entry);
+        if (said) {
+          var detail = document.createElement("div");
+          detail.className = "hc-alert-detail";
+          detail.textContent = said;
+          row.appendChild(detail);
+        }
+        if (entry.goalTitle) {
+          var goal = document.createElement("div");
+          goal.className = "hc-alert-goal";
+          goal.textContent = entry.goalTitle;
+          row.appendChild(goal);
+        }
         list.appendChild(row);
       });
     }
@@ -2775,11 +2726,12 @@
   function handoffSay(state) {
     handoffState = state;
     clearTimeout(handoffTimer);
-    if (state === "copied" || state === "failed") {
+    if (state === "copied" || state === "failed" || state === "stale") {
+      // An instruction stays long enough to be read; a verdict does not.
       handoffTimer = setTimeout(function () {
         handoffState = "";
         renderHandoff();
-      }, 1800);
+      }, state === "stale" ? 6000 : 1800);
     }
     renderHandoff();
   }
@@ -2834,7 +2786,15 @@
       .then(function (r) { return r.json(); })
       .then(function (body) {
         if (!(body && body.ok && typeof body.markdown === "string")) {
-          throw new Error((body && body.error) || "no hand-off");
+          var err = new Error((body && body.error) || "no hand-off");
+          // A server that knows the route always answers ok: true or
+          // false. One that answers without `ok` at all ("not found") was
+          // started before the route existed -- the same thing the poll
+          // reports as source_stale. Either way the cure is a relaunch,
+          // and the button says so instead of "copy failed".
+          err.stale = serverState.sourceStale === true
+            || !body || typeof body.ok === "undefined";
+          throw err;
         }
         handoffLast = body;
         return body;
@@ -2871,8 +2831,8 @@
       if (body) handoffDownload(body.markdown, body.filename);
       handoffSay("failed");
       return false;
-    }, function () {
-      handoffSay("failed");
+    }, function (err) {
+      handoffSay(err && err.stale ? "stale" : "failed");
       return false;
     });
   }
@@ -3073,6 +3033,16 @@
   // state and rendering; this only names its containers (through the same
   // template patch the rest of the bridge uses) and dresses them.
 
+  // The magnifier over the search field, as a mask so it takes the theme's
+  // ink rather than a baked-in colour. Kept out of the markup on purpose:
+  // the artifact compiles the template it is handed, and CSS is not read.
+  var SEARCH_GLASS =
+    "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20"
+    + "viewBox='0%200%2012%2012'%3E%3Cg%20fill='none'%20stroke='%23000'%20"
+    + "stroke-width='1.5'%20stroke-linecap='round'%3E%3Ccircle%20cx='4.9'%20"
+    + "cy='4.9'%20r='3.3'/%3E%3Cpath%20d='M7.4%207.4%2010.6%2010.6'/%3E"
+    + "%3C/g%3E%3C/svg%3E";
+
   var LAUNCH_CSS = [
       // A darker, flatter palette than the artifact's own dark theme. Only
       // the greys move: the accent stays the artifact's, so every control
@@ -3085,46 +3055,78 @@
       // it. --hc-left/--hc-right are the rail widths; the bridge writes them
       // on the root when the reader drags a divider, and the defaults here
       // are the widths the shell shipped with.
-      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-top:37px;--hc-left:300px;--hc-right:330px}",
-      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922;--hc-noticetxt:#8aa495}",
-      // A banner is not an overlay: it takes its own line, and the columns
-      // give it back when it goes.
-      "[data-hc-launch][data-hc-notice]{--hc-top:71px}",
-      "[data-hc-launch][data-hc-notice] .hc>div:nth-child(2){padding-top:34px!important}",
+      // The header is two rows of --hc-row: the product and the project on
+      // the first, the page tabs and the filter counts on the second.
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-warn:#9a6700;--hc-row:37px;--hc-top:74px;--hc-left:300px;--hc-right:330px}",
+      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-warn:#d29922}",
       // The page is the workspace: it fills the window and does not scroll
       // as a whole -- each column scrolls in its own right, the way the
       // screenshots read.
       // Full bleed: no outer padding, so the columns meet the window on
       // every side and each other on a shared 1px line.
       "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0!important}",
-      // Header bar: brand, status pills, panel toggles, session. A fixed
-      // height, so the columns can be sized against it exactly.
-      // Sticky, and above the columns: the pills are pinned to the viewport
-      // top, so the bar they sit in has to stay there too when the page
-      // scrolls -- or they float off it.
-      "[data-hc-launch] .hc>div:first-child{position:sticky;top:0;z-index:19;background:var(--bg);height:var(--hc-top);box-sizing:border-box;padding:0 16px!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch][data-hc-notice] .hc>div:first-child{height:37px}",
+      // Header bar: the product and project on the first row, the page tabs
+      // and the filter counts on the second. A fixed height, so the columns
+      // can be sized against it exactly. Sticky, and above the columns: the
+      // counts are pinned to the viewport top, so the bar they sit in has to
+      // stay there too when the page scrolls -- or they float off it.
+      // The bottom row is an absolutely-positioned child rather than a
+      // wrapped flex line, so the first row's items keep centring in the
+      // space the padding leaves them however tall the second row is.
+      "[data-hc-launch] .hc>div:first-child{position:sticky;top:0;z-index:19;background:var(--bg);height:var(--hc-top);box-sizing:border-box;padding:0 16px calc(var(--hc-row) - 1px)!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
       // The product name is the one serif on the page; the marker before
       // it and everything after it stay in the workspace's monospace.
       "[data-hc-launch] .hc-brand{font:600 15px Georgia,'Iowan Old Style','Times New Roman',serif!important;letter-spacing:.1px;line-height:1}",
+      // The crumb after it: which directory this workspace is a view of.
+      // margin-right:auto rather than the header's own space-between, or
+      // the project would drift to the middle of the row.
+      "[data-hc-launch] .hc-project{display:inline-flex;align-items:center;gap:9px;margin-left:11px;margin-right:auto;font:11.5px 'Source Code Pro',monospace;color:var(--dtxt);align-self:center}",
+      "[data-hc-launch] .hc-project:empty{display:none}",
+      "[data-hc-launch] .hc-project-sep{color:var(--fnt)}",
+      "[data-hc-launch] .hc-project-name{display:inline-flex;align-items:center;gap:7px;padding:3px 5px;margin:-3px -5px;border-radius:4px;cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-project-name:hover,[data-hc-launch] .hc-project-name[data-hc-project-open]{background:var(--hov)}",
+      "[data-hc-launch] .hc-project-caret{font-size:8px;color:var(--fnt)}",
       "[data-hc-launch] .hc-session{font:11px 'Source Code Pro',monospace;color:var(--mut)}",
       "[data-hc-launch] .hc-session:not(:empty)::before{content:'\\25cf';color:var(--hc-ok);margin-right:6px;font-size:9px;vertical-align:1px}",
       "[data-hc-launch] .hc-updated{color:var(--fnt)}",
+      // Left to right along the first row's right end: what this workspace
+      // links and hands off, then that it is saved, then the controls that
+      // change what is on screen. The theme switch is the artifact's own
+      // node and takes the middle of that run, so the order is declared
+      // rather than left to the markup.
+      "[data-hc-launch] .hc-chats{order:-6}",
+      "[data-hc-launch] .hc-session{order:-5}",
+      "[data-hc-launch] .hc-handoff{order:-4}",
+      "[data-hc-launch] .hc-updated{order:-3}",
+      "[data-hc-launch] .hc-alerts{order:1}",
+      "[data-hc-launch] .hc-settings{order:2}",
+      // The second row. The tabs are drawn into it by the bridge; the
+      // filter counts are the artifact's own row, lifted here by position.
+      "[data-hc-launch] .hc-subbar{position:absolute;left:0;right:0;bottom:0;height:calc(var(--hc-row) - 1px);box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 16px;border-top:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-subtabs{display:inline-flex;align-items:center;gap:24px;height:100%}",
+      "[data-hc-launch] .hc-subtab{position:relative;display:inline-flex;align-items:center;height:100%;font:600 10.5px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-subtab:hover{color:var(--mut)}",
+      "[data-hc-launch] .hc-subtab[data-hc-subtab-on]{color:var(--ink)}",
+      "[data-hc-launch] .hc-subtab[data-hc-subtab-on]::after{content:'';position:absolute;left:0;right:0;bottom:8px;height:2px;background:var(--ink);border-radius:1px}",
       // The title row loses the page heading -- a chat workspace has one
-      // page, already named in the header -- and its status pills move up
-      // INTO the header, so the row itself takes no height. The row is not
-      // a child of the header (the artifact renders it in the body), and
-      // moving the node would be undone by the next render, so it is lifted
-      // by position instead: fixed at the top, just after the brand. The
-      // bridge measures the brand and writes --hc-pills-left.
-      "[data-hc-launch] .hc-titlerow{position:fixed;top:0;left:var(--hc-pills-left,120px);height:37px;margin:0;padding:0!important;align-items:center!important;z-index:20}",
+      // page, already named in the header -- and its filter counts move up
+      // INTO the header's second row, so the row itself takes no height.
+      // The row is not a child of the header (the artifact renders it in
+      // the body), and moving the node would be undone by the next render,
+      // so it is lifted by position instead: fixed at the second row's
+      // right end, opposite the tabs.
+      "[data-hc-launch] .hc-titlerow{position:fixed;top:var(--hc-row);left:auto;right:16px;height:calc(var(--hc-row) - 1px);margin:0;padding:0!important;align-items:center!important;z-index:20}",
       "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
-      "[data-hc-launch] .hc-chiprow{gap:6px!important}",
-      "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
-      "[data-hc-launch] .hc-chip:hover{border-color:var(--bd2);text-decoration:none!important}",
+      "[data-hc-launch] .hc-chiprow{gap:22px!important;align-items:center!important}",
+      // Plain text, not pills: a name and, beside it in a quieter colour,
+      // how many goals answer to it.
+      "[data-hc-launch] .hc-chip{padding:0;border:0;border-radius:0;background:transparent;letter-spacing:.2px;white-space:nowrap}",
+      "[data-hc-launch] .hc-chip:hover{text-decoration:none!important;color:var(--ink)!important}",
+      "[data-hc-launch] .hc-chip-n{font-weight:400;color:var(--fnt)}",
       // The selected chip is the one the artifact draws bold; reading its
       // own inline style is what keeps this in step with its state.
-      "[data-hc-launch] .hc-chip[style*=\"700 11px\"]{background:var(--panel2);border-color:var(--bd2);color:var(--ink)!important}",
+      "[data-hc-launch] .hc-chip[style*=\"700 11px\"]{color:var(--ink)!important}",
+      "[data-hc-launch] .hc-chip[style*=\"700 11px\"] .hc-chip-n{color:var(--mut)}",
       // Three columns. The artifact's own flex row becomes the shell; the
       // prompt rail is emitted before the inspector and ordered after it,
       // so nothing has to be re-parented after a render.
@@ -3147,7 +3149,7 @@
       "[data-hc-launch] .hc-rail-right::before{content:'';position:absolute;top:0;left:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}",
       "[data-hc-launch][data-hc-dragging]{cursor:col-resize;user-select:none}",
       // The two panel toggles in the header, before the theme switch.
-      "[data-hc-launch] .hc-panels{order:-1;display:inline-flex;align-items:center;gap:8px;padding-right:8px;border-right:1px solid var(--bd);align-self:center}",
+      "[data-hc-launch] .hc-panels{order:-2;display:inline-flex;align-items:center;gap:9px;align-self:center}",
       "[data-hc-launch] .hc-panel{display:inline-flex;cursor:pointer;color:var(--fnt);user-select:none}",
       "[data-hc-launch] .hc-panel:hover,[data-hc-launch] .hc-panel-on{color:var(--ink)}",
       // Rail headings, shared by both rails.
@@ -3180,8 +3182,25 @@
       "[data-hc-launch] .hc-todo-dash{flex:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--fnt);user-select:none;cursor:pointer;width:8px;text-align:center}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-dash{color:var(--ink)}",
       "[data-hc-launch] .hc-todo-line{flex:1 1 auto;min-width:0;min-height:1.9em;outline:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
+      // A row with nothing typed into it yet has no line box, so the row's
+      // baseline alignment falls back to the text box's bottom edge and the
+      // gutter dash drops ~8px below the caret -- then snaps up on the first
+      // keystroke. A zero-width space in a pseudo-element gives the empty
+      // box a line box to be measured by. It is not in the DOM, so nothing
+      // that reads or edits the row's text ever sees it.
+      "[data-hc-launch] .hc-todo-line:empty::before{content:\"\\200b\"}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-line{color:var(--ink);font-weight:600}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"done\"] .hc-todo-line{color:var(--fnt);text-decoration:line-through}",
+      // A done row is a control: clicking it opens the pane that sends it
+      // back out. "reopening" is the moment between the click and the note
+      // -- struck through no longer, not yet building.
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"done\"]{cursor:pointer}",
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"reopening\"] .hc-todo-line{color:var(--ink);font-weight:600}",
+      // The runs a row has already had, under it: quieter than the row, and
+      // quieter still for what the reader said about each.
+      "[data-hc-launch] .hc-todo-runs{margin:1px 0 7px;border-left:2px solid var(--bd);padding:1px 0 1px 10px;user-select:text}",
+      "[data-hc-launch] .hc-todo-run{font:11px/1.5 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-run-note{font:11px/1.5 'Source Code Pro',monospace;color:var(--dtxt);padding-left:12px;white-space:pre-wrap;overflow-wrap:anywhere}",
       // A rule between the list's bands: rows not yet sent, rows out with
       // the builder, rows that came back done.
       "[data-hc-launch] .hc-todo-sep{border-top:1px solid var(--bd);margin:7px 6px;user-select:none}",
@@ -3215,9 +3234,14 @@
       // two: the heading's line moves down to under the input. The rail's
       // tree is the third child now, after the heading and the search.
       "[data-hc-launch] .hc-rail-left>.hc-rail-head{border-bottom:0;padding-bottom:2px}",
-      "[data-hc-launch] .hc-search{flex:none;display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch] .hc-search-input{display:block;width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:3px 13px 9px;font:11.5px 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
-      "[data-hc-launch] .hc-search-input::placeholder{color:var(--fnt)}",
+      "[data-hc-launch] .hc-search{flex:none;position:relative;display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--bd)}",
+      // A magnifier stands in for the words: an empty field with a label
+      // reads as a field, not as a search. The glass is a mask over a
+      // painted box, so it takes the rail's ink and follows the theme; it
+      // sits in the input's left gutter and never eats a click.
+      "[data-hc-launch] .hc-search-icon{position:absolute;left:13px;top:4px;width:11px;height:11px;pointer-events:none;background-color:var(--fnt);-webkit-mask:url(\"" + SEARCH_GLASS + "\") no-repeat center/11px 11px;mask:url(\"" + SEARCH_GLASS + "\") no-repeat center/11px 11px}",
+      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-icon{background-color:var(--ink)}",
+      "[data-hc-launch] .hc-search-input{display:block;width:100%;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:3px 13px 9px 30px;font:11.5px 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
       "[data-hc-launch] .hc-search-input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}",
       // While a query is typed the rail shows hits in place of the tree:
       // the search box grows to the rail, and every sibling but the
@@ -3249,26 +3273,20 @@
       "[data-hc-launch][data-hc-theme=\"dark\"] .hc-rail-copy{color:#08130c}",
       "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
       // What the chat is actually being told, from /api/state.injection.
-      // Sources, as a chip rail above the document.
-      "[data-hc-launch] .hc-sources{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:12px}",
-      "[data-hc-launch] .hc-sources-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut);margin-right:2px}",
-      "[data-hc-launch] .hc-src{display:inline-flex;align-items:center;gap:6px;max-width:280px;padding:3px 8px;border:1px solid var(--bd);border-radius:99px;background:var(--panel2);font:10.5px 'Source Code Pro',monospace;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-src-tag{font:600 8px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt)}",
-      "[data-hc-launch] .hc-src-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      "[data-hc-launch] .hc-src-rm{color:var(--fnt);cursor:pointer;font-size:11px}",
-      "[data-hc-launch] .hc-src-rm:hover{color:var(--del)}",
-      "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
-      "[data-hc-launch] .hc-src-add:hover{color:var(--acc);border-color:var(--acc)}",
+      // Sources, as one line above the document: the label, what is
+      // attached in a run of names, and the link that opens the box where
+      // they are added and removed. Pills went: a rail of them grew with
+      // every source and each carried its own remove control, and the
+      // addition belongs in a dialog, not a dashed pill.
+      "[data-hc-launch] .hc-sources{display:flex;align-items:baseline;gap:10px;margin-top:12px;min-width:0}",
+      "[data-hc-launch] .hc-sources-label{flex:none;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-sources-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10.5px 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-src-add{flex:none;font:600 10.5px 'Source Code Pro',monospace;color:var(--acc);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-src-add:hover{text-decoration:underline}",
       "[data-hc-launch] .hc-tabs{margin-top:14px!important}",
-      // The session banner. Same nodes, same timers, same close button as
-      // the toast it replaces -- a bar under the header rather than a card
-      // in the corner, because it reports on the whole workspace.
-      "[data-hc-launch] .hc-notice-stack{position:fixed;top:37px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
-      "[data-hc-launch] .hc-notice{width:auto;max-width:none;border:none;border-bottom:1px solid var(--hc-okbd);border-left:none;border-radius:0;background:var(--hc-okbg);box-shadow:none;display:flex;align-items:baseline;gap:10px;padding:7px 34px 7px 16px}",
-      "[data-hc-launch] .hc-notice-title{color:var(--hc-ok);flex:none}",
-      "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
-      "[data-hc-launch] .hc-notice-detail{margin-top:0;color:var(--hc-noticetxt);flex:1;min-width:0}",
-      "[data-hc-launch] .hc-notice-close{top:6px;right:12px;color:var(--hc-noticetxt)}",
+      // What the session did lands in the alert stack with the builds, so
+      // there is nothing here to dress: no bar under the header, and the
+      // columns keep every pixel under it whatever the session is doing.
   ].join("");
 
   var launchApplied = false;
@@ -3388,6 +3406,9 @@
   var todoCopiedTimer = null;
   var todoBuilding = false;
   var todoBuildError = "";
+  // The done row whose "what went wrong?" pane is open, if any. One at a
+  // time: reopening is an argument about one row, not a mode the list is in.
+  var todoReopening = null;
 
   function repeat(unit, times) {
     var out = "";
@@ -3428,7 +3449,21 @@
       // "has anything changed" is a field-for-field comparison.
       var shots = todoAttachmentsOn(row);
       if (shots.length) copy.attachments = shots;
+      var past = todoHistoryOn(row);
+      if (past.length) copy.history = past;
       return copy;
+    });
+  }
+
+  function todoHistoryOn(row) {
+    // The runs this row has already had: the verdict each ended on and what
+    // the reader said was wrong with it. The server owns this list -- it is
+    // carried here only so the rows on screen and the rows the server holds
+    // compare equal, and so the rail can stack the runs under the row.
+    return array(row && row.history).filter(function (past) {
+      return past && str(past.state);
+    }).map(function (past) {
+      return { state: str(past.state), note: str(past.note) };
     });
   }
 
@@ -3855,8 +3890,8 @@
 
   function todoLayState(items, incoming) {
     // The build state the store holds for each row, laid over the rows on
-    // screen by id -- status and question only; text, depth and order are
-    // the reader's. Answers whether anything changed.
+    // screen by id -- status, question and run history only; text, depth and
+    // order are the reader's. Answers whether anything changed.
     var held = Object.create(null);
     array(incoming).forEach(function (row) {
       if (row && typeof row.id === "string") held[row.id] = row;
@@ -3866,9 +3901,13 @@
       var was = row && held[row.id];
       if (!was) return;
       var status = str(was.status), question = str(was.question);
-      if (str(row.status) !== status || str(row.question) !== question) {
+      var past = todoHistoryOn(was);
+      if (str(row.status) !== status || str(row.question) !== question
+          || !same(todoHistoryOn(row), past)) {
         row.status = status;
         row.question = question;
+        if (past.length) row.history = past;
+        else delete row.history;
         changed = true;
       }
     });
@@ -3880,6 +3919,7 @@
     todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
     todoPicked = {};
     todoBuildError = "";
+    todoReopening = null;
   }
 
   function todoStamp(now) {
@@ -4424,6 +4464,45 @@
       });
   }
 
+  function todoReopen(id, text) {
+    // "No, you did a bad job": the row goes back out on its next run, told
+    // what was wrong with the last one. The run that ended is kept, note and
+    // all -- so the row's argument survives, and so a failure here can put
+    // the row back exactly as it was.
+    var note = str(text).trim();
+    if (!todoGoalId || !note) return;
+    var goalId = todoGoalId;
+    var row = todoItems && todoItems[todoIndexOfId(id)];
+    if (!row || row.status !== "done") return;
+    var held = todoHistoryOn(row);
+    row.history = held.concat([{ state: "done", note: note }]);
+    row.status = "building";
+    row.question = "";
+    todoReopening = null;
+    todoBuildError = "";
+    alertNoteOut([id]);
+    // Out of the done band and back into the middle one.
+    todoItems = todoSectioned(todoItems);
+    todoHold();
+    renderTodoRail(true);
+    post({ op: "reopen_todo", goal_id: goalId, id: id, note: note })
+      .then(function (res) {
+        if (todoGoalId === goalId && row) {
+          if (res && res.ok && res.queued && row.status === "building") {
+            row.status = "queued";
+          } else if (!res || !res.ok) {
+            todoBuildError = (res && res.error)
+              || "the TODO could not be reopened";
+            row.status = "done";
+            if (held.length) row.history = held;
+            else delete row.history;
+            todoItems = todoSectioned(todoItems);
+          }
+        }
+        todoSettle();
+      });
+  }
+
   function todoCopyAll() {
     var goal = todoSelectedGoal();
     var text = todoCopyText(todoItems, goal ? goal.notes : "");
@@ -4564,6 +4643,20 @@
         }
         return;
       }
+      if (node && node.getAttribute
+          && node.getAttribute("data-hc-todo-reopen") !== null) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          todoReopen(node.getAttribute("data-hc-todo-reopen"), node.value);
+        } else if (event.key === "Escape") {
+          // Second thoughts: the row stays done, nothing was said.
+          event.preventDefault();
+          event.stopPropagation();
+          todoReopening = null;
+          renderTodoRail(true);
+        }
+        return;
+      }
       // Cmd+Enter from anywhere that is not a place to type -- the Build
       // control just clicked, Select all, the tree -- is the build, the
       // same as from the list. Once: the reader should not have to click
@@ -4586,8 +4679,9 @@
     document.addEventListener("input", function (event) {
       var typed = event.target;
       if (typed && typed.getAttribute
-          && typed.getAttribute("data-hc-todo-answer") !== null) {
-        // The answer box grows with its text: one line until it needs two.
+          && (typed.getAttribute("data-hc-todo-answer") !== null
+              || typed.getAttribute("data-hc-todo-reopen") !== null)) {
+        // The box grows with its text: one line until it needs two.
         typed.style.height = "auto";
         typed.style.height = typed.scrollHeight + "px";
         return;
@@ -4618,6 +4712,25 @@
     document.addEventListener("click", function (event) {
       var node = event.target;
       if (!node || !node.getAttribute) return;
+      // A finished row, clicked: the reader wants another go at it. No
+      // hover-only affordance -- the row itself is the control, and the
+      // pane it opens is the same thread Claude's own questions use.
+      var line = todoLineOf(node);
+      var at = line ? todoIndexOfLine(line) : -1;
+      var clicked = at >= 0 && todoItems ? todoItems[at] : null;
+      if (clicked && clicked.status === "done") {
+        todoReopening = clicked.id;
+        renderTodoRail(true);
+        var box = document.querySelector("[data-hc-todo-reopen]");
+        if (box) box.focus();
+        return;
+      }
+      // Anywhere else -- another row, the tree, the buttons -- puts an open
+      // pane away. Not inside it: the note is being typed there.
+      if (todoReopening && !todoInReopenPane(node)) {
+        todoReopening = null;
+        renderTodoRail(true);
+      }
       var dash = node.getAttribute("data-hc-todo-dash");
       if (dash !== null) {
         todoTogglePick(dash);
@@ -4657,6 +4770,14 @@
     }, true);
   }
 
+  function todoInReopenPane(node) {
+    while (node && node !== document) {
+      if (node.className === "hc-todo-ask hc-todo-reopen-pane") return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
   function todoTabSpan(name, label) {
     var tab = document.createElement("span");
     tab.className = "hc-rail-tab" + (railTab === name ? " hc-rail-tab-on" : "");
@@ -4694,7 +4815,14 @@
     var line = document.createElement("div");
     line.className = "hc-todo-row";
     line.style.paddingLeft = (row.depth * 20) + "px";
-    if (row.status) line.setAttribute("data-hc-todo-state", row.status);
+    // A done row with its pane open is already out of the done band in the
+    // reader's head: the strikethrough lifts before the note is sent, so
+    // what they are typing about does not read as settled.
+    var reopening = row.status === "done" && todoReopening === row.id;
+    if (row.status) {
+      line.setAttribute("data-hc-todo-state",
+                        reopening ? "reopening" : row.status);
+    }
     if (todoPicked[row.id]) line.setAttribute("data-hc-todo-picked", "");
     var dash = document.createElement("span");
     dash.className = "hc-todo-dash";
@@ -4720,15 +4848,42 @@
     // does. Done rows are their own band and always say so.
     var state = TODO_STATUS[row.status];
     if (state && !head && TODO_CHILD_QUIET[row.status]) state = null;
+    if (reopening) state = ["reopened", "var(--hc-warn)"];
+    var past = todoHistoryOn(row);
     if (state) {
       var badge = document.createElement("span");
       badge.className = "hc-todo-status";
       badge.setAttribute("contenteditable", "false");
-      badge.textContent = state[0];
+      // A row on its second or later go says which: "building · run 2".
+      badge.textContent = past.length
+        ? state[0] + " · run " + (past.length + 1) : state[0];
       badge.style.color = state[1];
       line.appendChild(badge);
     }
     wrap.appendChild(line);
+    if (past.length) {
+      // Every run this row has already had, oldest first, each with what the
+      // reader said was wrong with it. Kept under the row rather than
+      // replaced by the newest: the row's argument with the builder is the
+      // record, and the reader is the only one who can read it.
+      var log = document.createElement("div");
+      log.className = "hc-todo-runs";
+      log.setAttribute("contenteditable", "false");
+      log.style.marginLeft = (row.depth * 20 + 22) + "px";
+      past.forEach(function (entry, i) {
+        var when = document.createElement("div");
+        when.className = "hc-todo-run";
+        when.textContent = "run " + (i + 1) + " · " + entry.state
+          + " · reopened";
+        log.appendChild(when);
+        if (!entry.note) return;
+        var said = document.createElement("div");
+        said.className = "hc-todo-run-note";
+        said.textContent = "↳ “" + entry.note + "”";
+        log.appendChild(said);
+      });
+      wrap.appendChild(log);
+    }
     if (row.status === "asking") {
       var ask = document.createElement("div");
       ask.className = "hc-todo-ask";
@@ -4758,7 +4913,40 @@
       ask.appendChild(reply);
       wrap.appendChild(ask);
     }
+    if (row.status === "done" && todoReopening === row.id) {
+      // The reader's side of the same thread: not Claude asking what to do,
+      // the reader saying what was wrong. Same shape on purpose -- it is the
+      // one place in the rail where the two of them talk about a row.
+      wrap.appendChild(todoReopenNode(row));
+    }
     return wrap;
+  }
+
+  function todoReopenNode(row) {
+    var pane = document.createElement("div");
+    pane.className = "hc-todo-ask hc-todo-reopen-pane";
+    pane.setAttribute("contenteditable", "false");
+    pane.style.marginLeft = (row.depth * 20 + 22) + "px";
+    var q = document.createElement("div");
+    q.className = "hc-todo-question";
+    q.textContent = "What went wrong?";
+    pane.appendChild(q);
+    var reply = document.createElement("div");
+    reply.className = "hc-todo-reply";
+    var arrow = document.createElement("span");
+    arrow.className = "hc-todo-arrow";
+    arrow.textContent = "↳";
+    reply.appendChild(arrow);
+    var note = document.createElement("textarea");
+    note.className = "hc-todo-answer";
+    note.rows = 1;
+    note.setAttribute("rows", "1");
+    note.placeholder = "say what to fix, then enter";
+    note.spellcheck = false;
+    note.setAttribute("data-hc-todo-reopen", row.id);
+    reply.appendChild(note);
+    pane.appendChild(reply);
+    return pane;
   }
 
   function renderTodoRail(force) {
@@ -5164,25 +5352,18 @@
     return changed;
   }
 
-  // The launch stylesheet lives on the root so it can reach the banner,
-  // which is parented on <body>. Two facts it cannot read from there: which
-  // theme the artifact is drawing, and whether a banner is up.
+  // The launch stylesheet lives on the root so it can reach the cards, which
+  // are parented on <body>. The one fact it cannot read from there is which
+  // theme the artifact is drawing.
   function mirrorRootState() {
     var root = document.documentElement;
     if (!root || !root.setAttribute) return false;
     var app = document.querySelector(".hc");
     var theme = (app && app.getAttribute && app.getAttribute("data-dark") === "true")
       ? "dark" : "light";
-    var host = noticeStack();
-    var up = !!(host && host.children && host.children.length);
     var changed = false;
     if (root.getAttribute("data-hc-theme") !== theme) {
       root.setAttribute("data-hc-theme", theme);
-      changed = true;
-    }
-    if (up !== (root.getAttribute("data-hc-notice") !== null)) {
-      if (up) root.setAttribute("data-hc-notice", "");
-      else root.removeAttribute("data-hc-notice");
       changed = true;
     }
     return changed;
@@ -5369,20 +5550,363 @@
     return true;
   }
 
-  // The status pills sit in the header just after the brand. The row they
-  // live in is fixed-positioned by the stylesheet; this measures where the
-  // brand ends so the offset follows the font rather than a guess.
-  function placePills() {
-    var root = document.documentElement;
-    var brand = document.querySelector(".hc-brand");
-    if (!root || !root.style || typeof root.style.setProperty !== "function"
-        || !brand || !brand.getBoundingClientRect) return false;
-    var box = brand.getBoundingClientRect();
-    if (!box || !box.width) return false;
-    var left = Math.round(box.right + 18);
-    var want = left + "px";
-    if (root.style.getPropertyValue("--hc-pills-left") === want) return false;
-    root.style.setProperty("--hc-pills-left", want);
+  // --- the header's second row: which page, and the crumb above it --------
+  // The tabs name the two things this window shows: the project it stands
+  // in front of, and the goal tree. The filter counts are the artifact's
+  // own row, lifted to the other end of the same bar by the stylesheet.
+
+  var PROJECT_TABS = [["overview", "OVERVIEW"], ["goals", "GOALS"]];
+  var projectFacts = null;
+  var projectPending = false;
+  var projectBox = null;
+  var overviewOn = false;
+
+  function loadProject(force) {
+    if (serverState.scope !== "chat") return Promise.resolve(null);
+    if (projectFacts && !force) return Promise.resolve(projectFacts);
+    if (projectPending) return Promise.resolve(projectFacts);
+    projectPending = true;
+    return fetch("/api/project")
+      .then(function (r) { return r.json(); })
+      .catch(function () { return null; })
+      .then(function (value) {
+        projectPending = false;
+        if (value && value.ok) projectFacts = value;
+        return projectFacts;
+      });
+  }
+
+  // The crumb after the brand. Built once into the slot the header patch
+  // leaves, and refreshed in place: the artifact re-materializes its subtree
+  // on render, so the node is rebuilt whenever it has gone.
+  function renderProject() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-project");
+    if (!slot) return false;
+    if (!projectFacts) { loadProject(false); return false; }
+    var name = slot.querySelector(".hc-project-name");
+    if (!name) {
+      while (slot.firstChild) slot.removeChild(slot.firstChild);
+      var sep = document.createElement("span");
+      sep.className = "hc-project-sep";
+      sep.textContent = "/";
+      slot.appendChild(sep);
+      name = document.createElement("span");
+      name.className = "hc-project-name";
+      name.setAttribute("role", "button");
+      name.setAttribute("data-hc-project", "");
+      var label = document.createElement("span");
+      label.className = "hc-project-label";
+      name.appendChild(label);
+      var caret = document.createElement("span");
+      caret.className = "hc-project-caret";
+      caret.textContent = "\u25be";
+      name.appendChild(caret);
+      slot.appendChild(name);
+    }
+    var text = str(projectFacts.name) || str(projectFacts.cwd);
+    var label2 = name.querySelector(".hc-project-label");
+    if (label2 && label2.textContent !== text) label2.textContent = text;
+    var title = str(projectFacts.cwd);
+    if (projectFacts.branch) title += "  ·  " + projectFacts.branch;
+    if (name.title !== title) name.title = title;
+    var open = projectMenuShown();
+    if (open) name.setAttribute("data-hc-project-open", "");
+    else name.removeAttribute("data-hc-project-open");
+    return true;
+  }
+
+  function renderSubTabs() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-subtabs");
+    if (!slot) return false;
+    if (!slot.children || !slot.children.length) {
+      PROJECT_TABS.forEach(function (spec) {
+        var tab = document.createElement("span");
+        tab.className = "hc-subtab";
+        tab.setAttribute("data-hc-subtab", spec[0]);
+        tab.setAttribute("role", "button");
+        tab.textContent = spec[1];
+        slot.appendChild(tab);
+      });
+    }
+    var kids = slot.children || [];
+    for (var i = 0; i < kids.length; i++) {
+      var want = kids[i].getAttribute("data-hc-subtab") === "overview";
+      if (want === overviewOn) kids[i].setAttribute("data-hc-subtab-on", "");
+      else kids[i].removeAttribute("data-hc-subtab-on");
+    }
+    return true;
+  }
+
+  // --- what the crumb opens, and what OVERVIEW shows ----------------------
+  // Both read the same record: where this workspace's project is, what is
+  // checked out there, and what the tree in front of it adds up to. The
+  // menu is the short form; the pane is the long one.
+
+  function factRow(key, value, href) {
+    var row = document.createElement("div");
+    row.className = "hc-ov-fact";
+    var k = document.createElement("span");
+    k.className = "hc-ov-fact-k";
+    k.textContent = key;
+    row.appendChild(k);
+    var v = document.createElement(href ? "a" : "span");
+    v.className = "hc-ov-fact-v";
+    v.textContent = value;
+    if (href) {
+      v.setAttribute("href", href);
+      v.setAttribute("target", "_blank");
+      v.setAttribute("rel", "noreferrer noopener");
+    }
+    row.appendChild(v);
+    return row;
+  }
+
+  function treeLine(facts) {
+    var dirty = Number(facts.dirty) || 0;
+    var parts = [dirty ? (dirty + (dirty === 1 ? " file changed"
+                                              : " files changed"))
+                       : "clean"];
+    if (Number(facts.ahead)) parts.push(facts.ahead + " ahead");
+    if (Number(facts.behind)) parts.push(facts.behind + " behind");
+    return parts.join(" · ");
+  }
+
+  function projectFactRows(facts) {
+    var box = document.createElement("div");
+    box.className = "hc-ov-facts";
+    box.appendChild(factRow("directory", str(facts.cwd)));
+    if (facts.git) {
+      if (facts.branch) box.appendChild(factRow("branch", str(facts.branch)));
+      if (facts.slug || facts.remote) {
+        box.appendChild(factRow("origin", str(facts.slug || facts.remote),
+                                str(facts.github) || ""));
+      }
+      if (facts.head) {
+        box.appendChild(factRow("head", facts.head
+                                + (facts.subject ? "  " + facts.subject : "")));
+      }
+      box.appendChild(factRow("working tree", treeLine(facts)));
+    } else {
+      box.appendChild(factRow("git", "not a repository"));
+    }
+    return box;
+  }
+
+  // The goals the server holds, counted by the words the tree uses, and
+  // their TODO rows counted by where each one is with the builder.
+  function workspaceCounts() {
+    var goals = array(serverState.goals);
+    var out = { goals: goals.length, active: 0, inprog: 0, done: 0, gone: 0,
+                todo: 0, queued: 0, asking: 0, built: 0, failed: 0 };
+    goals.forEach(function (g) {
+      var st = str(g.status);
+      if (st === "in_progress") out.inprog++;
+      else if (st === "completed") out.done++;
+      else if (st === "abandoned") out.gone++;
+      else out.active++;
+      array(g.todo_items).forEach(function (row) {
+        var rs = str(row.status);
+        if (rs === "queued" || rs === "building") out.queued++;
+        else if (rs === "asking") out.asking++;
+        else if (rs === "done") out.built++;
+        else if (rs === "failed") out.failed++;
+        else out.todo++;
+      });
+    });
+    return out;
+  }
+
+  function countRow(pairs) {
+    var row = document.createElement("div");
+    row.className = "hc-ov-nums";
+    pairs.forEach(function (pair) {
+      if (!pair[1]) return;
+      var one = document.createElement("span");
+      one.className = "hc-ov-num";
+      var n = document.createElement("b");
+      n.textContent = String(pair[1]);
+      one.appendChild(n);
+      var lab = document.createElement("span");
+      lab.textContent = " " + pair[0];
+      one.appendChild(lab);
+      row.appendChild(one);
+    });
+    if (!row.children.length) {
+      row.appendChild(document.createTextNode("none yet"));
+    }
+    return row;
+  }
+
+  function section(label, body) {
+    var sec = document.createElement("div");
+    sec.className = "hc-ov-sec";
+    var head = document.createElement("div");
+    head.className = "hc-ov-label";
+    head.textContent = label;
+    sec.appendChild(head);
+    sec.appendChild(body);
+    return sec;
+  }
+
+  function commitList(facts) {
+    var list = document.createElement("div");
+    list.className = "hc-ov-commits";
+    array(facts.commits).forEach(function (c) {
+      var row = document.createElement("div");
+      row.className = "hc-ov-commit";
+      var sha = document.createElement("span");
+      sha.className = "hc-ov-sha";
+      sha.textContent = str(c.sha);
+      row.appendChild(sha);
+      var subject = document.createElement("span");
+      subject.className = "hc-ov-subject";
+      subject.textContent = str(c.subject);
+      row.appendChild(subject);
+      var when = document.createElement("span");
+      when.className = "hc-ov-when";
+      when.textContent = str(c.when);
+      row.appendChild(when);
+      list.appendChild(row);
+    });
+    if (!list.children.length) {
+      list.appendChild(mk("div", "hc-ov-empty", "no commits read here"));
+    }
+    return list;
+  }
+
+  function mk(tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function overviewNode() {
+    var facts = projectFacts || { name: "", cwd: "", commits: [] };
+    var box = mk("div", "hc-ov");
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", "Project overview");
+    var card = mk("div", "hc-ov-card");
+    card.appendChild(mk("div", "hc-ov-name", str(facts.name) || "this project"));
+    card.appendChild(projectFactRows(facts));
+    box.appendChild(card);
+    var c = workspaceCounts();
+    box.appendChild(section("goals", countRow(
+      [["active", c.active], ["in progress", c.inprog],
+       ["done", c.done], ["abandoned", c.gone]])));
+    box.appendChild(section("todo rows", countRow(
+      [["to build", c.todo], ["with the builder", c.queued],
+       ["asking", c.asking], ["built", c.built], ["failed", c.failed]])));
+    box.appendChild(section("recent commits", commitList(facts)));
+    return box;
+  }
+
+  var overviewBox = null;
+
+  function overviewShown() {
+    return !!(overviewBox && overviewBox.parentNode);
+  }
+
+  function renderOverview() {
+    if (!overviewOn) {
+      if (overviewShown()) overviewBox.parentNode.removeChild(overviewBox);
+      overviewBox = null;
+      return false;
+    }
+    ensureAlertStyles();
+    var next = overviewNode();
+    if (overviewShown()) {
+      overviewBox.parentNode.replaceChild(next, overviewBox);
+    } else {
+      (document.body || document.documentElement).appendChild(next);
+    }
+    overviewBox = next;
+    return true;
+  }
+
+  function showOverview(on) {
+    var want = !!on;
+    if (want === overviewOn) return overviewOn;
+    overviewOn = want;
+    if (want) loadProject(true).then(function () { renderOverview(); });
+    renderOverview();
+    renderSubTabs();
+    return overviewOn;
+  }
+
+  function projectMenuShown() {
+    return !!(projectBox && projectBox.parentNode);
+  }
+
+  function closeProjectMenu() {
+    if (!projectMenuShown()) return false;
+    projectBox.parentNode.removeChild(projectBox);
+    projectBox = null;
+    renderProject();
+    return true;
+  }
+
+  function openProjectMenu() {
+    if (projectMenuShown()) return projectBox;
+    ensureAlertStyles();
+    var facts = projectFacts;
+    if (!facts) { loadProject(true).then(function () { renderProject(); }); }
+    projectBox = mk("div", "hc-project-menu");
+    projectBox.setAttribute("role", "dialog");
+    projectBox.setAttribute("aria-label", "Project");
+    var head = mk("div", "hc-project-menu-head");
+    head.appendChild(mk("span", "", str(facts && facts.name) || "project"));
+    var close = mk("span", "hc-project-menu-act", "\u00d7");
+    close.setAttribute("role", "button");
+    close.setAttribute("aria-label", "Close");
+    head.appendChild(close);
+    projectBox.appendChild(head);
+    projectBox.appendChild(projectFactRows(facts || { cwd: "", git: false }));
+    var more = mk("div", "hc-project-menu-more",
+                  "Open OVERVIEW for what this workspace adds up to.");
+    projectBox.appendChild(more);
+    (document.body || document.documentElement).appendChild(projectBox);
+    var name = document.querySelector(".hc-project-name");
+    if (name && name.getBoundingClientRect) {
+      var r = name.getBoundingClientRect();
+      projectBox.style.left = Math.round(r.left) + "px";
+    }
+    renderProject();
+    return projectBox;
+  }
+
+  function toggleProjectMenu() {
+    return projectMenuShown() ? closeProjectMenu() : !!openProjectMenu();
+  }
+
+  var headerBound = false;
+
+  function bindHeaderRow() {
+    if (headerBound || !document.addEventListener) return false;
+    headerBound = true;
+    document.addEventListener("click", function (e) {
+      var tab = closestByClass(e.target, "hc-subtab");
+      if (tab) {
+        e.preventDefault();
+        showOverview(tab.getAttribute("data-hc-subtab") === "overview");
+        return;
+      }
+      if (closestByClass(e.target, "hc-project-name")) {
+        e.preventDefault();
+        toggleProjectMenu();
+        return;
+      }
+      if (projectMenuShown() && !closestByClass(e.target, "hc-project-menu")) {
+        closeProjectMenu();
+      }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape") return;
+      if (closeProjectMenu()) return;
+      if (overviewOn) showOverview(false);
+    });
     return true;
   }
 
@@ -5768,7 +6292,9 @@
       applyLaunchSkin();
       mirrorRootState();
       applyLayout();
-      placePills();
+      renderProject();
+      renderSubTabs();
+      bindHeaderRow();
       renderPanelToggles();
       installRailDrag();
       renderSessionChip();
@@ -5782,25 +6308,38 @@
     setInterval(sweep, 700);
   }
 
-  // Asking which kind of source, and then for the value. The three kinds are
-  // the three the store keeps (github, local, doc); the value goes back
-  // through the artifact's own ctx lists, so it lands on set_sources by the
-  // path every other source edit already takes.
-  function askSource() {
+  // The sources a goal was written against, in one box rather than a rail
+  // of pills: what is attached now, each with a way off, and a form for the
+  // next one. The kinds are the three the store keeps (github, local, doc).
+  // Every edit goes back through `spec.add` / `spec.remove`, which the
+  // artifact wires to its own ctx lists, so it lands on set_sources by the
+  // path the textbox pane took. Resolves, when closed, with the lists as
+  // the box last drew them.
+  function manageSources(spec) {
+    spec = spec || {};
+    var code = array(spec.code).slice(), docs = array(spec.docs).slice();
     return new Promise(function (resolve) {
       ensureDialogStyles();
       var overlay = document.createElement("div");
       overlay.className = "hc-ask";
       var box = document.createElement("div");
-      box.className = "hc-ask-box";
+      box.className = "hc-ask-box hc-srcs-box";
       var title = document.createElement("div");
       title.className = "hc-ask-title";
-      title.textContent = "Attach a source to this goal";
+      title.textContent = "Sources for this goal";
+      var list = document.createElement("div");
+      list.className = "hc-srcs-list";
       var kinds = document.createElement("div");
       kinds.className = "hc-ask-kinds";
+      var form = document.createElement("div");
+      form.className = "hc-srcs-form";
       var input = document.createElement("input");
       input.type = "text";
       input.className = "hc-ask-input";
+      var attach = document.createElement("button");
+      attach.type = "button";
+      attach.className = "hc-ask-btn hc-ask-ok";
+      attach.textContent = "Attach";
       var chosen = "github";
       var buttons = [];
 
@@ -5824,39 +6363,111 @@
         kinds.appendChild(button);
       });
 
-      var row = document.createElement("div");
-      row.className = "hc-ask-row";
-      var cancel = document.createElement("button");
-      cancel.className = "hc-ask-btn";
-      cancel.textContent = "Cancel";
-      var confirm = document.createElement("button");
-      confirm.className = "hc-ask-btn hc-ask-ok";
-      confirm.textContent = "Attach";
-
-      function close(value) {
-        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        resolve(value || null);
+      function rowsNow() {
+        return code.map(function (c) {
+          return { id: c.id, label: str(c.label),
+                   tag: c.type === "github" ? "GITHUB" : "LOCAL" };
+        }).concat(docs.map(function (d) {
+          return { id: d.id, label: str(d.label), tag: "DOC" };
+        }));
       }
+
+      function draw() {
+        while (list.firstChild) list.removeChild(list.firstChild);
+        var rows = rowsNow();
+        if (!rows.length) {
+          var none = document.createElement("div");
+          none.className = "hc-srcs-none";
+          none.textContent = "Nothing attached yet. Add a repo, a folder or a document below.";
+          list.appendChild(none);
+          return;
+        }
+        rows.forEach(function (r) {
+          var row = document.createElement("div");
+          row.className = "hc-srcs-row";
+          var tag = document.createElement("span");
+          tag.className = "hc-srcs-tag";
+          tag.textContent = r.tag;
+          var label = document.createElement("span");
+          label.className = "hc-srcs-label";
+          label.textContent = r.label;
+          var rm = document.createElement("button");
+          rm.type = "button";
+          rm.className = "hc-srcs-rm";
+          rm.title = "Remove this source";
+          rm.setAttribute("aria-label", "Remove " + r.label);
+          rm.textContent = "×";
+          rm.onclick = function () {
+            code = code.filter(function (q) { return q.id !== r.id; });
+            docs = docs.filter(function (q) { return q.id !== r.id; });
+            if (typeof spec.remove === "function") spec.remove(r.id);
+            draw();
+          };
+          row.appendChild(tag);
+          row.appendChild(label);
+          row.appendChild(rm);
+          list.appendChild(row);
+        });
+      }
+
       function take() {
         var label = str(input.value).trim();
-        close(label ? { type: chosen, label: label } : null);
+        if (!label) { input.focus(); return; }
+        var entry = { id: (chosen === "doc" ? "d" : "c")
+                          + Date.now().toString(36)
+                          + Math.random().toString(36).slice(2, 5),
+                      type: chosen, label: label };
+        var kept = (typeof spec.add === "function") ? spec.add(entry) : null;
+        if (kept && kept.id) entry = kept;
+        if (chosen === "doc") docs.push(entry); else code.push(entry);
+        input.value = "";
+        draw();
+        input.focus();
       }
-      cancel.onclick = function () { close(null); };
-      confirm.onclick = take;
+
+      function onKey(event) {
+        if (!overlay.parentNode) return;
+        if (!event || event.key !== "Escape") return;
+        if (event.preventDefault) event.preventDefault();
+        close();
+      }
+
+      function close() {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (document.removeEventListener) {
+          document.removeEventListener("keydown", onKey, true);
+        }
+        resolve({ code: code, docs: docs });
+      }
+
+      var foot = document.createElement("div");
+      foot.className = "hc-ask-row";
+      var done = document.createElement("button");
+      done.type = "button";
+      done.className = "hc-ask-btn";
+      done.textContent = "Done";
+      done.onclick = close;
+      attach.onclick = take;
       input.onkeydown = function (e) {
         if (e.key === "Enter") { e.preventDefault(); take(); }
-        if (e.key === "Escape") { e.preventDefault(); close(null); }
+        if (e.key === "Escape") { e.preventDefault(); close(); }
       };
-      overlay.onclick = function (e) { if (e.target === overlay) close(null); };
-      row.appendChild(cancel);
-      row.appendChild(confirm);
+      overlay.onclick = function (e) { if (e.target === overlay) close(); };
+      form.appendChild(input);
+      form.appendChild(attach);
+      foot.appendChild(done);
       box.appendChild(title);
+      box.appendChild(list);
       box.appendChild(kinds);
-      box.appendChild(input);
-      box.appendChild(row);
+      box.appendChild(form);
+      box.appendChild(foot);
       overlay.appendChild(box);
       (document.querySelector(".hc") || document.body).appendChild(overlay);
+      if (document.addEventListener) {
+        document.addEventListener("keydown", onKey, true);
+      }
       pick("github");
+      draw();
       setTimeout(function () { input.focus(); }, 0);
     });
   }
@@ -5880,6 +6491,18 @@
       ".hc-ask-input:focus{border-color:var(--acc)}",
       ".hc-ask-row{display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-top:14px}",
       ".hc-ask-kinds{display:flex;gap:6px;margin-bottom:10px}",
+      // The sources box: what is attached, then the form for the next one.
+      ".hc-srcs-box{width:min(560px,100%)}",
+      ".hc-srcs-list{margin-bottom:12px;max-height:40vh;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa)}",
+      ".hc-srcs-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--bd,#e6e6e6);font:11.5px 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
+      ".hc-srcs-row:last-child{border-bottom:none}",
+      ".hc-srcs-tag{flex:none;padding:1px 6px;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;font:600 8.5px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--mut,#777)}",
+      ".hc-srcs-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-srcs-rm{flex:none;border:none;background:transparent;color:var(--fnt,#9b9b9b);cursor:pointer;font:13px/1 'Source Code Pro',monospace;padding:0 2px}",
+      ".hc-srcs-rm:hover{color:var(--del,#c33)}",
+      ".hc-srcs-none{padding:10px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-srcs-form{display:flex;gap:6px;align-items:center}",
+      ".hc-srcs-form .hc-ask-input{flex:1;min-width:0}",
       ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
@@ -5981,22 +6604,25 @@
        chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
             : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
       ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
-       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><div class=\"hc-search-hits\"></div></div>"
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><span class=\"hc-search-icon\" aria-hidden=\"true\"></span><input class=\"hc-search-input\" type=\"search\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals, notes, TODOs, prompts\"><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
        chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><textarea class=\"hc-rail-code\" key=\"{{ selKey }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" placeholder=\"Write your prompt. The goal\u2019s context is added when you copy.\" spellcheck=\"false\"></textarea><div class=\"hc-rail-actions\"><span class=\"hc-rail-generate\" data-hc-generating=\"off\">Generate</span><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write a prompt for it.</div></sc-if></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
-      // The sources this goal was written against, as a rail over the
-      // document. Both lists and both remove handlers are the artifact's
-      // own, so every edit lands on set_sources through the path that was
-      // already there -- this is the source control the textbox pane had.
+      // The sources this goal was written against, as one line over the
+      // document: their names, and a link into the box where they are
+      // added and taken off. The box writes through `add` / `remove`
+      // below, which are the artifact's own ctx updates, so every edit
+      // lands on set_sources through the path that was already there.
       ["<div style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">",
-       chat ? "<div class=\"hc-sources\"><span class=\"hc-sources-label\">SOURCES</span><sc-for list=\"{{ codeRows }}\" as=\"cr\" hint-placeholder-count=\"1\"><span class=\"hc-src\"><span class=\"hc-src-tag\">{{ cr.tag }}</span><span class=\"hc-src-label\">{{ cr.label }}</span><span sc-camel-on-click=\"{{ cr.rm }}\" title=\"Remove this source\" class=\"hc-src-rm\">\u00d7</span></span></sc-for><sc-for list=\"{{ docRows }}\" as=\"dr\" hint-placeholder-count=\"1\"><span class=\"hc-src\"><span class=\"hc-src-tag\">DOC</span><span class=\"hc-src-label\">{{ dr.label }}</span><span sc-camel-on-click=\"{{ dr.rm }}\" title=\"Remove this source\" class=\"hc-src-rm\">\u00d7</span></span></sc-for><span sc-camel-on-click=\"{{ srcAdd }}\" class=\"hc-src-add\">+ Add source</span></div>\n<div class=\"hc-tabs\" style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"
+       chat ? "<div class=\"hc-sources\"><span class=\"hc-sources-label\">SOURCES</span><span class=\"hc-sources-sum\" title=\"{{ srcSummary }}\">{{ srcSummary }}</span><span sc-camel-on-click=\"{{ srcOpen }}\" class=\"hc-src-add\">{{ srcOpenLabel }}</span></div>\n<div class=\"hc-tabs\" style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"
             : "<div style=\"display:flex;gap:16px;margin-top:20px;border-bottom:1px solid var(--bd);position:sticky;top:0;z-index:5;background:var(--bg);box-shadow:0 -16px 0 0 var(--bg)\">"],
-      // + Add source asks which of the three kinds the store keeps and
-      // then for the value, rather than appending a placeholder row.
+      // The line's text and the link that opens the box. The box stays up
+      // across adds and removes, and a poll can re-render the pane while it
+      // is open -- so its writes go against the goal's ctx as it stands at
+      // write time, not against the lists this render closed over.
       ["      codeEmpty: codeList.length === 0,",
-       chat ? "      srcAdd: () => window.__hcAskSource().then(function (v) { if (!v) return; if (v.type === 'doc') { setDocs(docList.concat([{ id: 'd' + Date.now().toString(36), type: 'doc', label: v.label }])); } else { setCode(codeList.concat([{ id: 'c' + Date.now().toString(36), type: v.type, label: v.label }])); } }),\n      codeEmpty: codeList.length === 0,"
+       chat ? "      srcSummary: codeList.concat(docList).map(q => String((q && q.label) || '').trim()).filter(Boolean).join(', ') || 'none attached',\n      srcOpenLabel: (codeList.length + docList.length) ? 'Edit sources' : '+ Add source',\n      srcOpen: () => { if (!sel || !window.__hcSources) return; const gid = sel.id; const ctxOf = (x) => x.ctx || {}; const codeOf = (x) => Array.isArray(ctxOf(x).code) ? ctxOf(x).code : CODEDEF; const docsOf = (x) => Array.isArray(ctxOf(x).docs) ? ctxOf(x).docs : DOCDEF; window.__hcSources({ code: codeList, docs: docList, add: (v) => { this.set(s => ({ goals: this.up(s.goals, gid, x => v.type === 'doc' ? { ...x, ctx: { ...ctxOf(x), docs: docsOf(x).concat([v]) } } : { ...x, ctx: { ...ctxOf(x), code: codeOf(x).concat([v]) } }) }), true); return v; }, remove: (id) => { this.set(s => ({ goals: this.up(s.goals, gid, x => ({ ...x, ctx: { ...ctxOf(x), code: codeOf(x).filter(q => q.id !== id), docs: docsOf(x).filter(q => q.id !== id) } })) }), true); } }); },\n      codeEmpty: codeList.length === 0,"
             : "      codeEmpty: codeList.length === 0,"],
       // Two numbers the rails print: how many goals this chat has, and
       // how big the assembled prompt is. Characters over four, labelled
@@ -6005,13 +6631,14 @@
        chat ? "      goalCount: total,\n      draftTok: '~' + Math.ceil(String(draft || '').length / 4) + ' tok',\n      hasCrumb: !!(trail && trail.length > 1),"
             : "      hasCrumb: !!(trail && trail.length > 1),"],
       // All first, because a chat opens on All and its tree is small.
-      // The count moves to the end so a chip reads as a name with a
-      // number rather than a parenthetical aside.
+      // The count leaves the label rather than being appended to it: it is
+      // drawn beside the name in a quieter colour, so the row reads as four
+      // names with four numbers rather than four sentences.
       ["const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',",
-       chat ? "const filters = [['all', 'All', total], ['active', 'Active', activeN], ['inprog', 'In progress', ipN], ['done', 'Done', doneN]].map(([k, lab, n], i) => ({\n      lab: lab + ' ' + n,"
+       chat ? "const filters = [['all', 'All', total], ['active', 'Active', activeN], ['inprog', 'In progress', ipN], ['done', 'Done', doneN]].map(([k, lab, n], i) => ({\n      num: String(n),\n      lab: lab,"
             : "const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',"],
       ["<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>",
-       chat ? "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span class=\"hc-chip\" sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"
+       chat ? "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span class=\"hc-chip\" sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }} <b class=\"hc-chip-n\">{{ f.num }}</b></span></sc-for>"
             : "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"],
       ["<div style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">",
        chat ? "<div class=\"hc-titlerow\" style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">"
@@ -6021,8 +6648,11 @@
             : "<sc-if value=\"{{ pageGoals }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"display:flex;gap:16px;align-items:baseline;flex-wrap:wrap\">"],
       // The window is named for what it is: one chat's goals. "Vault"
       // is the global product this scope is not.
+      // and the directory it stands in front of reads after it, as a
+      // breadcrumb: the product, then the project. The bridge fills the
+      // second span from /api/project -- only the server knows the path.
       ["<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>",
-       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span>"
+       chat ? "<span class=\"hc-brand\" style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Engelbart</span><span class=\"hc-project\"></span>"
             : "<span style=\"font-size:13.5px;font-weight:700;color:var(--ink)\">Vault</span>"],
       // A notification names a goal; going to it means selecting it in the
       // tree. The artifact owns selection, so it publishes one setter from
@@ -6033,7 +6663,7 @@
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" title=\"saved {{ updatedLabel }}\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved \u2713</span></div><div class=\"hc-subbar\"><span class=\"hc-subtabs\"></span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -6449,7 +7079,7 @@
   }
 
   window.__hcAsk = ask;
-  window.__hcAskSource = askSource;
+  window.__hcSources = manageSources;
   window.__hcRailFields = railFields;
 
   // --- a banner for work happening outside the page ------------------------
@@ -6838,8 +7468,6 @@
     noticesToShow: noticesToShow,
     pageTitle: pageTitle,
     applyPageTitle: applyPageTitle,
-    noticeStack: noticeStack,
-    noticeCss: function () { return NOTICE_CSS; },
     paneTabBar: paneTabBar,
     headerNav: headerNav,
     promptAddSlot: promptAddSlot,
@@ -6863,7 +7491,7 @@
     injectionLines: injectionLines,
     renderInjection: renderInjection,
     renderSessionChip: renderSessionChip,
-    askSource: askSource,
+    manageSources: manageSources,
     treeStep: treeStep,
     foldedIds: foldedIds,
     // TODO build alerts: the banner stack, the bell, the center, settings.

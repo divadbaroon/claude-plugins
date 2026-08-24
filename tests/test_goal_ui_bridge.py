@@ -1255,6 +1255,97 @@ class AddControlTests(BridgeTestCase):
             "p;"))
 
 
+class SourcesModalTests(BridgeTestCase):
+    """In a chat the sources are added and removed in one box, not a rail
+    of pills: the pane shows their names and a link that opens the box."""
+
+    def test_the_chat_rail_is_a_line_and_a_link_into_the_box(self):
+        out = self.patched_bundle(
+            "({ opens: out.indexOf('window.__hcSources({') >= 0,"
+            "   sum: out.indexOf('class=\"hc-sources-sum\"') >= 0,"
+            "   pills: out.indexOf('class=\"hc-src\"') >= 0"
+            "       || out.indexOf('class=\"hc-src-tag\"') >= 0"
+            "       || out.indexOf('class=\"hc-src-rm\"') >= 0,"
+            "   askSource: out.indexOf('__hcAskSource') >= 0,"
+            "   idempotent: window.__hcPromptUI.patchBundleSource(out) === out });",
+            scope="chat")
+        self.assertTrue(out["opens"], "the link does not open the box")
+        self.assertTrue(out["sum"], "the pane no longer names its sources")
+        self.assertFalse(out["pills"], "a source pill survived")
+        self.assertFalse(out["askSource"])
+        self.assertTrue(out["idempotent"])
+
+    def open_box(self):
+        return (
+            "var log = [];"
+            "var p = window.__hcSources({"
+            "  code: [{ id: 'c1', type: 'github', label: 'owner/repo' },"
+            "         { id: 'c2', type: 'local', label: '~/proj' }],"
+            "  docs: [{ id: 'd1', type: 'doc', label: 'spec.md' }],"
+            "  add: function (v) { log.push(['add', v.type, v.label]); return v; },"
+            "  remove: function (id) { log.push(['rm', id]); } });"
+            "var box = made.filter(function (e) {"
+            "  return String(e.className).indexOf('hc-srcs-box') >= 0; })[0];"
+            "var list = box.querySelector('.hc-srcs-list');"
+            "var input = box.querySelector('.hc-ask-input');"
+            "var rows = function () { return list.children.map(function (r) {"
+            "  return r.children[0].textContent + ' ' + r.children[1].textContent; }); };")
+
+    def test_the_box_lists_what_is_attached_with_its_kind(self):
+        self.assertEqual(["GITHUB owner/repo", "LOCAL ~/proj", "DOC spec.md"],
+                         self.run_js(self.open_box() + "rows();"))
+
+    def test_removing_a_row_writes_through_and_redraws(self):
+        out = self.run_js(
+            self.open_box()
+            + "list.children[1].children[2].onclick();"
+            "[rows(), log];")
+        self.assertEqual([["GITHUB owner/repo", "DOC spec.md"], [["rm", "c2"]]], out)
+
+    def test_attaching_writes_through_and_appends_a_row(self):
+        out = self.run_js(
+            self.open_box()
+            + "var kinds = box.querySelector('.hc-ask-kinds');"
+            "kinds.children[2].onclick();"  # Document
+            "input.value = '  notes/design.md ';"
+            "input.onkeydown({ key: 'Enter', preventDefault: function () {} });"
+            "[rows(), log, input.value];")
+        self.assertEqual(["GITHUB owner/repo", "LOCAL ~/proj", "DOC spec.md",
+                          "DOC notes/design.md"], out[0])
+        self.assertEqual([["add", "doc", "notes/design.md"]], out[1])
+        self.assertEqual("", out[2])
+
+    def test_a_blank_value_attaches_nothing(self):
+        out = self.run_js(
+            self.open_box()
+            + "input.value = '   ';"
+            "box.querySelector('.hc-srcs-form').children[1].onclick();"
+            "[rows().length, log];")
+        self.assertEqual([3, []], out)
+
+    def test_done_and_escape_close_with_the_lists_as_drawn(self):
+        out = self.run_js(
+            self.open_box()
+            + "list.children[0].children[2].onclick();"
+            "box.querySelector('.hc-ask-row').children[0].onclick();"
+            "p.then(function (v) { return [v.code.map(function (c) { return c.id; }),"
+            "  v.docs.map(function (d) { return d.id; }), box.parentNode.parentNode === null]; });")
+        self.assertEqual([["c2"], ["d1"], True], out)
+        gone = self.run_js(
+            self.open_box()
+            + "input.onkeydown({ key: 'Escape', preventDefault: function () {} });"
+            "box.parentNode.parentNode === null;")
+        self.assertTrue(gone)
+
+    def test_an_empty_box_says_so(self):
+        out = self.run_js(
+            "window.__hcSources({ code: [], docs: [] });"
+            "var box = made.filter(function (e) {"
+            "  return String(e.className).indexOf('hc-srcs-box') >= 0; })[0];"
+            "box.querySelector('.hc-srcs-list').children[0].className;")
+        self.assertEqual("hc-srcs-none", out)
+
+
 class SourceRoundTripTests(BridgeTestCase):
     """Edits the artifact makes to context must come back as typed sources."""
 
@@ -4246,12 +4337,17 @@ class ChatNoticeTests(BridgeTestCase):
     """A goals workspace is a second window on a chat running in a terminal.
 
     The one thing it can say that the terminal cannot is that the terminal is
-    finished. These tests hold what it is allowed to say, and for how long.
+    finished. It says it where a finished TODO is said: a card in the
+    top-right corner, an entry behind the bell, one unread count. These tests
+    hold what it is allowed to say, and for how long.
     """
 
     SID = "7f3a1b2c-4d5e-4f60-8a9b-0c1d2e3f4a5b"
 
     PRELUDE = (
+        "var A = window.__hcPromptUI.alerts;"
+        "var slot = document.createElement('span'); slot.className = 'hc-alerts';"
+        "header.appendChild(slot);"
         "window.__hcPromptUI.acceptState("
         "  { goals: [], prompts: [], scope: %s, session_id: %s });"
         # The first tick of the standing 700ms sweep, which is what names the
@@ -4265,11 +4361,12 @@ class ChatNoticeTests(BridgeTestCase):
         "      relatedTarget: related || null, preventDefault: function () {},"
         "      stopPropagation: function () {} }); }); };"
         "var stack = function () {"
-        "  var node = window.__hcPromptUI.noticeStack();"
+        "  var node = A.stack();"
         "  return node ? node.children : []; };"
         "var drawn = function () { return stack().map(function (n) {"
-        "  var d = n.querySelector('.hc-notice-detail');"
-        "  return [n.className, n.querySelector('.hc-notice-title').textContent,"
+        "  var d = n.querySelector('.hc-alert-detail');"
+        "  return [n.getAttribute('data-hc-alert-kind'),"
+        "          n.querySelector('.hc-alert-title').textContent,"
         "          d ? d.textContent : null]; }); };"
     )
 
@@ -4298,7 +4395,56 @@ class ChatNoticeTests(BridgeTestCase):
             "   detail: 'Explore: found it'}]);"
             "drawn();")
         self.assertEqual(
-            [["hc-notice", "A subagent returned", "Explore: found it"]], out)
+            [["subagent_returned", "A subagent returned", "Explore: found it"]],
+            out)
+
+    def test_a_session_notice_lands_in_the_stack_the_builder_writes_to(self):
+        # The whole point of the change: one corner, one bell, one count.
+        # A reader watching for a build coming back should not have to watch
+        # a second surface for the chat answering.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var e = A.log()[0];"
+            "[A.log().length, A.unread(), e.kind, e.text, e.goalId, e.rowId,"
+            " document.querySelectorAll('.hc-notice').length];")
+        self.assertEqual([1, 1, "session_stopped", "done", "", "", 0], out)
+
+    def test_the_bell_counts_a_chat_answering_with_the_builds(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "A.renderBell();"
+            "var b = slot.querySelector('.hc-bell');"
+            "[b.getAttribute('data-hc-unread'),"
+            " b.querySelector('.hc-bell-count').textContent];")
+        self.assertEqual(["1", "1"], out)
+
+    def test_the_center_lists_it_without_a_goal_line(self):
+        # A turn ending is about the conversation, not about one row of work.
+        # A blank goal line under it would read as a goal named "".
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "A.open();"
+            "var row = A.center().querySelector('.hc-alert-row');"
+            "[row.getAttribute('data-hc-alert-kind'),"
+            " row.querySelector('.hc-alert-detail').textContent,"
+            " !!row.querySelector('.hc-alert-goal')];")
+        self.assertEqual(["session_stopped", "done", False], out)
+
+    def test_clicking_it_reads_it_and_moves_nothing(self):
+        # A build's card takes the reader to the row it reports on. This one
+        # names no row, so following it would drop the reader on a goal the
+        # notice never mentioned.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var moved = null;"
+            "window.__hcSelectGoal = function (id) { moved = id; };"
+            "fire('click', stack()[0].querySelector('.hc-alert-title'));"
+            "[A.unread(), stack().length, moved];")
+        self.assertEqual([0, 0, None], out)
 
     def test_the_same_notice_is_never_shown_twice(self):
         # State is polled every 1.5s and the store keeps twenty rows, so the
@@ -4328,8 +4474,8 @@ class ChatNoticeTests(BridgeTestCase):
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'compacted',"
             "  at: iso(now + 5000), detail: 'whatever'}]);"
-            "stack().length;")
-        self.assertEqual(0, out)
+            "[stack().length, A.log().length];")
+        self.assertEqual([0, 0], out)
 
     def test_every_sentence_it_can_say_is_one_the_hook_proved(self):
         out = self.notices(
@@ -4339,16 +4485,16 @@ class ChatNoticeTests(BridgeTestCase):
             "      at: iso(now + 1000 + i), detail: ''}; }));"
             "drawn();")
         self.assertEqual(
-            [["hc-notice", "Claude finished responding", None],
-             ["hc-notice", "A subagent returned", None],
-             ["hc-notice", "Session ended", None]], out)
+            [["session_stopped", "Claude finished responding", None],
+             ["subagent_returned", "A subagent returned", None],
+             ["session_ended", "Session ended", None]], out)
 
     def test_a_notice_with_nothing_to_add_carries_no_empty_line(self):
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_ended',"
             "  at: iso(now + 5000), detail: ''}]);"
-            "[stack().length, !!stack()[0].querySelector('.hc-notice-detail'),"
-            " !!stack()[0].querySelector('.hc-notice-close')];")
+            "[stack().length, !!stack()[0].querySelector('.hc-alert-detail'),"
+            " !!stack()[0].querySelector('.hc-alert-close')];")
         self.assertEqual([1, False, True], out)
 
     def test_a_global_vault_draws_no_banner(self):
@@ -4356,14 +4502,17 @@ class ChatNoticeTests(BridgeTestCase):
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
             "  at: iso(now + 5000), detail: 'done'}]);"
-            "[window.__hcPromptUI.noticeStack(), document.title];",
+            "[A.stack(), A.log().length, document.title];",
             scope="global")
         # And the sweep that names a chat tab never renames a vault's.
-        self.assertEqual([None, "Goals"], out)
+        self.assertEqual([None, 0, "Goals"], out)
 
-    def test_the_tab_carries_the_mark_only_while_a_notice_stands(self):
+    def test_the_tab_carries_the_mark_until_the_notice_is_read(self):
         # The workspace is usually on a second screen. The tab strip is the
-        # only part of it a reader looking elsewhere can see.
+        # only part of it a reader looking elsewhere can see -- so the mark
+        # follows the unread count, not the six seconds the card is up. A
+        # reader who was looking away for those six seconds is exactly the
+        # reader it is for.
         out = self.notices(
             "var titles = [document.title];"
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
@@ -4371,9 +4520,12 @@ class ChatNoticeTests(BridgeTestCase):
             "titles.push(document.title);"
             "window.fireTimers();"
             "titles.push(document.title);"
+            "A.markAllRead();"
+            "titles.push(document.title);"
             "titles;")
         self.assertEqual(
-            ["Engelbart · 7f3a1b2c", "● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
+            ["Engelbart · 7f3a1b2c", "● Engelbart · 7f3a1b2c",
+             "● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
     def test_a_notice_takes_itself_away(self):
         out = self.notices(
@@ -4386,7 +4538,7 @@ class ChatNoticeTests(BridgeTestCase):
         self.assertEqual([1, 0], out)
 
     def test_reading_it_keeps_it_on_screen(self):
-        # Eight seconds is not long enough to read a line and think about it,
+        # Six seconds is not long enough to read a line and think about it,
         # so the clock stops while the pointer is on it and starts again when
         # it leaves.
         out = self.notices(
@@ -4408,43 +4560,45 @@ class ChatNoticeTests(BridgeTestCase):
             "  at: iso(now + 5000), detail: 'done'}]);"
             "var box = stack()[0];"
             "fire('mouseover', box);"
-            "fire('mouseout', box.querySelector('.hc-notice-title'),"
-            "     box.querySelector('.hc-notice-detail'));"
+            "fire('mouseout', box.querySelector('.hc-alert-title'),"
+            "     box.querySelector('.hc-alert-detail'));"
             "window.fireTimers();"
             "stack().length;",
             defer=True)
         self.assertEqual(1, out)
 
-    def test_the_close_control_dismisses_it(self):
+    def test_the_close_control_dismisses_it_as_read(self):
+        # × on a build's card marks it read and leaves it in the center. The
+        # same control does the same thing here, which is what takes the
+        # mark off the tab.
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
             "  at: iso(now + 5000), detail: 'done'}]);"
             "var box = stack()[0];"
-            "fire('click', box.querySelector('.hc-notice-close'));"
-            "[stack().length, document.title];")
-        self.assertEqual([0, "Engelbart · 7f3a1b2c"], out)
+            "fire('click', box.querySelector('.hc-alert-close'));"
+            "[stack().length, A.log().length, A.unread(), document.title];")
+        self.assertEqual([0, 1, 0, "Engelbart · 7f3a1b2c"], out)
 
     def test_a_dismissed_notice_does_not_come_back_on_the_next_poll(self):
         out = self.notices(
             "var row = [{id: 'n1', kind: 'session_stopped',"
             "            at: iso(now + 5000), detail: 'done'}];"
             "window.__hcPromptUI.showNotices(row);"
-            "fire('click', stack()[0].querySelector('.hc-notice-close'));"
+            "fire('click', stack()[0].querySelector('.hc-alert-close'));"
             "window.__hcPromptUI.showNotices(row);"
-            "stack().length;",
+            "[stack().length, A.log().length];",
             defer=True)
-        self.assertEqual(0, out)
+        self.assertEqual([0, 1], out)
 
-    def test_the_banner_is_small_and_drawn_from_the_page_tokens(self):
-        css = self.run_js("window.__hcPromptUI.noticeCss();")
-        self.assertIn("position:fixed", css)
-        self.assertIn("right:", css)
-        self.assertIn("bottom:", css)
-        self.assertIn("320px", css)
-        self.assertIn("11px", css)
-        self.assertIn("monospace", css)
-        for token in ("--panel", "--bd2", "--acc", "--mut", "--ink"):
-            self.assertIn("var(" + token, css)
+    def test_the_banner_setting_governs_it_like_a_build(self):
+        # One switch in the gear panel, not two. Turning banners off still
+        # leaves the entry behind the bell to find later.
+        out = self.notices(
+            "A.setSettings({banners: false});"
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "[stack().length, A.log().length, A.unread()];")
+        self.assertEqual([0, 1, 1], out)
 
     def test_junk_in_the_notice_list_is_stepped_over(self):
         # /api/state is a file on disk away from a process that may have been
@@ -4454,8 +4608,8 @@ class ChatNoticeTests(BridgeTestCase):
             "  null, 'nope', {}, {id: 'n1'},"
             "  {id: 'n2', kind: 'session_stopped', at: 'not a date'},"
             "  {id: 'n3', kind: 'session_stopped', at: iso(now + 5000)}]);"
-            "stack().length;")
-        self.assertEqual(1, out)
+            "[stack().length, A.log().length];")
+        self.assertEqual([1, 1], out)
 
     def test_the_tab_is_named_after_the_conversation_it_watches(self):
         # A day with three of these open needs the tab strip to tell them
@@ -4485,7 +4639,7 @@ class ChatNoticeTests(BridgeTestCase):
             "seen;")
         self.assertEqual(["Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
-    def test_a_wipe_while_a_notice_stands_comes_back_marked(self):
+    def test_a_wipe_while_a_notice_is_unread_comes_back_marked(self):
         # The mark is derived from what the tab should say, not remembered
         # from what it did say: putting back the remembered string here would
         # restore the empty title the artifact had just left behind.
@@ -4495,17 +4649,19 @@ class ChatNoticeTests(BridgeTestCase):
             "document.title = '';"
             "window.__hcPromptUI.renderChatSurface();"
             "var marked = document.title;"
-            "window.fireTimers();"
+            "A.markAllRead();"
+            "document.title = '';"
+            "window.__hcPromptUI.renderChatSurface();"
             "[marked, document.title];")
         self.assertEqual(["● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
-    def test_the_banner_sits_just_above_the_prompt_picker(self):
-        # Both are fixed overlays. A banner under the picker is a banner
-        # nobody can dismiss while choosing a prompt; a banner at the top of
-        # the stacking order covers a modal the reader is working in.
-        css = self.run_js("window.__hcPromptUI.noticeCss();")
+    def test_the_card_sits_above_the_prompt_picker(self):
+        # Both are fixed overlays. A card under the picker is a card nobody
+        # can dismiss while choosing a prompt; one at the top of the stacking
+        # order covers a modal the reader is working in.
+        css = self.run_js("window.__hcPromptUI.alerts.css();")
         dialog = self.run_js("window.__hcPromptUI.dialogCss();")
-        self.assertIn("z-index:100001", css)
+        self.assertIn("z-index:100002", css)
         self.assertIn("z-index:100000", dialog)
 
 
@@ -4519,9 +4675,10 @@ LAUNCH_CLASSES = (
     "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
     "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
     "hc-rail-none",
-    "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
-    "hc-src-rm", "hc-src-add", "hc-tabs",
-    "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-sources", "hc-sources-label", "hc-sources-sum", "hc-src-add",
+    "hc-tabs",
+    "hc-chip", "hc-chip-n", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-project", "hc-subbar", "hc-subtabs",
     "hc-panels", "hc-session", "hc-chats", "hc-handoff", "hc-alerts",
     "hc-settings", "hc-updated",
     "hc-search", "hc-search-input", "hc-search-hits",
@@ -4663,7 +4820,7 @@ class LaunchSkinTests(BridgeTestCase):
                               r"border-radius:0;")
         # The header is a fixed height and --hc-top is exactly that height,
         # so the columns are sized against it, not against a guess.
-        self.assertIn("--hc-top:37px", css)
+        self.assertIn("--hc-row:37px;--hc-top:74px", css)
         # Sticky: the pills are pinned to the viewport, so the bar they sit
         # in must not scroll away from under them.
         self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
@@ -4674,12 +4831,18 @@ class LaunchSkinTests(BridgeTestCase):
         self.assertRegex(css, r"\.hc-brand\{font:600 15px Georgia,[^}]*serif!important")
         # No marker before the name: the brand is the word alone.
         self.assertNotIn(".hc-brand::before", css)
-        # The status pills' row is lifted into the header by position, and
-        # takes no height where the artifact renders it: the middle bar
-        # is gone.
-        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;top:0;"
-                              r"left:var\(--hc-pills-left,\d+px\);height:37px;"
+        # The filter counts' row is lifted into the header's second row by
+        # position, and takes no height where the artifact renders it: the
+        # middle bar is gone.
+        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;"
+                              r"top:var\(--hc-row\);left:auto;right:16px;"
+                              r"height:calc\(var\(--hc-row\) - 1px\);"
                               r"margin:0;padding:0!important")
+        # And the tabs are drawn into the same bar, at the other end. It is
+        # a row short of --hc-row because it carries the header's own rule.
+        self.assertIn(".hc-subbar{position:absolute;left:0;right:0;bottom:0;"
+                      "height:calc(var(--hc-row) - 1px);", css)
+        self.assertIn(".hc-subtab[data-hc-subtab-on]::after{", css)
 
     def layout(self, tail):
         # The harness's root has a bare style object; the bridge writes the

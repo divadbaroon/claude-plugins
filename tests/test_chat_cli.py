@@ -746,6 +746,107 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         spawn.assert_called_once_with(SID)
 
+    def _health_server(self, body):
+        """A loopback server that answers /api/health with *body*."""
+        payload = json.dumps(body).encode()
+
+        class Health(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 2)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return {"pid": os.getpid(),
+                "url": f"http://127.0.0.1:{server.server_port}/"}
+
+    def test_a_server_behind_its_source_is_stale_not_healthy(self):
+        # bridge.js is read from disk per request; the routes are frozen at
+        # start. A server that admits source_stale would show the page a
+        # button it cannot serve, so the launcher must not reuse it.
+        fresh = self._health_server({"ok": True, "scope": "chat",
+                                     "session_id": SID, "source_stale": False})
+        self.assertTrue(self.cli._healthy_chat_server(fresh, SID))
+        self.assertFalse(self.cli._stale_chat_server(fresh, SID))
+
+        stale = self._health_server({"ok": True, "scope": "chat",
+                                     "session_id": SID, "source_stale": True})
+        self.assertFalse(self.cli._healthy_chat_server(stale, SID))
+        self.assertTrue(self.cli._stale_chat_server(stale, SID))
+
+        # One that does not report the field predates it: older than this
+        # launcher, so stale by definition. This is how a server started
+        # before the field existed gets replaced rather than kept forever.
+        silent = self._health_server({"ok": True, "scope": "chat",
+                                      "session_id": SID})
+        self.assertFalse(self.cli._healthy_chat_server(silent, SID))
+        self.assertTrue(self.cli._stale_chat_server(silent, SID))
+
+        # Another chat's server is neither ours to reuse nor ours to retire.
+        other = self._health_server({"ok": True, "scope": "chat",
+                                     "session_id": "someone-else",
+                                     "source_stale": True})
+        self.assertFalse(self.cli._healthy_chat_server(other, SID))
+        self.assertFalse(self.cli._stale_chat_server(other, SID))
+
+    def test_chat_ui_retires_a_stale_server_before_launching(self):
+        # The registry names a server that answers as this chat but admits
+        # it is behind its source: it is retired and a fresh one launched in
+        # its place, rather than reused for the sake of being alive.
+        self._register_server()
+        session_dir = CS.paths(SID).session_dir
+        record = self.cli._read_server_registry(session_dir)
+        pid = None
+        try:
+            with (mock.patch.object(self.cli, "_stale_chat_server",
+                                    return_value=True),
+                  mock.patch.object(self.cli, "_retire_chat_server") as retire,
+                  mock.patch.object(self.cli, "_request_chat_refresh"),
+                  contextlib.redirect_stdout(io.StringIO()) as out):
+                self.assertEqual(0, self.cli.chat_ui_main(
+                    ["--session", SID, "--cwd", "/repo", "--no-open"]))
+            retire.assert_called_once_with(record, session_dir)
+            launched = self.cli._read_server_registry(session_dir)
+            pid = launched["pid"]
+            self.assertNotEqual(record["pid"], pid)
+            self.assertEqual(launched["url"].strip(), out.getvalue().strip())
+            self.assertTrue(self.cli._healthy_chat_server(launched, SID))
+        finally:
+            if pid and self.cli._pid_alive(pid):
+                os.kill(pid, signal.SIGTERM)
+                process = next(
+                    (p for p in self.cli._DETACHED_PROCESSES if p.pid == pid), None
+                )
+                if process is not None:
+                    process.wait(timeout=5)
+                else:
+                    try:
+                        os.waitpid(pid, 0)
+                    except ChildProcessError:
+                        pass
+
+    def test_retire_stops_the_recorded_pid_and_clears_its_registry(self):
+        child = subprocess.Popen([sys.executable, "-c",
+                                  "import time; time.sleep(60)"])
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        self._register_server(pid=child.pid)
+        session_dir = CS.paths(SID).session_dir
+        record = self.cli._read_server_registry(session_dir)
+        self.cli._retire_chat_server(record, session_dir, timeout=3.0)
+        child.wait(timeout=3)
+        self.assertIsNotNone(child.returncode)
+        self.assertIsNone(self.cli._read_server_registry(session_dir))
+
 
 if __name__ == "__main__":
     unittest.main()

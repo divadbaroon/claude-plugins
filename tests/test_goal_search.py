@@ -234,6 +234,14 @@ class SearchPatchTests(BridgeTestCase):
         self.assertIn('<input class="hc-search-input" type="search"', out)
         self.assertIn('<div class="hc-search-hits"></div>', out)
 
+    def test_a_magnifier_stands_in_for_the_placeholder_words(self):
+        out = self.patched_bundle("out;", scope="chat")
+        # The field says what it is with a glass, not with a sentence.
+        self.assertIn('<span class="hc-search-icon" aria-hidden="true"></span>'
+                      '<input class="hc-search-input"', out)
+        self.assertNotIn("placeholder=\"Search goals", out)
+        self.assertIn('aria-label="Search goals, notes, TODOs, prompts"', out)
+
     def test_a_global_vault_gets_no_box(self):
         out = self.patched_bundle("out;", scope="global")
         self.assertNotIn("hc-search", out)
@@ -255,6 +263,22 @@ class SearchPatchTests(BridgeTestCase):
         self.assertNotIn(".hc-rail-left>div:nth-child(2)", css)
         # While searching, only the heading and the box stay on screen.
         self.assertIn(".hc-rail-left[data-hc-searching]>:not(.hc-rail-head):not(.hc-search){display:none!important}", css)
+
+    def test_the_glass_is_masked_ink_in_the_input_gutter(self):
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn("[data-hc-launch] .hc-search{flex:none;position:relative;", css)
+        self.assertIn("[data-hc-launch] .hc-search-icon{position:absolute;left:13px;top:4px;"
+                      "width:11px;height:11px;pointer-events:none;"
+                      "background-color:var(--fnt);", css)
+        self.assertIn("mask:url(\"data:image/svg+xml,", css)
+        self.assertIn("[data-hc-launch] .hc-rail-left[data-hc-searching] "
+                      ".hc-search-icon{background-color:var(--ink)}", css)
+        # The glass takes the gutter the heading sits on (13px), and the
+        # caret starts clear of it; no placeholder is left to colour.
+        self.assertIn(".hc-rail-head{flex:none;display:flex;align-items:center;"
+                      "justify-content:space-between;gap:10px;padding:11px 13px 10px;", css)
+        self.assertIn("padding:3px 13px 9px 30px;", css)
+        self.assertNotIn(".hc-search-input::placeholder", css)
 
 
 if __name__ == "__main__":

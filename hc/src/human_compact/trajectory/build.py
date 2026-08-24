@@ -80,6 +80,10 @@ the line, exactly in these shapes:
 - When a row is finished, print
   {"id": "<row id>", "state": "DONE"}
   and continue with the next row.
+- The user may reopen a row you already finished, in the shape
+  {"id": "<row id>", "reopened": "<what was wrong with your work>"}.
+  Your work on that row did not satisfy them. Fix what they name -- do not
+  redo the row from nothing -- and print its DONE marker again.
 
 Ask only when a real fork exists. Do not restate the rows back; do the work.
 """
@@ -108,6 +112,13 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
         indent = "  " * int(row.get("depth") or 0)
         marker = f" [{row['id']}]" if row.get("_picked") else ""
         lines.append(f"{indent}- {row.get('text', '')}{marker}")
+        # A row the reader reopened carries every earlier run's verdict and
+        # what they said was wrong with it. The work is to fix THAT, not to
+        # do the row again from nothing.
+        for n, past in enumerate(GM.normalize_history(row.get("history")), 1):
+            note = " ".join(str(past.get("note") or "").split())
+            lines.append(f"{indent}  (run {n} ended {past['state']}; the user"
+                         f" reopened it: \"{note}\")")
     # Screenshots pasted into the rows going out: each "[attachment #N]" a
     # row cites, resolved to the file it names, so the session can open it.
     shots = GM.render_attachments(rows).rstrip("\n")
@@ -215,6 +226,16 @@ def deliver(session_id: str, root: Optional[Path], event: str) -> str:
                          "protocol asked for:\n"
                          + json.dumps({"id": item.get("row_id"),
                                        "answer": item.get("text")}))
+        elif kind == "reopen":
+            _set_row(session_id, root, str(item.get("goal_id") or ""),
+                     str(item.get("row_id") or ""), status="building",
+                     question="")
+            parts.append(
+                "The user reopened a row you had already marked DONE: your"
+                " work on it did not satisfy them. Read what they said, fix"
+                " it, and print the DONE marker again when it is right.\n"
+                + json.dumps({"id": item.get("row_id"),
+                              "reopened": item.get("text")}))
     body = "\n\n".join(p for p in parts if p.strip())
     if not body:
         return ""
@@ -792,6 +813,82 @@ def answer(session_id: str, root: Optional[Path], goal_id: str,
                  question="(could not resume the build: %s)" % str(exc)[:60])
         return {"ok": False, "error": str(exc)[:200]}
     return {"ok": True, "resumed": True, "row": row_id}
+
+
+# ---------------------------------------------------------------- reopening
+#
+# A row comes back done and the reader disagrees: "no, you did a bad job".
+# Reopening is not a second Build of the same row -- it is the same row, on
+# its next run, told what was wrong with the last one. The run that ended
+# keeps its verdict and the reader's note in the row's `history`, which is
+# what the rail stacks under the row and what compose_prompt reads back out.
+#
+# Where the note goes depends on what is still around: the session that did
+# run 1 is resumed with it where it can be, since it is the only thing that
+# knows what it actually wrote; failing that a fresh run opens on a prompt
+# carrying the whole history.
+
+REOPENABLE = ("done",)
+
+
+def reopen(session_id: str, root: Optional[Path], goal_id: str,
+           row_id: str, note: str) -> Dict[str, Any]:
+    """Send a finished row back out with what the reader says went wrong."""
+    note = " ".join(str(note or "").split())
+    if not note:
+        return {"ok": False, "error": "say what went wrong first"}
+    live = _run_for(session_id, root, goal_id)
+    if live and live.alive():
+        return {"ok": False, "error": "the build is still running"}
+    session_mode = mode() == "session"
+    with CS.session_lock(session_id, root, wait_s=5):
+        goals, important = CS.load_goals(session_id, root)
+        goal = GM.by_id(goals, goal_id)
+        if not goal:
+            return {"ok": False, "error": "goal not found"}
+        items = goal.get("todo_items") or []
+        row = next((r for r in items if r.get("id") == row_id), None)
+        if row is None:
+            return {"ok": False, "error": "that TODO is not on this goal"}
+        if row.get("status") not in REOPENABLE:
+            return {"ok": False, "error": "only a finished TODO can be reopened"}
+        history = GM.normalize_history(row.get("history"))
+        history.append({"state": row["status"], "note": note})
+        row["history"] = history[-GM.MAX_HISTORY:]
+        row["status"] = "queued" if session_mode else "building"
+        row["question"] = ""
+        # A goal called finished on this row's account is working again.
+        if goal.get("status") in ("active", "completed"):
+            goal["status"] = "in_progress"
+        goal["updated_at"] = GM._now()
+        GM.sanitize(goals)
+        prompts = CS.load_prompts(session_id, root)
+        rows = picked_with_children(items, [row_id])
+        prompt = compose_prompt(session_id, goals, important, prompts, goal, rows)
+        if not CS.save_goals(session_id, goals, important, root):
+            return {"ok": False, "error": "goal state changed; try again"}
+    if session_mode:
+        enqueue(session_id, root, {"kind": "reopen", "goal_id": goal_id,
+                                   "row_id": row_id, "text": note})
+        return {"ok": True, "queued": True, "mode": "session", "row": row_id}
+    record = load_run(session_id, root, goal_id)
+    claude_session = (record or {}).get("claude_session_id")
+    resume = bool(claude_session)
+    run = Run(session_id, root, goal_id,
+              str((record or {}).get("cwd") or _cwd_for(session_id, root)),
+              str(claude_session or uuid.uuid4()))
+    try:
+        run.spawn(json.dumps({"id": row_id, "reopened": note}) if resume
+                  else prompt, resume=resume)
+    except (FileNotFoundError, OSError) as exc:
+        # Back to done, with the note still on the record: nothing is lost
+        # and the reader can try again.
+        _set_row(session_id, root, goal_id, row_id, status="done", question="")
+        return {"ok": False, "error": str(exc)[:200]}
+    with _RUNS_GUARD:
+        _RUNS[f"{session_id}:{goal_id}"] = run
+    return {"ok": True, "reopened": True, "resumed": resume, "row": row_id,
+            "run": len(GM.normalize_history(row.get("history"))) + 1}
 
 
 # ------------------------------------------------------------ pulling back
