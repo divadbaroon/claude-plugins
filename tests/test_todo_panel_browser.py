@@ -695,6 +695,12 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
     def test_picked_rows_build_ask_and_finish_on_the_answer(self):
         self.skipTest("headless-only")
 
+    def test_build_starts_the_build_without_asking_first(self):
+        # In session mode a build is queued for the connected session's next
+        # turn, so "needs you" -- the stub's question -- never comes on its
+        # own; the session-mode path is covered by the queued/building test.
+        self.skipTest("headless-only")
+
     def test_one_cmd_enter_builds_the_sole_row_and_the_page_stays(self):
         self.skipTest("headless-only")
 

@@ -7729,7 +7729,12 @@
   // Answers whether it handed anything over, which is what a test can check
   // without unloading a page.
   function todoFlushOnExit() {
-    if (!todoSaveTimer && !promptSaveTimer) return false;
+    // Only the rows: the Prompt tab is read, not typed into, since the
+    // prompt became the assembled string itself -- so there is no second
+    // field with a timer of its own to flush. (There was; a call to its
+    // old flush from here threw on every unload, and the rows it was
+    // meant to carry out went with the page.)
+    if (!todoSaveTimer) return false;
     // A read-only workspace refuses every write, and leaving one is not the
     // exception -- post() stops the ordinary path here and this is the same
     // path by another route.
@@ -7737,8 +7742,6 @@
         && document.documentElement.getAttribute("data-hc-readonly") !== null) {
       return false;
     }
-    // Both fields debounce into the same store, so one post carries them.
-    promptSaveNow();
     todoSaveNow();
     var synced = readSync();
     if (!synced) return false;
