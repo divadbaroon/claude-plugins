@@ -4724,41 +4724,54 @@ class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
 
     def test_what_sits_under_the_tab_strip_is_measured_from_it(self):
-        # Six offsets describe one geometry: header 37, tabs 32, pills 42.
-        # Growing the tab row without moving all of them puts the page
-        # either under the bars or a gap below them, and only one of those
-        # is visible in a screenshot.
+        # One geometry: header 37, then a 32px strip holding the view tabs
+        # on the left and the filter counts on the right. The counts used
+        # to take a 42px row of their own under the tabs; now they take no
+        # height, and everything below is measured from the strip's foot.
         css = self.run_js("window.__hcPromptUI.launchCss();")
-        head, tabs, pills = 37, 32, 42
+        head, tabs = 37, 32
         self.assertIn(".hc-viewtabs{position:fixed;top:%dpx;" % head, css)
         self.assertIn("height:%dpx;padding:0 24px;box-sizing:border-box;"
                       "background:var(--bg)" % tabs, css)
         self.assertIn(".hc-viewtab{cursor:pointer;user-select:none;"
                       "font:600 11px", css)
         self.assertIn("color:var(--fnt);height:%dpx;display:flex;" % tabs, css)
-        self.assertIn(".hc-pillbar{position:fixed;top:%dpx;" % (head + tabs), css)
-        self.assertIn("height:%dpx;padding:0 24px" % pills, css)
+        # The counts sit in the tab row, pinned to its right edge, as words
+        # with no box around them.
+        self.assertIn(".hc-pillbar{position:fixed;top:%dpx;right:24px;" % head, css)
+        self.assertIn("height:%dpx;padding:0;box-sizing:border-box}" % tabs, css)
+        self.assertIn(".hc-pillbar .hc-chip{padding:0!important;border:0!important;",
+                      css)
         self.assertIn("[data-hc-launch][data-hc-viewtabs]{--hc-top:%dpx}"
-                      % (head + tabs + pills), css)
-        # The overview takes the pills down, so it starts one row higher.
+                      % (head + tabs), css)
+        # The overview starts at the same height: there is no second row
+        # for it to be spared.
         self.assertIn("[data-hc-launch][data-hc-viewtabs][data-hc-overview]"
                       "{--hc-top:%dpx}" % (head + tabs), css)
-        # The goals column clears both bars, which is --hc-top less the
+        # The goals column clears the strip, which is --hc-top less the
         # header the artifact draws itself.
         self.assertIn("[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2)"
-                      "{padding-top:%dpx!important}" % (tabs + pills), css)
+                      "{padding-top:%dpx!important}" % tabs, css)
         # And again with the notice bar (34) above everything.
         self.assertIn("[data-hc-launch][data-hc-notice] .hc-viewtabs"
                       "{top:%dpx}" % (head + 34), css)
         self.assertIn("[data-hc-launch][data-hc-notice] .hc-pillbar"
-                      "{top:%dpx}" % (head + 34 + tabs), css)
+                      "{top:%dpx}" % (head + 34), css)
         self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
-                      "{--hc-top:%dpx}" % (head + 34 + tabs + pills), css)
+                      "{--hc-top:%dpx}" % (head + 34 + tabs), css)
         self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
                       "[data-hc-overview]{--hc-top:%dpx}" % (head + 34 + tabs), css)
         self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
                       " .hc>div:nth-child(2){padding-top:%dpx!important}"
-                      % (34 + tabs + pills), css)
+                      % (34 + tabs), css)
+
+    def test_the_stamp_is_a_tick_that_leads_the_header_tools(self):
+        # The header used to end in a clock that changed every minute. It
+        # now opens the right-hand group with "saved" and a tick, and keeps
+        # the time as the stamp's title for whoever wants it.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-updated{order:-2;color:var(--fnt)", css)
+        self.assertIn(".hc-panels{order:-1;", css)
 
     def test_the_rail_toggles_stand_down_on_the_overview(self):
         # They arrange the goals page. On the overview there is no rail to

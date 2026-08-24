@@ -6387,7 +6387,11 @@
       "[data-hc-launch] .hc-analyzing[data-hc-mood=\"done\"]::before{content:'\\25cf';color:var(--hc-ok)}",
       "[data-hc-launch] .hc-analyzing[data-hc-mood=\"bad\"]{color:var(--del,#a12d2d)}",
       "[data-hc-launch] .hc-session:not(:empty)::before{content:'\\25cf';color:var(--hc-ok);margin-right:6px;font-size:9px;vertical-align:1px}",
-      "[data-hc-launch] .hc-updated{color:var(--fnt)}",
+      // "saved" and a tick, ahead of the rail toggles: the stamp is the
+      // header's first word on the right, and the time it stands for is
+      // its title. A clock in the header changed every minute and said
+      // nothing the tick does not.
+      "[data-hc-launch] .hc-updated{order:-2;color:var(--fnt);margin-right:4px}",
       // The title row loses the page heading -- a chat workspace has one
       // page, already named in the header -- and its status pills move up
       // INTO the header, so the row itself takes no height. The row is not
@@ -6417,20 +6421,25 @@
       // once you had already arrived.
       "[data-hc-launch] .hc-viewtabs{position:fixed;top:37px;left:0;right:0;z-index:19;display:flex;gap:22px;align-items:stretch;height:32px;padding:0 24px;box-sizing:border-box;background:var(--bg);border-bottom:1px solid var(--bd)}",
       "[data-hc-launch][data-hc-notice] .hc-viewtabs{top:71px}",
-      // The strip is two rows: tabs (32) then the filter pills (42). The
-      // layout below is measured from --hc-top, so it grows by both.
-      "[data-hc-launch] .hc-pillbar{position:fixed;top:69px;left:0;right:0;z-index:19;display:flex;gap:12px;align-items:center;height:42px;padding:0 24px;box-sizing:border-box;background:var(--bg);border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch][data-hc-notice] .hc-pillbar{top:103px}",
+      // One strip, not two: the tabs say which view on the left and the
+      // counts say how much of it on the right of the same 32px row. The
+      // counts used to take a 42px row of bordered pills under the tabs;
+      // as words in the tab row they cost no height, and the layout below
+      // is measured from --hc-top, so it climbs by that row.
+      "[data-hc-launch] .hc-pillbar{position:fixed;top:37px;right:24px;z-index:20;display:flex;gap:12px;align-items:center;height:32px;padding:0;box-sizing:border-box}",
+      "[data-hc-launch][data-hc-notice] .hc-pillbar{top:71px}",
       "[data-hc-launch] .hc-pillbar[data-hc-hidden]{display:none}",
-      "[data-hc-launch] .hc-pillbar .hc-chiprow{margin:0!important;gap:10px!important;flex-wrap:nowrap!important}",
-      "[data-hc-launch] .hc-pillbar .hc-chip{padding:5px 15px!important;border:1px solid var(--bd2)!important;border-radius:999px!important;letter-spacing:.4px}",
-      "[data-hc-launch][data-hc-viewtabs]{--hc-top:111px}",
+      "[data-hc-launch] .hc-pillbar .hc-chiprow{margin:0!important;gap:22px!important;flex-wrap:nowrap!important}",
+      // Words, not pills: no box around a count, and the one in force is
+      // the bold one -- the artifact's own mark for it.
+      "[data-hc-launch] .hc-pillbar .hc-chip{padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;letter-spacing:.4px}",
+      "[data-hc-launch][data-hc-viewtabs]{--hc-top:69px}",
       "[data-hc-launch][data-hc-viewtabs] .hc>div:first-child{height:37px}",
-      "[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:74px!important}",
+      "[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:32px!important}",
       "[data-hc-launch][data-hc-viewtabs][data-hc-overview]{--hc-top:69px}",
-      "[data-hc-launch][data-hc-notice][data-hc-viewtabs]{--hc-top:145px}",
+      "[data-hc-launch][data-hc-notice][data-hc-viewtabs]{--hc-top:103px}",
       "[data-hc-launch][data-hc-notice][data-hc-viewtabs][data-hc-overview]{--hc-top:103px}",
-      "[data-hc-launch][data-hc-notice][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:108px!important}",
+      "[data-hc-launch][data-hc-notice][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:66px!important}",
       // One tab row, not two: the overview's own is redundant now.
       "[data-hc-launch] .hc-overview-tabs{display:none!important}",
       // With the duplicate gone the card would sit against the pillbar's
@@ -6438,7 +6447,7 @@
       "[data-hc-launch] .hc-overview{padding-top:22px}",
       "[data-hc-launch] .hc-viewtab{cursor:pointer;user-select:none;font:600 11px 'Source Code Pro',monospace;letter-spacing:1.3px;text-transform:uppercase;color:var(--fnt);height:32px;display:flex;align-items:center;border-bottom:2px solid transparent;margin-bottom:-1px}",
       "[data-hc-launch] .hc-viewtab:hover{color:var(--ink)}",
-      "[data-hc-launch] .hc-viewtab[data-hc-on]{color:var(--ink);border-bottom-color:var(--acc)}",
+      "[data-hc-launch] .hc-viewtab[data-hc-on]{color:var(--ink);border-bottom-color:var(--ink)}",
       "[data-hc-launch] .hc-chiprow{gap:6px!important}",
       "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
       "[data-hc-launch] .hc-chip:hover{border-color:var(--bd2);text-decoration:none!important}",
@@ -10800,7 +10809,7 @@
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">saved {{ updatedLabel }}</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\" title=\"saved {{ updatedLabel }}\">saved \u2713</span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
