@@ -9,6 +9,7 @@ beside it that answers a question from that one document alone. The node
 harness from test_goal_ui_bridge holds that contract.
 """
 import json
+import time
 import unittest
 
 from test_goal_ui_bridge import BridgeTestCase, NODE, STATE
@@ -26,6 +27,11 @@ def chat_state(project=True):
     return state
 
 
+# Two days before whenever the suite runs, not a fixed instant: the picker
+# renders "2d ago" against the clock, and a frozen epoch means the label the
+# test asserts changes by itself overnight.
+TWO_DAYS_AGO = int(time.time()) - 2 * 86400
+
 CHATS = {"ok": True,
          "linked": [{"session_id": "aaaaaaaa-1111-4111-8111-111111111111",
                      "label": "twin"},
@@ -34,15 +40,15 @@ CHATS = {"ok": True,
          "available": [
              {"session_id": "aaaaaaaa-1111-4111-8111-111111111111",
               "project": "myrepo", "cwd": "/Users/me/work/myrepo",
-              "mtime": 1787280000, "size": 10},
+              "mtime": TWO_DAYS_AGO, "size": 10},
              {"session_id": "bbbbbbbb-2222-4222-8222-222222222222",
               "project": "myrepo", "cwd": "/Users/me/work/myrepo",
-              "mtime": 1787280000, "size": 10},
+              "mtime": TWO_DAYS_AGO, "size": 10},
              {"session_id": "cccccccc-3333-4333-8333-333333333333",
               "project": "other", "cwd": "/Users/me/work/other",
-              "mtime": 1787280000, "size": 10},
+              "mtime": TWO_DAYS_AGO, "size": 10},
              {"session_id": "dddddddd-4444-4444-8444-444444444444",
-              "project": "myrepo", "cwd": "", "mtime": 1787280000, "size": 10}]}
+              "project": "myrepo", "cwd": "", "mtime": TWO_DAYS_AGO, "size": 10}]}
 
 # The fetch the harness ships answers every GET alike; these tests answer
 # the project's routes with what the server would say.
@@ -576,8 +582,10 @@ class ProjectMenuTests(BridgeTestCase):
             "JSON.stringify(window.__hcPromptUI.projectChatsOf(%s, {cwd: '/Users/me/work/myrepo'}));"
             % json.dumps(CHATS)))
         self.assertEqual([
-            {"session_id": "aaaaaaaa-1111-4111-8111-111111111111", "mtime": 1787280000, "linked": True},
-            {"session_id": "bbbbbbbb-2222-4222-8222-222222222222", "mtime": 1787280000, "linked": False},
+            {"session_id": "aaaaaaaa-1111-4111-8111-111111111111",
+             "mtime": TWO_DAYS_AGO, "linked": True},
+            {"session_id": "bbbbbbbb-2222-4222-8222-222222222222",
+             "mtime": TWO_DAYS_AGO, "linked": False},
         ], got)
 
 

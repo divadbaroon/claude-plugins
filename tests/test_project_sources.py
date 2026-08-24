@@ -439,10 +439,13 @@ class InheritedSourceTests(BridgeTestCase):
     """
 
     def rail(self, tail, state=None):
+        # Every tail here is a function body -- it opens with `return` --
+        # so it needs a function to be in. Spliced at the top level it is
+        # an illegal return, and the whole class fails before it draws.
         return json.loads(self.run_js(
             PRELUDE + fetch_js() + RAIL
             + "P.acceptState(%s);" % json.dumps(state or state_with())
-            + tail))
+            + "(function () {" + tail + "})();"))
 
     def test_the_rail_carries_the_repository_and_everything_attached_to_it(self):
         got = self.rail(

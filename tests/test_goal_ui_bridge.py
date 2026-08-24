@@ -52,10 +52,17 @@ function El(tag) {
   // document-level sweep has always taken as a comma-separated list.
   this.matches = (child, sel) => {
     const text = String(sel || "").trim();
-    const attr = /^\[([^\]=]+)(?:=\"([^\"]*)\")?\]$/.exec(text);
+    // Either quote, or none: the page writes [data-hc-notice='x'] in one
+    // place and [data-hc-sb="url"] in another, and a matcher that knows
+    // only one of them silently finds nothing -- which reads as a control
+    // that does not work rather than a selector that was not understood.
+    const attr = /^\[([^\]=]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]$/
+      .exec(text);
     if (attr) {
       const got = child.getAttribute(attr[1]);
-      return got !== null && (attr[2] === undefined || got === attr[2]);
+      const want = attr[2] !== undefined ? attr[2]
+        : attr[3] !== undefined ? attr[3] : attr[4];
+      return got !== null && (want === undefined || got === want);
     }
     if (text.startsWith(".")) {
       return String(child.className).split(" ").includes(text.slice(1));
@@ -4847,11 +4854,23 @@ class LaunchSkinTests(BridgeTestCase):
 
     def test_every_rule_in_the_sheet_is_gated_on_the_root_attribute(self):
         css = self.run_js("window.__hcPromptUI.launchCss();")
-        rules = [rule for rule in css.split("}") if rule.strip()]
+        # A @keyframes block is not a selector and cannot dress anything on
+        # its own: it applies only where an animation names it, and those
+        # declarations are rules like any other, gated below. Its steps
+        # ("0%,100%{...}") would otherwise read as ungated rules.
+        frames = re.compile(r"@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}")
+        selectors = frames.sub("", css)
+        rules = [rule for rule in selectors.split("}") if rule.strip()]
         self.assertTrue(rules)
         stray = [rule for rule in rules
                  if not rule.lstrip().startswith("[data-hc-launch]")]
         self.assertEqual([], stray)
+        # And the animation is only ever reached from a gated rule.
+        for name in re.findall(r"@keyframes\s+([\w-]+)", css):
+            for line in css.split("}"):
+                if name in line and "@keyframes" not in line:
+                    self.assertTrue(line.lstrip().startswith("[data-hc-launch]"),
+                                    "%s is used by an ungated rule" % name)
 
     def test_the_workspace_is_full_bleed(self):
         # The columns meet the window on every side and each other on one
