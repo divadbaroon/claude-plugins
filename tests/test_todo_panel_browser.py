@@ -248,6 +248,52 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_the_dash_holds_its_line_on_a_row_with_nothing_typed_in_it_yet(self):
+        # A row with no words has no line box of its own, so the row's
+        # baseline alignment falls back to the empty box's bottom edge: the
+        # dash drops most of a line and the caret sits above it, off to one
+        # side of the gutter it belongs beside. The line's zero-width strut
+        # is what holds them level, and nothing else in the suite would
+        # notice if it went: the rows would still read and save correctly.
+        from playwright.sync_api import sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                # The caret is where the first character will be drawn, so a
+                # throwaway glyph in the empty line stands in for it: measure
+                # where it lands, then take it back out.
+                geometry = """() => {
+                  const row = document.querySelector('.hc-todo-row');
+                  const dash = row.querySelector('.hc-todo-dash');
+                  const line = row.querySelector('.hc-todo-line');
+                  if (line.textContent !== '') throw new Error('row not empty');
+                  const probe = document.createElement('span');
+                  probe.textContent = 'X';
+                  line.appendChild(probe);
+                  const at = probe.getBoundingClientRect();
+                  probe.remove();
+                  const d = dash.getBoundingClientRect();
+                  const l = line.getBoundingClientRect();
+                  return {drop: +(d.top - l.top).toFixed(2),
+                          caretLeft: +(at.left - l.left).toFixed(2),
+                          height: +row.getBoundingClientRect().height.toFixed(2)};
+                }"""
+                seen = page.evaluate(geometry)
+                self.assertEqual(0, seen["drop"],
+                                 "the dash sits on the empty line's own first"
+                                 " line, not half a line under it: " + str(seen))
+                self.assertEqual(0, seen["caretLeft"],
+                                 "the caret opens at the line's left edge, so"
+                                 " the strut takes no width: " + str(seen))
+                # One line tall: 22.8px of line box inside 2px of padding
+                # either side. A strut that took a line of its own would
+                # make the row twice this.
+                self.assertLess(seen["height"], 28, str(seen))
+            finally:
+                browser.close()
+
     def test_a_pasted_list_lands_as_one_row_per_bullet(self):
         from playwright.sync_api import sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:
