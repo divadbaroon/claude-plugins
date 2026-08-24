@@ -289,14 +289,19 @@ class ProjectMenuTests(BridgeTestCase):
             "  click(menu.querySelector('.hc-project-browse'));"
             "  return later(function () {"
             "    var field = menu.querySelector('.hc-project-newname');"
+            "    var seat = menu.querySelector('.hc-project-parent');"
             "    return JSON.stringify(["
             "      calls.filter(function (c) { return c[1] && c[1].op === 'pick_directory'; })"
             "        .map(function (c) { return c[1].start; }),"
-            "      field.value, menu.querySelector('.hc-project-say').textContent]); }); });"))
-        # The dialog opens where the reader already is, and the chosen
-        # directory is both what the box holds and what the line reports.
-        self.assertEqual([["/Users/me/work/myrepo"], "/Users/me/work/picked",
-                          "/Users/me/work/picked"], got)
+            "      field.value, seat.getAttribute('data-hc-cwd'),"
+            "      deepText(seat)]); }); });"))
+        # The dialog opens where the reader already is, and what comes back
+        # is where the project will be *made* -- the name box is left for
+        # the name. A path typed there still adopts that directory; that is
+        # a different thing, and this button no longer does it.
+        self.assertEqual([["/Users/me/work/myrepo"], "",
+                          "/Users/me/work/picked",
+                          "in /Users/me/work/picked"], got)
 
     def test_closing_the_dialog_leaves_what_was_typed_alone(self):
         got = json.loads(self.run_js(
@@ -958,3 +963,50 @@ class ThemeTests(BridgeTestCase):
             + "var again = P.watchTheme();"
             + "JSON.stringify([first, again, seen]);"))
         self.assertEqual([True, False, [["html", True, ["data-dark"]]]], got)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NewProjectParentTests(BridgeTestCase):
+    """A name, and where the folder for it goes."""
+
+    def form(self, tail):
+        return json.loads(self.run_js(
+            PRELUDE + fetch_js()
+            + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
+            + "click(slot.querySelector('.hc-project-name-text'));"
+            + "later(function () {"
+            + "  var menu = document.querySelector('.hc-project-menu');"
+            + "  click(menu.querySelector('.hc-project-new'));"
+            + "  var name = menu.querySelector('.hc-project-newname');"
+            + "  var seat = menu.querySelector('.hc-project-parent');"
+            + tail + " });"))
+
+    def test_the_chosen_parent_is_sent_with_the_name(self):
+        got = self.form(
+            "seat.setAttribute('data-hc-cwd', '/Users/me/Projects');"
+            "name.value = 'Engelbart';"
+            "click(menu.querySelector('[data-hc-project-add]'));"
+            "return later(function () { return JSON.stringify("
+            "  calls.filter(function (c) { return c[1] && c[1].op === 'new_project'; })"
+            "    .map(function (c) { return [c[1].name, c[1].parent]; })); });")
+        self.assertEqual([["Engelbart", "/Users/me/Projects"]], got)
+
+    def test_with_no_parent_chosen_the_server_decides_where(self):
+        got = self.form(
+            "name.value = 'Engelbart';"
+            "click(menu.querySelector('[data-hc-project-add]'));"
+            "return later(function () { return JSON.stringify("
+            "  calls.filter(function (c) { return c[1] && c[1].op === 'new_project'; })"
+            "    .map(function (c) { return [c[1].name, c[1].parent]; })); });")
+        self.assertEqual([["Engelbart", ""]], got)
+
+    def test_the_parent_is_forgotten_once_the_project_is_made(self):
+        # Otherwise the next project silently lands beside the last one.
+        got = self.form(
+            "seat.setAttribute('data-hc-cwd', '/Users/me/Projects');"
+            "seat.textContent = 'in /Users/me/Projects';"
+            "name.value = 'Engelbart';"
+            "click(menu.querySelector('[data-hc-project-add]'));"
+            "return later(function () { return JSON.stringify("
+            "  [seat.getAttribute('data-hc-cwd'), deepText(seat), name.value]); });")
+        self.assertEqual([None, "", ""], got)

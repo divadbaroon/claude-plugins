@@ -42,6 +42,10 @@ def _goal(row: Dict[str, Any], todos: List[Dict[str, Any]],
         "relevance": str(row.get("relevance") or "core"),
         "relevance_why": str(row.get("relevance_why") or ""),
         "relevance_for": str(row.get("relevance_for") or ""),
+        # Present for shape, and always empty: it is an absolute path on
+        # the machine of whoever made the goal, and a build here would run
+        # in a directory that does not exist on this one.
+        "project_cwd": "",
         "updated_at": row.get("updated_at"),
         "evidence_ids": list(row.get("evidence_ids") or []),
         "sources": [{"id": s.get("local_id") or s.get("id"),

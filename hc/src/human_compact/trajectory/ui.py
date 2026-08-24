@@ -1353,14 +1353,24 @@ def open_project(cwd, trajdir=None):
             root = None
     key = PS._resolved(cwd)
     sessions = PS.project_sessions(root, cwd)
+    fresh = False
     if not sessions:
-        # A project made from a name has a directory and nothing else in it
-        # yet. A workspace serves one chat's goals, so there is none to open
-        # -- and the way to get one is to work there, which is worth saying
-        # with the directory in it rather than as a bare refusal.
-        return {"ok": False, "cwd": str(cwd),
-                "error": "nothing has been worked on there yet — "
-                         "run claude in " + str(cwd)}
+        # A project nobody has worked in has no chat, and a workspace serves
+        # one chat's goals. This used to refuse and say "run claude there",
+        # which made creating a project a dead end: the reader clicked the
+        # thing they had just made and was told to go elsewhere. Make the
+        # workspace instead. It is empty, which is what a new project is.
+        where = Path(str(cwd)).expanduser()
+        if not where.is_dir():
+            return {"ok": False, "cwd": str(cwd),
+                    "error": "that directory is not there any more"}
+        try:
+            sessions = [CS.open_workspace_for(where, root)]
+            fresh = True
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "cwd": str(cwd),
+                    "error": "could not start a workspace there: "
+                             + str(exc)[:120]}
     session_id = sessions[-1]
     with _SHARED_GUARD:
         held = _PROJECT_SERVERS.get(key)
@@ -1373,7 +1383,7 @@ def open_project(cwd, trajdir=None):
         started["session_id"] = session_id
         _PROJECT_SERVERS[key] = started
         return {"ok": True, "url": started["url"], "already": False,
-                "session_id": session_id}
+                "session_id": session_id, "fresh": fresh}
 
 
 def _serve_session(session_id, root, port=8870):
@@ -1535,7 +1545,7 @@ def clone_project(url, name="", root=None):
     return _made(root, str(home), text, cloned=address)
 
 
-def new_project(name, cwd=None, root=None, repo=None):
+def new_project(name, cwd=None, root=None, repo=None, parent=None):
     """Make a project: from a name, from a repository, or from a directory
     that already exists.
 
@@ -1566,6 +1576,15 @@ def new_project(name, cwd=None, root=None, repo=None):
         taken = PS.project_named(root, text)
         if taken:
             return _taken(taken)
+        # A parent the reader chose is where they want the project to live;
+        # the vault is only where one goes when nobody said.
+        seat = str(parent or "").strip()
+        if seat:
+            where = PS.create_under(root, seat, text)
+            if not where:
+                return {"ok": False,
+                        "error": "could not make " + text + " in " + seat}
+            return _made(root, where, text)
         where = PS.create_named(root, text)
         if not where:
             return {"ok": False, "error": "give the project a name"}
@@ -2008,7 +2027,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             except Exception:                                # noqa: BLE001
                 root = None
             return new_project(op.get("name"), op.get("cwd"), root,
-                               op.get("repo"))
+                               op.get("repo"), op.get("parent"))
         if kind == "project_setup":
             # The two questions a project that has never been worked in is
             # asked, answered against that project rather than this one: it
@@ -2359,9 +2378,22 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             if parent and not GM.by_id(goals, parent):
                 return {"ok": False, "error": "parent not found"}
             gid = GM.next_goal_id(goals)
+            # Which project this goal's work belongs to. A subgoal takes it
+            # from the goal above it; a root goal takes what the page said,
+            # and says nothing when the project is the one this chat was
+            # started in -- the ordinary case, and the one that must stay
+            # empty so a moved chat still builds where it now lives.
+            where = ""
+            if parent:
+                where = str(GM.by_id(goals, parent).get("project_cwd") or "")
+            else:
+                asked = str(op.get("project_cwd") or "").strip()
+                here = _project_identity(trajdir, chat_scoped, session_id)
+                if asked and asked != str(here.get("cwd") or ""):
+                    where = asked
             goals["goals"].append(GM.new_goal(
                 gid, (op.get("title") or "Untitled").strip()[:120], parent,
-                origin="user"))
+                origin="user", project_cwd=where))
         else:
             # Two different failures used to wear one message. "Unknown" is
             # an operation this build has never had -- most often a page
@@ -3406,6 +3438,7 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "relevance": prev.get("relevance", "core"),
                         "relevance_why": prev.get("relevance_why", ""),
                         "relevance_for": prev.get("relevance_for", ""),
+                        "project_cwd": prev.get("project_cwd", ""),
                         "opening": prev.get("opening", ""),
                         "auto_prompt_ids": prev.get("auto_prompt_ids", []),
                         "detached_prompt_ids": prev.get("detached_prompt_ids", []),

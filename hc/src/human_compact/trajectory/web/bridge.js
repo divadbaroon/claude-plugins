@@ -2974,6 +2974,8 @@
       ".hc-project-new:hover{color:var(--ink,#111)}",
       ".hc-project-newform{display:none;flex-wrap:wrap;gap:8px;align-items:center;padding:0 14px 10px}",
       ".hc-project-newform[data-hc-on]{display:flex}",
+      ".hc-project-parent{font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
+      ".hc-project-parent:empty{display:none}",
       ".hc-project-browse{flex:1 0 100%;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:10.5px}",
       ".hc-project-browse:hover{color:var(--ink,#111)}",
       ".hc-project-newname{flex:1 1 auto;min-width:0;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:5px 7px}",
@@ -3394,10 +3396,16 @@
     // own folder chooser opens under this line, and what comes back is
     // dropped in the box above as ordinary text -- still readable, still
     // editable, and nothing is made of it until "Add".
-    var browse = el("div", "hc-project-browse", "Choose a folder…");
+    var browse = el("div", "hc-project-browse", "Choose where it goes…");
     browse.setAttribute("role", "button");
     browse.setAttribute("data-hc-project-browse", "");
     form.appendChild(browse);
+    // Where the folder will be made. Empty means the vault, which is where
+    // a project goes when nobody has said -- fine for somewhere to keep an
+    // objective, wrong for anything anybody will open an editor on.
+    var seat = el("div", "hc-project-parent", "");
+    seat.setAttribute("data-hc-project-parent", "");
+    form.appendChild(seat);
     box.appendChild(form);
     var say = el("div", "hc-project-say", "");
     say.setAttribute("data-hc-project-say", "");
@@ -3525,11 +3533,14 @@
           return;
         }
         if (result.cancelled) { projectSay(""); return; }
-        if (field) {
-          field.value = str(result.cwd);
-          if (field.focus) field.focus();
+        var seat = projectMenuBox
+          && projectMenuBox.querySelector("[data-hc-project-parent]");
+        if (seat) {
+          seat.setAttribute("data-hc-cwd", str(result.cwd));
+          seat.textContent = "in " + str(result.cwd);
         }
-        projectSay(str(result.cwd));
+        if (field && field.focus) field.focus();
+        projectSay("");
       })
       .catch(function () { projectSay("could not open the chooser", true); });
     return true;
@@ -3642,7 +3653,10 @@
     if (!typed && !repo) { projectSay("type a name first", true); return false; }
     var cloning = !!repo || REPO_TEXT.test(typed);
     projectSay(cloning ? "cloning…" : "adding…");
-    post({ op: "new_project", name: typed, repo: repo }).then(function (result) {
+    var seat = projectMenuBox.querySelector("[data-hc-project-parent]");
+    var parent = seat ? str(seat.getAttribute("data-hc-cwd")) : "";
+    post({ op: "new_project", name: typed, repo: repo,
+           parent: parent }).then(function (result) {
       if (!result || !result.ok) {
         projectSay(staleSay(result) || (result && result.error)
                    || "could not add it", true);
@@ -3657,6 +3671,7 @@
       }
       if (field) field.value = "";
       if (repoField) repoField.value = "";
+      if (seat) { seat.removeAttribute("data-hc-cwd"); seat.textContent = ""; }
       projectSay((result.cloned ? "cloned " : "added ") + str(result.name));
       loadProjects();
       // A project with nothing in it is asked what it is for, here, while

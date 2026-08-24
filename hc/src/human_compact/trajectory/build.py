@@ -1043,7 +1043,42 @@ def _pop_later(session_id: str, root: Optional[Path], goal_id: str) -> List[str]
     return ids
 
 
-def _cwd_for(session_id: str, root: Optional[Path]) -> str:
+def _goal_cwd(goals, goal_id) -> str:
+    """The directory a goal's work belongs in, inherited from above it.
+
+    A goal made under another project carries that project's directory; a
+    subgoal of it carries none of its own and belongs to the same place, so
+    the answer is the nearest one on the way up. Empty means the ordinary
+    case: the project this chat was started in.
+    """
+    seen = set()
+    at = str(goal_id or "")
+    while at and at not in seen:
+        seen.add(at)
+        goal = GM.by_id(goals, at)
+        if not goal:
+            return ""
+        here = str(goal.get("project_cwd") or "").strip()
+        if here:
+            return here
+        at = str(goal.get("parent_goal_id") or "")
+    return ""
+
+
+def _cwd_for(session_id: str, root: Optional[Path], goals=None,
+             goal_id: str = "") -> str:
+    """Where a build runs.
+
+    The chat's own directory, unless the goal says otherwise: a project
+    made in the workspace has a directory of its own, and work on its goals
+    belongs there rather than wherever this chat happens to have started.
+    A directory that has gone away is not used -- a build in a path that no
+    longer exists fails in a way nobody can read.
+    """
+    if goals is not None and goal_id:
+        wanted = _goal_cwd(goals, goal_id)
+        if wanted and Path(wanted).expanduser().is_dir():
+            return str(Path(wanted).expanduser())
     manifest = CS.load_manifest(session_id, root)
     cwd = str(manifest.get("cwd") or "").strip()
     if cwd and Path(cwd).is_dir():
@@ -1115,7 +1150,8 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
                                    "row_ids": ids, "prompt": prompt})
         return {"ok": True, "queued": True, "mode": "session", "rows": ids,
                 "prompt": prompt}
-    run = Run(session_id, root, goal_id, _cwd_for(session_id, root),
+    run = Run(session_id, root, goal_id,
+              _cwd_for(session_id, root, goals, goal_id),
               str(uuid.uuid4()))
     # What this build is, for the cost it will report when it ends: the rows
     # picked, and the text they and their children carry.

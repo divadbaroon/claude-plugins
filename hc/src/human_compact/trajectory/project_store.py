@@ -98,6 +98,34 @@ def workspace_home(root: Optional[Path], name) -> Optional[Path]:
     return CS._state_location(root)[1] / "workspaces" / slug
 
 
+def create_under(root: Optional[Path], parent, name) -> Optional[str]:
+    """Make a project's directory inside one the reader chose.
+
+    The vault is where a project goes when nobody said where, not where a
+    project belongs: code kept beside the records is code in a strange
+    place, and the reader who picks a parent has said where they want it.
+    The folder is created -- unlike a path that was typed, which must exist
+    already, because a typo there is a mistake and a picked parent is not.
+    """
+    slug = _slug(name)
+    if not slug:
+        return None
+    try:
+        base = Path(str(parent)).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if not base.is_dir():
+        return None
+    home = base / slug
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    save_project(root, str(home), {"name": " ".join(str(name or "").split())
+                                   [:PROJECT_NAME_LIMIT]})
+    return str(home)
+
+
 def project_named(root: Optional[Path], name) -> Optional[Dict[str, Any]]:
     """The project already called this, if there is one.
 

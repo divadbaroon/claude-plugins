@@ -561,6 +561,11 @@ def new_goal(gid, title, parent_id=None, **fields):
             # verdict outlives the sentence that produced it and a stale one
             # should be visible as stale rather than trusted.
             "relevance": "core", "relevance_why": "", "relevance_for": "",
+            # Which project's directory this goal's work belongs in. Empty
+            # for the ordinary goal, which is about the project the chat was
+            # started in; set when the goal was made under another one, and
+            # then a build of its TODO rows runs there rather than here.
+            "project_cwd": "",
             "origin": "inferred", "updated_at": _now()}
     goal.update(fields)
     return goal
@@ -671,6 +676,7 @@ def sanitize(goals):
             g["relevance"] = "core"
         g["relevance_why"] = str(g.get("relevance_why") or "")[:200]
         g["relevance_for"] = str(g.get("relevance_for") or "")[:2000]
+        g["project_cwd"] = str(g.get("project_cwd") or "")[:1000]
         g.setdefault("evidence_ids", []); g.setdefault("todos", [])
         g.setdefault("important_item_ids", [])
         for key in ("prompt_ids", "auto_prompt_ids", "detached_prompt_ids"):
