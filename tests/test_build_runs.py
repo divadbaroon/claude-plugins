@@ -379,6 +379,13 @@ class ReopenTests(BuildRunTests):
         self.finish()
         run = BUILD._run_for(self.session, self.root, "g1")
         self.assertTrue(self.wait_for(lambda: not run.alive()))
+        # The reader thread writes the record's verdict a beat after the
+        # process is gone; a record removed before that write comes back.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
+            == "idle"))
+        if run.thread is not None:
+            run.thread.join(timeout=5)
         # The record of run 1 is gone -- a restart, an older build.
         BUILD._RUNS.clear()
         BUILD._run_path(self.session, self.root, "g1").unlink()
