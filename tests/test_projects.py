@@ -475,8 +475,10 @@ class ProjectTests(unittest.TestCase):
         stored = list((self.root / "projects").glob("*.json"))
         self.assertEqual(1, len(stored))
         record = json.loads(stored[0].read_text())
-        self.assertEqual("Ship the thing, well.", record["objective"])
-        self.assertEqual(str(self.project), record["cwd"])
+        # In the file's `project` section: the flat shape it was first
+        # written in is migrated on read, not written any more.
+        self.assertEqual("Ship the thing, well.", record["project"]["objective"])
+        self.assertEqual(str(self.project), record["project"]["cwd"])
 
     def test_the_project_can_be_renamed_and_the_directory_is_the_fallback(self):
         # A directory is where a project sits today, not what it is called.

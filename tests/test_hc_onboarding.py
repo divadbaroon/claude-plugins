@@ -19,7 +19,7 @@ PLUGIN_HOOKS = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
 VAULT_HOOK_EVENTS = {"SessionStart", "PreCompact", "PostCompact", "SessionEnd"}
 
 
-CHAT_HOOK = '"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh"'
+CHAT_HOOK = '${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh'
 
 
 def script_of(entry):
@@ -198,10 +198,12 @@ class HcOnboardingTests(unittest.TestCase):
                      for entry in group["hooks"]],
                     entries)
 
-    def test_hook_commands_quote_the_plugin_path(self):
-        # ${CLAUDE_PLUGIN_ROOT} is substituted into a shell command line. An
-        # unquoted install path containing a space would reach chat-hook.sh as
-        # two arguments and run nothing.
+    def test_hook_commands_do_not_quote_the_plugin_path(self):
+        # Claude Code spawns hook commands without a shell, so quotes written
+        # into the command are not syntax but part of the path: posix_spawn
+        # looked for a file literally named '"…/chat-hook.sh"' and found
+        # nothing, and every chat hook -- capture, injection, build status
+        # -- died with it. The path goes bare.
         for name in ("hooks.json", "hooks.experimental.json"):
             hooks = json.loads((PLUGIN_HOOKS / name).read_text())["hooks"]
             for event, groups in hooks.items():

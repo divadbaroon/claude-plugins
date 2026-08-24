@@ -2390,10 +2390,11 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 page.wait_for_selector("text=one goal", timeout=10000)
                 page.wait_for_timeout(1500)
                 g = page.evaluate(self.GEO)
-                # Header, then columns from its bottom edge to the window's.
+                # Header, then the 32px tab strip, then columns from its
+                # bottom edge to the window's.
                 self.assertEqual((0, 0, 1440, 37), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
                 for col in ("l", "m", "rt"):
-                    self.assertEqual(37, round(g[col]["y"]), col)
+                    self.assertEqual(37 + 32, round(g[col]["y"]), col)
                     self.assertEqual(900, round(g[col]["bottom"]), col)
                 # Flush: left rail at 0, main starts where it ends, right
                 # rail ends at the window.

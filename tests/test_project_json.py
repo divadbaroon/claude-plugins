@@ -343,7 +343,9 @@ class ProjectJsonRouteTests(ProjectFixture):
         with server_for(self.trajdir) as url:
             out = get_json(url + "/api/project.json")
         self.assertTrue(out["ok"], out)
-        self.assertEqual(str(path), out["path"])
+        # The route names the file by its real path: on macOS the temp
+        # directory is reached through /var -> /private/var.
+        self.assertEqual(str(path.resolve()), str(Path(out["path"]).resolve()))
         self.assertTrue(out["written"])
         self.assertFalse(out["truncated"])
         # Byte for byte: what a reader opening the file would see.
