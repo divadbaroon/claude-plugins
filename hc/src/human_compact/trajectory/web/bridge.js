@@ -5608,14 +5608,6 @@
     data.className = "hc-settings-sec";
     data.setAttribute("data-hc-settings-sec", "data");
     data.setAttribute("data-hc-tab", "data");
-    var dh = document.createElement("div");
-    dh.className = "hc-settings-sec-head";
-    dh.textContent = "Project record";
-    data.appendChild(dh);
-    var record = document.createElement("div");
-    record.setAttribute("data-hc-record", "");
-    record.appendChild(el("div", "hc-settings-hint", "reading\u2026"));
-    data.appendChild(record);
     // The whole workspace as one markdown file for a teammate's agent: the
     // goal tree, every TODO and note, the prompt. A large thing to put on
     // a clipboard, which is why it is here, under a line that says so, and
@@ -5641,6 +5633,14 @@
     hbtn.appendChild(hsaid);
     hrow.appendChild(hbtn);
     data.appendChild(hrow);
+    var dh = document.createElement("div");
+    dh.className = "hc-settings-sec-head";
+    dh.textContent = "Project record";
+    data.appendChild(dh);
+    var record = document.createElement("div");
+    record.setAttribute("data-hc-record", "");
+    record.appendChild(el("div", "hc-settings-hint", "reading\u2026"));
+    data.appendChild(record);
     box.appendChild(data);
 
     // Joining someone else's project. A code carries where to go as well
