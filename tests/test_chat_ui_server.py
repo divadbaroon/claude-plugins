@@ -67,8 +67,8 @@ def server_for(path, chat_scoped=True):
         thread.join(timeout=2)
 
 
-def get_json(url):
-    with NO_PROXY_OPENER.open(url, timeout=2) as response:
+def get_json(url, timeout=2):
+    with NO_PROXY_OPENER.open(url, timeout=timeout) as response:
         return json.loads(response.read())
 
 

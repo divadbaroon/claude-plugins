@@ -248,7 +248,9 @@ class RouteTests(unittest.TestCase):
 
     def test_a_chat_workspace_hands_off_its_tree_and_its_repository(self):
         with server_for(self.chat) as url:
-            body = get_json(url + "/api/handoff")
+            # git is shelled out to several times on the way; a cold CI
+            # runner has taken longer than the helper's two seconds once.
+            body = get_json(url + "/api/handoff", timeout=20)
         self.assertTrue(body["ok"], body)
         doc = body["markdown"]
         self.assertIn("### Chat goal  `[in progress]`", doc)

@@ -141,6 +141,24 @@ class BuildRunTests(unittest.TestCase):
         os.environ.pop("HC_USE_API_KEY", None)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
+        # Registered last, so it runs first: a run's reader thread writes the
+        # run record and its log until the stub exits, and a temp directory
+        # removed under it is "Directory not empty" on the way out -- the
+        # one failure CI has had in this file, on both platforms.
+        self.addCleanup(self._drain_runs)
+
+    @staticmethod
+    def _drain_runs(seconds=10.0):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            threads = [run.thread for run in list(BUILD._RUNS.values())
+                       if getattr(run, "thread", None) is not None
+                       and run.thread.is_alive()]
+            if not threads:
+                break
+            for thread in threads:
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        BUILD._RUNS.clear()
 
     def rows(self):
         goals, _ = chat_state.load_goals(self.session, self.root)
