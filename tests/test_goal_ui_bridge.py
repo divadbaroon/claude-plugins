@@ -4390,12 +4390,17 @@ class ChatNoticeTests(BridgeTestCase):
     """A goals workspace is a second window on a chat running in a terminal.
 
     The one thing it can say that the terminal cannot is that the terminal is
-    finished. These tests hold what it is allowed to say, and for how long.
+    finished. It says it where a finished TODO is said: a card in the
+    top-right corner, an entry behind the bell, one unread count. These tests
+    hold what it is allowed to say, and for how long.
     """
 
     SID = "7f3a1b2c-4d5e-4f60-8a9b-0c1d2e3f4a5b"
 
     PRELUDE = (
+        "var A = window.__hcPromptUI.alerts;"
+        "var slot = document.createElement('span'); slot.className = 'hc-alerts';"
+        "header.appendChild(slot);"
         "window.__hcPromptUI.acceptState("
         "  { goals: [], prompts: [], scope: %s, session_id: %s });"
         # The first tick of the standing 700ms sweep, which is what names the
@@ -4409,11 +4414,12 @@ class ChatNoticeTests(BridgeTestCase):
         "      relatedTarget: related || null, preventDefault: function () {},"
         "      stopPropagation: function () {} }); }); };"
         "var stack = function () {"
-        "  var node = window.__hcPromptUI.noticeStack();"
+        "  var node = A.stack();"
         "  return node ? node.children : []; };"
         "var drawn = function () { return stack().map(function (n) {"
-        "  var d = n.querySelector('.hc-notice-detail');"
-        "  return [n.className, n.querySelector('.hc-notice-title').textContent,"
+        "  var d = n.querySelector('.hc-alert-detail');"
+        "  return [n.getAttribute('data-hc-alert-kind'),"
+        "          n.querySelector('.hc-alert-title').textContent,"
         "          d ? d.textContent : null]; }); };"
     )
 
@@ -4442,7 +4448,56 @@ class ChatNoticeTests(BridgeTestCase):
             "   detail: 'Explore: found it'}]);"
             "drawn();")
         self.assertEqual(
-            [["hc-notice", "A subagent returned", "Explore: found it"]], out)
+            [["subagent_returned", "A subagent returned", "Explore: found it"]],
+            out)
+
+    def test_a_session_notice_lands_in_the_stack_the_builder_writes_to(self):
+        # The whole point of the change: one corner, one bell, one count.
+        # A reader watching for a build coming back should not have to watch
+        # a second surface for the chat answering.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var e = A.log()[0];"
+            "[A.log().length, A.unread(), e.kind, e.text, e.goalId, e.rowId,"
+            " document.querySelectorAll('.hc-notice').length];")
+        self.assertEqual([1, 1, "session_stopped", "done", "", "", 0], out)
+
+    def test_the_bell_counts_a_chat_answering_with_the_builds(self):
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "A.renderBell();"
+            "var b = slot.querySelector('.hc-bell');"
+            "[b.getAttribute('data-hc-unread'),"
+            " b.querySelector('.hc-bell-count').textContent];")
+        self.assertEqual(["1", "1"], out)
+
+    def test_the_center_lists_it_without_a_goal_line(self):
+        # A turn ending is about the conversation, not about one row of work.
+        # A blank goal line under it would read as a goal named "".
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "A.open();"
+            "var row = A.center().querySelector('.hc-alert-row');"
+            "[row.getAttribute('data-hc-alert-kind'),"
+            " row.querySelector('.hc-alert-detail').textContent,"
+            " !!row.querySelector('.hc-alert-goal')];")
+        self.assertEqual(["session_stopped", "done", False], out)
+
+    def test_clicking_it_reads_it_and_moves_nothing(self):
+        # A build's card takes the reader to the row it reports on. This one
+        # names no row, so following it would drop the reader on a goal the
+        # notice never mentioned.
+        out = self.notices(
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "var moved = null;"
+            "window.__hcSelectGoal = function (id) { moved = id; };"
+            "fire('click', stack()[0].querySelector('.hc-alert-title'));"
+            "[A.unread(), stack().length, moved];")
+        self.assertEqual([0, 0, None], out)
 
     def test_the_same_notice_is_never_shown_twice(self):
         # State is polled every 1.5s and the store keeps twenty rows, so the
@@ -4472,8 +4527,8 @@ class ChatNoticeTests(BridgeTestCase):
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'compacted',"
             "  at: iso(now + 5000), detail: 'whatever'}]);"
-            "stack().length;")
-        self.assertEqual(0, out)
+            "[stack().length, A.log().length];")
+        self.assertEqual([0, 0], out)
 
     def test_every_sentence_it_can_say_is_one_the_hook_proved(self):
         out = self.notices(
@@ -4483,16 +4538,16 @@ class ChatNoticeTests(BridgeTestCase):
             "      at: iso(now + 1000 + i), detail: ''}; }));"
             "drawn();")
         self.assertEqual(
-            [["hc-notice", "Claude finished responding", None],
-             ["hc-notice", "A subagent returned", None],
-             ["hc-notice", "Session ended", None]], out)
+            [["session_stopped", "Claude finished responding", None],
+             ["subagent_returned", "A subagent returned", None],
+             ["session_ended", "Session ended", None]], out)
 
     def test_a_notice_with_nothing_to_add_carries_no_empty_line(self):
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_ended',"
             "  at: iso(now + 5000), detail: ''}]);"
-            "[stack().length, !!stack()[0].querySelector('.hc-notice-detail'),"
-            " !!stack()[0].querySelector('.hc-notice-close')];")
+            "[stack().length, !!stack()[0].querySelector('.hc-alert-detail'),"
+            " !!stack()[0].querySelector('.hc-alert-close')];")
         self.assertEqual([1, False, True], out)
 
     def test_a_global_vault_draws_no_banner(self):
@@ -4500,14 +4555,17 @@ class ChatNoticeTests(BridgeTestCase):
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
             "  at: iso(now + 5000), detail: 'done'}]);"
-            "[window.__hcPromptUI.noticeStack(), document.title];",
+            "[A.stack(), A.log().length, document.title];",
             scope="global")
         # And the sweep that names a chat tab never renames a vault's.
-        self.assertEqual([None, "Goals"], out)
+        self.assertEqual([None, 0, "Goals"], out)
 
-    def test_the_tab_carries_the_mark_only_while_a_notice_stands(self):
+    def test_the_tab_carries_the_mark_until_the_notice_is_read(self):
         # The workspace is usually on a second screen. The tab strip is the
-        # only part of it a reader looking elsewhere can see.
+        # only part of it a reader looking elsewhere can see -- so the mark
+        # follows the unread count, not the six seconds the card is up. A
+        # reader who was looking away for those six seconds is exactly the
+        # reader it is for.
         out = self.notices(
             "var titles = [document.title];"
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
@@ -4515,9 +4573,12 @@ class ChatNoticeTests(BridgeTestCase):
             "titles.push(document.title);"
             "window.fireTimers();"
             "titles.push(document.title);"
+            "A.markAllRead();"
+            "titles.push(document.title);"
             "titles;")
         self.assertEqual(
-            ["Engelbart · 7f3a1b2c", "● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
+            ["Engelbart · 7f3a1b2c", "● Engelbart · 7f3a1b2c",
+             "● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
     def test_a_notice_takes_itself_away(self):
         out = self.notices(
@@ -4530,7 +4591,7 @@ class ChatNoticeTests(BridgeTestCase):
         self.assertEqual([1, 0], out)
 
     def test_reading_it_keeps_it_on_screen(self):
-        # Eight seconds is not long enough to read a line and think about it,
+        # Six seconds is not long enough to read a line and think about it,
         # so the clock stops while the pointer is on it and starts again when
         # it leaves.
         out = self.notices(
@@ -4552,38 +4613,43 @@ class ChatNoticeTests(BridgeTestCase):
             "  at: iso(now + 5000), detail: 'done'}]);"
             "var box = stack()[0];"
             "fire('mouseover', box);"
-            "fire('mouseout', box.querySelector('.hc-notice-title'),"
-            "     box.querySelector('.hc-notice-detail'));"
+            "fire('mouseout', box.querySelector('.hc-alert-title'),"
+            "     box.querySelector('.hc-alert-detail'));"
             "window.fireTimers();"
             "stack().length;",
             defer=True)
         self.assertEqual(1, out)
 
-    def test_the_close_control_dismisses_it(self):
+    def test_the_close_control_dismisses_it_as_read(self):
+        # × on a build's card marks it read and leaves it in the center. The
+        # same control does the same thing here, which is what takes the
+        # mark off the tab.
         out = self.notices(
             "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
             "  at: iso(now + 5000), detail: 'done'}]);"
             "var box = stack()[0];"
-            "fire('click', box.querySelector('.hc-notice-close'));"
-            "[stack().length, document.title];")
-        self.assertEqual([0, "Engelbart · 7f3a1b2c"], out)
+            "fire('click', box.querySelector('.hc-alert-close'));"
+            "[stack().length, A.log().length, A.unread(), document.title];")
+        self.assertEqual([0, 1, 0, "Engelbart · 7f3a1b2c"], out)
 
     def test_a_dismissed_notice_does_not_come_back_on_the_next_poll(self):
         out = self.notices(
             "var row = [{id: 'n1', kind: 'session_stopped',"
             "            at: iso(now + 5000), detail: 'done'}];"
             "window.__hcPromptUI.showNotices(row);"
-            "fire('click', stack()[0].querySelector('.hc-notice-close'));"
+            "fire('click', stack()[0].querySelector('.hc-alert-close'));"
             "window.__hcPromptUI.showNotices(row);"
-            "stack().length;",
+            "[stack().length, A.log().length];",
             defer=True)
-        self.assertEqual(0, out)
+        self.assertEqual([0, 1], out)
 
     def test_a_workspace_whose_server_stopped_says_so_until_one_lands(self):
         # Reopening a workspace that is running older code than the plugin
         # replaces it, which leaves this window pointed at a process that has
         # ended. Nothing else on the page changes when that happens, so
         # silence reads as a page that broke rather than one that closed.
+        # It is said where everything else is said now -- a card in the
+        # corner -- and taken back the moment a server answers again.
         out = self.notices(
             "var alive = false;"
             "fetch = function () { return alive"
@@ -4599,22 +4665,21 @@ class ChatNoticeTests(BridgeTestCase):
             "  .then(function () { seen.push(stack().length); return seen; });")
         self.assertEqual(
             [0, 0,
-             [["hc-notice", "This workspace is no longer running",
+             [["server_gone", "This workspace is no longer running",
                "It was stopped or restarted — the newer one opens in its own "
                "tab. Nothing typed here is being saved."]],
              0],
             out)
 
-    def test_the_banner_is_small_and_drawn_from_the_page_tokens(self):
-        css = self.run_js("window.__hcPromptUI.noticeCss();")
-        self.assertIn("position:fixed", css)
-        self.assertIn("right:", css)
-        self.assertIn("bottom:", css)
-        self.assertIn("320px", css)
-        self.assertIn("11px", css)
-        self.assertIn("monospace", css)
-        for token in ("--panel", "--bd2", "--acc", "--mut", "--ink"):
-            self.assertIn("var(" + token, css)
+    def test_the_banner_setting_governs_it_like_a_build(self):
+        # One switch in the gear panel, not two. Turning banners off still
+        # leaves the entry behind the bell to find later.
+        out = self.notices(
+            "A.setSettings({banners: false});"
+            "window.__hcPromptUI.showNotices([{id: 'n1', kind: 'session_stopped',"
+            "  at: iso(now + 5000), detail: 'done'}]);"
+            "[stack().length, A.log().length, A.unread()];")
+        self.assertEqual([0, 1, 1], out)
 
     def test_junk_in_the_notice_list_is_stepped_over(self):
         # /api/state is a file on disk away from a process that may have been
@@ -4624,8 +4689,8 @@ class ChatNoticeTests(BridgeTestCase):
             "  null, 'nope', {}, {id: 'n1'},"
             "  {id: 'n2', kind: 'session_stopped', at: 'not a date'},"
             "  {id: 'n3', kind: 'session_stopped', at: iso(now + 5000)}]);"
-            "stack().length;")
-        self.assertEqual(1, out)
+            "[stack().length, A.log().length];")
+        self.assertEqual([1, 1], out)
 
     def test_the_tab_is_named_after_the_conversation_it_watches(self):
         # A day with three of these open needs the tab strip to tell them
@@ -4655,7 +4720,7 @@ class ChatNoticeTests(BridgeTestCase):
             "seen;")
         self.assertEqual(["Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
-    def test_a_wipe_while_a_notice_stands_comes_back_marked(self):
+    def test_a_wipe_while_a_notice_is_unread_comes_back_marked(self):
         # The mark is derived from what the tab should say, not remembered
         # from what it did say: putting back the remembered string here would
         # restore the empty title the artifact had just left behind.
@@ -4665,17 +4730,19 @@ class ChatNoticeTests(BridgeTestCase):
             "document.title = '';"
             "window.__hcPromptUI.renderChatSurface();"
             "var marked = document.title;"
-            "window.fireTimers();"
+            "A.markAllRead();"
+            "document.title = '';"
+            "window.__hcPromptUI.renderChatSurface();"
             "[marked, document.title];")
         self.assertEqual(["● Engelbart · 7f3a1b2c", "Engelbart · 7f3a1b2c"], out)
 
-    def test_the_banner_sits_just_above_the_prompt_picker(self):
-        # Both are fixed overlays. A banner under the picker is a banner
-        # nobody can dismiss while choosing a prompt; a banner at the top of
-        # the stacking order covers a modal the reader is working in.
-        css = self.run_js("window.__hcPromptUI.noticeCss();")
+    def test_the_card_sits_above_the_prompt_picker(self):
+        # Both are fixed overlays. A card under the picker is a card nobody
+        # can dismiss while choosing a prompt; one at the top of the stacking
+        # order covers a modal the reader is working in.
+        css = self.run_js("window.__hcPromptUI.alerts.css();")
         dialog = self.run_js("window.__hcPromptUI.dialogCss();")
-        self.assertIn("z-index:100001", css)
+        self.assertIn("z-index:100002", css)
         self.assertIn("z-index:100000", dialog)
 
 
@@ -4691,7 +4758,7 @@ LAUNCH_CLASSES = (
     "hc-rail-none",
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
-    "hc-chip", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-chip", "hc-chip-n", "hc-titlerow", "hc-chiprow", "hc-brand",
     "hc-panels", "hc-session", "hc-chats", "hc-handoff", "hc-alerts",
     "hc-settings", "hc-updated",
     "hc-search", "hc-search-field", "hc-search-glyph", "hc-search-input",

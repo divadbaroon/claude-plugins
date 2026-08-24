@@ -597,6 +597,108 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_done_row_is_clicked_open_and_sent_back_out_with_the_note(self):
+        # "No, you did a bad job." Clicking a finished row -- not hovering it
+        # -- opens the same thread shape Claude's own questions use; the note
+        # sends the row back out on its next run, and the run that ended is
+        # kept under the row so the argument is legible afterwards.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Drop the 2k char cap")
+                page.wait_for_timeout(1200)
+                page.keyboard.press("Meta+Enter")
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("needs you", timeout=10_000)
+                page.locator(".hc-todo-answer").click()
+                page.keyboard.type("src/a.ts")
+                page.keyboard.press("Enter")
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("done", timeout=10_000)
+                row = self.tile(page, "Drop the 2k char cap")
+                struck = "el => getComputedStyle(el).textDecorationLine"
+                self.assertIn("line-through",
+                              row.locator(".hc-todo-line").evaluate(struck))
+                self.assertTrue(self.settled())
+                # Nothing on hover: the row itself is the control.
+                expect(page.locator("[data-hc-todo-reopen]")).to_have_count(0)
+                row.locator(".hc-todo-line").click()
+                expect(page.locator(".hc-todo-question")
+                       ).to_have_text("What went wrong?")
+                expect(row.locator(".hc-todo-status")).to_have_text("reopened")
+                self.assertNotIn("line-through",
+                                 row.locator(".hc-todo-line").evaluate(struck))
+                note = page.locator("[data-hc-todo-reopen]")
+                self.assertEqual("TEXTAREA", note.evaluate("el => el.tagName"))
+                # Escape is second thoughts: the row is done again, untouched.
+                page.keyboard.press("Escape")
+                expect(page.locator("[data-hc-todo-reopen]")).to_have_count(0)
+                self.assertEqual("done", self.rows()[0][2])
+                # Reopened for real: the note goes back into the same session.
+                row.locator(".hc-todo-line").click()
+                page.locator("[data-hc-todo-reopen]").click()
+                page.keyboard.type("truncation still happens in the subagent path")
+                page.keyboard.press("Enter")
+                expect(row.locator(".hc-todo-run").first
+                       ).to_have_text("run 1 · done · reopened", timeout=10_000)
+                expect(row.locator(".hc-todo-run-note").first).to_contain_text(
+                    "truncation still happens in the subagent path")
+                # And it finishes again with its history still under it.
+                expect(row.locator(".hc-todo-status")
+                       ).to_have_text("done · run 2", timeout=10_000)
+                page.wait_for_timeout(600)
+                goals, _ = chat_state.load_goals(self.session, self.root)
+                held = next(r for r in GM.by_id(goals, "g1")["todo_items"]
+                            if r["text"] == "Drop the 2k char cap")
+                self.assertEqual(
+                    [{"state": "done",
+                      "note": "truncation still happens in the subagent path"}],
+                    held.get("history"))
+            finally:
+                browser.close()
+
+    def settled(self):
+        # The build process this page started, ended: a row cannot be
+        # reopened into a session that is still writing.
+        run = BUILD._run_for(self.session, self.root, "g1")
+        for _ in range(200):
+            if run is None or not run.alive():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_the_dash_sits_where_the_caret_does_before_a_character_is_typed(self):
+        # An empty row's text box has no line box of its own, so baseline
+        # alignment falls back to its bottom edge and the gutter dash drops
+        # ~8px -- then jumps back up on the first keystroke. The dash must
+        # sit at the same height empty as it does with text in the row.
+        from playwright.sync_api import sync_playwright
+        measure = """() => {
+          const row = document.querySelector('.hc-todo-row');
+          const dash = row.querySelector('.hc-todo-dash').getBoundingClientRect();
+          const line = row.querySelector('.hc-todo-line').getBoundingClientRect();
+          return {drop: dash.top - line.top, height: row.getBoundingClientRect().height};
+        }"""
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                empty = page.evaluate(measure)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("ship it")
+                typed = page.evaluate(measure)
+                self.assertAlmostEqual(typed["drop"], empty["drop"], delta=0.6,
+                                       msg="the dash moves when the row is typed into")
+                self.assertAlmostEqual(typed["height"], empty["height"], delta=0.6,
+                                       msg="the empty row is taller than a typed one")
+            finally:
+                browser.close()
+
     def test_the_prompt_tab_prints_the_context_the_build_opens_on(self):
         # The tab is the prompt and nothing else: the project, the goal tree
         # and this goal's rows, printed whole rather than assembled out of
@@ -748,6 +850,11 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         self.skipTest("headless-only")
 
     def test_one_cmd_enter_builds_the_sole_row_and_the_page_stays(self):
+        self.skipTest("headless-only")
+
+    def test_a_done_row_is_clicked_open_and_sent_back_out_with_the_note(self):
+        # Nothing here reaches "done" without a build; the session mode's own
+        # reopen is held by test_build_runs.SessionBuildTests.
         self.skipTest("headless-only")
 
     def test_a_build_pressed_mid_save_still_carries_the_row_it_names(self):

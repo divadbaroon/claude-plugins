@@ -240,6 +240,12 @@ _TODO_ID = re.compile(r"^t[0-9a-z]{4,24}$")
 _MARKER = re.compile(r"\[attachment #(\d+)\]")
 MAX_ATTACHMENTS = 20
 
+# A row the reader reopened: the run that ended keeps its verdict and what
+# they said was wrong with it, so the next run can read both and the rail can
+# show the row's runs stacked under it. Entry i is run i+1; the run now
+# happening is len(history)+1. Only ever appended to, and only by the server.
+MAX_HISTORY = 12
+
 
 def normalize_attachments(value) -> list:
     out, seen = [], set()
@@ -257,6 +263,21 @@ def normalize_attachments(value) -> list:
         out.append({"n": n, "path": path,
                     "name": str(item.get("name") or "")[:200]})
         if len(out) >= MAX_ATTACHMENTS:
+            break
+    return out
+
+
+def normalize_history(value) -> list:
+    out = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "")
+        if state not in TODO_STATUSES or not state:
+            continue
+        out.append({"state": state,
+                    "note": str(item.get("note") or "")[:400]})
+        if len(out) >= MAX_HISTORY:
             break
     return out
 
@@ -368,6 +389,9 @@ def normalize_todo_items(value) -> list:
             tokens = 0
         if tokens > 0:
             clean["tokens"] = tokens
+        history = normalize_history(row.get("history"))
+        if history:
+            clean["history"] = history
         out.append(clean)
     ceiling = 0
     for row in out:

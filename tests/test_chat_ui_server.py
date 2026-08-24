@@ -982,11 +982,15 @@ class ChatUiServerTests(unittest.TestCase):
 
     @staticmethod
     def chip_style(page, label):
-        """Weight and colour of one filter chip, as the reader sees them."""
+        """Weight and colour of one filter chip, as the reader sees them.
+
+        The chip is a name and, in its own element, the count: matched on
+        the two together, the way the row reads.
+        """
         return page.evaluate(
             """label => {
-              const el = [...document.querySelectorAll('span')].find(
-                e => !e.children.length && e.textContent.trim() === label);
+              const el = [...document.querySelectorAll('.hc-chip')].find(
+                e => e.textContent.trim() === label);
               if (!el) return null;
               const cs = getComputedStyle(el);
               return { weight: cs.fontWeight, color: cs.color };
@@ -1576,8 +1580,9 @@ class ChatUiServerTests(unittest.TestCase):
                 # What leaves is the assembled prompt itself -- the same
                 # string the tab is printing.
                 copied = page.evaluate("() => navigator.clipboard.readText()")
-                self.assertIn("Objective:\nShip the document pane.", copied)
-                self.assertIn("Decisions:\n- we chose sqlite", copied)
+                # The goal's notes ride in the tree, under the goal, as written.
+                self.assertIn("Ship the document pane.", copied)
+                self.assertIn("- we chose sqlite", copied)
                 context.close()
             finally:
                 browser.close()
@@ -1645,7 +1650,8 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
                 copied = page.evaluate("() => navigator.clipboard.readText()")
-                self.assertIn("Objective:\nShip the document pane.", copied)
+                # The goal's notes ride in the tree, under the goal, as written.
+                self.assertIn("Ship the document pane.", copied)
                 self.assertNotIn("Implement this goal for me.", copied)
                 context.close()
             finally:
@@ -1708,13 +1714,13 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_a_finished_turn_arrives_as_a_bar_under_the_header(self):
-        """The banner reports on the workspace, so it takes the top of it.
+    def test_a_finished_turn_arrives_as_a_card_with_the_builds(self):
+        """A chat answering is news of the same kind as a build coming back.
 
-        Same nodes and the same timers as the corner toast it replaces -- the
-        close button and the hover hold are covered above. What is new is
-        where it sits, and that the columns give it a line rather than having
-        it painted over them.
+        So it arrives in the same corner, counts on the same bell, and takes
+        no line from the columns: the bar under the header that used to
+        report this pushed the whole workspace down every time the terminal
+        finished a turn.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1735,46 +1741,52 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-left")).to_be_visible(
                     timeout=10_000)
-                # The pills live in the header now, so the line the banner
-                # takes is measured against the columns under it.
+                # What the columns do while the terminal works is nothing:
+                # measured before, and again while a card is up.
                 rail_before = page.locator(".hc-rail-left").bounding_box()
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
+                card = page.locator(".hc-alert[data-hc-alert-kind"
+                                    "=\"session_stopped\"]")
+                expect(card).to_have_count(1, timeout=4_000)
                 # What a Stop hook proves is that the turn ended. It does not
                 # prove a goal moved or a task closed, so it does not say so.
-                expect(banner.locator(".hc-notice-title")).to_have_text(
+                expect(card.locator(".hc-alert-title")).to_have_text(
                     "Claude finished responding")
-                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                expect(card.locator(".hc-alert-detail")).to_have_text(
                     "Done. Tests pass.")
+                # And it names no goal: there is no one row it reports on.
+                expect(card.locator(".hc-alert-goal")).to_have_count(0)
 
-                box = banner.bounding_box()
-                self.assertLess(box["x"], 20, "a bar starts at the edge")
-                self.assertGreater(box["width"], 1_000, "a bar spans the page")
-                self.assertLess(box["y"], 80, "and sits under the header")
-                # It has its own line: the columns move down for it rather
-                # than being painted over.
-                moved = page.locator(".hc-rail-left").bounding_box()
-                self.assertGreater(moved["y"], rail_before["y"] + 20)
-                self.assertGreater(moved["y"], box["y"] + box["height"] - 2)
+                box = card.bounding_box()
+                self.assertGreater(box["x"], 900, "a card sits on the right")
+                self.assertLess(box["width"], 400, "a card is not a bar")
+                self.assertLess(box["y"], 100, "under the header")
+                # The columns are where they were: it is an overlay, not a
+                # line the workspace has to give up.
+                held = page.locator(".hc-rail-left").bounding_box()
+                self.assertAlmostEqual(rail_before["y"], held["y"], delta=2)
 
-                # And the columns give the line back when it goes.
-                banner.locator(".hc-notice-close").click()
-                expect(banner).to_have_count(0, timeout=2_000)
+                # It counts on the bell with the builds, and × reads it.
+                count = page.locator(".hc-alerts .hc-bell-count")
+                expect(count).to_have_text("1", timeout=2_000)
+                card.locator(".hc-alert-close").click()
+                expect(card).to_have_count(0, timeout=2_000)
+                expect(count).to_have_text("0")
                 back = page.locator(".hc-rail-left").bounding_box()
                 self.assertAlmostEqual(rail_before["y"], back["y"], delta=2)
             finally:
                 browser.close()
 
     def test_a_source_added_here_outlives_the_page_and_the_server(self):
-        """SOURCES is a rail of chips, and each chip is a stored record.
+        """SOURCES is one line naming the records, and a box that edits them.
 
-        The pane that held these as three textboxes is dormant; the rail is
-        the control that came back. Nothing new is written -- both lists are
-        the artifact's own, so an edit lands on set_sources by the path that
-        was already there.
+        The pane that held these as three textboxes is dormant, and the rail
+        of pills it became is gone too: adding and removing happen in one
+        box, and the line under the title names what is attached. Nothing
+        new is written -- both lists are the artifact's own, so an edit
+        lands on set_sources by the path that was already there.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -2081,7 +2093,7 @@ class ChatUiServerTests(unittest.TestCase):
                 # Two polls' worth: the state carrying the old notice has
                 # certainly landed by now.
                 page.wait_for_timeout(3_500)
-                expect(page.locator(".hc-notice")).to_have_count(0)
+                expect(page.locator(".hc-alert")).to_have_count(0)
                 self.assertEqual(title, page.title())
 
                 chat_state.add_notice(
@@ -2089,25 +2101,44 @@ class ChatUiServerTests(unittest.TestCase):
                     "Explore: Analysis complete. Found 3 potential issues",
                     self.root)
 
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
-                expect(banner.locator(".hc-notice-title")
+                card = page.locator(".hc-alert")
+                expect(card).to_have_count(1, timeout=4_000)
+                expect(card.locator(".hc-alert-title")
                        ).to_have_text("A subagent returned")
-                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                expect(card.locator(".hc-alert-detail")).to_have_text(
                     "Explore: Analysis complete. Found 3 potential issues")
-                expect(banner.locator(".hc-notice-close")).to_be_visible()
+                expect(card.locator(".hc-alert-close")).to_be_visible()
                 # A workspace on another screen has to be able to say so
                 # from the tab strip alone, without losing which conversation
                 # it is watching.
                 self.assertEqual("\u25cf " + title, page.title())
 
-                # It takes itself away; nothing here was clicked.
-                expect(banner).to_have_count(0, timeout=12_000)
-                self.assertEqual(title, page.title())
+                # It takes itself away; nothing here was clicked. What it
+                # leaves behind is the point of moving it here: the reader
+                # who was looking at the terminal for those six seconds
+                # still finds it on the bell, and the tab still says so.
+                expect(card).to_have_count(0, timeout=12_000)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("1")
+                self.assertEqual("\u25cf " + title, page.title())
 
                 # And it is not shown twice for the same event.
                 page.wait_for_timeout(3_500)
-                expect(banner).to_have_count(0)
+                expect(card).to_have_count(0)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("1")
+
+                # Reading it in the center is what takes the mark off.
+                page.locator(".hc-alerts .hc-bell").click()
+                center = page.locator(".hc-alert-center")
+                expect(center).to_have_count(1, timeout=2_000)
+                expect(center.locator(".hc-alert-row")).to_have_count(1)
+                center.locator(
+                    ".hc-alert-center-act[data-hc-alert-act=\"read-all\"]"
+                ).click()
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("0")
+                self.assertEqual(title, page.title())
             finally:
                 browser.close()
 
@@ -2137,20 +2168,23 @@ class ChatUiServerTests(unittest.TestCase):
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
-                expect(banner.locator(".hc-notice-title")
+                card = page.locator(".hc-alert")
+                expect(card).to_have_count(1, timeout=4_000)
+                expect(card.locator(".hc-alert-title")
                        ).to_have_text("Claude finished responding")
 
                 # Reading it holds it open past the moment it would have gone.
-                banner.hover()
+                card.hover()
                 page.wait_for_timeout(9_000)
-                expect(banner).to_have_count(1)
+                expect(card).to_have_count(1)
 
                 self.assertEqual("\u25cf " + title, page.title())
 
-                banner.locator(".hc-notice-close").click()
-                expect(banner).to_have_count(0, timeout=2_000)
+                # \u00d7 dismisses it as read, which is what clears the tab.
+                card.locator(".hc-alert-close").click()
+                expect(card).to_have_count(0, timeout=2_000)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("0")
                 self.assertEqual(title, page.title())
             finally:
                 browser.close()

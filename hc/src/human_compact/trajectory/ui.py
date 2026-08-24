@@ -1861,6 +1861,9 @@ def _apply(op, trajdir=None, chat_scoped=None):
         ids = op.get("ids")
         return BUILD.cancel(session_id, root, goal_id,
                             ids if isinstance(ids, list) else [])
+    if kind == "reopen_todo":
+        return BUILD.reopen(session_id, root, goal_id,
+                            str(op.get("id") or ""), str(op.get("note") or ""))
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -2252,8 +2255,8 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
-                    "generate_prompt", "prompt_preview", "reopen_session",
-                    "build_log", "watch_build"):
+                    "reopen_todo", "generate_prompt", "prompt_preview",
+                    "reopen_session", "build_log", "watch_build"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -3325,7 +3328,8 @@ def _merge_todo_items(posted, previous):
     """The browser's rows with the server's build state laid back over them.
 
     A row is matched by id. Text, depth and order are whatever the browser
-    sent (that is the edit); status, question and what the build spent are
+    sent (that is the edit); status, question, what the build spent and the
+    row's run history are
     whatever the server had for that id (that is the run). A row the browser
     no longer sends is gone; a row it sends that the server never saw starts
     blank. A browser that posted no list at all (an older cached page) keeps
@@ -3347,6 +3351,7 @@ def _merge_todo_items(posted, previous):
     for row in GM.normalize_todo_items(posted):
         was = held.get(row["id"])
         row.pop("tokens", None)
+        row.pop("history", None)
         if was is not None:
             row["status"] = was.get("status", "")
             row["question"] = was.get("question", "")
@@ -3356,6 +3361,8 @@ def _merge_todo_items(posted, previous):
                 row["text"] = was["text"]
             if was.get("tokens"):
                 row["tokens"] = was["tokens"]
+            if was.get("history"):
+                row["history"] = was["history"]
         else:
             row["status"] = ""
             row["question"] = ""

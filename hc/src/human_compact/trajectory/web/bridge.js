@@ -1831,31 +1831,33 @@
   // This page is a second window on a conversation happening in a terminal,
   // usually on another screen. The one thing it can say that the terminal
   // cannot is that the terminal is finished. Hooks record a notice when the
-  // session stops, when a subagent returns and when the session ends; this
-  // draws it and then gets out of the way. Chat scope only: a global vault
-  // stands behind no one session, so it has nothing to report.
+  // session stops, when a subagent returns and when the session ends.
+  //
+  // What arrives here is drawn where a finished TODO is drawn: a card in the
+  // top-right corner, an entry behind the bell, one unread count. A synced
+  // chat answering is news of the same kind as a build coming back, and a
+  // reader watching one corner should not have to watch two -- so this
+  // module keeps only the part the alert stack cannot know: which rows are
+  // new, and which of them this page has already had its chance to show.
+  // Chat scope only: a global vault stands behind no one session, so it has
+  // nothing to report.
 
-  var NOTICE_MS = 8000;
   // Three is what fits above the fold without covering the page it reports on.
   var NOTICE_MAX = 3;
   var NOTICE_MARK = "● ";
   // Exactly what one hook payload proves, and no further. A Stop means the
   // turn ended -- not that goals moved, that tasks closed, or that anything
   // succeeded. A map with no prototype so a kind named "constructor" reads
-  // as unknown rather than as a function.
-  var NOTICE_SAYS = Object.create(null);
-  NOTICE_SAYS.session_stopped = "Claude finished responding";
-  NOTICE_SAYS.subagent_returned = "A subagent returned";
-  NOTICE_SAYS.session_ended = "Session ended";
-
-  var NOTICE_CSS = [
-      ".hc-notice-stack{position:fixed;right:16px;bottom:16px;z-index:100001;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
-      ".hc-notice{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
-      ".hc-notice-title{font-weight:600;color:var(--ink,#111)}",
-      ".hc-notice-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".hc-notice-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
-      ".hc-notice-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}"
-  ].join("");
+  // as unknown rather than as a function. The sentence each one says lives
+  // in ALERT_SAYS with the builder's, because one node draws them both.
+  var NOTICE_KINDS = Object.create(null);
+  NOTICE_KINDS.session_stopped = true;
+  NOTICE_KINDS.subagent_returned = true;
+  NOTICE_KINDS.session_ended = true;
+  // And the two things this page can learn about its own server: that it
+  // is running older code than the plugin on disk, and that it is gone.
+  NOTICE_KINDS.server_stale = true;
+  NOTICE_KINDS.server_gone = true;
 
   // Everything this page has already had its chance to show. The store keeps
   // its last twenty rows and state is polled every 1.5s, so without this the
@@ -1864,34 +1866,6 @@
   // Anything older than this window belongs to the part of the conversation
   // it was not open for. Replaying that would report old news as new.
   var noticeSince = Date.now();
-  var noticeTimers = Object.create(null);
-  var noticeBox = null;
-  var noticeMarked = false;
-  var noticeBound = false;
-
-  function ensureNoticeStyles() {
-    if (document.getElementById("hc-notice-style")) return;
-    var style = document.createElement("style");
-    style.id = "hc-notice-style";
-    style.textContent = NOTICE_CSS;
-    (document.head || document.documentElement).appendChild(style);
-  }
-
-  function noticeStack() {
-    return (noticeBox && noticeBox.parentNode) ? noticeBox : null;
-  }
-
-  function noticeHost() {
-    if (noticeStack()) return noticeBox;
-    ensureNoticeStyles();
-    noticeBox = document.createElement("div");
-    noticeBox.className = "hc-notice-stack";
-    // Parented on the body, outside the artifact's own subtree: the artifact
-    // rebuilds that subtree whenever its state changes, and anything living
-    // inside it is silently dropped.
-    (document.body || document.documentElement).appendChild(noticeBox);
-    return noticeBox;
-  }
 
   function pageTitle() {
     // Named after the session rather than the goal tree: a day with several
@@ -1909,95 +1883,15 @@
       return false;
     }
     // Derived, never remembered. Restoring a title by putting back the
-    // string that was there when the banner appeared restores whatever the
-    // artifact had most recently wiped it to; recomputing cannot.
-    var want = (noticeMarked ? NOTICE_MARK : "") + pageTitle();
+    // string that was there when the mark appeared restores whatever the
+    // artifact had most recently wiped it to; recomputing cannot. The mark
+    // follows the unread count rather than a card standing on screen: a
+    // reader who was looking elsewhere for the six seconds a card is up is
+    // exactly the reader the tab strip is for.
+    var want = (alertUnread() ? NOTICE_MARK : "") + pageTitle();
     if (document.title === want) return false;
     document.title = want;
     return true;
-  }
-
-  function markNoticeTitle() {
-    noticeMarked = true;
-    applyPageTitle();
-  }
-
-  function unmarkNoticeTitle() {
-    if (!noticeMarked) return;
-    noticeMarked = false;
-    applyPageTitle();
-  }
-
-  function noticeIdOf(box) {
-    return (box && box.getAttribute) ? str(box.getAttribute("data-hc-notice")) : "";
-  }
-
-  function holdNotice(box) {
-    var id = noticeIdOf(box);
-    if (!id || !noticeTimers[id]) return;
-    clearTimeout(noticeTimers[id]);
-    delete noticeTimers[id];
-  }
-
-  function armNotice(box) {
-    var id = noticeIdOf(box);
-    if (!id) return;
-    holdNotice(box);
-    noticeTimers[id] = setTimeout(function () { dropNotice(box); }, NOTICE_MS);
-  }
-
-  function dropNotice(box) {
-    if (!box) return;
-    holdNotice(box);
-    if (box.parentNode) box.parentNode.removeChild(box);
-    var host = noticeStack();
-    if (!host || !host.children || !host.children.length) unmarkNoticeTitle();
-    // The banner has a line of its own in the launch layout, so its arrival
-    // and its departure both move the page. Waiting for the next sweep to
-    // notice would make the columns jump a beat after it.
-    mirrorRootState();
-  }
-
-  function closestNotice(node) {
-    while (node && node !== document) {
-      var name = node.className ? String(node.className) : "";
-      if (name.split(" ").indexOf("hc-notice") >= 0) return node;
-      node = node.parentNode;
-    }
-    return null;
-  }
-
-  function bindNotices() {
-    // Delegated, like the other controls here. These nodes come and go on
-    // their own timers, so a listener bound to one of them is a listener
-    // that outlives the thing it was for.
-    if (noticeBound || !document.addEventListener) return;
-    noticeBound = true;
-    document.addEventListener("click", function (event) {
-      var target = event && event.target;
-      var name = (target && target.className) ? String(target.className) : "";
-      if (name.indexOf("hc-notice-close") < 0) return;
-      var box = closestNotice(target);
-      if (!box) return;
-      if (event.preventDefault) event.preventDefault();
-      if (event.stopPropagation) event.stopPropagation();
-      dropNotice(box);
-    }, true);
-    // Eight seconds is not long enough to read a line and think about it, so
-    // the clock stops while the pointer is on it.
-    document.addEventListener("mouseover", function (event) {
-      var box = closestNotice(event && event.target);
-      if (box) holdNotice(box);
-    }, true);
-    document.addEventListener("mouseout", function (event) {
-      var box = closestNotice(event && event.target);
-      if (!box) return;
-      // mouseout also fires crossing from the headline to the detail line.
-      // Leaving one of its own children is not leaving it.
-      var to = event.relatedTarget;
-      if (to && box.contains && box.contains(to)) return;
-      armNotice(box);
-    }, true);
   }
 
   function noticesToShow(rows, since, seen) {
@@ -2005,59 +1899,44 @@
     array(rows).forEach(function (row) {
       if (!row || typeof row !== "object") return;
       var id = str(row.id);
-      var says = NOTICE_SAYS[str(row.kind)];
+      var kind = str(row.kind);
       var at = Date.parse(str(row.at));
-      if (!id || typeof says !== "string" || seen[id]) return;
+      if (!id || !NOTICE_KINDS[kind] || seen[id]) return;
       if (!isFinite(at) || at <= since) return;
       // Marked here rather than at draw time: one this page decided not to
       // draw is not one it should draw 1.5s later, when it is older still.
       seen[id] = true;
-      fresh.push({ id: id, says: says, detail: str(row.detail) });
+      fresh.push({ id: id, kind: kind, detail: str(row.detail) });
     });
     return fresh.slice(-NOTICE_MAX);
   }
 
-  function noticeNode(row) {
-    var box = document.createElement("div");
-    box.className = "hc-notice";
-    box.setAttribute("data-hc-notice", row.id);
-    var close = document.createElement("span");
-    close.className = "hc-notice-close";
-    close.textContent = "×";
-    close.setAttribute("role", "button");
-    close.setAttribute("aria-label", "Dismiss");
-    box.appendChild(close);
-    var title = document.createElement("div");
-    title.className = "hc-notice-title";
-    title.textContent = row.says;
-    box.appendChild(title);
-    // A hook that carried nothing to quote gets a headline and no blank line
-    // pretending there was something to say.
-    if (row.detail) {
-      var detail = document.createElement("div");
-      detail.className = "hc-notice-detail";
-      detail.textContent = row.detail;
-      box.appendChild(detail);
-    }
-    return box;
-  }
-
+  // Into the same log the builder writes to, and out through the same card.
+  // No goal and no row: a turn ending is about the conversation, not about
+  // one line of work, so clicking it has nowhere to go and says so by
+  // moving nothing.
   function showNotices(rows) {
     if (serverState.scope !== "chat") return 0;
     var fresh = noticesToShow(rows, noticeSince, noticeSeen);
     if (!fresh.length) return 0;
-    var host = noticeHost();
-    bindNotices();
+    var log = loadAlertLog();
     var made = fresh.map(function (row) {
-      return host.appendChild(noticeNode(row));
+      alertSeq += 1;
+      var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
+                    kind: row.kind, goalId: "", goalTitle: "", rowId: "",
+                    text: row.detail, question: "",
+                    at: Date.now(), read: false };
+      log.unshift(entry);
+      return entry;
     });
-    while (host.children.length > NOTICE_MAX) dropNotice(host.children[0]);
-    // Marked before the timers start: on a page whose clock is running fast
-    // enough to dismiss one immediately, marking afterwards leaves the tab
-    // claiming a banner nobody can see.
-    markNoticeTitle();
-    mirrorRootState();
-    made.forEach(function (box) { armNotice(box); });
+    saveAlertLog();
+    if (alertSettings().banners) {
+      made.forEach(function (entry) { showAlertBanner(entry); });
+    }
+    renderBell();
+    renderAlertCenter();
+    // The bell's badge and the tab's mark are the same fact seen twice.
+    applyPageTitle();
     return fresh.length;
   }
 
@@ -2073,21 +1952,36 @@
     return noteStaleServer();
   }
 
-  // The same banner, raised by the other way this is ever learned: a server
+  // What this page learns about its own server is said the way everything
+  // else is said now: a card in the corner, an entry behind the bell, the
+  // mark on the tab. No goal and no row -- it is about the workspace.
+  function serverNotice(kind, detail) {
+    var log = loadAlertLog();
+    alertSeq += 1;
+    var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
+                  kind: kind, goalId: "", goalTitle: "", rowId: "",
+                  text: detail, question: "",
+                  at: Date.now(), read: false };
+    log.unshift(entry);
+    saveAlertLog();
+    if (alertSettings().banners) showAlertBanner(entry);
+    renderBell();
+    renderAlertCenter();
+    applyPageTitle();
+    return entry.id;
+  }
+
+  // The same card, raised by the other way this is ever learned: a server
   // old enough not to stamp the page at all still answers a control it has
-  // never heard of, and that answer is the stamp.
+  // never heard of, and that answer is the stamp. Once per page: the fact
+  // does not change until the server does.
+  var staleSaid = false;
   function noteStaleServer() {
-    var host = noticeHost();
-    if (host.querySelector("[data-hc-notice='hc-stale-server']")) return false;
-    bindNotices();
-    host.appendChild(noticeNode({
-      id: "hc-stale-server",
-      says: "This workspace is running older code than the plugin on disk",
-      detail: "Restart it (/goals-ui) — anything added since it started will "
-        + "not work here."
-    }));
-    markNoticeTitle();
-    mirrorRootState();
+    if (staleSaid) return false;
+    staleSaid = true;
+    serverNotice("server_stale",
+                 "Restart it (/goals-ui) — anything added since it started"
+                 + " will not work here.");
     return true;
   }
 
@@ -2096,26 +1990,27 @@
   // leaves this window pointed at a process that has ended -- with a newer
   // one already open in another tab. Saying so is the difference between a
   // workspace that closed and a workspace that looks broken.
+  var goneSaid = null;
   function noteServerGone() {
-    var host = noticeHost();
-    if (host.querySelector("[data-hc-notice='hc-server-gone']")) return false;
-    bindNotices();
-    host.appendChild(noticeNode({
-      id: "hc-server-gone",
-      says: "This workspace is no longer running",
-      detail: "It was stopped or restarted — the newer one opens in its own "
-        + "tab. Nothing typed here is being saved."
-    }));
-    markNoticeTitle();
-    mirrorRootState();
+    if (goneSaid) return false;
+    goneSaid = serverNotice(
+      "server_gone",
+      "It was stopped or restarted — the newer one opens in its own tab."
+      + " Nothing typed here is being saved.");
     return true;
   }
 
+  // A server answering again takes the card back: read, and off the screen.
   function clearServerGone() {
-    var host = noticeStack();
-    var box = host && host.querySelector("[data-hc-notice='hc-server-gone']");
-    if (box) dropNotice(box);
-    return !!box;
+    if (!goneSaid) return false;
+    var id = goneSaid;
+    goneSaid = null;
+    markAlertRead(id, true);
+    dropAlertBanner(alertBannerFor(id));
+    renderBell();
+    renderAlertCenter();
+    applyPageTitle();
+    return true;
   }
 
   // --- what the builder just did to a TODO row ------------------------------
@@ -2144,6 +2039,12 @@
   ALERT_SAYS.done = "TODO finished";
   ALERT_SAYS.failed = "TODO failed";
   ALERT_SAYS.asking = "Claude has a question";
+  // What a synced chat did, said in the same three lines a build gets.
+  ALERT_SAYS.session_stopped = "Claude finished responding";
+  ALERT_SAYS.subagent_returned = "A subagent returned";
+  ALERT_SAYS.session_ended = "Session ended";
+  ALERT_SAYS.server_stale = "This workspace is running older code than the plugin on disk";
+  ALERT_SAYS.server_gone = "This workspace is no longer running";
 
   var ALERT_CSS = [
       ".hc-alert-stack{position:fixed;top:var(--hc-alerts-top,calc(var(--hc-top,37px) + 10px));right:16px;z-index:100002;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
@@ -2372,6 +2273,7 @@
     saveAlertLog();
     renderBell();
     renderAlertCenter();
+    applyPageTitle();
     return true;
   }
 
@@ -2380,7 +2282,9 @@
     reloadAlertLog().forEach(function (row) {
       if (!row.read) { row.read = true; changed = true; }
     });
-    if (changed) { saveAlertLog(); renderBell(); renderAlertCenter(); }
+    if (changed) {
+      saveAlertLog(); renderBell(); renderAlertCenter(); applyPageTitle();
+    }
     return changed;
   }
 
@@ -2390,6 +2294,7 @@
     dropAllAlerts();
     renderBell();
     renderAlertCenter();
+    applyPageTitle();
   }
 
   // Another page writing the log -- clearing it, or reading something in it
@@ -2480,6 +2385,7 @@
     }
     renderBell();
     renderAlertCenter();
+    applyPageTitle();
     return made;
   }
 
@@ -2510,6 +2416,10 @@
 
   function alertDetailOf(entry) {
     if (entry.kind === "asking" && entry.question) return entry.question;
+    // A hook that carried nothing to quote gets a headline and no blank
+    // line pretending there was something to say. A TODO always has a row
+    // to name, so an empty one there is a bug worth seeing.
+    if (NOTICE_KINDS[entry.kind]) return entry.text;
     return entry.text || "(untitled TODO)";
   }
 
@@ -2529,14 +2439,20 @@
     title.className = "hc-alert-title";
     title.textContent = ALERT_SAYS[entry.kind];
     box.appendChild(title);
-    var detail = document.createElement("div");
-    detail.className = "hc-alert-detail";
-    detail.textContent = alertDetailOf(entry);
-    box.appendChild(detail);
-    var goal = document.createElement("div");
-    goal.className = "hc-alert-goal";
-    goal.textContent = entry.goalTitle;
-    box.appendChild(goal);
+    var said = alertDetailOf(entry);
+    if (said) {
+      var detail = document.createElement("div");
+      detail.className = "hc-alert-detail";
+      detail.textContent = said;
+      box.appendChild(detail);
+    }
+    // A session card names no goal: there is no line under it to carry.
+    if (entry.goalTitle) {
+      var goal = document.createElement("div");
+      goal.className = "hc-alert-goal";
+      goal.textContent = entry.goalTitle;
+      box.appendChild(goal);
+    }
     return box;
   }
 
@@ -2599,6 +2515,10 @@
     markAlertRead(id, true);
     dropAlertBanner(alertBannerFor(id));
     closeAlertCenter();
+    // A session card reports on the conversation, not on a row. Reading it
+    // is the whole of it: moving the rail to a goal it never named would
+    // take the reader off whatever they were working on.
+    if (NOTICE_KINDS[entry.kind]) return true;
     railTab = "todos";
     if (entry.goalId) {
       if (typeof window !== "undefined" && typeof window.__hcSelectGoal === "function") {
@@ -2872,7 +2792,8 @@
       if (!log.length) {
         var empty = document.createElement("div");
         empty.className = "hc-alert-center-empty";
-        empty.textContent = "Nothing yet. Builds that finish, fail, or ask land here.";
+        empty.textContent = "Nothing yet. Builds that finish, fail, or ask "
+          + "land here, and so does a synced chat answering.";
         list.appendChild(empty);
       }
       log.forEach(function (entry) {
@@ -2891,14 +2812,19 @@
         says.textContent = ALERT_SAYS[entry.kind];
         title.appendChild(says);
         row.appendChild(title);
-        var detail = document.createElement("div");
-        detail.className = "hc-alert-detail";
-        detail.textContent = alertDetailOf(entry);
-        row.appendChild(detail);
-        var goal = document.createElement("div");
-        goal.className = "hc-alert-goal";
-        goal.textContent = entry.goalTitle;
-        row.appendChild(goal);
+        var said = alertDetailOf(entry);
+        if (said) {
+          var detail = document.createElement("div");
+          detail.className = "hc-alert-detail";
+          detail.textContent = said;
+          row.appendChild(detail);
+        }
+        if (entry.goalTitle) {
+          var goal = document.createElement("div");
+          goal.className = "hc-alert-goal";
+          goal.textContent = entry.goalTitle;
+          row.appendChild(goal);
+        }
         list.appendChild(row);
       });
     }
@@ -6433,6 +6359,10 @@
       // Words, not pills: no box around a count, and the one in force is
       // the bold one -- the artifact's own mark for it.
       "[data-hc-launch] .hc-pillbar .hc-chip{padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;letter-spacing:.4px}",
+      // The count stands beside the name in a quieter colour, so the row
+      // reads as four names with four numbers rather than four sentences.
+      "[data-hc-launch] .hc-chip-n{font-weight:400;color:var(--fnt)}",
+      "[data-hc-launch] .hc-chip[style*=\"700 11px\"] .hc-chip-n{color:var(--mut)}",
       "[data-hc-launch][data-hc-viewtabs]{--hc-top:69px}",
       "[data-hc-launch][data-hc-viewtabs] .hc>div:first-child{height:37px}",
       "[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:32px!important}",
@@ -6518,6 +6448,16 @@
       "[data-hc-launch] .hc-todo-line::before{content:\"\\200b\"}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-line{color:var(--ink);font-weight:600}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"done\"] .hc-todo-line{color:var(--fnt);text-decoration:line-through}",
+      // A done row is a control: clicking it opens the pane that sends it
+      // back out. "reopening" is the moment between the click and the note
+      // -- struck through no longer, not yet building.
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"done\"]{cursor:pointer}",
+      "[data-hc-launch] .hc-todo-row[data-hc-todo-state=\"reopening\"] .hc-todo-line{color:var(--ink);font-weight:600}",
+      // The runs a row has already had, under it: quieter than the row, and
+      // quieter still for what the reader said about each.
+      "[data-hc-launch] .hc-todo-runs{margin:1px 0 7px;border-left:2px solid var(--bd);padding:1px 0 1px 10px;user-select:text}",
+      "[data-hc-launch] .hc-todo-run{font:11px/1.5 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-run-note{font:11px/1.5 'Source Code Pro',monospace;color:var(--dtxt);padding-left:12px;white-space:pre-wrap;overflow-wrap:anywhere}",
       // A rule between the list's bands: rows not yet sent, rows out with
       // the builder, rows that came back done.
       "[data-hc-launch] .hc-todo-sep{border-top:1px solid var(--bd);margin:7px 6px;user-select:none}",
@@ -6785,6 +6725,9 @@
   var todoCopiedTimer = null;
   var todoBuilding = false;
   var todoBuildError = "";
+  // The done row whose "what went wrong?" pane is open, if any. One at a
+  // time: reopening is an argument about one row, not a mode the list is in.
+  var todoReopening = null;
 
   function repeat(unit, times) {
     var out = "";
@@ -6830,7 +6773,21 @@
       // writes its rows: the comparison is JSON against JSON.
       var spent = +row.tokens;
       if (spent > 0) copy.tokens = Math.round(spent);
+      var past = todoHistoryOn(row);
+      if (past.length) copy.history = past;
       return copy;
+    });
+  }
+
+  function todoHistoryOn(row) {
+    // The runs this row has already had: the verdict each ended on and what
+    // the reader said was wrong with it. The server owns this list -- it is
+    // carried here only so the rows on screen and the rows the server holds
+    // compare equal, and so the rail can stack the runs under the row.
+    return array(row && row.history).filter(function (past) {
+      return past && str(past.state);
+    }).map(function (past) {
+      return { state: str(past.state), note: str(past.note) };
     });
   }
 
@@ -7577,8 +7534,9 @@
 
   function todoLayState(items, incoming) {
     // The build state the store holds for each row, laid over the rows on
-    // screen by id -- status, question and what the build spent; text, depth
-    // and order are the reader's. Answers whether anything changed.
+    // screen by id -- status, question, what the build spent and the run
+    // history; text, depth and order are the reader's. Answers whether
+    // anything changed.
     var held = Object.create(null);
     array(incoming).forEach(function (row) {
       if (row && typeof row.id === "string") held[row.id] = row;
@@ -7589,12 +7547,15 @@
       if (!was) return;
       var status = str(was.status), question = str(was.question);
       var spent = +was.tokens > 0 ? Math.round(+was.tokens) : undefined;
+      var past = todoHistoryOn(was);
       if (str(row.status) !== status || str(row.question) !== question
-          || row.tokens !== spent) {
+          || row.tokens !== spent || !same(todoHistoryOn(row), past)) {
         row.status = status;
         row.question = question;
         if (spent === undefined) delete row.tokens;
         else row.tokens = spent;
+        if (past.length) row.history = past;
+        else delete row.history;
         changed = true;
       }
     });
@@ -7606,6 +7567,7 @@
     todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
     todoPicked = {};
     todoBuildError = "";
+    todoReopening = null;
   }
 
   function todoStamp(now) {
@@ -8259,6 +8221,45 @@
       });
   }
 
+  function todoReopen(id, text) {
+    // "No, you did a bad job": the row goes back out on its next run, told
+    // what was wrong with the last one. The run that ended is kept, note and
+    // all -- so the row's argument survives, and so a failure here can put
+    // the row back exactly as it was.
+    var note = str(text).trim();
+    if (!todoGoalId || !note) return;
+    var goalId = todoGoalId;
+    var row = todoItems && todoItems[todoIndexOfId(id)];
+    if (!row || row.status !== "done") return;
+    var held = todoHistoryOn(row);
+    row.history = held.concat([{ state: "done", note: note }]);
+    row.status = "building";
+    row.question = "";
+    todoReopening = null;
+    todoBuildError = "";
+    alertNoteOut([id]);
+    // Out of the done band and back into the middle one.
+    todoItems = todoSectioned(todoItems);
+    todoHold();
+    renderTodoRail(true);
+    post({ op: "reopen_todo", goal_id: goalId, id: id, note: note })
+      .then(function (res) {
+        if (todoGoalId === goalId && row) {
+          if (res && res.ok && res.queued && row.status === "building") {
+            row.status = "queued";
+          } else if (!res || !res.ok) {
+            todoBuildError = (res && res.error)
+              || "the TODO could not be reopened";
+            row.status = "done";
+            if (held.length) row.history = held;
+            else delete row.history;
+            todoItems = todoSectioned(todoItems);
+          }
+        }
+        todoSettle();
+      });
+  }
+
   function todoCopyAll() {
     var goal = todoSelectedGoal();
     var text = todoCopyText(todoItems, goal ? goal.notes : "");
@@ -8399,6 +8400,20 @@
         }
         return;
       }
+      if (node && node.getAttribute
+          && node.getAttribute("data-hc-todo-reopen") !== null) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          todoReopen(node.getAttribute("data-hc-todo-reopen"), node.value);
+        } else if (event.key === "Escape") {
+          // Second thoughts: the row stays done, nothing was said.
+          event.preventDefault();
+          event.stopPropagation();
+          todoReopening = null;
+          renderTodoRail(true);
+        }
+        return;
+      }
       // Cmd+Enter from anywhere that is not a place to type -- the Build
       // control just clicked, Select all, the tree -- is the build, the
       // same as from the list. Once: the reader should not have to click
@@ -8421,8 +8436,9 @@
     document.addEventListener("input", function (event) {
       var typed = event.target;
       if (typed && typed.getAttribute
-          && typed.getAttribute("data-hc-todo-answer") !== null) {
-        // The answer box grows with its text: one line until it needs two.
+          && (typed.getAttribute("data-hc-todo-answer") !== null
+              || typed.getAttribute("data-hc-todo-reopen") !== null)) {
+        // The box grows with its text: one line until it needs two.
         typed.style.height = "auto";
         typed.style.height = typed.scrollHeight + "px";
         return;
@@ -8473,6 +8489,25 @@
     document.addEventListener("click", function (event) {
       var node = event.target;
       if (!node || !node.getAttribute) return;
+      // A finished row, clicked: the reader wants another go at it. No
+      // hover-only affordance -- the row itself is the control, and the
+      // pane it opens is the same thread Claude's own questions use.
+      var line = todoLineOf(node);
+      var at = line ? todoIndexOfLine(line) : -1;
+      var clicked = at >= 0 && todoItems ? todoItems[at] : null;
+      if (clicked && clicked.status === "done") {
+        todoReopening = clicked.id;
+        renderTodoRail(true);
+        var box = document.querySelector("[data-hc-todo-reopen]");
+        if (box) box.focus();
+        return;
+      }
+      // Anywhere else -- another row, the tree, the buttons -- puts an open
+      // pane away. Not inside it: the note is being typed there.
+      if (todoReopening && !todoInReopenPane(node)) {
+        todoReopening = null;
+        renderTodoRail(true);
+      }
       var dash = node.getAttribute("data-hc-todo-dash");
       if (dash !== null) {
         todoTogglePick(dash);
@@ -8530,6 +8565,14 @@
     }, true);
   }
 
+  function todoInReopenPane(node) {
+    while (node && node !== document) {
+      if (node.className === "hc-todo-ask hc-todo-reopen-pane") return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
   function todoTabSpan(name, label) {
     var tab = document.createElement("span");
     tab.className = "hc-rail-tab" + (railTab === name ? " hc-rail-tab-on" : "");
@@ -8567,7 +8610,14 @@
     var line = document.createElement("div");
     line.className = "hc-todo-row";
     line.style.paddingLeft = (row.depth * 20) + "px";
-    if (row.status) line.setAttribute("data-hc-todo-state", row.status);
+    // A done row with its pane open is already out of the done band in the
+    // reader's head: the strikethrough lifts before the note is sent, so
+    // what they are typing about does not read as settled.
+    var reopening = row.status === "done" && todoReopening === row.id;
+    if (row.status) {
+      line.setAttribute("data-hc-todo-state",
+                        reopening ? "reopening" : row.status);
+    }
     if (todoPicked[row.id]) line.setAttribute("data-hc-todo-picked", "");
     var dash = document.createElement("span");
     dash.className = "hc-todo-dash";
@@ -8593,11 +8643,15 @@
     // does. Done rows are their own band and always say so.
     var state = TODO_STATUS[row.status];
     if (state && !head && TODO_CHILD_QUIET[row.status]) state = null;
+    if (reopening) state = ["reopened", "var(--hc-warn)"];
+    var past = todoHistoryOn(row);
     if (state) {
       var badge = document.createElement("span");
       badge.className = "hc-todo-status";
       badge.setAttribute("contenteditable", "false");
-      badge.textContent = state[0];
+      // A row on its second or later go says which: "building · run 2".
+      badge.textContent = past.length
+        ? state[0] + " · run " + (past.length + 1) : state[0];
       badge.style.color = state[1];
       line.appendChild(badge);
     }
@@ -8611,6 +8665,29 @@
     line.appendChild(cost);
     todoCostPaint(row, text);
     wrap.appendChild(line);
+    if (past.length) {
+      // Every run this row has already had, oldest first, each with what the
+      // reader said was wrong with it. Kept under the row rather than
+      // replaced by the newest: the row's argument with the builder is the
+      // record, and the reader is the only one who can read it.
+      var log = document.createElement("div");
+      log.className = "hc-todo-runs";
+      log.setAttribute("contenteditable", "false");
+      log.style.marginLeft = (row.depth * 20 + 22) + "px";
+      past.forEach(function (entry, i) {
+        var when = document.createElement("div");
+        when.className = "hc-todo-run";
+        when.textContent = "run " + (i + 1) + " · " + entry.state
+          + " · reopened";
+        log.appendChild(when);
+        if (!entry.note) return;
+        var said = document.createElement("div");
+        said.className = "hc-todo-run-note";
+        said.textContent = "↳ “" + entry.note + "”";
+        log.appendChild(said);
+      });
+      wrap.appendChild(log);
+    }
     if (row.status === "asking") {
       var ask = document.createElement("div");
       ask.className = "hc-todo-ask";
@@ -8640,7 +8717,40 @@
       ask.appendChild(reply);
       wrap.appendChild(ask);
     }
+    if (row.status === "done" && todoReopening === row.id) {
+      // The reader's side of the same thread: not Claude asking what to do,
+      // the reader saying what was wrong. Same shape on purpose -- it is the
+      // one place in the rail where the two of them talk about a row.
+      wrap.appendChild(todoReopenNode(row));
+    }
     return wrap;
+  }
+
+  function todoReopenNode(row) {
+    var pane = document.createElement("div");
+    pane.className = "hc-todo-ask hc-todo-reopen-pane";
+    pane.setAttribute("contenteditable", "false");
+    pane.style.marginLeft = (row.depth * 20 + 22) + "px";
+    var q = document.createElement("div");
+    q.className = "hc-todo-question";
+    q.textContent = "What went wrong?";
+    pane.appendChild(q);
+    var reply = document.createElement("div");
+    reply.className = "hc-todo-reply";
+    var arrow = document.createElement("span");
+    arrow.className = "hc-todo-arrow";
+    arrow.textContent = "↳";
+    reply.appendChild(arrow);
+    var note = document.createElement("textarea");
+    note.className = "hc-todo-answer";
+    note.rows = 1;
+    note.setAttribute("rows", "1");
+    note.placeholder = "say what to fix, then enter";
+    note.spellcheck = false;
+    note.setAttribute("data-hc-todo-reopen", row.id);
+    reply.appendChild(note);
+    pane.appendChild(reply);
+    return pane;
   }
 
   function renderTodoRail(force) {
@@ -9115,25 +9225,18 @@
     return changed;
   }
 
-  // The launch stylesheet lives on the root so it can reach the banner,
-  // which is parented on <body>. Two facts it cannot read from there: which
-  // theme the artifact is drawing, and whether a banner is up.
+  // The launch stylesheet lives on the root so it can reach the cards, which
+  // are parented on <body>. The one fact it cannot read from there is which
+  // theme the artifact is drawing.
   function mirrorRootState() {
     var root = document.documentElement;
     if (!root || !root.setAttribute) return false;
     var app = document.querySelector(".hc");
     var theme = (app && app.getAttribute && app.getAttribute("data-dark") === "true")
       ? "dark" : "light";
-    var host = noticeStack();
-    var up = !!(host && host.children && host.children.length);
     var changed = false;
     if (root.getAttribute("data-hc-theme") !== theme) {
       root.setAttribute("data-hc-theme", theme);
-      changed = true;
-    }
-    if (up !== (root.getAttribute("data-hc-notice") !== null)) {
-      if (up) root.setAttribute("data-hc-notice", "");
-      else root.removeAttribute("data-hc-notice");
       changed = true;
     }
     return changed;
@@ -10787,10 +10890,10 @@
       // The count moves to the end so a chip reads as a name with a
       // number rather than a parenthetical aside.
       ["const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',",
-       chat ? "const filters = [['all', 'All', total], ['active', 'Active', activeN], ['inprog', 'In progress', ipN], ['done', 'Done', doneN]].map(([k, lab, n], i) => ({\n      lab: lab + ' ' + n,"
+       chat ? "const filters = [['all', 'All', total], ['active', 'Active', activeN], ['inprog', 'In progress', ipN], ['done', 'Done', doneN]].map(([k, lab, n], i) => ({\n      num: String(n),\n      lab: lab,"
             : "const filters = [['active', 'active', activeN], ['inprog', 'in progress', ipN], ['done', 'done', doneN], ['all', 'all', total]].map(([k, lab, n], i) => ({\n      lab: lab + ' (' + n + ')',"],
       ["<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>",
-       chat ? "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span class=\"hc-chip\" sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"
+       chat ? "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span class=\"hc-chip\" sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }} <b class=\"hc-chip-n\">{{ f.num }}</b></span></sc-for>"
             : "<sc-for list=\"{{ filters }}\" as=\"f\" hint-placeholder-count=\"4\"><span sc-camel-on-click=\"{{ f.click }}\" style=\"font:{{ f.fw }} 11px 'Source Code Pro',monospace;cursor:pointer;color:{{ f.c }}\" style-hover=\"text-decoration:underline\">{{ f.lab }}</span></sc-for>"],
       ["<div style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">",
        chat ? "<div class=\"hc-titlerow\" style=\"display:{{ headDisp }};align-items:flex-end;justify-content:space-between;gap:16px;padding:0 4px;flex-wrap:wrap\">"
@@ -11635,8 +11738,6 @@
     noticesToShow: noticesToShow,
     pageTitle: pageTitle,
     applyPageTitle: applyPageTitle,
-    noticeStack: noticeStack,
-    noticeCss: function () { return NOTICE_CSS; },
     paneTabBar: paneTabBar,
     headerNav: headerNav,
     promptAddSlot: promptAddSlot,
