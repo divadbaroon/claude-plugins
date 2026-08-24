@@ -2998,6 +2998,22 @@
       // The overview: the whole window under the header. It is the
       // project's screen, not a pane of the goal's -- both rails are
       // covered, and GOALS (or Esc) brings the three columns back.
+      ".hc-system{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:22px 24px 40px;box-sizing:border-box}",
+      "[data-hc-system] .hc-system{display:block}",
+      ".hc-system-head{display:flex;align-items:baseline;justify-content:space-between;gap:14px}",
+      ".hc-system-again{cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-system-again:hover{color:var(--ink,#111)}",
+      ".hc-system-flow{margin-top:18px;max-width:680px}",
+      ".hc-system-stage{border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:14px 18px 16px}",
+      ".hc-system-stage[data-hc-warn]{border-color:var(--acc,#a5492a)}",
+      ".hc-system-stage-head{display:flex;align-items:baseline;gap:9px}",
+      ".hc-system-dot{font-size:8px;color:var(--ok,#3f8f5f)}",
+      ".hc-system-stage[data-hc-warn] .hc-system-dot{color:var(--acc,#a5492a)}",
+      ".hc-system-name{font:700 13px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-system-what{margin-top:5px;font-size:12px;line-height:1.65;color:var(--mut,#575757)}",
+      ".hc-system-stage .hc-overview-facts{margin-top:11px;gap:5px}",
+      ".hc-system-note{margin-top:11px;padding-top:10px;border-top:1px solid var(--bd,#e3e3e3);font-size:11.5px;line-height:1.6;color:var(--acc,#a5492a)}",
+      ".hc-system-arrow{text-align:center;color:var(--fnt,#9b9b9b);font-size:13px;line-height:1;padding:7px 0}",
       ".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 24px 24px;box-sizing:border-box}",
       "[data-hc-overview] .hc-overview{display:block}",
       ".hc-overview-tabs{display:flex;gap:22px;align-items:baseline;padding:12px 0 0;border-bottom:1px solid var(--bd,#e3e3e3);margin:0 -24px 16px;padding-left:24px;padding-right:24px}",
@@ -5024,6 +5040,207 @@
     return true;
   }
 
+  // --- how the system works -----------------------------------------------
+  //
+  // A workspace made of a hook, a vault, an analyser, a server and a
+  // browser has five places for a version to drift, and no page that shows
+  // any of them. Every confusion this project has cost a day to was one:
+  // a server older than its code, hooks running an installed copy that had
+  // never heard of a switch, a build whose process had gone. This is the
+  // pipeline, stage by stage, each saying what it is right now.
+
+  var systemBox = null;
+  var systemKept = null;
+
+  function systemShown() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute
+              && root.getAttribute("data-hc-system") !== null);
+  }
+
+  function openSystem() {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute) return false;
+    closeOverview();
+    closeProjectMenu();
+    root.setAttribute("data-hc-system", "");
+    renderSystem();
+    loadSystem();
+    return true;
+  }
+
+  function closeSystem() {
+    var root = document.documentElement;
+    if (!root || !root.removeAttribute) return false;
+    var was = systemShown();
+    root.removeAttribute("data-hc-system");
+    return was;
+  }
+
+  function loadSystem() {
+    return fetchJSON("/api/system").then(function (result) {
+      systemKept = result || { ok: false };
+      if (systemShown()) drawSystem();
+      return result;
+    });
+  }
+
+  // Each stage is a claim about the workspace with the evidence beside it.
+  // "warn" is never a guess: it is a fact the reader would want to act on,
+  // and the line says which fact.
+  function systemStages(report) {
+    var out = [];
+    var vault = (report && report.vault) || {};
+    var hooks = (report && report.hooks) || {};
+    var infer = (report && report.inference) || {};
+    var server = (report && report.server) || {};
+    var builds = (report && report.builds) || {};
+    var project = (report && report.project) || {};
+
+    out.push({
+      name: "This chat",
+      what: "Everything starts as turns in a Claude Code conversation.",
+      facts: [["session", str(vault.session_id).slice(0, 8) || "—"],
+              ["directory", str(project.cwd) || "—"]]
+    });
+
+    var behind = Math.max(0, Number(infer.requested || 0)
+                          - Number(infer.analyzed || 0));
+    out.push({
+      name: "Hooks",
+      what: "Claude Code runs a script on each turn, which hands the"
+            + " transcript to the vault.",
+      warn: hooks.installed === false || !hooks.is_repo,
+      facts: [["events", array(hooks.events).length
+               ? String(array(hooks.events).length) + " installed" : "none"],
+              ["runs", hooks.is_repo ? "this repository"
+               : (str(hooks.runtime) ? "installed plugin " + str(hooks.runtime)
+                  : "nothing found on PATH")]],
+      note: hooks.is_repo ? "" :
+        "The hooks run an installed copy, not the code in this repository."
+        + " Anything added here that they need is invisible to them."
+    });
+
+    out.push({
+      name: "The vault",
+      what: "One directory per chat: its turns, its goals, its TODO rows.",
+      facts: [["at", str(vault.base)],
+              ["holds", String(vault.chats || 0) + " chats · "
+               + String(vault.projects || 0) + " projects"]]
+    });
+
+    out.push({
+      name: "The analyser",
+      what: "Reads new turns and writes goals, in a process of its own.",
+      warn: !infer.on || behind > 200,
+      facts: [["state", infer.on ? str(infer.status) || "idle" : "off"],
+              ["read", String(infer.analyzed || 0) + " of "
+               + String(infer.requested || 0) + " turns"]],
+      note: !infer.on
+        ? "Off for this chat — " + (str(infer.why) || "by request")
+          + ". The tree holds only what you typed."
+        : (behind > 200 ? String(behind) + " turns have not been read yet."
+           : "")
+    });
+
+    out.push({
+      name: "This workspace",
+      what: "Serves the goal tree, and is itself the plugin's own code.",
+      warn: !!server.stale,
+      facts: [["source", str(server.source)],
+              ["restarts itself", server.auto_reload ? "yes" : "no"]],
+      note: server.stale
+        ? "Running older code than the files on disk."
+        : ""
+    });
+
+    out.push({
+      name: "Builds",
+      what: "A TODO row handed to Claude, running in the project's"
+            + " directory.",
+      warn: Number(builds.stale || 0) > 0,
+      facts: [["out now", String(builds.live || 0)],
+              ["records", String(builds.records || 0)]],
+      note: Number(builds.stale || 0) > 0
+        ? String(builds.stale) + " say they are running, but their process"
+          + " has gone."
+        : ""
+    });
+    return out;
+  }
+
+  function systemNode() {
+    var box = el("div", "hc-system");
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", "How this workspace works");
+    var head = el("div", "hc-system-head");
+    head.appendChild(el("div", "hc-overview-name", "How this works"));
+    var again = el("span", "hc-system-again", "Read again");
+    again.setAttribute("role", "button");
+    again.setAttribute("data-hc-system-reload", "");
+    head.appendChild(again);
+    box.appendChild(head);
+    box.appendChild(el("div", "hc-overview-about",
+      "Your turns become goals by passing through these, in order. Each"
+      + " one says what it is right now, read from the running system."));
+    var flow = el("div", "hc-system-flow");
+    flow.setAttribute("data-hc-system-flow", "");
+    box.appendChild(flow);
+    return box;
+  }
+
+  function drawSystem() {
+    if (!systemBox) return false;
+    var flow = systemBox.querySelector("[data-hc-system-flow]");
+    if (!flow) return false;
+    wipe(flow);
+    if (!systemKept || !systemKept.ok) {
+      flow.appendChild(el("div", "hc-overview-empty",
+        "could not read the system"));
+      return true;
+    }
+    systemStages(systemKept).forEach(function (stage, i) {
+      if (i) flow.appendChild(el("div", "hc-system-arrow", "\u2193"));
+      var card = el("div", "hc-system-stage");
+      if (stage.warn) card.setAttribute("data-hc-warn", "");
+      var top = el("div", "hc-system-stage-head");
+      top.appendChild(el("span", "hc-system-dot", "\u25cf"));
+      top.appendChild(el("span", "hc-system-name", stage.name));
+      card.appendChild(top);
+      card.appendChild(el("div", "hc-system-what", stage.what));
+      var facts = el("div", "hc-overview-facts");
+      array(stage.facts).forEach(function (pair) {
+        var row = el("div", "hc-overview-fact");
+        row.appendChild(el("span", "hc-overview-fact-k", pair[0]));
+        row.appendChild(el("span", "hc-overview-fact-v", pair[1]));
+        facts.appendChild(row);
+      });
+      card.appendChild(facts);
+      if (stage.note) card.appendChild(el("div", "hc-system-note", stage.note));
+      flow.appendChild(card);
+    });
+    return true;
+  }
+
+  function renderSystem() {
+    if (serverState.scope !== "chat") {
+      if (systemShown()) closeSystem();
+      return false;
+    }
+    if (!systemShown()) return false;
+    ensureProjectStyles();
+    if (!systemBox || !inLiveDocument(systemBox)) {
+      if (systemBox && systemBox.parentNode) {
+        systemBox.parentNode.removeChild(systemBox);
+      }
+      systemBox = systemNode();
+      (document.body || document.documentElement).appendChild(systemBox);
+    }
+    syncProjectTheme(systemBox);
+    drawSystem();
+    return true;
+  }
+
   function openOverview() {
     var who = projectInfo();
     var root = document.documentElement;
@@ -5206,11 +5423,18 @@
         }
         return;
       }
+      if (closestAttr(target, "data-hc-system-reload")) {
+        stop();
+        loadSystem();
+        return;
+      }
       var viewTab = closestByClass(target, "hc-viewtab");
       if (viewTab) {
         stop();
-        if (viewTab.getAttribute("data-hc-viewtab") === "overview") openOverview();
-        else closeOverview();
+        var want = viewTab.getAttribute("data-hc-viewtab");
+        if (want === "overview") { closeSystem(); openOverview(); }
+        else if (want === "system") openSystem();
+        else { closeSystem(); closeOverview(); }
         renderViewTabs();
         return;
       }
@@ -9180,7 +9404,8 @@
     var tabs = document.querySelector(".hc-viewtabs");
     if (!tabs) {
       tabs = el("div", "hc-viewtabs");
-      [["overview", "Overview"], ["goals", "Goals"]].forEach(function (pair) {
+      [["overview", "Overview"], ["goals", "Goals"],
+       ["system", "System"]].forEach(function (pair) {
         var tab = el("span", "hc-viewtab", pair[1]);
         tab.setAttribute("data-hc-viewtab", pair[0]);
         tab.setAttribute("role", "button");
@@ -9206,9 +9431,10 @@
     var chips = document.querySelector(".hc-chiprow");
     if (chips && chips.parentNode !== bar) bar.appendChild(chips);
     // Counts describe the tree, and the overview is not the tree.
-    if (overviewShown()) bar.setAttribute("data-hc-hidden", "");
+    if (overviewShown() || systemShown()) bar.setAttribute("data-hc-hidden", "");
     else bar.removeAttribute("data-hc-hidden");
-    var on = overviewShown() ? "overview" : "goals";
+    var on = systemShown() ? "system"
+      : overviewShown() ? "overview" : "goals";
     var kids = tabs.children || [];
     var moved = false;
     for (var i = 0; i < kids.length; i += 1) {
@@ -10106,6 +10332,7 @@
       renderAnalyzer();
       renderProjectChip();
       renderOverview();
+      renderSystem();
       renderHandoff();
       renderBell();
       renderGear();
@@ -11650,6 +11877,12 @@
     projectChatsOf: projectChatsOf,
     remoteHref: remoteHref,
     openOverview: openOverview,
+    openSystem: openSystem,
+    closeSystem: closeSystem,
+    systemShown: systemShown,
+    renderSystem: renderSystem,
+    loadSystem: loadSystem,
+    systemStages: systemStages,
     closeOverview: closeOverview,
     renderOverview: renderOverview,
     overviewShown: overviewShown,

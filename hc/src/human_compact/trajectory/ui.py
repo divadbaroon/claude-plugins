@@ -848,6 +848,143 @@ def project_json(root, cwd):
 README_NAMES = ("README.md", "readme.md", "README.markdown", "README")
 
 
+# --- how the system works, as it is actually wired ----------------------
+#
+# A workspace made of a hook, a vault, an analyser, a server and a browser
+# has five places for a version to drift and no page that shows any of it.
+# Every confusion this project has cost a day to was one of them: a server
+# older than its code, hooks running an installed copy that had never heard
+# of a switch, a build whose process had gone. This reports what each stage
+# is right now -- read, never guessed, and honest about what it cannot see.
+
+HOOK_EVENTS_EXPECTED = ("SessionStart", "UserPromptSubmit", "Stop",
+                        "SubagentStop", "PostCompact", "SessionEnd")
+
+
+def _hook_report():
+    """The hooks as installed, and which code they would run.
+
+    The command in hooks.json is a script, and the script picks an
+    executable at run time -- so the question "which version answers a
+    hook" is not answered by the hook file alone, and the resolution has to
+    be repeated here the way the script does it.
+    """
+    home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+    where = home / "skills" / "vault" / "hooks" / "hooks.json"
+    out = {"file": str(where), "installed": where.exists(), "events": [],
+           "command": "", "runs": "", "runtime": "", "is_repo": False}
+    try:
+        value = json.loads(where.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return out
+    hooks = value.get("hooks") if isinstance(value, dict) else None
+    if isinstance(hooks, dict):
+        out["events"] = sorted(hooks)
+        for entries in hooks.values():
+            for entry in (entries if isinstance(entries, list) else []):
+                for hook in (entry.get("hooks") or []
+                             if isinstance(entry, dict) else []):
+                    command = str((hook or {}).get("command") or "")
+                    if command and not out["command"]:
+                        out["command"] = command
+    out["missing"] = [name for name in HOOK_EVENTS_EXPECTED
+                      if name not in out["events"]]
+    # The same search the script makes, in the same order.
+    picked = os.environ.get("HC_EXECUTABLE") or ""
+    if not (picked and os.access(picked, os.X_OK)):
+        installed = Path.home() / ".human-compact" / "bin" / "hc"
+        picked = str(installed) if os.access(installed, os.X_OK) else ""
+    out["runs"] = picked
+    if picked:
+        try:
+            target = Path(picked).resolve()
+            out["runtime"] = next((part for part in target.parts
+                                   if part[:1].isdigit() and "." in part), "")
+            out["is_repo"] = "human-compact/runtimes" not in str(target)
+        except (OSError, RuntimeError):
+            pass
+    return out
+
+
+def _build_report(session_id, root):
+    """How many builds are out, and how many records only say they are."""
+    from . import build as BUILD
+    out = {"live": 0, "records": 0, "stale": 0}
+    try:
+        with BUILD._RUNS_GUARD:
+            out["live"] = sum(1 for run in BUILD._RUNS.values() if run.alive())
+    except Exception:                                    # noqa: BLE001
+        pass
+    if not session_id:
+        return out
+    try:
+        folder = BUILD._builds_dir(session_id, root)
+        for record in folder.glob("*.json"):
+            if record.name in ("later.json", "usage.json"):
+                continue
+            try:
+                held = json.loads(record.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(held, dict):
+                continue
+            out["records"] += 1
+            if held.get("status") == "running" and not _pid_alive(held.get("pid")):
+                out["stale"] += 1
+    except OSError:
+        pass
+    return out
+
+
+def system_report(trajdir, chat_scoped):
+    """What this workspace is, stage by stage."""
+    from . import chat_synth as CSY
+    session_id, root = ((_chat_identity(trajdir)) if chat_scoped
+                        else (None, None))
+    stamp = _code_stamp()
+    report = {
+        "ok": True,
+        "server": {
+            "pid": os.getpid(),
+            "started_at": datetime.fromtimestamp(
+                _CODE_STAMP, timezone.utc).isoformat(timespec="seconds")
+            if _CODE_STAMP else "",
+            "code_changed_at": datetime.fromtimestamp(
+                stamp, timezone.utc).isoformat(timespec="seconds")
+            if stamp else "",
+            "stale": _server_is_stale(),
+            "auto_reload": str(os.environ.get("HC_AUTO_RELOAD", "")).strip()
+                           not in ("0", "off", "no"),
+            "source": str(Path(__file__).resolve().parent),
+        },
+        "vault": {"base": str(CS._state_base(root)), "chats": 0,
+                  "projects": len(PS.list_projects(root)),
+                  "session_id": session_id or ""},
+        "hooks": _hook_report(),
+        "builds": _build_report(session_id, root),
+    }
+    try:
+        report["vault"]["chats"] = sum(
+            1 for entry in CS._state_base(root).iterdir() if entry.is_dir())
+    except OSError:
+        pass
+    if session_id:
+        state = CS.get_analyzer_state(session_id, root)
+        off = CSY.inference_off(session_id, root)
+        report["inference"] = {
+            "on": not off,
+            "why": ("a file in this chat's vault directory" if off else ""),
+            "status": str(state.get("status") or ""),
+            "analyzed": state.get("last_analyzed_ordinal") or 0,
+            "requested": state.get("requested_ordinal") or 0,
+            "error": str(state.get("error") or "")[:200],
+        }
+        who = _project_identity(trajdir, chat_scoped, session_id)
+        report["project"] = {"name": who.get("name") or "",
+                             "cwd": who.get("cwd") or ""}
+    return report
+
+
 def project_readme(cwd):
     """The project's front page, under whatever name it was given.
 
@@ -2543,6 +2680,9 @@ class H(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "root": who["cwd"],
                                  "tree": (project_tree(who["cwd"])
                                           if who["cwd"] else [])})
+            elif self.path == "/api/system":
+                self._send(200, system_report(self.server.trajdir,
+                                              self.server.chat_scoped))
             elif self.path.split("?", 1)[0] == "/api/source":
                 from urllib.parse import parse_qs, urlsplit
                 query = parse_qs(urlsplit(self.path).query)
