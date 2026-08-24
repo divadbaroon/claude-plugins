@@ -2147,7 +2147,11 @@
       ".hc-handoff-btn[data-hc-handoff=\"copied\"]{color:var(--ok,#2f7d4f)}",
       ".hc-handoff-btn[data-hc-handoff=\"failed\"]{color:var(--acc,#a5492a)}",
       ".hc-handoff-said{display:none;white-space:nowrap}",
-      ".hc-handoff-btn[data-hc-handoff] .hc-handoff-said{display:inline}"
+      ".hc-handoff-btn[data-hc-handoff] .hc-handoff-said{display:inline}",
+      // On the Data tab it is a settings button first: its colours stay,
+      // and the state -- assembling, copied, failed -- reads in the label.
+      ".hc-settings-panel .hc-handoff-btn,.hc-settings-panel .hc-handoff-btn[data-hc-handoff]{color:var(--onacc,#fff);padding:5px 10px;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-settings-panel .hc-handoff-btn .hc-handoff-said{margin-left:6px;opacity:.85}"
   ].join("");
 
   var HANDOFF_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7\"></path><polyline points=\"16 6 12 2 8 6\"></polyline><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"15\"></line></svg>";
@@ -5612,6 +5616,31 @@
     record.setAttribute("data-hc-record", "");
     record.appendChild(el("div", "hc-settings-hint", "reading\u2026"));
     data.appendChild(record);
+    // The whole workspace as one markdown file for a teammate's agent: the
+    // goal tree, every TODO and note, the prompt. A large thing to put on
+    // a clipboard, which is why it is here, under a line that says so, and
+    // not in the header.
+    var hh = document.createElement("div");
+    hh.className = "hc-settings-sec-head";
+    hh.textContent = "Hand-off";
+    data.appendChild(hh);
+    data.appendChild(el("div", "hc-settings-hint",
+      "Copy the whole workspace \u2014 goals, TODOs, notes, prompt \u2014 as"
+      + " one markdown file for a teammate\u2019s agent. The file is also"
+      + " kept beside the goals as handoff.md."));
+    var hrow = document.createElement("div");
+    hrow.className = "hc-settings-row";
+    var hbtn = document.createElement("span");
+    hbtn.className = "hc-settings-btn hc-handoff-btn";
+    hbtn.setAttribute("role", "button");
+    hbtn.setAttribute("aria-label", "Hand off to a teammate");
+    hbtn.title = HANDOFF_TITLE;
+    hbtn.appendChild(text("Copy hand-off"));
+    var hsaid = document.createElement("span");
+    hsaid.className = "hc-handoff-said";
+    hbtn.appendChild(hsaid);
+    hrow.appendChild(hbtn);
+    data.appendChild(hrow);
     box.appendChild(data);
 
     // Joining someone else's project. A code carries where to go as well
@@ -6059,34 +6088,22 @@
   }
 
   // The hand-off button copied the whole workspace to the clipboard from
-  // the header. Taken off: it sat beside controls that do small things and
-  // did a very large one, with no way to tell before pressing it. The
-  // /api/handoff route and handoff.md are untouched.
+  // the header. Taken off there: it sat beside controls that do small things
+  // and did a very large one, with no way to tell before pressing it. It
+  // lives behind the gear now, on the Data tab, under a line that says what
+  // it does; the header slot stays empty. /api/handoff and handoff.md are
+  // untouched.
   function renderHandoff() {
     var slot = document.querySelector(".hc-handoff");
     if (slot) wipe(slot);
-    return false;
+    if (serverState.scope !== "chat" || !settingsPanelShown()) return false;
+    var btn = settingsPanelBox.querySelector(".hc-handoff-btn");
+    return btn ? dressHandoff(btn) : false;
   }
 
-  function renderHandoffDisabled() {
-    if (serverState.scope !== "chat") return false;
-    var slot = document.querySelector(".hc-handoff");
-    if (!slot) return false;
-    ensureAlertStyles();
-    bindAlerts();
-    var btn = slot.querySelector(".hc-handoff-btn");
-    if (!btn) {
-      btn = document.createElement("span");
-      btn.className = "hc-handoff-btn";
-      btn.setAttribute("role", "button");
-      btn.setAttribute("aria-label", "Hand off to a teammate");
-      btn.title = HANDOFF_TITLE;
-      btn.innerHTML = HANDOFF_ICON;
-      var said = document.createElement("span");
-      said.className = "hc-handoff-said";
-      btn.appendChild(said);
-      slot.appendChild(btn);
-    }
+  // The button's state -- busy, copied, failed -- written onto it, and the
+  // words for it into its own label. Answers whether anything changed.
+  function dressHandoff(btn) {
     var changed = false;
     var was = btn.getAttribute("data-hc-handoff");
     if (handoffState && was !== handoffState) {

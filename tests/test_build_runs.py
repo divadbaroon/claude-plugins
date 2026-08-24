@@ -264,7 +264,7 @@ class BuildRunTests(unittest.TestCase):
         # process is gone; wait for the word rather than for the exit.
         self.assertTrue(self.wait_for(
             lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
-            == "waiting"))
+            == "waiting"), BUILD.load_run(self.session, self.root, "g1"))
         record = BUILD.load_run(self.session, self.root, "g1")
         self.assertEqual("waiting", record["status"])
 
@@ -613,6 +613,11 @@ class TransientRetryTests(BuildRunTests):
         self.assertEqual(2, len(calls))
         self.assertFalse(calls[0]["resume"])
         self.assertTrue(calls[1]["resume"], "the retry resumes the same session")
+        # The reader thread writes the record's verdict a beat after the
+        # rows change; wait for the word rather than for the rows.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
+            == "idle"), BUILD.load_run(self.session, self.root, "g1"))
         record = BUILD.load_run(self.session, self.root, "g1")
         self.assertEqual("idle", record["status"])
         self.assertEqual(1, record.get("retry"))

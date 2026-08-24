@@ -297,7 +297,9 @@ class HandoffButtonTests(BridgeTestCase):
         "    : { ok: true };"
         "  return Promise.resolve({ ok: true, json: function () {"
         "    return Promise.resolve(body); } }); };"
-        "var btn = function () { H.render(); return slot.querySelector('.hc-handoff-btn'); };"
+        "var P = window.__hcPromptUI;"
+        "var btn = function () { P.gear.open(); H.render();"
+        "  var panel = P.gear.panel(); return panel && panel.querySelector('.hc-handoff-btn'); };"
         "var said = function () { var b = btn(); return b ? [b.getAttribute('data-hc-handoff'),"
         "  b.querySelector('.hc-handoff-said').textContent] : null; };"
     )
@@ -309,6 +311,45 @@ class HandoffButtonTests(BridgeTestCase):
     def test_a_global_vault_draws_no_button(self):
         got = self.handoff("[H.render(), slot.children.length];", scope="global")
         self.assertEqual([False, 0], got)
+
+    def test_the_header_slot_stays_empty_and_the_button_is_on_the_data_tab(self):
+        # Taken out of the header on purpose: beside controls that do small
+        # things it did a very large one. It is behind the gear, on the Data
+        # tab, under a line that says what it does.
+        got = self.handoff(
+            "var b = btn(); [slot.children.length, !!b, b && b.getAttribute('role'),"
+            " b && b.title, b && b.parentNode.parentNode.getAttribute('data-hc-tab'),"
+            " said()];")
+        self.assertEqual([0, True, "button", HO_TITLE, "data", [None, ""]], got)
+
+    def test_a_click_fetches_the_document_copies_it_and_says_copied(self):
+        got = self.handoff(
+            "btn();"
+            "var seen = [];"
+            "var p = H.copy(); seen.push(said());"
+            "p.then(function (ok) {"
+            "  seen.push([ok, said(), copied, calls.filter(function (c) {"
+            "    return String(c[0]).indexOf('/api/handoff') >= 0; }).length]);"
+            "  fireTimers(); seen.push(said());"
+            "}); p.then(function () { return seen; });")
+        self.assertEqual(
+            [["busy", "assembling…"],
+             [True, ["copied", "copied ✓"], ["# Hand-off: acme/widgets\n"], 1],
+             [None, ""]],
+            got)
+
+    def test_a_server_that_cannot_hand_off_says_failed_and_copies_nothing(self):
+        got = self.handoff(
+            "btn();"
+            "fetch = function () { return Promise.resolve({ ok: true, json: function () {"
+            "  return Promise.resolve({ ok: false, error: 'nope' }); } }); };"
+            "H.copy().then(function (ok) { return [ok, said(), copied]; });")
+        self.assertEqual([False, ["failed", "copy failed"], []], got)
+
+
+HO_TITLE = ("Hand off: copy the whole workspace as markdown for a "
+            "teammate’s agent")
+
 
 if __name__ == "__main__":
     unittest.main()
