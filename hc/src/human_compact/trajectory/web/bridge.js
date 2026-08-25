@@ -6656,10 +6656,10 @@
       "[data-hc-launch] .hc-onb-note{margin-top:7px;font:13px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--fnt);max-width:52ch}",
       "[data-hc-launch] .hc-onb-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}",
       "[data-hc-launch] .hc-onb-btn{padding:7px 14px;border:1px solid var(--bd2);border-radius:6px;font:600 12.5px -apple-system,sans-serif;color:var(--dtxt);cursor:pointer;user-select:none}",
-      "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--acc);color:var(--ink)}",
+      "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--hc-ok);color:var(--ink)}",
       "[data-hc-launch] .hc-onb-btn-on{background:var(--hc-ok);border-color:var(--hc-ok);color:#08130c}",
       "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:12px;padding:9px 11px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);color:var(--dtxt);font:13px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;outline:none;resize:none}",
-      "[data-hc-launch] .hc-onb-field:focus{border-color:var(--acc)}",
+      "[data-hc-launch] .hc-onb-field:focus{border-color:var(--hc-ok)}",
       "[data-hc-launch] .hc-onb-list{margin-top:14px;max-height:44vh;overflow:auto;border:1px solid var(--bd);border-radius:6px}",
       "[data-hc-launch] .hc-onb-item{display:block;padding:10px 13px;border-bottom:1px solid var(--bd);cursor:pointer}",
       "[data-hc-launch] .hc-onb-item:last-child{border-bottom:none}",
@@ -6668,7 +6668,7 @@
       "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:12px/1.5 -apple-system,sans-serif;color:var(--fnt)}",
       "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:3px;font:10.5px 'Source Code Pro',monospace;color:var(--mut)}",
       "[data-hc-launch] .hc-onb-empty{padding:14px 13px;font:12.5px -apple-system,sans-serif;color:var(--fnt)}",
-      "[data-hc-launch] .hc-onb-said{margin-top:12px;font:12.5px -apple-system,sans-serif;color:var(--del)}",
+      "[data-hc-launch] .hc-onb-said{margin-top:12px;font:12.5px -apple-system,sans-serif;color:var(--hc-warn)}",
       "[data-hc-launch] .hc-rail-tabs{display:inline-flex;gap:14px;align-items:baseline}",
       "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
@@ -9399,18 +9399,43 @@
     }, true);
   }
 
+  var ONB_VARS = ["--panel", "--panel2", "--ink", "--dtxt", "--fnt", "--mut",
+                  "--bd", "--bd2", "--hov", "--hc-ok", "--hc-warn"];
+
+  function onbCarryTheme(node) {
+    var shell = document.querySelector(".hc");
+    if (!shell || typeof getComputedStyle !== "function") return;
+    var from = getComputedStyle(shell);
+    ONB_VARS.forEach(function (name) {
+      var value = from.getPropertyValue(name);
+      if (value && value.trim()) node.style.setProperty(name, value.trim());
+    });
+  }
+
   function renderOnboarding(force) {
     onbDelegate();
     if (!onbNeeded()) { if (onbBox) onbClose(); return false; }
     // Already up and unchanged: rebuilding on every sweep would take the
-    // caret out of the name field between keystrokes.
-    if (onbBox && onbBox.parentNode && !force) return true;
+    // caret out of the name field between keystrokes. The theme is re-read
+    // anyway -- the artifact applies dark after its first paint, and a panel
+    // that copied the palette once would stay light in front of a dark
+    // workspace forever.
+    if (onbBox && onbBox.parentNode && !force) {
+      onbCarryTheme(onbBox);
+      return true;
+    }
     var at = onbBox && onbBox.querySelector("[data-hc-onb-name]");
     var typed = at ? at.value : null;
     var area = onbBox && onbBox.querySelector("[data-hc-onb-why]");
     var typedWhy = area ? area.value : null;
     onbClose();
     var shade = el("div", "hc-onb-shade");
+    // The theme's variables are declared on the artifact's own shell, and this
+    // panel deliberately lives outside it -- on documentElement, where nothing
+    // the artifact redraws can take its listeners away. So they are carried
+    // across by hand; without this the panel has no background and its text is
+    // the browser's black, on a dark shade.
+    onbCarryTheme(shade);
     var box = el("div", "hc-onb");
     onbBody(box);
     if (onbSaid) box.appendChild(el("div", "hc-onb-said", onbSaid));

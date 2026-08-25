@@ -2737,7 +2737,7 @@ class ProjectOnboardingServerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.a = Path(self.tmp.name) / "chat-a"
-        write_scope(self.a, [goal("g1", "a goal")], [], bound=False)
+        write_scope(self.a, [], [], bound=False)
 
     def test_a_fresh_chat_reports_itself_unbound(self):
         with server_for(self.a) as url:
@@ -2787,11 +2787,13 @@ class OnboardingBrowserTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.a = Path(self.tmp.name) / "chat-a"
-        write_scope(self.a, [goal("g1", "a goal")], [], bound=False)
+        # Genuinely new: a chat with a tree is taken to be in its project
+        # already, which is the migration's whole job.
+        write_scope(self.a, [], [], bound=False)
 
     def open(self, page, url):
         page.goto(url)
-        page.wait_for_selector("text=a goal", timeout=15000)
+        page.wait_for_selector(".hc", timeout=15000)
 
     def test_an_unbound_chat_opens_on_the_question_not_the_tree(self):
         try:
@@ -2857,3 +2859,100 @@ class OnboardingBrowserTests(unittest.TestCase):
             b.close()
         self.assertTrue(state["project_bound"])
         self.assertEqual("Older Thing", state["project"]["name"])
+
+
+class OnboardingMigrationTests(unittest.TestCase):
+    """A chat already working in a project is not asked which project it is.
+
+    Binding arrived after these chats did. Every one of them predates it, so
+    "has no binding" describes the whole existing world -- and asking someone
+    mid-project which project they are in is the bug, not the feature.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+
+    def test_a_chat_with_goals_is_taken_as_already_in_its_project(self):
+        write_scope(self.a, [goal("g1", "real work underway")], [], bound=False)
+        with server_for(self.a) as url:
+            state = get_json(url + "/api/state")
+        self.assertTrue(state["project_bound"],
+                        "a chat with a tree is mid-project; asking is the bug")
+
+    def test_a_chat_whose_directory_is_a_known_project_is_taken_as_bound(self):
+        write_scope(self.a, [], [], bound=False)
+        home = str(Path(self.tmp.name) / "acme")
+        (self.a / "manifest.json").write_text(json.dumps(
+            {"schema_version": 1, "session_id": self.a.name, "cwd": home}))
+        from human_compact.trajectory import project_store as PS
+        PS.save_project(self.a.parent, home, {"objective": "already a project"})
+        with server_for(self.a) as url:
+            state = get_json(url + "/api/state")
+        self.assertTrue(state["project_bound"])
+
+    def test_a_genuinely_new_chat_is_still_asked(self):
+        write_scope(self.a, [], [], bound=False)
+        with server_for(self.a) as url:
+            state = get_json(url + "/api/state")
+        self.assertFalse(state["project_bound"],
+                         "an empty chat in no known project is what onboarding is for")
+
+    def test_the_migration_is_written_down_so_it_is_asked_once(self):
+        write_scope(self.a, [goal("g1", "real work underway")], [], bound=False)
+        with server_for(self.a) as url:
+            get_json(url + "/api/state")
+        manifest = json.loads((self.a / "manifest.json").read_text())
+        self.assertTrue(manifest.get("project_bound_at"),
+                        "the answer should survive the next reload")
+
+
+class OnboardingLooksLikeTheWorkspaceTests(unittest.TestCase):
+    """The panel lives outside the artifact, so it must carry its own palette.
+
+    The theme's variables are declared on the artifact's shell. A panel on
+    documentElement inherits none of them: it had no background and drew its
+    text in the browser's black, on a dark shade.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [], [], bound=False)
+
+    def test_the_panel_wears_the_workspace_palette_and_sits_in_the_middle(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1440, "height": 900})
+            page.goto(url)
+            page.wait_for_selector(".hc-onb", timeout=15_000)
+            # The artifact applies its theme after the first paint, so this is
+            # about what the reader ends up looking at, not the first frame.
+            page.wait_for_timeout(2_000)
+            seen = page.evaluate(
+                "() => {"
+                "  const b = document.querySelector('.hc-onb');"
+                "  const shell = document.querySelector('.hc');"
+                "  const r = b.getBoundingClientRect();"
+                "  return {panel: getComputedStyle(b).backgroundColor,"
+                "          want: getComputedStyle(shell).getPropertyValue('--panel').trim(),"
+                "          title: getComputedStyle(document.querySelector"
+                "            ('.hc-onb-title')).color,"
+                "          midX: Math.abs((r.left + r.width / 2) - innerWidth / 2),"
+                "          midY: Math.abs((r.top + r.height / 2) - innerHeight / 2)};}")
+            b.close()
+        self.assertNotEqual("rgba(0, 0, 0, 0)", seen["panel"],
+                            "a panel with no background is the shade with words on it")
+        self.assertNotEqual("rgb(0, 0, 0)", seen["title"],
+                            "black text on a dark shade is the bug this fixes")
+        self.assertEqual("#0d1117", seen["want"], "the workspace is dark here")
+        self.assertEqual("rgb(13, 17, 23)", seen["panel"],
+                         "the panel should wear the same panel colour as the shell")
+        self.assertLess(seen["midX"], 3)
+        self.assertLess(seen["midY"], 3)

@@ -322,6 +322,22 @@ def bind_project(session_id: str, home, root: Optional[Path] = None) -> str:
     return resolved
 
 
+def mark_project_migrated(session_id: str, root: Optional[Path] = None) -> None:
+    """Record that a chat predating the binding was taken as already bound.
+
+    Written without a project_home: the chat keeps naming whatever directory
+    it named before, and only stops being asked about it.
+    """
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = load_manifest(session_id, root)
+        if manifest.get("project_bound_at"):
+            return
+        manifest["project_bound_at"] = _now()
+        manifest["project_bound_by"] = "migration"
+        manifest["updated_at"] = _now()
+        _atomic_json(p.manifest, manifest)
+
+
 def needs_project_onboarding(session_id: str, root: Optional[Path] = None) -> bool:
     """Whether to ask this chat which project it is for.
 

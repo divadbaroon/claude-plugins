@@ -643,6 +643,35 @@ def project_tree(root, depth=3):
     return walk(base, 1)
 
 
+def _ask_which_project(trajdir, session_id, root, goals) -> bool:
+    """Whether to put this chat through onboarding -- and if not, say so once.
+
+    Binding arrived after every chat that already exists, so "has no binding"
+    describes the whole existing world rather than the new chats onboarding
+    is for. A chat is taken to be in its project already when it has a tree
+    of its own, or when the directory it works in is one somebody has already
+    made a project of. That is written down rather than merely returned: a
+    conclusion recomputed on every poll would be reached again after the
+    reader answered, and answering once is the whole point.
+    """
+    if not CS.needs_project_onboarding(session_id, root):
+        return False
+    working = bool((goals or {}).get("goals"))
+    if not working:
+        try:
+            where = _manifest_cwd(str(session_id), root)
+            working = bool(where and PS.read_file(root, where).get("project"))
+        except Exception:  # noqa: BLE001 - a migration must never break a read
+            working = False
+    if not working:
+        return True
+    try:
+        CS.mark_project_migrated(session_id, root)
+    except Exception:  # noqa: BLE001 - asking twice beats failing to answer
+        pass
+    return False
+
+
 def _project_identity(trajdir, chat_scoped, session_id):
     """The directory this chat works in, named for the reader.
 
@@ -1778,7 +1807,7 @@ def _payload(trajdir=None, chat_scoped=None):
             session_id, root = _chat_identity(trajdir)
             # Resolved with the same root the rest of this payload uses: a
             # server on a vault of its own must not answer from the default.
-            bound = not CS.needs_project_onboarding(session_id, root)
+            bound = not _ask_which_project(trajdir, session_id, root, goals)
             analyzer = CS.get_analyzer_state(session_id, root)
             notices = CS.load_notices(session_id, root)
             session = session_id
