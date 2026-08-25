@@ -4839,10 +4839,26 @@ class LaunchSkinTests(BridgeTestCase):
                               r"height:calc\(var\(--hc-row\) - 1px\);"
                               r"margin:0;padding:0!important")
         # And the tabs are drawn into the same bar, at the other end. It is
-        # a row short of --hc-row because it carries the header's own rule.
+        # a row short of --hc-row because it carries the header's own rule
+        # -- the one rule: none between the rows, so the header reads as
+        # one block rather than a bar with a strip under it.
         self.assertIn(".hc-subbar{position:absolute;left:0;right:0;bottom:0;"
                       "height:calc(var(--hc-row) - 1px);", css)
-        self.assertIn(".hc-subtab[data-hc-subtab-on]::after{", css)
+        self.assertNotRegex(css, r"\.hc-subbar\{[^}]*border-top")
+        # The tabs are set as the counts are: 11px, the same tracking,
+        # title case; the open one is bold and stands on the header's rule.
+        self.assertIn(".hc-subtab{position:relative;display:inline-flex;"
+                      "align-items:center;height:100%;font:500 11px 'Source Code Pro',"
+                      "monospace;letter-spacing:.2px;color:var(--fnt);", css)
+        self.assertIn(".hc-subtab[data-hc-subtab-on]{font-weight:700;color:var(--ink)}", css)
+        # The counts go with the tree: OVERVIEW is not the tree.
+        self.assertIn("[data-hc-launch][data-hc-overview] .hc-titlerow"
+                      "{display:none!important}", css)
+        self.assertIn(".hc-subtab[data-hc-subtab-on]::after{content:'';position:absolute;"
+                      "left:0;right:0;bottom:-1px;height:2px;", css)
+        # And the page does not rubber-band: a bounce would carry the
+        # sticky header off while the fixed counts stayed.
+        self.assertRegex(css, r"\[data-hc-launch\]\{[^}]*overscroll-behavior:none\}")
 
     def layout(self, tail):
         # The harness's root has a bare style object; the bridge writes the

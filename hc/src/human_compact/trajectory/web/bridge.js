@@ -3057,7 +3057,10 @@
       // are the widths the shell shipped with.
       // The header is two rows of --hc-row: the product and the project on
       // the first, the page tabs and the filter counts on the second.
-      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-warn:#9a6700;--hc-row:37px;--hc-top:74px;--hc-left:300px;--hc-right:330px}",
+      // No rubber-band: the page has nothing to scroll, and a trackpad
+      // bounce would carry the sticky header off while the counts, fixed
+      // to the viewport, stayed -- the bar visibly coming apart.
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-warn:#9a6700;--hc-row:37px;--hc-top:74px;--hc-left:300px;--hc-right:330px;overscroll-behavior:none}",
       "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-warn:#d29922}",
       // The page is the workspace: it fills the window and does not scroll
       // as a whole -- each column scrolls in its own right, the way the
@@ -3102,12 +3105,20 @@
       "[data-hc-launch] .hc-settings{order:2}",
       // The second row. The tabs are drawn into it by the bridge; the
       // filter counts are the artifact's own row, lifted here by position.
-      "[data-hc-launch] .hc-subbar{position:absolute;left:0;right:0;bottom:0;height:calc(var(--hc-row) - 1px);box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 16px;border-top:1px solid var(--bd)}",
-      "[data-hc-launch] .hc-subtabs{display:inline-flex;align-items:center;gap:24px;height:100%}",
-      "[data-hc-launch] .hc-subtab{position:relative;display:inline-flex;align-items:center;height:100%;font:600 10.5px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt);cursor:pointer;user-select:none}",
-      "[data-hc-launch] .hc-subtab:hover{color:var(--mut)}",
-      "[data-hc-launch] .hc-subtab[data-hc-subtab-on]{color:var(--ink)}",
-      "[data-hc-launch] .hc-subtab[data-hc-subtab-on]::after{content:'';position:absolute;left:0;right:0;bottom:8px;height:2px;background:var(--ink);border-radius:1px}",
+      // No rule between the rows: the header is one block with one line
+      // under it, and the tabs stand on that line rather than in a strip
+      // of their own.
+      "[data-hc-launch] .hc-subbar{position:absolute;left:0;right:0;bottom:0;height:calc(var(--hc-row) - 1px);box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 16px}",
+      "[data-hc-launch] .hc-subtabs{display:inline-flex;align-items:center;gap:22px;height:100%}",
+      // The tabs are set exactly as the counts at the row's other end --
+      // the same size, tracking and case -- so the row reads as one row of
+      // words. Which page is open is said by weight and the line under it.
+      "[data-hc-launch] .hc-subtab{position:relative;display:inline-flex;align-items:center;height:100%;font:500 11px 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-subtab:hover{color:var(--ink)}",
+      "[data-hc-launch] .hc-subtab[data-hc-subtab-on]{font-weight:700;color:var(--ink)}",
+      // The mark sits on the header's own rule, covering it under the open
+      // tab: one line, thickened where the page is, not a second one.
+      "[data-hc-launch] .hc-subtab[data-hc-subtab-on]::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--ink)}",
       // The title row loses the page heading -- a chat workspace has one
       // page, already named in the header -- and its filter counts move up
       // INTO the header's second row, so the row itself takes no height.
@@ -3117,6 +3128,9 @@
       // right end, opposite the tabs.
       "[data-hc-launch] .hc-titlerow{position:fixed;top:var(--hc-row);left:auto;right:16px;height:calc(var(--hc-row) - 1px);margin:0;padding:0!important;align-items:center!important;z-index:20}",
       "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
+      // Counts describe the tree, and the overview is not the tree. The
+      // artifact writes the row's display inline, so this has to shout.
+      "[data-hc-launch][data-hc-overview] .hc-titlerow{display:none!important}",
       "[data-hc-launch] .hc-chiprow{gap:22px!important;align-items:center!important}",
       // Plain text, not pills: a name and, beside it in a quieter colour,
       // how many goals answer to it.
@@ -5555,7 +5569,7 @@
   // in front of, and the goal tree. The filter counts are the artifact's
   // own row, lifted to the other end of the same bar by the stylesheet.
 
-  var PROJECT_TABS = [["overview", "OVERVIEW"], ["goals", "GOALS"]];
+  var PROJECT_TABS = [["overview", "Overview"], ["goals", "Goals"]];
   var projectFacts = null;
   var projectPending = false;
   var projectBox = null;
@@ -5830,6 +5844,13 @@
     var want = !!on;
     if (want === overviewOn) return overviewOn;
     overviewOn = want;
+    // Said on the root as well, for the stylesheet: the filter counts
+    // ride in the header and go when the tree they count is not on screen.
+    var root = document.documentElement;
+    if (root && root.setAttribute) {
+      if (want) root.setAttribute("data-hc-overview", "");
+      else root.removeAttribute("data-hc-overview");
+    }
     if (want) loadProject(true).then(function () { renderOverview(); });
     renderOverview();
     renderSubTabs();
@@ -5865,7 +5886,7 @@
     projectBox.appendChild(head);
     projectBox.appendChild(projectFactRows(facts || { cwd: "", git: false }));
     var more = mk("div", "hc-project-menu-more",
-                  "Open OVERVIEW for what this workspace adds up to.");
+                  "Open Overview for what this workspace adds up to.");
     projectBox.appendChild(more);
     (document.body || document.documentElement).appendChild(projectBox);
     var name = document.querySelector(".hc-project-name");
