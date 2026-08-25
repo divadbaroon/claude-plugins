@@ -576,6 +576,23 @@ class ProjectMenuTests(BridgeTestCase):
             " document.querySelector('.hc-project-act') === null]);"))
         self.assertEqual([False, True, "", True], got)
 
+    def test_the_view_tabs_are_drawn_into_the_header_as_words(self):
+        # The tabs live in the header's own second row, under the brand,
+        # and read as the filter counts do -- "Overview", "Goals" -- not as
+        # a tracked strip of capitals. Nothing is parked on .hc for them,
+        # and the root carries no attribute for a strip that is not there.
+        got = json.loads(self.run_js(
+            PRELUDE + fetch_js() + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state()) +
+            "P.renderViewTabs();"
+            "var tabs = document.querySelector('.hc-viewtabs');"
+            "JSON.stringify([tabs.parentNode.className, tabs.parentNode.parentNode === header,"
+            " texts(tabs, 'hc-viewtab'), tabs.children[1].getAttribute('data-hc-on'),"
+            " document.documentElement.getAttribute('data-hc-viewtabs'),"
+            " document.querySelector('.hc-pillbar') === null,"
+            " P.renderViewTabs(), tabs.children.length]);"))
+        self.assertEqual(["hc-subbar", True, ["Overview", "Goals"], "", None, True,
+                          False, 2], got)
+
     def test_remote_hrefs(self):
         got = json.loads(self.run_js(
             "JSON.stringify(['git@github.com:acme/myrepo.git', 'https://github.com/acme/myrepo.git',"

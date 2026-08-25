@@ -4759,6 +4759,7 @@ LAUNCH_CLASSES = (
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-chip-n", "hc-titlerow", "hc-chiprow", "hc-brand",
+    "hc-subbar", "hc-viewtabs",
     "hc-panels", "hc-session", "hc-chats", "hc-handoff", "hc-alerts",
     "hc-settings", "hc-updated",
     "hc-search", "hc-search-field", "hc-search-glyph", "hc-search-input",
@@ -4790,47 +4791,58 @@ def _contrast(fg, bg):
 class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
 
-    def test_what_sits_under_the_tab_strip_is_measured_from_it(self):
-        # One geometry: header 37, then a 32px strip holding the view tabs
-        # on the left and the filter counts on the right. The counts used
-        # to take a 42px row of their own under the tabs; now they take no
-        # height, and everything below is measured from the strip's foot.
+    def test_the_tabs_are_the_headers_second_row_and_read_as_the_counts_do(self):
+        # One header of two rows (--hc-row each) under one rule: the brand
+        # and the project on the first, the view tabs and the filter counts
+        # on the second. The tabs used to be a 32px strip of their own,
+        # fixed under a one-row header at its own indent with its own rule
+        # -- a second bar, and one that came apart from the header on a
+        # trackpad bounce.
         css = self.run_js("window.__hcPromptUI.launchCss();")
-        head, tabs = 37, 32
-        self.assertIn(".hc-viewtabs{position:fixed;top:%dpx;" % head, css)
-        self.assertIn("height:%dpx;padding:0 24px;box-sizing:border-box;"
-                      "background:var(--bg)" % tabs, css)
-        self.assertIn(".hc-viewtab{cursor:pointer;user-select:none;"
-                      "font:600 11px", css)
-        self.assertIn("color:var(--fnt);height:%dpx;display:flex;" % tabs, css)
-        # The counts sit in the tab row, pinned to its right edge, as words
-        # with no box around them.
-        self.assertIn(".hc-pillbar{position:fixed;top:%dpx;right:24px;" % head, css)
-        self.assertIn("height:%dpx;padding:0;box-sizing:border-box}" % tabs, css)
-        self.assertIn(".hc-pillbar .hc-chip{padding:0!important;border:0!important;",
+        row = 37
+        self.assertIn("--hc-row:%dpx;--hc-top:%dpx" % (row, row * 2), css)
+        self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
+                      "background:var(--bg);height:var(--hc-top);box-sizing:border-box;"
+                      "padding:0 16px calc(var(--hc-row) - 1px)!important;", css)
+        # The second row is the header's own child at its foot, at the
+        # header's indent, with no rule of its own.
+        self.assertIn(".hc-subbar{position:absolute;left:0;right:0;bottom:0;"
+                      "height:calc(var(--hc-row) - 1px);", css)
+        self.assertRegex(css, r"\.hc-subbar\{[^}]*padding:0 16px\}")
+        self.assertNotRegex(css, r"\.hc-subbar\{[^}]*border-top")
+        self.assertNotIn(".hc-viewtabs{position:fixed", css)
+        self.assertNotIn(".hc-pillbar", css)
+        self.assertNotIn("[data-hc-viewtabs]", css)
+        # The tabs are set as the counts at the row's other end are: 11px,
+        # the same tracking, title case; the open one is bold and stands on
+        # the header's rule.
+        self.assertIn(".hc-viewtab{position:relative;display:inline-flex;"
+                      "align-items:center;height:100%;font:500 11px 'Source Code Pro',"
+                      "monospace;letter-spacing:.2px;color:var(--fnt);", css)
+        self.assertNotRegex(css, r"\.hc-viewtab\{[^}]*uppercase")
+        self.assertIn(".hc-viewtab[data-hc-on]{font-weight:700;color:var(--ink)}", css)
+        self.assertIn(".hc-viewtab[data-hc-on]::after{content:'';position:absolute;"
+                      "left:0;right:0;bottom:-1px;height:2px;", css)
+        # The counts: the artifact's own row, lifted to the second row's
+        # right end as words with no box around them, and gone on the
+        # overview -- counts describe the tree, and the overview is not it.
+        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;top:var\(--hc-row\);"
+                              r"left:auto;right:16px;height:calc\(var\(--hc-row\) - 1px\);")
+        self.assertIn("[data-hc-launch][data-hc-overview] .hc-titlerow"
+                      "{display:none!important}", css)
+        self.assertIn(".hc-chip{padding:0;border:0;border-radius:0;background:transparent;",
                       css)
-        self.assertIn("[data-hc-launch][data-hc-viewtabs]{--hc-top:%dpx}"
-                      % (head + tabs), css)
-        # The overview starts at the same height: there is no second row
-        # for it to be spared.
-        self.assertIn("[data-hc-launch][data-hc-viewtabs][data-hc-overview]"
-                      "{--hc-top:%dpx}" % (head + tabs), css)
-        # The goals column clears the strip, which is --hc-top less the
-        # header the artifact draws itself.
-        self.assertIn("[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2)"
-                      "{padding-top:%dpx!important}" % tabs, css)
-        # And again with the notice bar (34) above everything.
-        self.assertIn("[data-hc-launch][data-hc-notice] .hc-viewtabs"
-                      "{top:%dpx}" % (head + 34), css)
-        self.assertIn("[data-hc-launch][data-hc-notice] .hc-pillbar"
-                      "{top:%dpx}" % (head + 34), css)
-        self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
-                      "{--hc-top:%dpx}" % (head + 34 + tabs), css)
-        self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
-                      "[data-hc-overview]{--hc-top:%dpx}" % (head + 34 + tabs), css)
-        self.assertIn("[data-hc-launch][data-hc-notice][data-hc-viewtabs]"
-                      " .hc>div:nth-child(2){padding-top:%dpx!important}"
-                      % (34 + tabs), css)
+        # With the notice bar (34) under the header, what is under it drops
+        # by that much; the header keeps its two rows.
+        self.assertIn("[data-hc-launch][data-hc-notice]{--hc-top:%dpx}" % (row * 2 + 34), css)
+        self.assertIn("[data-hc-launch][data-hc-notice] .hc>div:first-child{height:%dpx}"
+                      % (row * 2), css)
+        self.assertIn("[data-hc-launch][data-hc-notice] .hc>div:nth-child(2)"
+                      "{padding-top:34px!important}", css)
+        self.assertIn(".hc-notice-stack{position:fixed;top:%dpx;" % (row * 2), css)
+        # And the page does not rubber-band: a bounce would carry the
+        # sticky header off while the fixed counts stayed.
+        self.assertRegex(css, r"\[data-hc-launch\]\{[^}]*overscroll-behavior:none\}")
 
     def test_the_stamp_is_a_tick_that_leads_the_header_tools(self):
         # The header used to end in a clock that changed every minute. It
@@ -4969,9 +4981,10 @@ class LaunchSkinTests(BridgeTestCase):
                       "border:0!important;border-radius:0!important", css)
         self.assertRegex(css, r"\.hc-rail-right\{[^}]*border-width:0 0 0 1px;"
                               r"border-radius:0;")
-        # The header is a fixed height and --hc-top is exactly that height,
-        # so the columns are sized against it, not against a guess.
-        self.assertIn("--hc-top:37px", css)
+        # The header is a fixed height -- two rows of --hc-row -- and
+        # --hc-top is exactly that height, so the columns are sized against
+        # it, not against a guess.
+        self.assertIn("--hc-row:37px;--hc-top:74px", css)
         # Sticky: the pills are pinned to the viewport, so the bar they sit
         # in must not scroll away from under them.
         self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
@@ -4982,11 +4995,12 @@ class LaunchSkinTests(BridgeTestCase):
         self.assertRegex(css, r"\.hc-brand\{font:600 15px Georgia,[^}]*serif!important")
         # No marker before the name: the brand is the word alone.
         self.assertNotIn(".hc-brand::before", css)
-        # The status pills' row is lifted into the header by position, and
-        # takes no height where the artifact renders it: the middle bar
-        # is gone.
-        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;top:0;"
-                              r"left:var\(--hc-pills-left,\d+px\);height:37px;"
+        # The filter counts' row is lifted into the header's second row by
+        # position, and takes no height where the artifact renders it: the
+        # middle bar is gone.
+        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;"
+                              r"top:var\(--hc-row\);left:auto;right:16px;"
+                              r"height:calc\(var\(--hc-row\) - 1px\);"
                               r"margin:0;padding:0!important")
 
     def layout(self, tail):

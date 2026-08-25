@@ -6293,11 +6293,16 @@
       // it. --hc-left/--hc-right are the rail widths; the bridge writes them
       // on the root when the reader drags a divider, and the defaults here
       // are the widths the shell shipped with.
-      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-top:37px;--hc-left:300px;--hc-right:330px}",
+      // The header is two rows of --hc-row: the product and the project on
+      // the first, the view tabs and the filter counts on the second.
+      // No rubber-band: the page has nothing to scroll, and a trackpad
+      // bounce would carry the sticky header off while the counts, fixed
+      // to the viewport, stayed -- the bar visibly coming apart.
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-row:37px;--hc-top:74px;--hc-left:300px;--hc-right:330px;overscroll-behavior:none}",
       "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922;--hc-noticetxt:#8aa495}",
       // A banner is not an overlay: it takes its own line, and the columns
       // give it back when it goes.
-      "[data-hc-launch][data-hc-notice]{--hc-top:71px}",
+      "[data-hc-launch][data-hc-notice]{--hc-top:108px}",
       "[data-hc-launch][data-hc-notice] .hc>div:nth-child(2){padding-top:34px!important}",
       // The page is the workspace: it fills the window and does not scroll
       // as a whole -- each column scrolls in its own right, the way the
@@ -6305,13 +6310,17 @@
       // Full bleed: no outer padding, so the columns meet the window on
       // every side and each other on a shared 1px line.
       "[data-hc-launch] .hc>div:nth-child(2){max-width:none!important;padding:0!important}",
-      // Header bar: brand, status pills, panel toggles, session. A fixed
-      // height, so the columns can be sized against it exactly.
-      // Sticky, and above the columns: the pills are pinned to the viewport
-      // top, so the bar they sit in has to stay there too when the page
-      // scrolls -- or they float off it.
-      "[data-hc-launch] .hc>div:first-child{position:sticky;top:0;z-index:19;background:var(--bg);height:var(--hc-top);box-sizing:border-box;padding:0 16px!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch][data-hc-notice] .hc>div:first-child{height:37px}",
+      // Header bar: the product and project on the first row, the view
+      // tabs and the filter counts on the second. A fixed height, so the
+      // columns can be sized against it exactly. Sticky, and above the
+      // columns: the counts are pinned to the viewport top, so the bar
+      // they sit in has to stay there too when the page scrolls -- or they
+      // float off it. The bottom row is an absolutely-positioned child
+      // rather than a wrapped flex line, so the first row's items keep
+      // centring in the space the padding leaves them. With the notice bar
+      // up the header keeps its two rows; only what is under it moves.
+      "[data-hc-launch] .hc>div:first-child{position:sticky;top:0;z-index:19;background:var(--bg);height:var(--hc-top);box-sizing:border-box;padding:0 16px calc(var(--hc-row) - 1px)!important;align-items:center!important;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch][data-hc-notice] .hc>div:first-child{height:74px}",
       // The product name is the one serif on the page; the marker before
       // it and everything after it stay in the workspace's monospace.
       "[data-hc-launch] .hc-brand{font:600 15px Georgia,'Iowan Old Style','Times New Roman',serif!important;letter-spacing:.1px;line-height:1}",
@@ -6336,14 +6345,17 @@
       // nothing the tick does not.
       "[data-hc-launch] .hc-updated{order:-2;color:var(--fnt);margin-right:4px}",
       // The title row loses the page heading -- a chat workspace has one
-      // page, already named in the header -- and its status pills move up
-      // INTO the header, so the row itself takes no height. The row is not
-      // a child of the header (the artifact renders it in the body), and
-      // moving the node would be undone by the next render, so it is lifted
-      // by position instead: fixed at the top, just after the brand. The
-      // bridge measures the brand and writes --hc-pills-left.
-      "[data-hc-launch] .hc-titlerow{position:fixed;top:0;left:var(--hc-pills-left,120px);height:37px;margin:0;padding:0!important;align-items:center!important;z-index:20}",
+      // page, already named in the header -- and its filter counts move up
+      // INTO the header's second row, so the row itself takes no height.
+      // The row is not a child of the header (the artifact renders it in
+      // the body), and moving the node would be undone by the next render,
+      // so it is lifted by position instead: fixed at the second row's
+      // right end, opposite the tabs.
+      "[data-hc-launch] .hc-titlerow{position:fixed;top:var(--hc-row);left:auto;right:16px;height:calc(var(--hc-row) - 1px);margin:0;padding:0!important;align-items:center!important;z-index:20}",
       "[data-hc-launch] .hc-titlerow>div:first-child{display:none}",
+      // Counts describe the tree, and the overview is not the tree. The
+      // artifact writes the row's display inline, so this has to shout.
+      "[data-hc-launch][data-hc-overview] .hc-titlerow{display:none!important}",
       // Read-only: the controls that write are taken off the page rather
       // than left to fail. Anything that only reads -- folding, selecting,
       // the search, the panes -- is untouched.
@@ -6358,49 +6370,40 @@
       "[data-hc-launch] .hc-ro-note{position:fixed;left:0;right:0;bottom:0;z-index:100004;display:flex;align-items:center;justify-content:center;gap:8px;padding:5px 12px;background:var(--panel2,#f6f6f6);border-top:1px solid var(--bd,#e3e3e3);color:var(--mut,#575757);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
       "[data-hc-launch] .hc-ro-dot{color:var(--acc,#a5492a);font-size:8px}",
       "[data-hc-launch] .hc-who{flex:none;font:600 12.5px 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap}",
-      // The row sits where the overview's own tabs used to: directly under
-      // the header, full width. It no longer comes and goes with the
-      // overview -- that was the only way back, and it was visible only
-      // once you had already arrived.
-      "[data-hc-launch] .hc-viewtabs{position:fixed;top:37px;left:0;right:0;z-index:19;display:flex;gap:22px;align-items:stretch;height:32px;padding:0 24px;box-sizing:border-box;background:var(--bg);border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch][data-hc-notice] .hc-viewtabs{top:71px}",
-      // One strip, not two: the tabs say which view on the left and the
-      // counts say how much of it on the right of the same 32px row. The
-      // counts used to take a 42px row of bordered pills under the tabs;
-      // as words in the tab row they cost no height, and the layout below
-      // is measured from --hc-top, so it climbs by that row.
-      "[data-hc-launch] .hc-pillbar{position:fixed;top:37px;right:24px;z-index:20;display:flex;gap:12px;align-items:center;height:32px;padding:0;box-sizing:border-box}",
-      "[data-hc-launch][data-hc-notice] .hc-pillbar{top:71px}",
-      "[data-hc-launch] .hc-pillbar[data-hc-hidden]{display:none}",
-      "[data-hc-launch] .hc-pillbar .hc-chiprow{margin:0!important;gap:22px!important;flex-wrap:nowrap!important}",
-      // Words, not pills: no box around a count, and the one in force is
-      // the bold one -- the artifact's own mark for it.
-      "[data-hc-launch] .hc-pillbar .hc-chip{padding:0!important;border:0!important;border-radius:0!important;background:transparent!important;letter-spacing:.4px}",
-      // The count stands beside the name in a quieter colour, so the row
-      // reads as four names with four numbers rather than four sentences.
+      // The tabs' row is the header's own second row: a slot the template
+      // leaves under the brand's row (see the header patch), filled by the
+      // bridge. It used to be a strip of its own, fixed under a one-row
+      // header at its own indent with its own rule -- three lines in a
+      // hundred pixels, and a bar that came apart from the header on a
+      // trackpad bounce. Now the header is two rows of --hc-row with one
+      // rule under both, and the tabs stand on that rule.
+      "[data-hc-launch] .hc-subbar{position:absolute;left:0;right:0;bottom:0;height:calc(var(--hc-row) - 1px);box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 16px}",
+      "[data-hc-launch] .hc-viewtabs{display:inline-flex;align-items:center;gap:22px;height:100%}",
+      // The counts stand at the row's other end as words, not pills: a
+      // name and, beside it in a quieter colour, how many goals answer to
+      // it -- so the row reads as four names with four numbers rather than
+      // four sentences. The one in force is the bold one, the artifact's
+      // own mark for it; reading its inline style keeps this in step.
+      "[data-hc-launch] .hc-chiprow{gap:22px!important;align-items:center!important;flex-wrap:nowrap!important}",
+      "[data-hc-launch] .hc-chip{padding:0;border:0;border-radius:0;background:transparent;letter-spacing:.2px;white-space:nowrap}",
+      "[data-hc-launch] .hc-chip:hover{text-decoration:none!important;color:var(--ink)!important}",
       "[data-hc-launch] .hc-chip-n{font-weight:400;color:var(--fnt)}",
+      "[data-hc-launch] .hc-chip[style*=\"700 11px\"]{color:var(--ink)!important}",
       "[data-hc-launch] .hc-chip[style*=\"700 11px\"] .hc-chip-n{color:var(--mut)}",
-      "[data-hc-launch][data-hc-viewtabs]{--hc-top:69px}",
-      "[data-hc-launch][data-hc-viewtabs] .hc>div:first-child{height:37px}",
-      "[data-hc-launch][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:32px!important}",
-      "[data-hc-launch][data-hc-viewtabs][data-hc-overview]{--hc-top:69px}",
-      "[data-hc-launch][data-hc-notice][data-hc-viewtabs]{--hc-top:103px}",
-      "[data-hc-launch][data-hc-notice][data-hc-viewtabs][data-hc-overview]{--hc-top:103px}",
-      "[data-hc-launch][data-hc-notice][data-hc-viewtabs] .hc>div:nth-child(2){padding-top:66px!important}",
       // One tab row, not two: the overview's own is redundant now.
       "[data-hc-launch] .hc-overview-tabs{display:none!important}",
       // With the duplicate gone the card would sit against the pillbar's
       // rule; the page needs the top margin the tab row used to give it.
       "[data-hc-launch] .hc-overview{padding-top:22px}",
-      "[data-hc-launch] .hc-viewtab{cursor:pointer;user-select:none;font:600 11px 'Source Code Pro',monospace;letter-spacing:1.3px;text-transform:uppercase;color:var(--fnt);height:32px;display:flex;align-items:center;border-bottom:2px solid transparent;margin-bottom:-1px}",
+      // The tabs are set exactly as the counts at the row's other end --
+      // the same size, tracking and case -- so the row reads as one row of
+      // words. Which page is open is said by weight and the line under it.
+      "[data-hc-launch] .hc-viewtab{position:relative;display:inline-flex;align-items:center;height:100%;font:500 11px 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-viewtab:hover{color:var(--ink)}",
-      "[data-hc-launch] .hc-viewtab[data-hc-on]{color:var(--ink);border-bottom-color:var(--ink)}",
-      "[data-hc-launch] .hc-chiprow{gap:6px!important}",
-      "[data-hc-launch] .hc-chip{padding:3px 10px;border:1px solid var(--bd);border-radius:99px;background:transparent;letter-spacing:.1px}",
-      "[data-hc-launch] .hc-chip:hover{border-color:var(--bd2);text-decoration:none!important}",
-      // The selected chip is the one the artifact draws bold; reading its
-      // own inline style is what keeps this in step with its state.
-      "[data-hc-launch] .hc-chip[style*=\"700 11px\"]{background:var(--panel2);border-color:var(--bd2);color:var(--ink)!important}",
+      "[data-hc-launch] .hc-viewtab[data-hc-on]{font-weight:700;color:var(--ink)}",
+      // The mark sits on the header's own rule, covering it under the open
+      // tab: one line, thickened where the page is, not a second one.
+      "[data-hc-launch] .hc-viewtab[data-hc-on]::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--ink)}",
       // Three columns. The artifact's own flex row becomes the shell; the
       // prompt rail is emitted before the inspector and ordered after it,
       // so nothing has to be re-parented after a render.
@@ -6617,7 +6620,7 @@
       // The session banner. Same nodes, same timers, same close button as
       // the toast it replaces -- a bar under the header rather than a card
       // in the corner, because it reports on the whole workspace.
-      "[data-hc-launch] .hc-notice-stack{position:fixed;top:37px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
+      "[data-hc-launch] .hc-notice-stack{position:fixed;top:74px;left:0;right:0;bottom:auto;z-index:60;align-items:stretch;gap:0}",
       "[data-hc-launch] .hc-notice{width:auto;max-width:none;border:none;border-bottom:1px solid var(--hc-okbd);border-left:none;border-radius:0;background:var(--hc-okbg);box-shadow:none;display:flex;align-items:baseline;gap:10px;padding:7px 34px 7px 16px}",
       "[data-hc-launch] .hc-notice-title{color:var(--hc-ok);flex:none}",
       "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
@@ -9296,50 +9299,38 @@
     return "";
   }
 
-  // Overview and Goals, always on screen. They used to live inside the
-  // overview panel, which meant the way back was visible only once you
-  // were already there -- and nothing on the goals page said the overview
-  // existed at all. They sit above the filter chips: what you are looking
-  // at, then how much of it.
+  // Overview and Goals, always on screen, in the header's second row: what
+  // you are looking at on the left and -- the artifact's own filter counts,
+  // lifted to the same row by the stylesheet -- how much of it on the
+  // right. They used to live inside the overview panel, which meant the
+  // way back was visible only once you were already there; then in a
+  // strip of their own under the header, which read as a second bar.
   function renderViewTabs() {
     if (serverState.scope !== "chat") return false;
-    // Inside .hc, not on the body: the palette -- --ink, --bg, --fnt, and
-    // the dark override -- is defined on .hc, so anything parked outside it
-    // inherits none of them and renders as black text on nothing.
-    var host = document.querySelector(".hc") || document.body
-               || document.documentElement;
-    if (!host || !host.appendChild) return false;
     var tabs = document.querySelector(".hc-viewtabs");
     if (!tabs) {
-      tabs = el("div", "hc-viewtabs");
+      // The slot is the header's own, left there by the template patch.
+      // Where there is no template to leave it -- the harness -- one is
+      // hung under the brand's row by hand, in the same place.
+      var mark = document.querySelector(".hc-project")
+                 || document.querySelector(".hc-brand");
+      var header = mark && mark.parentNode;
+      if (!header || !header.appendChild) return false;
+      var bar = el("div", "hc-subbar");
+      tabs = el("span", "hc-viewtabs");
+      bar.appendChild(tabs);
+      header.appendChild(bar);
+    }
+    // The artifact re-materializes the header on render, so the slot is
+    // refilled whenever it comes back empty.
+    if (!tabs.children || !tabs.children.length) {
       [["overview", "Overview"], ["goals", "Goals"]].forEach(function (pair) {
         var tab = el("span", "hc-viewtab", pair[1]);
         tab.setAttribute("data-hc-viewtab", pair[0]);
         tab.setAttribute("role", "button");
         tabs.appendChild(tab);
       });
-      host.appendChild(tabs);
     }
-    // Everything below is measured from --hc-top; the bar takes its own
-    // strip, so the root says so and the rails, the main column and the
-    // overview all start under it. Same trick the notice bar uses.
-    var root = document.documentElement;
-    if (root && root.setAttribute) root.setAttribute("data-hc-viewtabs", "");
-
-    // The filter chips belong under the tabs, not in the goals column: the
-    // tabs say which view, the counts say how much of it. The artifact's
-    // own element is moved rather than rebuilt, so its click handlers --
-    // which own the filter state -- come with it.
-    var bar = document.querySelector(".hc-pillbar");
-    if (!bar) {
-      bar = el("div", "hc-pillbar");
-      host.appendChild(bar);
-    }
-    var chips = document.querySelector(".hc-chiprow");
-    if (chips && chips.parentNode !== bar) bar.appendChild(chips);
-    // Counts describe the tree, and the overview is not the tree.
-    if (overviewShown()) bar.setAttribute("data-hc-hidden", "");
-    else bar.removeAttribute("data-hc-hidden");
     var on = overviewShown() ? "overview" : "goals";
     var kids = tabs.children || [];
     var moved = false;
@@ -9620,27 +9611,6 @@
       var on = side === "left" ? !l.hideLeft : !l.hideRight;
       kids[i].className = "hc-panel" + (on ? " hc-panel-on" : "");
     }
-    return true;
-  }
-
-  // The status pills sit in the header just after the brand. The row they
-  // live in is fixed-positioned by the stylesheet; this measures where the
-  // brand ends so the offset follows the font rather than a guess.
-  function placePills() {
-    var root = document.documentElement;
-    // After the project chip when there is one: the pills follow the last
-    // thing the header names before them.
-    var chip = document.querySelector(".hc-project");
-    var brand = (chip && chip.children && chip.children.length) ? chip
-              : document.querySelector(".hc-brand");
-    if (!root || !root.style || typeof root.style.setProperty !== "function"
-        || !brand || !brand.getBoundingClientRect) return false;
-    var box = brand.getBoundingClientRect();
-    if (!box || !box.width) return false;
-    var left = Math.round(box.right + 18);
-    var want = left + "px";
-    if (root.style.getPropertyValue("--hc-pills-left") === want) return false;
-    root.style.setProperty("--hc-pills-left", want);
     return true;
   }
 
@@ -10229,7 +10199,6 @@
       applyLaunchSkin();
       mirrorRootState();
       applyLayout();
-      placePills();
       renderPanelToggles();
       installRailDrag();
       renderSessionChip();
@@ -10931,8 +10900,12 @@
        "  set(fn, touch) { if (typeof window !== 'undefined') window.__hcSelectGoal = (id) => this.set(() => ({ page: 'goals', selId: id, editId: null, paneTab: 'context' })); if (typeof window !== 'undefined') window.__hcRevealGoal = (id) => { const tr = this.path(this.state.goals, id) || []; if (!tr.length) return false; this.set(s => { let gs = s.goals; tr.slice(0, -1).forEach(n => { gs = this.up(gs, n.id, x => ({ ...x, open: true })); }); return { page: 'goals', selId: id, editId: null, paneTab: 'context', goals: gs }; }); setTimeout(() => { const ids = this._rowIds || []; if (ids.indexOf(id) < 0) { this.set(() => ({ filter: 'all' })); } setTimeout(() => { const ids2 = this._rowIds || [], nx = ids2.indexOf(id), el = this._treeEl; if (el && nx >= 0) { const top = nx * 29, bot = top + 29; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; } }, 0); }, 0); return true; }; this.setState("],
       // Room for the session this window is a second view of. The bridge
       // fills it in: only the server knows which conversation this is.
+      // And, after the first row's right-hand group, the header's second
+      // row: the slot the bridge draws the view tabs into. It is the
+      // header's own child, so it holds still with the header, and the
+      // artifact draws it back with the header on every render.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\" title=\"saved {{ updatedLabel }}\">saved \u2713</span></div>"
+       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\" title=\"saved {{ updatedLabel }}\">saved \u2713</span></div><div class=\"hc-subbar\"><span class=\"hc-viewtabs\"></span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
