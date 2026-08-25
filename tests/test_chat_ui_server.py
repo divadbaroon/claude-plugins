@@ -43,7 +43,7 @@ def goal(goal_id, title, prompt_ids=None):
 def open_prompt_tab(page):
     """The rail opens on TODOs; the assembled prompt is the other tab."""
     page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
-    page.wait_for_selector("textarea.hc-rail-code", state="visible", timeout=10_000)
+    page.wait_for_selector(".hc-rail-copy", state="visible", timeout=10_000)
 
 
 def write_scope(path, goals, prompts):
@@ -67,8 +67,8 @@ def server_for(path, chat_scoped=True):
         thread.join(timeout=2)
 
 
-def get_json(url):
-    with NO_PROXY_OPENER.open(url, timeout=2) as response:
+def get_json(url, timeout=2):
+    with NO_PROXY_OPENER.open(url, timeout=timeout) as response:
         return json.loads(response.read())
 
 
@@ -616,7 +616,7 @@ class ChatUiServerTests(unittest.TestCase):
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
                 open_prompt_tab(page)
-                expect(page.locator(".hc-rail-code")).to_be_visible()
+                expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
                 copy.click()
@@ -664,10 +664,8 @@ class ChatUiServerTests(unittest.TestCase):
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
                 open_prompt_tab(page)
-                code = page.locator(".hc-rail-code")
-                expect(code).to_be_visible()
-                # The field holds only the reader's words -- none yet -- and
-                # the assembled context rides along on copy. Read the copy.
+                expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
+                # What the tab prints is what Copy takes. Read the copy.
                 context = page.context
                 context.grant_permissions(["clipboard-read",
                                            "clipboard-write"])
@@ -984,11 +982,15 @@ class ChatUiServerTests(unittest.TestCase):
 
     @staticmethod
     def chip_style(page, label):
-        """Weight and colour of one filter chip, as the reader sees them."""
+        """Weight and colour of one filter chip, as the reader sees them.
+
+        The chip is a name and, in its own element, the count: matched on
+        the two together, the way the row reads.
+        """
         return page.evaluate(
             """label => {
-              const el = [...document.querySelectorAll('span')].find(
-                e => !e.children.length && e.textContent.trim() === label);
+              const el = [...document.querySelectorAll('.hc-chip')].find(
+                e => e.textContent.trim() === label);
               if (!el) return null;
               const cs = getComputedStyle(el);
               return { weight: cs.fontWeight, color: cs.color };
@@ -1552,12 +1554,10 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_have_count(1)
 
                 open_prompt_tab(page)
-                # The field is for the reader's own words: the context the
-                # goal assembles is not printed in it (it is prepended on
-                # copy), so a goal with nothing written shows an empty field.
-                expect(rail.locator("textarea.hc-rail-code")).to_have_count(1)
-                draft = rail.locator(".hc-rail-code").input_value()
-                self.assertEqual("", draft)
+                # The tab prints the prompt and offers no box to type in:
+                # what is on screen is the whole of what a build would send.
+                expect(rail.locator(".hc-rail-ctx-body")).to_have_count(1)
+                expect(rail.locator("textarea.hc-rail-code")).to_have_count(0)
 
                 # Nothing here starts a run; every op behind one refuses.
                 expect(page.get_by_text("run agent", exact=True)
@@ -1577,22 +1577,25 @@ class ChatUiServerTests(unittest.TestCase):
                 # The label only changes once the clipboard has it.
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
-                # With nothing written, what leaves is the assembled prompt
-                # itself -- the field being empty does not empty the copy.
+                # What leaves is the assembled prompt itself -- the same
+                # string the tab is printing.
                 copied = page.evaluate("() => navigator.clipboard.readText()")
-                self.assertIn("Objective:\nShip the document pane.", copied)
-                self.assertIn("Decisions:\n- we chose sqlite", copied)
+                # The goal's notes ride in the tree, under the goal, as written.
+                self.assertIn("Ship the document pane.", copied)
+                self.assertIn("- we chose sqlite", copied)
                 context.close()
             finally:
                 browser.close()
 
-    def test_an_edited_prompt_is_kept_in_the_document_and_copied(self):
+    def test_the_prompt_is_assembled_from_the_document_and_copied(self):
         """It is assembled, not authored, and reading it changes nothing.
 
-        The old box kept no edit -- not across a reload, not across a
-        CONTEXT -> PROMPT round trip -- while the copy beside it said to edit
-        it here. The rail is a rendering of the goal's document, so there is
-        no edit to lose and nothing it can write back.
+        The tab was a box to type in with the assembled prompt printed above
+        it: the reader's paragraph landed in the goal's `prompt_md` and the
+        string that mattered was the one they could not touch. Only the
+        prompt is left. It is a rendering of the goal's document, so there is
+        no edit to lose and nothing it can write back -- and what Copy takes
+        is exactly what is on screen.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1623,43 +1626,32 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
                 open_prompt_tab(page)
-                code = page.locator(".hc-rail-code")
-                self.assertEqual("", code.input_value())
+                # No box to type in, and the objective from the document is
+                # in what the tab prints.
+                expect(page.locator("textarea.hc-rail-code")).to_have_count(0)
+                body = page.locator(".hc-rail-ctx-body")
+                expect(body).to_contain_text("Ship the document pane.",
+                                             timeout=15_000)
 
-                # An edit is the reader's, and it is kept where the rest of
-                # their writing is kept: a section of the goal's document.
-                # Browser storage would not do -- every /goals-ui opens a new
-                # port, and a new port is a new origin with nothing saved.
-                code.click()
-                page.keyboard.type("EDITED BY HAND")
-                page.wait_for_timeout(2_500)
+                # Reading it writes nothing back: the goal's own prompt field
+                # is still empty, and the document it was assembled from is
+                # untouched.
                 stored_goal = [g for g in get_json(url + "/api/state")["goals"]
                                if g["id"] == "a1"][0]
-                # Its own field, beside the document -- never in it.
-                self.assertIn("EDITED BY HAND", stored_goal["prompt_md"])
-                self.assertNotIn("EDITED BY HAND", stored_goal["notes"])
+                self.assertEqual("", stored_goal["prompt_md"])
                 self.assertNotIn("# Prompt", stored_goal["notes"])
-                # The objective it was assembled from is untouched by the edit.
                 self.assertIn("# Objective\nShip the document pane.",
                               stored_goal["notes"])
                 self.assertEqual("", stored_goal["description"])
 
-                page.reload(wait_until="domcontentloaded")
-                expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
-                open_prompt_tab(page)
-                expect(page.locator(".hc-rail-code")).to_have_value(
-                    __import__("re").compile("EDITED BY HAND"))
-
-                # Copy takes the assembled context AND the reader's words:
-                # what is on screen is theirs alone, what leaves is whole.
+                # Copy takes what is on screen, whole.
                 copy = page.get_by_text("Copy prompt", exact=True)
                 copy.click()
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
                 copied = page.evaluate("() => navigator.clipboard.readText()")
-                self.assertIn("Objective:\nShip the document pane.", copied)
-                self.assertTrue(copied.rstrip().endswith("EDITED BY HAND"),
-                                copied)
+                # The goal's notes ride in the tree, under the goal, as written.
+                self.assertIn("Ship the document pane.", copied)
                 self.assertNotIn("Implement this goal for me.", copied)
                 context.close()
             finally:
@@ -1722,13 +1714,13 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_a_finished_turn_arrives_as_a_bar_under_the_header(self):
-        """The banner reports on the workspace, so it takes the top of it.
+    def test_a_finished_turn_arrives_as_a_card_with_the_builds(self):
+        """A chat answering is news of the same kind as a build coming back.
 
-        Same nodes and the same timers as the corner toast it replaces -- the
-        close button and the hover hold are covered above. What is new is
-        where it sits, and that the columns give it a line rather than having
-        it painted over them.
+        So it arrives in the same corner, counts on the same bell, and takes
+        no line from the columns: the bar under the header that used to
+        report this pushed the whole workspace down every time the terminal
+        finished a turn.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1749,46 +1741,52 @@ class ChatUiServerTests(unittest.TestCase):
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-left")).to_be_visible(
                     timeout=10_000)
-                # The pills live in the header now, so the line the banner
-                # takes is measured against the columns under it.
+                # What the columns do while the terminal works is nothing:
+                # measured before, and again while a card is up.
                 rail_before = page.locator(".hc-rail-left").bounding_box()
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
+                card = page.locator(".hc-alert[data-hc-alert-kind"
+                                    "=\"session_stopped\"]")
+                expect(card).to_have_count(1, timeout=4_000)
                 # What a Stop hook proves is that the turn ended. It does not
                 # prove a goal moved or a task closed, so it does not say so.
-                expect(banner.locator(".hc-notice-title")).to_have_text(
+                expect(card.locator(".hc-alert-title")).to_have_text(
                     "Claude finished responding")
-                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                expect(card.locator(".hc-alert-detail")).to_have_text(
                     "Done. Tests pass.")
+                # And it names no goal: there is no one row it reports on.
+                expect(card.locator(".hc-alert-goal")).to_have_count(0)
 
-                box = banner.bounding_box()
-                self.assertLess(box["x"], 20, "a bar starts at the edge")
-                self.assertGreater(box["width"], 1_000, "a bar spans the page")
-                self.assertLess(box["y"], 80, "and sits under the header")
-                # It has its own line: the columns move down for it rather
-                # than being painted over.
-                moved = page.locator(".hc-rail-left").bounding_box()
-                self.assertGreater(moved["y"], rail_before["y"] + 20)
-                self.assertGreater(moved["y"], box["y"] + box["height"] - 2)
+                box = card.bounding_box()
+                self.assertGreater(box["x"], 900, "a card sits on the right")
+                self.assertLess(box["width"], 400, "a card is not a bar")
+                self.assertLess(box["y"], 100, "under the header")
+                # The columns are where they were: it is an overlay, not a
+                # line the workspace has to give up.
+                held = page.locator(".hc-rail-left").bounding_box()
+                self.assertAlmostEqual(rail_before["y"], held["y"], delta=2)
 
-                # And the columns give the line back when it goes.
-                banner.locator(".hc-notice-close").click()
-                expect(banner).to_have_count(0, timeout=2_000)
+                # It counts on the bell with the builds, and × reads it.
+                count = page.locator(".hc-alerts .hc-bell-count")
+                expect(count).to_have_text("1", timeout=2_000)
+                card.locator(".hc-alert-close").click()
+                expect(card).to_have_count(0, timeout=2_000)
+                expect(count).to_have_text("0")
                 back = page.locator(".hc-rail-left").bounding_box()
                 self.assertAlmostEqual(rail_before["y"], back["y"], delta=2)
             finally:
                 browser.close()
 
     def test_a_source_added_here_outlives_the_page_and_the_server(self):
-        """SOURCES is a rail of chips, and each chip is a stored record.
+        """SOURCES is one line naming the records, and a box that edits them.
 
-        The pane that held these as three textboxes is dormant; the rail is
-        the control that came back. Nothing new is written -- both lists are
-        the artifact's own, so an edit lands on set_sources by the path that
-        was already there.
+        The pane that held these as three textboxes is dormant, and the rail
+        of pills it became is gone too: adding and removing happen in one
+        box, and the line under the title names what is attached. Nothing
+        new is written -- both lists are the artifact's own, so an edit
+        lands on set_sources by the path that was already there.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -2095,7 +2093,7 @@ class ChatUiServerTests(unittest.TestCase):
                 # Two polls' worth: the state carrying the old notice has
                 # certainly landed by now.
                 page.wait_for_timeout(3_500)
-                expect(page.locator(".hc-notice")).to_have_count(0)
+                expect(page.locator(".hc-alert")).to_have_count(0)
                 self.assertEqual(title, page.title())
 
                 chat_state.add_notice(
@@ -2103,25 +2101,44 @@ class ChatUiServerTests(unittest.TestCase):
                     "Explore: Analysis complete. Found 3 potential issues",
                     self.root)
 
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
-                expect(banner.locator(".hc-notice-title")
+                card = page.locator(".hc-alert")
+                expect(card).to_have_count(1, timeout=4_000)
+                expect(card.locator(".hc-alert-title")
                        ).to_have_text("A subagent returned")
-                expect(banner.locator(".hc-notice-detail")).to_have_text(
+                expect(card.locator(".hc-alert-detail")).to_have_text(
                     "Explore: Analysis complete. Found 3 potential issues")
-                expect(banner.locator(".hc-notice-close")).to_be_visible()
+                expect(card.locator(".hc-alert-close")).to_be_visible()
                 # A workspace on another screen has to be able to say so
                 # from the tab strip alone, without losing which conversation
                 # it is watching.
                 self.assertEqual("\u25cf " + title, page.title())
 
-                # It takes itself away; nothing here was clicked.
-                expect(banner).to_have_count(0, timeout=12_000)
-                self.assertEqual(title, page.title())
+                # It takes itself away; nothing here was clicked. What it
+                # leaves behind is the point of moving it here: the reader
+                # who was looking at the terminal for those six seconds
+                # still finds it on the bell, and the tab still says so.
+                expect(card).to_have_count(0, timeout=12_000)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("1")
+                self.assertEqual("\u25cf " + title, page.title())
 
                 # And it is not shown twice for the same event.
                 page.wait_for_timeout(3_500)
-                expect(banner).to_have_count(0)
+                expect(card).to_have_count(0)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("1")
+
+                # Reading it in the center is what takes the mark off.
+                page.locator(".hc-alerts .hc-bell").click()
+                center = page.locator(".hc-alert-center")
+                expect(center).to_have_count(1, timeout=2_000)
+                expect(center.locator(".hc-alert-row")).to_have_count(1)
+                center.locator(
+                    ".hc-alert-center-act[data-hc-alert-act=\"read-all\"]"
+                ).click()
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("0")
+                self.assertEqual(title, page.title())
             finally:
                 browser.close()
 
@@ -2151,20 +2168,23 @@ class ChatUiServerTests(unittest.TestCase):
 
                 chat_state.add_notice("chat-a", "session_stopped",
                                       "Done. Tests pass.", self.root)
-                banner = page.locator(".hc-notice")
-                expect(banner).to_have_count(1, timeout=4_000)
-                expect(banner.locator(".hc-notice-title")
+                card = page.locator(".hc-alert")
+                expect(card).to_have_count(1, timeout=4_000)
+                expect(card.locator(".hc-alert-title")
                        ).to_have_text("Claude finished responding")
 
                 # Reading it holds it open past the moment it would have gone.
-                banner.hover()
+                card.hover()
                 page.wait_for_timeout(9_000)
-                expect(banner).to_have_count(1)
+                expect(card).to_have_count(1)
 
                 self.assertEqual("\u25cf " + title, page.title())
 
-                banner.locator(".hc-notice-close").click()
-                expect(banner).to_have_count(0, timeout=2_000)
+                # \u00d7 dismisses it as read, which is what clears the tab.
+                card.locator(".hc-alert-close").click()
+                expect(card).to_have_count(0, timeout=2_000)
+                expect(page.locator(".hc-alerts .hc-bell-count")
+                       ).to_have_text("0")
                 self.assertEqual(title, page.title())
             finally:
                 browser.close()
@@ -2385,6 +2405,7 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
         return { hdr: r('.hc>div:first-child'), l: r('.hc-rail-left'),
                  m: r('.hc-main'), rt: r('.hc-rail-right'),
                  pills: r('.hc-titlerow'), brand: r('.hc-brand'),
+                 sub: r('.hc-subbar'), tabs: r('.hc-viewtabs'),
                  brandFont: getComputedStyle(document.querySelector('.hc-brand')).fontFamily };
     }"""
 
@@ -2404,10 +2425,11 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 page.wait_for_selector("text=one goal", timeout=10000)
                 page.wait_for_timeout(1500)
                 g = page.evaluate(self.GEO)
-                # Header, then columns from its bottom edge to the window's.
-                self.assertEqual((0, 0, 1440, 37), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
+                # Header -- two rows -- then columns from its bottom edge to
+                # the window's.
+                self.assertEqual((0, 0, 1440, 74), tuple(round(g["hdr"][k]) for k in ("x", "y", "width", "height")))
                 for col in ("l", "m", "rt"):
-                    self.assertEqual(37, round(g[col]["y"]), col)
+                    self.assertEqual(74, round(g[col]["y"]), col)
                     self.assertEqual(900, round(g[col]["bottom"]), col)
                 # Flush: left rail at 0, main starts where it ends, right
                 # rail ends at the window.
@@ -2415,10 +2437,15 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 self.assertEqual(round(g["l"]["right"]), round(g["m"]["x"]))
                 self.assertEqual(round(g["m"]["right"]), round(g["rt"]["x"]))
                 self.assertEqual(1440, round(g["rt"]["right"]))
-                # The pills sit inside the header, after the brand; the brand
-                # is set in a serif.
-                self.assertLess(g["pills"]["y"], 37)
-                self.assertGreater(g["pills"]["x"], g["brand"]["right"])
+                # The second row is the header's own, at the header's
+                # indent: the view tabs at its left end under the brand,
+                # the filter counts at its right end, flush with the tools
+                # above them. The brand is set in a serif.
+                self.assertEqual((0, 37, 1440, 36), tuple(round(g["sub"][k]) for k in ("x", "y", "width", "height")))
+                self.assertEqual(round(g["brand"]["x"]), round(g["tabs"]["x"]))
+                self.assertEqual(37, round(g["pills"]["y"]))
+                self.assertEqual(73, round(g["pills"]["bottom"]))
+                self.assertEqual(1440 - 16, round(g["pills"]["right"]))
                 self.assertIn("Georgia", g["brandFont"])
 
                 # Drag the goals divider 80px right; the rail follows.

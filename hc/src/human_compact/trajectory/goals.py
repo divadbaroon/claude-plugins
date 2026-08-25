@@ -231,6 +231,81 @@ TODO_INDENT = "    "
 TODO_STATUSES = ("", "queued", "building", "asking", "done", "failed")
 _TODO_ID = re.compile(r"^t[0-9a-z]{4,24}$")
 
+# A screenshot pasted into a row: the row's text gets "[attachment #N]" where
+# the caret was, and the row's `attachments` remembers which file each N
+# names. N counts up across the whole list, never reused, so a marker means
+# the same file wherever it is later moved. A marker the reader deletes from
+# the text un-cites its file: what leaves the rail names only the markers
+# still present in some row.
+_MARKER = re.compile(r"\[attachment #(\d+)\]")
+MAX_ATTACHMENTS = 20
+
+# A row the reader reopened: the run that ended keeps its verdict and what
+# they said was wrong with it, so the next run can read both and the rail can
+# show the row's runs stacked under it. Entry i is run i+1; the run now
+# happening is len(history)+1. Only ever appended to, and only by the server.
+MAX_HISTORY = 12
+
+
+def normalize_attachments(value) -> list:
+    out, seen = [], set()
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            n = int(item.get("n"))
+        except (TypeError, ValueError):
+            continue
+        path = str(item.get("path") or "")[:1000]
+        if n <= 0 or n in seen or not path:
+            continue
+        seen.add(n)
+        out.append({"n": n, "path": path,
+                    "name": str(item.get("name") or "")[:200]})
+        if len(out) >= MAX_ATTACHMENTS:
+            break
+    return out
+
+
+def normalize_history(value) -> list:
+    out = []
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "")
+        if state not in TODO_STATUSES or not state:
+            continue
+        out.append({"state": state,
+                    "note": str(item.get("note") or "")[:400]})
+        if len(out) >= MAX_HISTORY:
+            break
+    return out
+
+
+def todo_attachments(items) -> list:
+    """The files the list still cites: each row's attachments whose marker
+    appears in SOME row's text, ordered by number."""
+    cited = set()
+    for row in items or []:
+        if isinstance(row, dict):
+            cited.update(int(n) for n in _MARKER.findall(str(row.get("text") or "")))
+    out, seen = [], set()
+    for row in items or []:
+        if not isinstance(row, dict):
+            continue
+        for att in normalize_attachments(row.get("attachments")):
+            if att["n"] in cited and att["n"] not in seen:
+                seen.add(att["n"])
+                out.append(att)
+    return sorted(out, key=lambda a: a["n"])
+
+
+def render_attachments(items) -> str:
+    """One line per cited file, marker to path; "" when nothing is cited."""
+    lines = [f"[attachment #{a['n']}]: {a['path']}"
+             for a in todo_attachments(items)]
+    return "\n".join(lines) + "\n" if lines else ""
+
 
 def todo_id() -> str:
     """A fresh id for a list row: short, opaque, never shown."""
@@ -295,10 +370,29 @@ def normalize_todo_items(value) -> list:
         status = str(row.get("status") or "")
         if status not in TODO_STATUSES:
             status = ""
-        out.append({"id": rid, "text": str(row.get("text") or ""),
-                    "depth": depth, "status": status,
-                    "question": str(row.get("question") or "")[:400]
-                    if status == "asking" else ""})
+        clean = {"id": rid, "text": str(row.get("text") or ""),
+                 "depth": depth, "status": status,
+                 "question": str(row.get("question") or "")[:400]
+                 if status == "asking" else ""}
+        # Only present when there is something to hold: the browser's rows
+        # and the server's must compare equal field for field, and a row
+        # without a screenshot has no field at all on either side.
+        attachments = normalize_attachments(row.get("attachments"))
+        if attachments:
+            clean["attachments"] = attachments
+        # What building this row actually spent, once it has been built alone
+        # -- the rail prints it in place of its estimate. Same rule: absent
+        # until there is a number, on both sides of the wire.
+        try:
+            tokens = int(row.get("tokens") or 0)
+        except (TypeError, ValueError):
+            tokens = 0
+        if tokens > 0:
+            clean["tokens"] = tokens
+        history = normalize_history(row.get("history"))
+        if history:
+            clean["history"] = history
+        out.append(clean)
     ceiling = 0
     for row in out:
         row["depth"] = max(0, min(row["depth"], ceiling))
@@ -306,7 +400,9 @@ def normalize_todo_items(value) -> list:
     return out
 
 
-SOURCE_TYPES = ("github", "local", "doc")
+# ``chat`` is never inferred from a label -- a session id looks like
+# nothing in particular -- so it arrives only when a caller says so.
+SOURCE_TYPES = ("github", "local", "doc", "chat")
 
 
 def source_type(label: str) -> str:
@@ -484,9 +580,46 @@ def new_goal(gid, title, parent_id=None, **fields):
             "description": "", "priority": "normal", "notes": "",
             "todos_md": "", "todo_items": [], "prompt_md": "",
             "sources": [], "opening": "",
+            # How this goal stands to the project's objective, and the
+            # objective it was judged against -- kept together, because a
+            # verdict outlives the sentence that produced it and a stale one
+            # should be visible as stale rather than trusted.
+            "relevance": "core", "relevance_why": "", "relevance_for": "",
+            # Which project's directory this goal's work belongs in. Empty
+            # for the ordinary goal, which is about the project the chat was
+            # started in; set when the goal was made under another one, and
+            # then a build of its TODO rows runs there rather than here.
+            "project_cwd": "",
             "origin": "inferred", "updated_at": _now()}
     goal.update(fields)
     return goal
+
+
+def add_todo_row(goal, text, depth=0):
+    """Put a next action on the goal's own list, not in the tree.
+
+    Inference used to emit these as child goals -- every next action became
+    a node, and a tree of forty leaves was mostly checklist. They belong on
+    the goal they serve: the rail beside it, where they can be built,
+    answered and ticked off without crowding the tree.
+
+    Returns the row, or None when the goal already has that line.
+    """
+    text = str(text or "").strip()[:400]
+    if not text:
+        return None
+    rows = goal.get("todo_items")
+    if not isinstance(rows, list):
+        rows = goal["todo_items"] = []
+    lowered = text.lower()
+    for row in rows:
+        if str(row.get("text") or "").strip().lower() == lowered:
+            return None
+    row = {"id": todo_id(), "text": text,
+           "depth": max(0, min(8, int(depth or 0))),
+           "status": "", "question": ""}
+    rows.append(row)
+    return row
 
 
 def promote_todos(goals):
@@ -561,6 +694,13 @@ def sanitize(goals):
             g["parent_goal_id"] = None
         if g.get("status") not in ("active", "in_progress", "completed", "abandoned"):
             g["status"] = "active"
+        # An unrecognised verdict is "core": the fold hides work, so the
+        # failure to understand one must not be what hides it.
+        if g.get("relevance") not in ("core", "supporting", "unrelated"):
+            g["relevance"] = "core"
+        g["relevance_why"] = str(g.get("relevance_why") or "")[:200]
+        g["relevance_for"] = str(g.get("relevance_for") or "")[:2000]
+        g["project_cwd"] = str(g.get("project_cwd") or "")[:1000]
         g.setdefault("evidence_ids", []); g.setdefault("todos", [])
         g.setdefault("important_item_ids", [])
         for key in ("prompt_ids", "auto_prompt_ids", "detached_prompt_ids"):
@@ -640,26 +780,34 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
             if new:
                 g["updated_at"] = _now(); changes.append(f"evidence → {g['title'][:40]}")
         elif op == "add_todo" and g:
-            # A next action is a goal one level down, not a second data type.
-            text = str(o.get("text") or "").strip()[:120]
-            if text and not any(
-                    c.get("title") == text and c.get("parent_goal_id") == g["id"]
-                    for c in goals["goals"]):
-                goals["goals"].append(new_goal(
-                    child_goal_id(goals, g["id"]), text, g["id"],
-                    evidence_ids=[e for e in o.get("evidence_ids", [])
-                                  if isinstance(e, str)]))
+            # On the goal's own list, beside it -- not a node in the tree.
+            row = add_todo_row(g, o.get("text"))
+            if row:
                 g["updated_at"] = _now()
-                changes.append(f"goal + {text[:44]}")
+                changes.append(f"todo + {row['text'][:44]}")
         elif op == "complete_todo" and g:
             tt = _toks(o.get("text_match", o.get("text", "")))
-            for c in goals["goals"]:
-                if c.get("parent_goal_id") != g["id"] or c["status"] == "completed":
+            done = False
+            # The goal's own list first, which is where inference puts them.
+            for row in g.get("todo_items") or []:
+                if row.get("status") == "done":
                     continue
-                ct = _toks(c["title"])
-                if tt and len(tt & ct) / max(1, len(tt)) >= 0.5:
-                    c["status"] = "completed"; c["updated_at"] = _now()
-                    changes.append(f"✓ {c['title'][:44]}"); break
+                rt = _toks(str(row.get("text") or ""))
+                if tt and len(tt & rt) / max(1, len(tt)) >= 0.5:
+                    row["status"] = "done"; g["updated_at"] = _now()
+                    changes.append(f"✓ {str(row.get('text'))[:44]}")
+                    done = True
+                    break
+            # Older trees put them in the tree; still close those.
+            if not done:
+                for c in goals["goals"]:
+                    if (c.get("parent_goal_id") != g["id"]
+                            or c["status"] == "completed"):
+                        continue
+                    ct = _toks(c["title"])
+                    if tt and len(tt & ct) / max(1, len(tt)) >= 0.5:
+                        c["status"] = "completed"; c["updated_at"] = _now()
+                        changes.append(f"✓ {c['title'][:44]}"); break
         elif op == "new_goal":
             parent_id = o.get("parent_goal_id")
             if parent_id and not by_id(goals, parent_id):
@@ -672,13 +820,47 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                     continue
             gid = next_goal_id(goals)
             title = str(o.get("title") or "Untitled goal")[:120]
-            goals["goals"].append(new_goal(
+            # A goal can be born finished. Each pass sees one window of
+            # evidence, and work that starts and ends inside it is noticed
+            # only once -- created, and then never revisited, because the
+            # evidence that would close it is the same evidence that made
+            # it. Without this such a goal stays active for good.
+            born = o.get("status")
+            if born not in ("active", "in_progress", "completed", "abandoned"):
+                born = "active"
+            # How it stands to the objective, when the model said. Dropped
+            # here until now, so every goal created by an incremental pass
+            # came out "core" whatever the model judged -- and the tags on
+            # a rebuilt tree looked uniform because they were.
+            stands = o.get("relevance")
+            if stands not in ("core", "supporting", "unrelated"):
+                stands = "core"
+            made = new_goal(
                 gid, title, parent_id,
+                status=born,
+                relevance=stands,
+                relevance_why=str(o.get("relevance_why") or "")[:200],
                 evidence_ids=o.get("evidence_ids", []),
-                todos=[t for t in o.get("todos", []) if isinstance(t, dict)],
-                description=str(o.get("description") or "")[:600]))
+                description=str(o.get("description") or "")[:600])
+            for t in o.get("todos", []) or []:
+                if isinstance(t, dict):
+                    row = add_todo_row(made, t.get("text"))
+                    if row and t.get("done"):
+                        row["status"] = "done"
+                elif isinstance(t, str):
+                    add_todo_row(made, t)
+            goals["goals"].append(made)
             sanitize(goals)
             changes.append(f"goal + {title[:44]}")
+        elif (op == "set_relevance" and g
+              and o.get("relevance") in ("core", "supporting", "unrelated")):
+            # Only when the standing actually changed: a verdict restated
+            # every pass would rewrite updated_at and churn the tree.
+            if g.get("relevance") != o["relevance"]:
+                g["relevance"] = o["relevance"]
+                g["relevance_why"] = str(o.get("relevance_why") or "")[:200]
+                g["updated_at"] = _now()
+                changes.append(f"relevance {g['id']} -> {o['relevance']}")
         elif op == "set_status" and g and o.get("status") in ("active", "in_progress", "completed", "abandoned"):
             g["status"] = o["status"]; g["updated_at"] = _now()
             changes.append(f"{g['title'][:36]} → {o['status']}")

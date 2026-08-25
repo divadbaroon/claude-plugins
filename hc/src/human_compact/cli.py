@@ -42,6 +42,7 @@ _LAUNCH_COMMAND_HELP = (
     ("install", "install /goals-ui for Claude Code"),
     ("setup", "noninteractive npm onboarding"),
     ("chat-ui", "goal tree for one Claude chat"),
+    ("supabase", "connect this workspace to your own Supabase"),
     ("chat-serve", "session-scoped goal server (internal)"),
     ("chat-hook", "Claude Code chat-state hook (internal)"),
     ("chat-refresh", "session-scoped goal analyzer (internal)"),
@@ -1245,13 +1246,23 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             )
             if not url:
                 raise RuntimeError("launcher returned no localhost URL")
+            # Anything the launcher wanted the reader to know -- so far, only
+            # a workspace it declined to replace -- said after the URL.
+            aside = next(
+                (line.strip()[len("note: "):]
+                 for line in launched.getvalue().splitlines()
+                 if line.strip().startswith("note: ")),
+                "",
+            )
             # Blocking the expansion ends the turn with no model call, and
             # Claude Code prints `reason` to the user. That is the closest a
             # plugin gets to a built-in local command like /model: the
             # workspace opens and Claude never speaks. Handing back
             # additionalContext instead would buy a whole turn to say a URL
             # the user can already see.
-            json.dump({"decision": "block", "reason": f"goals-ui: {url}"},
+            json.dump({"decision": "block",
+                       "reason": f"goals-ui: {url}"
+                                 + (f" — {aside}" if aside else "")},
                       stdout)
             stdout.write("\n")
         except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
@@ -1372,6 +1383,99 @@ def _pid_alive(pid):
         return False
 
 
+def _package_code_stamp():
+    """The newest edit time among this package's own Python files, or 0.0."""
+    newest = 0.0
+    try:
+        for path in Path(__file__).resolve().parent.rglob("*.py"):
+            newest = max(newest, path.stat().st_mtime)
+    except OSError:                       # noqa: BLE001 - a hint, never logic
+        return 0.0
+    return newest
+
+
+def _server_outran_its_code(record):
+    """Whether the server in `record` started before the code it serves.
+
+    The browser's half of the workspace is re-read from disk on every page
+    load and the server's half is not, so editing the plugin with a workspace
+    open leaves a new page talking to an old process -- which answers every
+    control added since with "unknown operation". The page says so and tells
+    the reader to restart it, which only means anything if reopening actually
+    replaces the server rather than handing back the same one.
+    """
+    if not isinstance(record, dict):
+        return False
+    try:
+        started = float(record.get("started_at") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    newest = _package_code_stamp()
+    # A second of slack: a file copied into place can carry a timestamp a hair
+    # past the process that read it, and nobody edited anything.
+    return bool(started and newest and newest > started + 1.0)
+
+
+def _chat_server_is_building(session_dir):
+    """Whether a build this server is reading is still running.
+
+    A build is a subprocess, but the thread that reads what it prints and
+    records how each row ended belongs to the server. Replacing the server
+    under a live build would leave the rows saying "building" forever, so an
+    out-of-date workspace with work in flight is left alone: it can be
+    restarted once the build lands.
+    """
+    import json
+    try:
+        runs = sorted((Path(session_dir) / "builds").glob("*.json"))
+    except OSError:
+        return False
+    for path in runs:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        if (str(record.get("status") or "") in ("running", "retrying")
+                and _pid_alive(record.get("pid"))):
+            return True
+    return False
+
+
+def _stop_chat_server(record, timeout=6.0):
+    """Stop the session server named in `record`; True once it is gone."""
+    import signal
+    try:
+        pid = int(record.get("pid")) if isinstance(record, dict) else None
+    except (TypeError, ValueError):
+        return False
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        # Already gone, or not ours to signal. Only the first is a success.
+        return not _pid_alive(pid)
+    # A server this process launched itself is its own child, and a child has
+    # to be waited on: unreaped, it answers a liveness check as if it were
+    # still serving. Orphaned daemons -- the ordinary case, where the launcher
+    # exited long ago -- are reaped by the system, so polling is enough.
+    mine = next((proc for proc in _DETACHED_PROCESSES if proc.pid == pid), None)
+    if mine is not None:
+        try:
+            mine.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return True
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def _healthy_chat_server(record, session_id, timeout=0.5):
     import http.client
     import json
@@ -1410,6 +1514,69 @@ def _healthy_chat_server(record, session_id, timeout=0.5):
         and body.get("scope") == "chat"
         and body.get("session_id") == session_id
     )
+
+
+def supabase_main(argv=None):
+    """Set up, sign in to, or sign out of the reader's own Supabase.
+
+    The password is typed here and exchanged once for tokens: it is not
+    stored, not logged, and not passed on the command line, where it would
+    sit in the shell's history for anyone who reads the file.
+    """
+    import getpass
+    ap = argparse.ArgumentParser(
+        prog="hc supabase",
+        description="Connect the goal workspace to your own Supabase project.")
+    ap.add_argument("action", choices=("setup", "login", "logout", "status"))
+    args = ap.parse_args(argv or [])
+    from .trajectory import supabase_client as SB
+
+    if args.action == "setup":
+        path, created = SB.write_template()
+        say(("wrote %s" if created else "%s is already there") % path)
+        say("Put your project URL and anon (public) key in it, then run"
+            " `hc supabase login`.")
+        say("Find both under Project Settings -> API in the Supabase"
+            " dashboard.")
+        say("Use the ANON key, not the service key: the workspace signs in"
+            " as you, and row security does the rest.")
+        return 0
+
+    if args.action == "logout":
+        SB.sign_out()
+        say("signed out; the stored tokens are gone")
+        return 0
+
+    if args.action == "status":
+        state = SB.status()
+        say(f"config    {state['config_path']}")
+        say(f"configured {'yes' if state['configured'] else 'no'}")
+        say(f"signed in  {'yes' if state['signed_in'] else 'no'}"
+            + (f" ({state['email']})" if state.get("email") else ""))
+        return 0
+
+    try:
+        config = SB.load_config()
+    except SB.SupabaseError as exc:
+        say(str(exc))
+        return 1
+    if not config["url"] or not config["anon_key"]:
+        say(f"fill in {SB.config_path()} first (run `hc supabase setup`)")
+        return 1
+    email = config.get("email") or ""
+    if not email or email == "you@example.com":
+        email = input("email: ").strip()
+    else:
+        say(f"email: {email}")
+    password = getpass.getpass("password (not stored): ")
+    try:
+        session = SB.sign_in(email, password)
+    except SB.SupabaseError as exc:
+        say(str(exc))
+        return 1
+    say(f"signed in as {session['email']}")
+    say("the workspace can now send this project from the project overview")
+    return 0
 
 
 def chat_serve_main(argv=None):
@@ -1514,6 +1681,21 @@ def chat_ui_main(argv=None):
 
     with CS.session_lock(args.session, wait_s=8):
         record = _read_server_registry(p.session_dir)
+        note = ""
+        # Reopening a workspace whose code has moved on is a restart, not a
+        # reuse: otherwise the reader is handed back the same old server that
+        # just told them to restart it, and every control added since keeps
+        # failing with no way out.
+        # Staleness first: it is a handful of stat calls, and the health probe
+        # below is a request the common path should only pay for once.
+        if (_server_outran_its_code(record)
+                and _healthy_chat_server(record, args.session)):
+            if _chat_server_is_building(p.session_dir):
+                note = ("kept the running workspace: a build is in flight."
+                        " Reopen it when the build lands to pick up the"
+                        " newer code.")
+            elif _stop_chat_server(record):
+                record = None
         if not _healthy_chat_server(record, args.session):
             log_path = p.session_dir / "server.log"
             log_path.touch(mode=0o600, exist_ok=True)
@@ -1577,6 +1759,10 @@ def chat_ui_main(argv=None):
     url = record["url"]
     if not args.no_open:
         webbrowser.open(url)
+    # The URL last: the hook that prints this reads back the last line that
+    # looks like one, and a note above it rides along in what the reader sees.
+    if note:
+        print("note: " + note)
     print(url)
     return 0
 
@@ -1624,6 +1810,8 @@ def hc_main():
         ui_main(rest)
     elif cmd == "chat-ui":
         chat_ui_main(rest)
+    elif cmd == "supabase":
+        raise SystemExit(supabase_main(rest) or 0)
     elif cmd == "chat-serve":
         chat_serve_main(rest)
     elif cmd == "chat-hook":

@@ -391,9 +391,14 @@ class ChatSynthesisTests(unittest.TestCase):
             self.assertEqual(
                 "Infer this goal", CS.load_goals(SID, self.root)[0]["goals"][0]["title"]
             )
-            self.assertFalse(
-                (CS.paths(SID, self.root).session_dir / "analyzer.json").exists()
-            )
+            # The worker says idle, then takes its state file away: two
+            # writes, and a runner can read between them. Give the second
+            # a moment before calling the file's presence a bug.
+            state_file = CS.paths(SID, self.root).session_dir / "analyzer.json"
+            gone_by = time.monotonic() + 2
+            while state_file.exists() and time.monotonic() < gone_by:
+                time.sleep(0.05)
+            self.assertFalse(state_file.exists())
         finally:
             pid = spawned.get("pid")
             if pid:
