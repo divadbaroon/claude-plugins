@@ -1,5 +1,5 @@
 ---
-name: goals-ui
+name: bart
 description: Open the goal workspace for this Claude Code conversation.
 disable-model-invocation: true
 ---
@@ -22,5 +22,5 @@ Code session will open it without a reply. Nothing else: no other commands, no
 files, no summary of the goals.
 
 From this point the chat's goals document is injected as context on session
-start, later messages, subagents and tool batches. `/goals-ui disable` turns
+start, later messages, subagents and tool batches. `/bart disable` turns
 that off for this chat.

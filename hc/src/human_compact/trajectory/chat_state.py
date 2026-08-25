@@ -1,7 +1,7 @@
 """Durable, session-scoped Claude Code event ingestion for chat goals.
 
 The global trajectory pipeline intentionally summarizes many Vault sessions.
-This module is the separate state boundary for ``/goals-ui``: one Claude session,
+This module is the separate state boundary for ``/bart``: one Claude session,
 one append-only logical event stream, one goal tree.  Transcript files are
 treated as replaceable caches (Claude may truncate or rewrite them); stable
 record ids and event deduplication are the correctness boundary.
@@ -283,7 +283,7 @@ def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
     """Record that this chat opened its goal workspace, keeping the first time.
 
     Every session's history is ingested, but analysis and context injection
-    belong only to the chats whose owner asked for them by running /goals-ui.
+    belong only to the chats whose owner asked for them by running /bart.
     Opening the workspace again is also how a disabled chat is turned back on.
     """
     with session_lock(session_id, root, wait_s=5) as p:
@@ -325,7 +325,7 @@ def open_workspace_for(cwd, root: Optional[Path] = None) -> str:
 
 
 def disable_goals_ui(session_id: str, root: Optional[Path] = None) -> None:
-    """Stop injecting and analyzing this chat until /goals-ui is run again."""
+    """Stop injecting and analyzing this chat until /bart is run again."""
     with session_lock(session_id, root, wait_s=5) as p:
         manifest = load_manifest(session_id, root)
         manifest["goals_ui_disabled_at"] = _now()
@@ -337,7 +337,7 @@ def disable_goals_ui(session_id: str, root: Optional[Path] = None) -> None:
 
 
 def goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> bool:
-    """True once /goals-ui has opened this chat's workspace at least once.
+    """True once /bart has opened this chat's workspace at least once.
 
     The public "has this chat ever opted in" query, which a disable does not
     revoke; ``goals_ui_active`` is the narrower "may we act right now" gate.
@@ -348,7 +348,7 @@ def goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> bool:
 def goals_ui_active(session_id: str, root: Optional[Path] = None) -> bool:
     """True while this chat's goals may be analyzed and injected.
 
-    One /goals-ui is the whole opt-in: it does not expire when the browser
+    One /bart is the whole opt-in: it does not expire when the browser
     tab closes or the workspace server exits, because the goals the user
     wrote there outlive the window that wrote them.
     """
@@ -504,11 +504,12 @@ def _human_origin(record: Dict[str, Any]) -> bool:
 def _is_goals_ui_launcher(text: str) -> bool:
     """Keep the command that opens the workspace out of its own goal model.
 
-    ``hc-ui`` is the pre-rename spelling and still appears in transcripts
-    recorded before the rename, so both names are recognized.
+    ``goals-ui`` and ``hc-ui`` are the pre-rename spellings and still appear
+    in transcripts recorded before each rename, so every name is recognized.
+    A prompt that only ever opened the workspace is not a goal.
     """
     lowered = str(text or "").strip().lower()
-    for name in ("goals-ui", "hc-ui"):
+    for name in ("bart", "goals-ui", "hc-ui"):
         if (lowered in (f"/{name}", f"\\{name}", name)
                 or lowered.startswith(f"/{name} ")
                 or re.search(

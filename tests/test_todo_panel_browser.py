@@ -728,12 +728,13 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_a_row_is_priced_at_what_the_prompt_tab_counts(self):
-        # The number in a row's corner and the number above the prompt field
-        # are the same measurement of the same string -- the context a build
-        # of that row opens on. They were not: the corner added a guess about
-        # the work on top, which read as tens of thousands beside the tab's
-        # few, and the two surfaces disagreed about what a row costs.
+    def test_an_unbuilt_row_carries_no_price_but_the_prompt_tab_still_counts(self):
+        # A row's corner used to guess at what its build would cost, before
+        # the build; the number beside a row still being written was the
+        # wrong place for a guess, and the guess is now the build's own,
+        # on the watch panel once it has been asked for. The Prompt tab
+        # still counts the string a build opens on, since that is a
+        # measurement of a string that exists.
         from playwright.sync_api import expect, sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
@@ -744,20 +745,12 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.keyboard.type("Add the route")
                 page.wait_for_timeout(1500)
                 corner = page.locator(".hc-todo-cost").first
-                expect(corner).not_to_have_text("", timeout=15000)
                 page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
                 note = page.locator(".hc-rail-ctx-note")
                 expect(note).to_contain_text("tok", timeout=15000)
-                above, beside = tokens_in(note.inner_text()), tokens_in(corner.inner_text())
-                self.assertGreater(beside, 0)
-                # Not to the token: the tab counts the row's line in the
-                # composed prompt and the corner counts the row's own text.
-                # Within a tenth of each other, where the old corner was a
-                # factor of twenty away.
-                self.assertLess(abs(above - beside), 0.1 * above)
-                # And the work it dropped from the number is still said, where
-                # it can be called the guess it is.
-                self.assertIn("work", corner.get_attribute("title") or "")
+                self.assertGreater(tokens_in(note.inner_text()), 0)
+                expect(corner).to_have_text("")
+                expect(corner).to_be_hidden()
             finally:
                 browser.close()
 

@@ -232,7 +232,7 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", output.getvalue())
         spawn.assert_not_called()
-        # History must still accumulate, or /goals-ui would open onto nothing.
+        # History must still accumulate, or /bart would open onto nothing.
         self.assertEqual(
             "The rebuild fix is tested.", CS.load_events(SID)[0]["text"]
         )
@@ -254,7 +254,7 @@ class ChatCliTests(unittest.TestCase):
         spawn.assert_called_once_with(SID)
 
     def test_prompt_hook_injects_even_though_the_workspace_is_closed(self):
-        # /goals-ui is a one-time opt-in, not a window that has to stay open:
+        # /bart is a one-time opt-in, not a window that has to stay open:
         # the user who closed the tab still owns the goals they wrote in it.
         CS.save_goals(SID, one_goal_tree(), {"items": []})
         CS.mark_goals_ui_invoked(SID)
@@ -448,7 +448,7 @@ class ChatCliTests(unittest.TestCase):
 
         with mock.patch.object(self.cli, "chat_ui_main") as launch:
             raw = self._hook("UserPromptExpansion", command_args="disable",
-                             command_name="goals-ui")
+                             command_name="bart")
 
         launch.assert_not_called()
         response = json.loads(raw)
@@ -543,9 +543,9 @@ class ChatCliTests(unittest.TestCase):
             )
         self.assertEqual(0, code)
         # `decision: block` ends the turn with no model call and shows `reason`
-        # to the user; that line is the whole of what /goals-ui says.
+        # to the user; that line is the whole of what /bart says.
         self.assertEqual(
-            {"decision": "block", "reason": "goals-ui: http://127.0.0.1:9012/"},
+            {"decision": "block", "reason": "bart: http://127.0.0.1:9012/"},
             json.loads(output.getvalue()),
         )
         opened.assert_called_once_with("http://127.0.0.1:9012/")
@@ -738,7 +738,7 @@ class ChatCliTests(unittest.TestCase):
 
         stopped.assert_not_called()
         reason = json.loads(output.getvalue())["reason"]
-        self.assertTrue(reason.startswith("goals-ui: http://127.0.0.1:9012/"))
+        self.assertTrue(reason.startswith("bart: http://127.0.0.1:9012/"))
         self.assertIn("a build is in flight", reason)
 
     def test_refresh_worker_hands_off_remaining_bounded_evidence(self):

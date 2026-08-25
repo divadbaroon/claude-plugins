@@ -305,9 +305,9 @@ class ChatStateTests(unittest.TestCase):
         write_jsonl(
             self.transcript,
             [
-                user_record("/goals-ui", uuid="launcher", prompt_id="launcher"),
+                user_record("/bart", uuid="launcher", prompt_id="launcher"),
                 user_record(
-                    "<command-name>/goals-ui</command-name>\n"
+                    "<command-name>/bart</command-name>\n"
                     "<command-message>goals-ui</command-message>",
                     uuid="wrapped-launcher",
                     prompt_id="wrapped-launcher",
@@ -349,7 +349,7 @@ class ChatStateTests(unittest.TestCase):
         self.assertIn("task_notification", kinds)
         launchers = [
             event for event in CS.load_events(SID, self.base)
-            if "goals-ui" in event.get("text", "")
+            if "bart" in event.get("text", "")
         ]
         self.assertEqual(2, len(launchers))
         self.assertTrue(all(not event["usable_for_goals"] for event in launchers))
@@ -654,12 +654,12 @@ class ChatStateTests(unittest.TestCase):
         self.assertEqual([first], goal["auto_prompt_ids"])
 
     def test_ui_launcher_detection_spans_current_and_legacy_spellings(self):
-        for text in ("/goals-ui", "/goals-ui now", "\\goals-ui", "goals-ui",
-                     "<command-name>/goals-ui</command-name>",
+        for text in ("/bart", "/bart now", "\\goals-ui", "bart",
+                     "<command-name>/bart</command-name>",
                      "/hc-ui", "<command-name>/hc-ui</command-name>"):
             with self.subTest(launcher=text):
                 self.assertTrue(CS._is_goals_ui_launcher(text))
-        for text in ("goal", "open the goal ui please", "/goals-ui-ish", ""):
+        for text in ("goal", "open the goal ui please", "/bart-ish", ""):
             with self.subTest(other=text):
                 self.assertFalse(CS._is_goals_ui_launcher(text))
 

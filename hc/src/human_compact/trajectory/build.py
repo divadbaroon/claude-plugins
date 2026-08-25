@@ -9,7 +9,12 @@ picked rows -- each under an id the reader never sees -- and a small protocol:
   characters) and stop; the row shows the question in the rail, the reader
   answers there, and the answer goes back into the same session as
   ``{"id": "...", "answer": "..."}``;
-* when a row is finished, print ``{"id": "...", "state": "DONE"}``.
+* when a row is finished, print ``{"id": "...", "state": "DONE"}``;
+* before starting on the rows, print ``{"estimate": {"tokens": N, "minutes":
+  N}}`` -- what the whole build will spend and how long it will take. The
+  rail's watch line says "calculating" until that line lands, then counts down
+  from it. It is asked of the build session itself, which already holds the
+  context, rather than of a second process handed a copy of it.
 
 Everything else the process prints is a log. Rows are ``building`` from the
 moment they are submitted, ``asking`` while a question stands, ``done`` on the
@@ -79,6 +84,14 @@ never mention them to the user in prose.
 Protocol -- print these as bare JSON objects on their own line, nothing else on
 the line, exactly in these shapes:
 
+- First, before you start on the rows, print your estimate for the whole build
+  -- every row under "The work" together -- as
+  {"estimate": {"tokens": <integer>, "minutes": <integer>}}
+  where tokens is what you expect this session to spend in total (everything
+  it reads, writes and re-reads, cache included) and minutes is how long the
+  work will take. A quick look at the repository to size the rows is fine; no
+  edits before it. If your estimate changes materially as you work, print it
+  again with the new numbers.
 - If a row is ambiguous and you cannot proceed without the user, print
   {"id": "<row id>", "question": "<under 100 characters>"}
   and then STOP your turn immediately. Do not continue with other rows in that
@@ -750,6 +763,41 @@ def directives(text: str) -> List[Dict[str, Any]]:
     return out
 
 
+# The build's own word on what it will cost: one object with one nested
+# object, so the row directive's pattern (which bars braces inside) is not
+# the one to find it with.
+_ESTIMATE = re.compile(r"\{\s*\"estimate\"\s*:\s*\{[^{}]*\}\s*\}")
+
+
+def estimate_in(text: str) -> Optional[Dict[str, int]]:
+    """The last estimate in a piece of assistant text, or None.
+
+    ``{"tokens": N, "minutes": N}`` with both whole and non-negative; a line
+    that names only one of them still counts, with the other at zero. The
+    last one wins: a build that re-estimates as it goes means the later
+    number.
+    """
+    found: Optional[Dict[str, int]] = None
+    for match in _ESTIMATE.finditer(text or ""):
+        try:
+            obj = json.loads(match.group(0))
+        except ValueError:
+            continue
+        inner = obj.get("estimate") if isinstance(obj, dict) else None
+        if not isinstance(inner, dict):
+            continue
+        out: Dict[str, int] = {}
+        for key in ("tokens", "minutes"):
+            value = inner.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            out[key] = max(0, int(value))
+        if out:
+            found = {"tokens": out.get("tokens", 0),
+                     "minutes": out.get("minutes", 0)}
+    return found
+
+
 def _stream_text(event: Dict[str, Any]) -> str:
     """The text an assistant stream-json event carries, if any."""
     if event.get("type") == "assistant":
@@ -888,9 +936,12 @@ class Run:
         # an hour spent waiting for the reader's answer is not that. How many
         # rows are out is a fresh run's to say -- a resume may be a Run that
         # only knows the session, not what was picked into it.
-        fresh = {"started_at": _now()}
+        fresh: Dict[str, Any] = {"started_at": _now()}
         if not resume:
             fresh["rows"] = len(self.picked) or 1
+            # A new build has not said what it will cost yet; the last
+            # one's word must not stand in for it.
+            fresh["estimate"] = None
         self.record(status="running", last_message=message[-400:], **fresh)
         rows = len(self.picked) or 1
         self._say("start", "carrying on" if resume else
@@ -954,6 +1005,14 @@ class Run:
             elif obj.get("state") == "DONE":
                 _set_row(self.session_id, self.root, self.goal_id, row_id,
                          status="done", question="")
+        # The build's estimate of itself goes on the run record, where the
+        # rail reads its countdown from; and into the log, so what the line
+        # said is in plain words beside everything else the build did.
+        estimate = estimate_in(text)
+        if estimate:
+            self.record(estimate=dict(estimate, at=_now()))
+            self._say("say", "estimated about %d min and %s tokens for the build"
+                      % (estimate["minutes"], f"{estimate['tokens']:,}"))
 
     def _bank(self) -> None:
         """Bank what this build spent: one sample for the estimate, and -- when
@@ -1507,15 +1566,30 @@ def _span(start: Any, end: Any) -> Optional[int]:
     return max(0, int((until - began).total_seconds()))
 
 
+def _estimate_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What the build said it would cost, as the rail is shown it."""
+    value = record.get("estimate")
+    if not isinstance(value, dict):
+        return None
+    try:
+        tokens = max(0, int(value.get("tokens") or 0))
+        minutes = max(0, int(value.get("minutes") or 0))
+    except (TypeError, ValueError):
+        return None
+    if not tokens and not minutes:
+        return None
+    return {"tokens": tokens, "minutes": minutes,
+            "at": str(value.get("at") or "")}
+
+
 def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
     """Every build this chat has a record of, by goal: where it stands, how
     long it has been at it, the last thing it did, and -- while it is running
-    -- roughly how much longer it has, from what this chat's own rows have
-    taken before.
+    -- roughly how much longer it has, from the build's own estimate of
+    itself. Until the build has printed one there is no number to count down
+    from, and the rail says it is calculating.
     """
     out: Dict[str, Any] = {}
-    priced = cost(session_id, root)
-    per_row = int(priced.get("row_seconds") or DEFAULT_ROW_SECONDS)
     try:
         files = sorted(_builds_dir(session_id, root).glob("*.json"))
     except OSError:
@@ -1536,6 +1610,11 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
         elapsed = _span(record.get("started_at"),
                         None if running else record.get("updated_at"))
         rows = max(1, int(record.get("rows") or 1))
+        estimate = _estimate_of(record)
+        try:
+            spent = max(0, int(record.get("tokens") or 0))
+        except (TypeError, ValueError):
+            spent = 0
         out[goal_id] = {
             "status": "running" if running else str(record.get("status") or ""),
             "running": running,
@@ -1543,13 +1622,16 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
             "updated_at": record.get("updated_at"),
             "rows": rows,
             "elapsed_s": elapsed,
-            # What is left of the estimate. It can reach zero and stay there:
-            # an estimate that has run out is a truer thing to show than one
-            # that keeps moving away.
-            "eta_s": (max(0, per_row * rows - elapsed)
-                      if running and elapsed is not None else None),
-            "per_row_s": per_row,
-            "measured": bool(priced.get("time_samples")),
+            # What is left of the build's own estimate. It can reach zero and
+            # stay there: an estimate that has run out is a truer thing to
+            # show than one that keeps moving away. None until the build has
+            # printed one, and None again once it has stopped.
+            "eta_s": (max(0, estimate["minutes"] * 60 - elapsed)
+                      if running and estimate and elapsed is not None
+                      else None),
+            "estimate": estimate,
+            # What it actually spent, once it has stopped and said.
+            "tokens": spent,
             "last": lines[-1] if lines else None,
             "lines": len(lines),
             "can_open": bool(record.get("claude_session_id")),

@@ -148,15 +148,15 @@ async function run(deps = {}) {
       output.write(`  hc           needs one more step (below)\n`);
     }
     // The chat hooks record from the moment they are installed -- that is what
-    // lets /goals-ui, run mid-chat, see the chat from its beginning. Only
+    // lets /bart, run mid-chat, see the chat from its beginning. Only
     // analysis and injection wait for it, so those are what this line promises.
     output.write(experimentalEnabled()
       ? '\nInstalled. Chats are recorded locally; nothing is analyzed or '
-        + 'injected until you run /goals-ui in a chat.\n'
+        + 'injected until you run /bart in a chat.\n'
         + 'Global Vault hooks are wired (HC_EXPERIMENTAL=1); capture follows '
         + 'your global Vault setting.\n'
       : '\nInstalled. Chats are recorded locally; nothing is analyzed or '
-        + 'injected until you run /goals-ui in a chat.\n');
+        + 'injected until you run /bart in a chat.\n');
     if (reach && !reach.onPath) {
       output.write(reach.added
         ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`
@@ -165,7 +165,7 @@ async function run(deps = {}) {
         : `\nAdd this to your shell profile, then run it here:\n\n    ${reach.line}\n`);
     }
     const needsPathStep = !!(reach && !reach.onPath);
-    const next = 'Open any Claude Code chat and type /goals-ui.';
+    const next = 'Open any Claude Code chat and type /bart.';
     output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
     return 0;
   } catch (error) {

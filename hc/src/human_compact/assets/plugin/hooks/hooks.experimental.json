@@ -13,7 +13,7 @@
       ] }
     ],
     "UserPromptExpansion": [
-      { "matcher": "goals-ui", "hooks": [
+      { "matcher": "bart", "hooks": [
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 45 }
       ] }
     ],

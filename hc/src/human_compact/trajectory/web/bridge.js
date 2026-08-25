@@ -16,8 +16,7 @@
   // and compares the two.
   var DEFAULT_DOC = "";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
-                      scope: "global", sessionId: "", buildSession: null,
-                      buildCost: null };
+                      scope: "global", sessionId: "", buildSession: null };
   var stateFingerprint = null;
   var lastObservedGoals = null;
   var refreshPending = false;
@@ -808,13 +807,8 @@
       // builds wait for its next turn.
       buildSession: (st.build_session && typeof st.build_session === "object")
         ? st.build_session : null,
-      // What a build costs here: the context every one of them opens on, and
-      // what a row of work has spent in this chat so far. The TODO rail
-      // prices its rows from it.
-      buildCost: (st.build_cost && typeof st.build_cost === "object")
-        ? st.build_cost : null,
       // What each goal's build is doing right now, by goal id: how far in it
-      // is, roughly how much longer it has, and the last thing it did. The
+      // is, how much longer it says it has, and the last thing it did. The
       // rail draws it under the rows, so "building" is not all the reader
       // gets to know.
       buildRuns: (st.build_runs && typeof st.build_runs === "object")
@@ -1980,7 +1974,7 @@
     if (staleSaid) return false;
     staleSaid = true;
     serverNotice("server_stale",
-                 "Restart it (/goals-ui) — anything added since it started"
+                 "Restart it (/bart) — anything added since it started"
                  + " will not work here.");
     return true;
   }
@@ -6482,12 +6476,12 @@
       // the builder, rows that came back done.
       "[data-hc-launch] .hc-todo-sep{border-top:1px solid var(--bd);margin:7px 6px;user-select:none}",
       "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
-      // What the row will cost to build, in its lower right. `flex-end`, not
+      // What the row's build spent, in its lower right. `flex-end`, not
       // the row's baseline: a row whose text wraps is two or three lines
       // tall, and the number belongs at the bottom of it, beside the last
       // line -- which is what "in the corner" means on a row that wrapped.
-      // Faint, because it is an estimate the reader is free to ignore; the
-      // measured number a finished build leaves is not faint.
+      // Empty until the row has been built: what a build WILL cost is the
+      // build's own word, on the watch panel below the rows.
       "[data-hc-launch] .hc-todo-cost{flex:none;align-self:flex-end;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--fnt);opacity:.7;user-select:none;white-space:nowrap;cursor:default}",
       "[data-hc-launch] .hc-todo-row:hover .hc-todo-cost{opacity:1}",
       "[data-hc-launch] .hc-todo-cost[data-hc-todo-spent]{color:var(--mut);opacity:1}",
@@ -6737,6 +6731,11 @@
   var railTab = "todos";
   var todoItems = null;
   var todoGoalId = null;
+  // What the rail last took from the store, by row id: the text and depth
+  // of each row as of that reading. It is how the rail tells, when the
+  // store has changed under it, whether a difference is its own edit or
+  // someone else's -- see todoReconcile.
+  var todoBase = null;
   var todoPicked = {};
   var todoSavedLabel = "";
   var todoSaveTimer = null;
@@ -7127,81 +7126,17 @@
     return out.join("\n");
   }
 
-  // --- what a row will cost to build ---------------------------------------
+  // --- what a row's build spent --------------------------------------------
   //
-  // Every row that has not been built yet prints a number in its lower right.
-  // What its build will spend is two parts, and the tooltip says which is
-  // which, because only one of them is knowable in advance:
-  //
-  // * the context the build opens on -- the project, the goal tree this plugin
-  //   keeps for the chat, this goal's own prompt, the protocol, plus the row
-  //   itself. That is the string the Prompt tab prints, and it is counted
-  //   here the way the tab counts it: prompt_preview composes it and says how
-  //   many tokens it is with no rows in it, so the number beside a row and
-  //   the number in the tab can never disagree. (The state's
-  //   own context_tokens measures the goal-context file alone, which is a
-  //   part of that string and reads low beside it; it stands in only until
-  //   the preview has answered for this goal.) Characters over four, the
-  //   usual rule of thumb, since no browser holds the model's tokenizer;
-  // * the work -- what Claude reads, writes and re-reads to do the row. Not
-  //   knowable, so it is measured instead: the server keeps what this chat's
-  //   own finished builds spent, per row, and the median of those is what a
-  //   row is priced at. Before this chat has built anything there is nothing
-  //   to measure and the server's default stands in, which the tooltip says.
-  //
-  // A row longer than the ones already built is scaled up from that median,
-  // and a shorter one down, within a factor either way -- length is a weak
-  // signal about work, so it is allowed to nudge the number, not set it.
-  //
-  // The corner prints the context, since that is the half a number can be
-  // told about honestly; the work is in the tooltip, where it can be labelled
-  // as the guess it is.
-  //
-  // Once a row HAS been built, and built on its own, the run's own usage is
-  // on the row and the estimate is not printed: a measured number replaces a
-  // guess about the same thing.
-
-  var TODO_COST_SPAN = [0.5, 2.5];
-
-  function todoCostContext() {
-    // The context the row on screen opens on. The Prompt tab's measurement
-    // for this goal where it has one -- see promptCtxCost -- and the state's
-    // coarser figure until then.
-    if (todoGoalId && promptCtxCost && promptCtxCost.goal === todoGoalId
-        && promptCtxCost.context > 0) {
-      return promptCtxCost.context;
-    }
-    var cost = serverState.buildCost;
-    return (cost && typeof cost === "object")
-      ? Math.max(0, +cost.context_tokens || 0) : 0;
-  }
-
-  function todoCostBasis() {
-    var cost = serverState.buildCost;
-    var work = (cost && typeof cost === "object")
-      ? Math.max(0, +cost.row_tokens || 0) : 0;
-    if (!work) return null;
-    return { context: todoCostContext(), work: work,
-             chars: Math.max(1, +cost.row_chars || 1),
-             samples: Math.max(0, +cost.samples || 0) };
-  }
-
-  function todoCostOf(row) {
-    // The estimate for one row, or null when there is nothing to say: an
-    // empty row is no work, a row already out with the builder is past being
-    // estimated, and a chat the server has measured nothing for would rather
-    // print no number than one nothing stands behind.
-    var text = str(row && row.text).trim();
-    if (!text) return null;
-    var basis = todoCostBasis();
-    if (!basis) return null;
-    var own = Math.ceil(text.length / 4);
-    var scale = Math.min(TODO_COST_SPAN[1],
-                         Math.max(TODO_COST_SPAN[0], text.length / basis.chars));
-    var work = Math.round(basis.work * scale);
-    return { total: basis.context + own + work, context: basis.context + own,
-             work: work, samples: basis.samples };
-  }
+  // A row that has been built, and built on its own, prints in its lower
+  // right what its build actually spent: the run's own usage, banked onto the
+  // row when the run ended. A row that has not been built yet prints nothing
+  // there. The corner used to carry a guess at what the build would cost --
+  // the context it opens on, plus a median of this chat's earlier builds --
+  // and a number nothing stood behind was the wrong thing to put beside a
+  // row the reader was still writing. What a build WILL cost is now the
+  // build's own word: asked for as its first protocol line and shown on the
+  // watch panel below the rows, see todoWatchLine.
 
   function todoTokenLabel(n) {
     // Three significant figures at most: an estimate that reads "31.7k" is
@@ -7213,31 +7148,13 @@
   }
 
   function todoCostText(row) {
-    // What the corner of one row says, and what it says when hovered. A
-    // measured number where there is one; an estimate where there is not;
-    // nothing at all for a row that is neither.
+    // What the corner of one row says, and what it says when hovered: a
+    // measured number where there is one, nothing at all otherwise.
     var spent = +(row && row.tokens);
-    if (spent > 0) {
-      return { label: todoTokenLabel(spent) + " tok",
-               title: "this row's build spent " + spent.toLocaleString()
-                 + " tokens", measured: true };
-    }
-    if (row && row.status && row.status !== "failed") return null;
-    var cost = todoCostOf(row);
-    if (!cost) return null;
-    var source = cost.samples
-      ? "a typical build here, over your last " + cost.samples
-        + (cost.samples === 1 ? " build" : " builds")
-      : "a typical build, until this chat has built something to measure";
-    return {
-      label: "~" + todoTokenLabel(cost.context) + " tok",
-      title: "about " + todoTokenLabel(cost.context)
-        + " of context this row's build opens on — the string the Prompt tab"
-        + " prints, plus this row. Doing the work then costs roughly "
-        + todoTokenLabel(cost.work) + " more: " + source
-        + ". Rows built together share the context.",
-      measured: false
-    };
+    if (!(spent > 0)) return null;
+    return { label: todoTokenLabel(spent) + " tok",
+             title: "this row's build spent " + spent.toLocaleString()
+               + " tokens", measured: true };
   }
 
   function todoCostPaint(row, line) {
@@ -7269,11 +7186,14 @@
   //
   // A row handed to the builder used to say "building" and stop there, for as
   // long as it took. What the rail says now is the run's own account of
-  // itself: how long it has been at it, roughly how much longer it has -- from
-  // what a row has taken in this chat before, so the number gets truer as the
-  // chat builds -- and the last thing the agent actually did. The whole log is
-  // one click away, and so is a terminal window on the run: following its log
-  // while it runs, and resuming its session once it has stopped.
+  // itself: how long it has been at it, how much longer it has and what it
+  // will spend -- the build's own estimate, which the protocol asks it to
+  // print before it starts on the rows, so the panel says "calculating" until
+  // that line lands and counts down from it after; a number the build gave
+  // rather than one worked out from the chat's earlier builds -- and the last
+  // thing the agent actually did. The whole log is one click away, and so is
+  // a terminal window on the run: following its log while it runs, and
+  // resuming its session once it has stopped.
 
   var WATCH_HEAD = {
     running: "building", retrying: "retrying after an API error",
@@ -7290,21 +7210,47 @@
     return mins ? (hours + "h " + mins + "m") : (hours + "h");
   }
 
+  function todoWatchEstimate(run) {
+    // The build's own word on what it will cost, or null until it has
+    // given one -- an older server sends none, and reads the same way.
+    var est = run && run.estimate;
+    if (!est || typeof est !== "object") return null;
+    var tokens = Math.max(0, +est.tokens || 0);
+    var minutes = Math.max(0, +est.minutes || 0);
+    return (tokens || minutes) ? { tokens: tokens, minutes: minutes } : null;
+  }
+
   function todoWatchLine(run) {
     // The panel's one line, or null when this goal has no build to watch.
     if (!run || typeof run !== "object" || !str(run.status)) return null;
     var head = WATCH_HEAD[str(run.status)] || str(run.status);
+    var est = todoWatchEstimate(run);
+    var spent = Math.max(0, +run.tokens || 0);
     var parts = [head];
     if (typeof run.elapsed_s === "number") {
       parts.push(buildDuration(run.elapsed_s) + " in");
     }
-    if (run.running && typeof run.eta_s === "number") {
+    if (run.running) {
+      // How much longer, by the build's own reckoning -- and "calculating"
+      // until it has reckoned, rather than a number nothing stands behind.
       // An estimate that has run out says so rather than sliding forward: a
       // number that keeps moving away is worse than none.
-      parts.push(run.eta_s > 0 ? "about " + buildDuration(run.eta_s) + " left"
-                 : "longer than usual");
+      if (!est || !est.minutes || typeof run.eta_s !== "number") {
+        parts.push("calculating…");
+      } else {
+        parts.push(run.eta_s > 0
+                   ? "about " + buildDuration(run.eta_s) + " left"
+                   : "longer than it estimated");
+      }
     }
-    var per = buildDuration(run.per_row_s);
+    // Tokens: what it expects to spend while it runs, "~" because it is its
+    // guess; what it actually spent once it has stopped and said.
+    if (!run.running && spent > 0) {
+      parts.push(todoTokenLabel(spent) + " tok");
+    } else if (est && est.tokens > 0) {
+      parts.push("~" + todoTokenLabel(est.tokens) + " tok");
+    }
+    var rows = Math.max(1, +run.rows || 1);
     return {
       head: head,
       running: !!run.running,
@@ -7313,10 +7259,14 @@
       lines: +run.lines || 0,
       canOpen: !!run.can_open,
       error: str(run.error),
-      title: run.measured
-        ? "about " + per + " a row, from this chat's own finished builds"
-        : "about " + per + " a row — a default, until this chat has built"
-          + " something to measure"
+      title: est
+        ? "the build's own estimate, printed before it started on the rows:"
+          + " about " + buildDuration(est.minutes * 60) + " and "
+          + est.tokens.toLocaleString() + " tokens for " + rows
+          + (rows === 1 ? " row" : " rows")
+          + (spent > 0 ? "; it spent " + spent.toLocaleString() : "")
+        : "the build prints its own estimate — how long, and how many tokens"
+          + " — before it starts on the rows; nothing is shown until it has"
     };
   }
 
@@ -7582,9 +7532,107 @@
     return changed;
   }
 
+  // --- the rail's rows against the store's, three ways --------------------
+  //
+  // While the reader types, the rail holds its own list and writes it whole;
+  // the server reads a row it is not sent as deleted. But the store can
+  // change under the rail meanwhile -- a sync landing rows another window
+  // typed, a recovery, a build marking rows -- and a list written whole over
+  // that erased whatever the rail had never seen, and blanked a row it had
+  // loaded empty before someone else filled it. Two lists cannot tell "I
+  // deleted this" from "I never saw this". A third can: the base, what the
+  // rail last took from the store. A stored row in neither the rail nor the
+  // base was added elsewhere and joins, after the stored row before it. A
+  // row in the base the rail no longer has was deleted here and stays gone.
+  // A row whose text (or depth) the rail has not changed since the base
+  // takes the store's. Status and question are not this function's: they
+  // are laid by todoLayState. Answers the rows and whether any changed; the
+  // rail's own rows are the objects given, as todoSectioned keeps them.
+
+  function todoBaseOf(rows) {
+    var out = Object.create(null);
+    array(rows).forEach(function (row) {
+      if (row && typeof row.id === "string") {
+        out[row.id] = { text: str(row.text), depth: row.depth | 0 };
+      }
+    });
+    return out;
+  }
+
+  function todoBaseMap(base) {
+    if (Array.isArray(base)) return todoBaseOf(base);
+    return base && typeof base === "object" ? base : Object.create(null);
+  }
+
+  function todoReconcile(items, stored, base) {
+    var rows = array(items).slice();
+    var known = todoBaseMap(base);
+    var have = Object.create(null);
+    rows.forEach(function (row) {
+      if (row && typeof row.id === "string") have[row.id] = row;
+    });
+    var changed = false;
+    var prev = null;
+    array(stored).forEach(function (row) {
+      if (!row || typeof row.id !== "string") return;
+      var mine = have[row.id], was = known[row.id];
+      if (mine) {
+        if (was) {
+          if (str(mine.text) === was.text && str(row.text) !== was.text) {
+            mine.text = str(row.text);
+            changed = true;
+          }
+          if ((mine.depth | 0) === was.depth && (row.depth | 0) !== was.depth) {
+            mine.depth = row.depth | 0;
+            changed = true;
+          }
+        }
+        prev = row.id;
+        return;
+      }
+      if (was) return; // deleted here, since the base
+      var fresh = todoCopyRows([row])[0];
+      var at = prev ? rows.indexOf(have[prev]) + 1 : 0;
+      rows.splice(at, 0, fresh);
+      have[fresh.id] = fresh;
+      prev = fresh.id;
+      changed = true;
+    });
+    return { items: rows, changed: changed };
+  }
+
+  function todoAbsorb(stored) {
+    // The store's rows into the rail's, by the rule above; the rows the two
+    // now agree on become the base. Answers whether the rail's rows changed.
+    if (!todoItems) return false;
+    var out = todoReconcile(todoItems, stored, todoBase);
+    var mine = Object.create(null);
+    out.items.forEach(function (row) { mine[row.id] = row; });
+    var base = todoBaseMap(todoBase);
+    array(stored).forEach(function (row) {
+      var held = row && mine[row.id];
+      if (held && str(held.text) === str(row.text)
+          && (held.depth | 0) === (row.depth | 0)) {
+        base[row.id] = { text: str(row.text), depth: row.depth | 0 };
+      }
+    });
+    todoBase = base;
+    if (!out.changed) return false;
+    // A row that joined above the caret's row would move the caret's index;
+    // the caret follows its row.
+    var at = todoFocusAt && todoItems[todoFocusAt.index];
+    todoItems = todoSectioned(out.items);
+    if (at) {
+      var where = todoItems.indexOf(at);
+      if (where >= 0) todoFocusAt.index = where;
+    }
+    return true;
+  }
+
   function todoLoad(goal) {
     todoGoalId = goal.id;
     todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
+    todoBase = todoBaseOf(goal.items);
     todoPicked = {};
     todoBuildError = "";
     todoReopening = null;
@@ -7674,8 +7722,13 @@
     var goals = readLocalGoals();
     var node = todoFind(goals, todoGoalId);
     if (!node) return false;
+    // What the store gained since the rail last read it goes in first, or
+    // this write would carry the rail's older list over it and the server
+    // would read every row the rail never saw as deleted.
+    var stored = todoNormalize(node.todo_items);
+    todoAbsorb(stored);
     var next = todoCopyRows(todoItems);
-    if (same(todoNormalize(node.todo_items), next)) return false;
+    if (same(stored, next)) return false;
     // Its own field, written through the same tree import the notes editor
     // uses -- and never the notes: the list and the document are two things.
     // The server lays its own build state back over these rows by id.
@@ -7683,7 +7736,10 @@
     node.todos_md = todoSerialize(next);
     // The import's own promise, not merely "yes": a build pressed on a row
     // typed a moment ago must wait for that row's text to reach the server.
-    return writeGoalsLocal(goals);
+    var written = writeGoalsLocal(goals);
+    // Written, the rail's rows are the store's: the base is them now.
+    todoBase = todoBaseOf(next);
+    return written;
   }
 
   function todoSaveSoon() {
@@ -8794,6 +8850,7 @@
     if (!goal) {
       todoGoalId = null;
       todoItems = null;
+      todoBase = null;
     } else if (goal.id !== todoGoalId) {
       todoLoad(goal);
       force = true;
@@ -8809,14 +8866,20 @@
           todoItems = incoming || [todoRow("", 0)];
           force = true;
         }
+        todoBase = todoBaseOf(goal.items);
       } else if (incoming && todoItems && document.activeElement === todoHost()) {
         // Mid-edit, the rows are the reader's: nothing replaces the one
         // they are typing in. The server's word on a row's STATE still
         // lands, though -- laid over the rows by id, text untouched -- or a
         // build finishing while they type the next TODO would never show.
-        // The caret is put back where it was, by row id, since the rows
-        // may re-band.
-        if (todoLayState(todoItems, incoming)) {
+        // And what the store GAINED lands too -- rows another window or a
+        // sync added, text typed into a row this one had loaded empty --
+        // by the base (todoReconcile), or the rail's next save would write
+        // its older list over them and the server would read them as
+        // deleted. The caret is put back where it was, by row id, since
+        // the rows may re-band.
+        var laid = todoLayState(todoItems, incoming);
+        if (todoAbsorb(goal.items) || laid) {
           todoItems = todoSectioned(todoItems);
           force = true;
         }
@@ -8911,9 +8974,8 @@
     });
     var drawn = list.getAttribute("data-hc-todo-shape");
     if (!force && drawn === JSON.stringify(shape) && list.children.length) {
-      // The rows stand, but what a build costs here may have moved under
-      // them -- a finished build is a new sample, and the goal tree every
-      // build carries grows as the reader writes. The corners follow it.
+      // The rows stand, but a finished build may have written what it spent
+      // onto one of them since. The corners follow it.
       todoCostSweep(list);
       return true;
     }
@@ -9001,11 +9063,6 @@
   var promptCtxText = "";
   var promptCtxBusy = false;
   var promptCtxFold = false;
-  // What that same string costs with no rows in it, as the server counted it,
-  // and the goal it was counted for. This is what a TODO row's corner prices
-  // itself against -- see todoCostBasis -- so the number beside a row and the
-  // number above the field are one measurement of one string.
-  var promptCtxCost = { goal: "", context: 0 };
 
   function promptCtxSignature(goal) {
     // Anything in the tree can move the context, so the tree is the key --
@@ -9047,13 +9104,7 @@
         promptCtxText = (res && res.ok && typeof res.prompt === "string")
           ? res.prompt : "";
         window.__hcPromptContext = promptCtxText;
-        promptCtxCost = (res && res.ok && +res.context_tokens > 0)
-          ? { goal: goalId, context: Math.round(+res.context_tokens) }
-          : { goal: "", context: 0 };
-        // The corners are repriced in place rather than redrawn: the reader
-        // is very likely typing in one of those rows.
         if (railTab === "prompt") renderTodoRail(true);
-        else todoCostSweep(todoHost());
       });
   }
 
@@ -9478,8 +9529,8 @@
     var reads = array(state.reads).map(str).filter(Boolean);
     if (reads.length) rows.push(["", "reads: " + reads.join(" · ")]);
     rows.push([state.active ? "on" : "off",
-               state.active ? "on · /goals-ui disable turns it off"
-                            : "off · /goals-ui turns it back on"]);
+               state.active ? "on · /bart disable turns it off"
+                            : "off · /bart turns it back on"]);
     return rows;
   }
 
@@ -11661,6 +11712,7 @@
       serializeStates: todoSerializeStates,
       copyText: todoCopyText,
       normalize: todoNormalize,
+      reconcile: todoReconcile,
       enter: todoEnter,
       indent: todoIndent,
       outdent: todoOutdent,

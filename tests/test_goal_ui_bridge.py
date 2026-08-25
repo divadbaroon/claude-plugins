@@ -892,15 +892,17 @@ class TodoSectionTests(BridgeTestCase):
 
 
 class TodoCostTests(BridgeTestCase):
-    """The number in a row's lower right: the context its build opens on.
+    """The number in a row's lower right: what its build actually spent.
 
-    The same measurement the Prompt tab prints above the field -- the composed
-    prompt, counted -- so the two surfaces cannot disagree about what a row
-    costs. What the work on top of it will spend is a guess and lives in the
-    tooltip, labelled as one. A row that HAS been built prints what it actually
-    cost instead, and no "~".
+    A row that has not been built prints nothing there. The corner used to
+    carry a guess at what the build would cost -- the context it opens on
+    plus a median of the chat's earlier builds -- and a number nothing stood
+    behind was the wrong thing beside a row still being written. What a build
+    will cost is now the build's own word, on the watch panel: see
+    BuildWatchTests.
     """
 
+    # An older server still sends its cost block; the corner ignores it.
     COST = {"context_tokens": 2000, "row_tokens": 30000, "row_chars": 80,
             "samples": 4}
 
@@ -918,56 +920,26 @@ class TodoCostTests(BridgeTestCase):
         row.update(rest)
         return row
 
-    def test_a_row_is_priced_at_the_context_its_build_opens_on(self):
-        # 2000 of context, plus the 20 the row's own 80 characters add. The
-        # work is not in the number -- a corner that read "32k" for a row the
-        # Prompt tab priced at 2k was two answers to one question.
-        out = self.cost(self.row("x" * 80))
-        self.assertEqual("~2k tok", out["label"])
-        self.assertFalse(out["measured"])
-        # but it is still said, where it can be called a guess
-        self.assertIn("30k more", out["title"])
-        self.assertIn("over your last 4 builds", out["title"])
-
-    def test_a_longer_row_carries_more_of_itself(self):
-        # The context is the same string whatever the row says; only the row's
-        # own text grows.
-        self.assertEqual("~2.1k tok", self.cost(self.row("x" * 400))["label"])
-        self.assertEqual("~3k tok", self.cost(self.row("x" * 4000))["label"])
-        self.assertEqual("~2k tok", self.cost(self.row("x" * 20))["label"])
-
-    def test_the_work_in_the_tooltip_still_leans_on_the_row_s_length(self):
-        # Length is a weak signal about work: it may nudge the guess, up to
-        # 2.5x the median build, never set it.
-        self.assertIn("75k more", self.cost(self.row("x" * 400))["title"])
-        self.assertIn("75k more", self.cost(self.row("x" * 4000))["title"])
-        self.assertIn("15k more", self.cost(self.row("x" * 20))["title"])
-
-    def test_a_chat_that_has_built_nothing_says_where_the_number_came_from(self):
-        out = self.cost(self.row("x" * 80),
-                        dict(self.COST, samples=0))
-        self.assertIn("until this chat has built something", out["title"])
+    def test_a_row_that_has_not_been_built_is_not_priced(self):
+        # Whatever the server says a typical build here costs.
+        self.assertIsNone(self.cost(self.row("x" * 80)))
+        self.assertIsNone(self.cost(self.row("x" * 4000)))
+        self.assertIsNone(self.cost(self.row("Add the route"), cost={}))
+        # Nor a row out with the builder, or back from it unbuilt.
+        self.assertIsNone(self.cost(self.row("Add the route", status="building")))
+        self.assertIsNone(self.cost(self.row("Add the route", status="queued")))
+        self.assertIsNone(self.cost(self.row("Add the route", status="failed")))
 
     def test_a_built_row_prints_what_it_actually_spent(self):
         out = self.cost(self.row("Add the route", status="done", tokens=8400))
         self.assertEqual("8.4k tok", out["label"])
         self.assertTrue(out["measured"])
         self.assertIn("spent", out["title"])
-
-    def test_a_row_out_with_the_builder_is_past_being_estimated(self):
-        self.assertIsNone(self.cost(self.row("Add the route", status="building")))
-        self.assertIsNone(self.cost(self.row("Add the route", status="queued")))
-        # A row that came back failed is going out again: price it.
-        self.assertIsNotNone(self.cost(self.row("Add the route", status="failed")))
+        self.assertNotIn("~", out["label"], "measured, not guessed")
 
     def test_an_empty_row_says_nothing(self):
         self.assertIsNone(self.cost(self.row("")))
         self.assertIsNone(self.cost(self.row("   ")))
-
-    def test_without_the_server_s_word_no_estimate_is_invented(self):
-        # An older server, or a global vault, sends no cost block: the corner
-        # stays empty rather than showing a number nothing stands behind.
-        self.assertIsNone(self.cost(self.row("Add the route"), cost={}))
 
     def test_the_label_never_claims_more_precision_than_it_has(self):
         out = self.run_js(
@@ -986,10 +958,26 @@ class TodoCostTests(BridgeTestCase):
             "out = [slot.textContent, slot.getAttribute('contenteditable'),"
             "  node.querySelector('.hc-todo-row').children.map("
             "    function (c) { return c.className; })];"
-            % (json.dumps(state), json.dumps(self.row("x" * 80))))
-        self.assertEqual("~2k tok", out[0])
+            % (json.dumps(state),
+               json.dumps(self.row("x" * 80, status="done", tokens=2000))))
+        self.assertEqual("2k tok", out[0])
         self.assertEqual("false", out[1], "an island, like the gutter")
-        self.assertEqual(["hc-todo-dash", "hc-todo-line", "hc-todo-cost"], out[2])
+        # After the badge a built row wears, and last of all.
+        self.assertEqual(["hc-todo-dash", "hc-todo-line", "hc-todo-status",
+                          "hc-todo-cost"], out[2])
+
+    def test_an_unbuilt_row_s_corner_is_there_and_empty(self):
+        # Drawn, so a measured number can land in it without a redraw under
+        # the reader's caret -- but saying nothing, and taking no room.
+        state = {"scope": "chat", "goals": [], "prompts": [],
+                 "build_cost": self.COST}
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "var slot = node.querySelector('.hc-todo-cost');"
+            "out = [slot.textContent, slot.style.display];"
+            % (json.dumps(state), json.dumps(self.row("x" * 80))))
+        self.assertEqual(["", "none"], out)
 
     def test_the_stylesheet_puts_it_in_the_lower_right(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
@@ -1000,12 +988,16 @@ class BuildWatchTests(BridgeTestCase):
     """The line under the rows while a build is out.
 
     A row that says "building" says nothing about what that means. The panel
-    says how far in the run is, roughly how much longer it has -- from what a
-    row has taken in this chat before -- and the last thing the agent did.
+    says how far in the run is, how much longer it has and what it will
+    spend -- the build's own estimate, printed as its first protocol line, so
+    the panel is "calculating" until that line lands -- and the last thing
+    the agent did.
     """
 
     RUN = {"status": "running", "running": True, "rows": 2,
-           "elapsed_s": 130, "eta_s": 350, "per_row_s": 240, "measured": True,
+           "elapsed_s": 130, "eta_s": 350, "tokens": 0,
+           "estimate": {"tokens": 120000, "minutes": 8,
+                        "at": "2026-08-23T21:02:00+00:00"},
            "lines": 12, "can_open": True, "error": "",
            "last": {"at": "2026-08-23T21:04:09+00:00", "kind": "tool",
                     "text": "edited build.py"}}
@@ -1017,26 +1009,41 @@ class BuildWatchTests(BridgeTestCase):
 
     def test_a_running_build_says_how_long_it_has_been_and_has_left(self):
         out = self.line()
-        self.assertEqual("building · 2m in · about 6m left", out["meta"])
+        self.assertEqual("building · 2m in · about 6m left · ~120k tok",
+                         out["meta"])
         self.assertEqual("edited build.py", out["last"])
         self.assertTrue(out["running"])
-        self.assertIn("from this chat's own finished builds", out["title"])
+        self.assertIn("the build's own estimate", out["title"])
+        self.assertIn("about 8m and 120,000 tokens for 2 rows", out["title"])
+
+    def test_a_build_is_calculating_until_it_has_estimated_itself(self):
+        out = self.line(dict(self.RUN, estimate=None, eta_s=None))
+        self.assertEqual("building · 2m in · calculating…", out["meta"])
+        self.assertIn("before it starts on the rows", out["title"])
+        # An older server sends no estimate at all, and reads the same way.
+        older = dict(self.RUN, per_row_s=240, measured=True)
+        del older["estimate"]
+        self.assertEqual("building · 2m in · calculating…",
+                         self.line(older)["meta"])
 
     def test_an_estimate_that_has_run_out_says_so_rather_than_sliding(self):
         out = self.line(dict(self.RUN, eta_s=0))
-        self.assertIn("longer than usual", out["meta"])
+        self.assertIn("longer than it estimated", out["meta"])
         self.assertNotIn("left", out["meta"])
-
-    def test_an_unmeasured_estimate_says_it_is_a_default(self):
-        out = self.line(dict(self.RUN, measured=False))
-        self.assertIn("until this chat has built", out["title"])
 
     def test_a_build_that_has_stopped_is_not_given_a_countdown(self):
         out = self.line(dict(self.RUN, status="waiting", running=False,
                              eta_s=None))
-        self.assertEqual("waiting on your answer · 2m in", out["meta"])
+        self.assertEqual("waiting on your answer · 2m in · ~120k tok",
+                         out["meta"])
         self.assertFalse(out["running"])
         self.assertTrue(out["canOpen"], "its session can still be opened")
+
+    def test_a_finished_build_says_what_it_spent_in_place_of_its_guess(self):
+        out = self.line(dict(self.RUN, status="idle", running=False,
+                             eta_s=None, tokens=131400))
+        self.assertEqual("finished · 2m in · 131k tok", out["meta"])
+        self.assertIn("it spent 131,400", out["title"])
 
     def test_a_goal_with_no_build_has_no_panel(self):
         self.assertIsNone(self.line(None))
@@ -1203,6 +1210,157 @@ class SoleRowAndBlankRowTests(BridgeTestCase):
         question = re.search(r"\.hc-todo-question\{([^}]*)\}", css).group(1)
         self.assertIn("white-space:pre-wrap", question)
         self.assertIn("overflow-wrap:anywhere", question)
+
+
+class RailReconcileTests(BridgeTestCase):
+    """The rail's rows against the store's, three ways.
+
+    The rail holds its own list while the reader types in it, and writes
+    that list whole. The store can change underneath it meanwhile -- a
+    recovery, another window, a build marking rows, inference adding one --
+    and a list written whole over that erased whatever the rail had never
+    seen: /api/import reads a row it is not sent as deleted. What was
+    missing was the rail's memory of what it last took from the store (the
+    base). With it, a row in the store that is in neither the rail nor the
+    base was added elsewhere and joins; a row in the base the rail no
+    longer has was deleted here and stays gone; a row whose text the rail
+    has not touched since the base takes the store's text.
+    """
+
+    def row(self, rid, text, depth=0, status=""):
+        return {"id": rid, "text": text, "depth": depth, "status": status,
+                "question": ""}
+
+    def reconcile(self, items, stored, base):
+        return self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.reconcile(%s, %s, %s);"
+            % (json.dumps(items), json.dumps(stored), json.dumps(base)))
+
+    def test_a_row_added_elsewhere_joins_the_rail_after_its_neighbour(self):
+        a, b, c = self.row("ta", "a"), self.row("tb", "b"), self.row("tc", "c")
+        out = self.reconcile([a, c], [a, b, c], [a, c])
+        self.assertTrue(out["changed"])
+        self.assertEqual(["ta", "tb", "tc"], [r["id"] for r in out["items"]])
+        # With no neighbour before it in the store, it leads.
+        out = self.reconcile([a], [b, a], [a])
+        self.assertEqual(["tb", "ta"], [r["id"] for r in out["items"]])
+
+    def test_a_row_the_rail_deleted_stays_deleted(self):
+        a, b = self.row("ta", "a"), self.row("tb", "b")
+        out = self.reconcile([a], [a, b], [a, b])
+        self.assertFalse(out["changed"])
+        self.assertEqual(["ta"], [r["id"] for r in out["items"]])
+
+    def test_text_the_rail_never_touched_takes_the_stores_word(self):
+        # The rail loaded the row blank; someone typed into it elsewhere.
+        # Writing the rail's blank over that is the wipe.
+        out = self.reconcile([self.row("ta", "")],
+                             [self.row("ta", "typed elsewhere")],
+                             [self.row("ta", "")])
+        self.assertTrue(out["changed"])
+        self.assertEqual("typed elsewhere", out["items"][0]["text"])
+        # Depth the same way.
+        out = self.reconcile([self.row("ta", "a"), self.row("tb", "b", 0)],
+                             [self.row("ta", "a"), self.row("tb", "b", 1)],
+                             [self.row("ta", "a"), self.row("tb", "b", 0)])
+        self.assertEqual(1, out["items"][1]["depth"])
+
+    def test_the_rails_own_edit_of_a_row_wins(self):
+        out = self.reconcile([self.row("ta", "mine")],
+                             [self.row("ta", "theirs")],
+                             [self.row("ta", "orig")])
+        self.assertFalse(out["changed"])
+        self.assertEqual("mine", out["items"][0]["text"])
+
+    def test_the_rails_own_new_rows_are_left_alone(self):
+        a, mine = self.row("ta", "a"), self.row("tnew", "just typed")
+        out = self.reconcile([a, mine], [a], [a])
+        self.assertFalse(out["changed"])
+        self.assertEqual(["ta", "tnew"], [r["id"] for r in out["items"]])
+        # A row the rail has that the base never saw keeps the rail's text
+        # even when the store holds another: without a base there is no
+        # saying the rail left it alone.
+        out = self.reconcile([self.row("ta", "mine")], [self.row("ta", "theirs")], [])
+        self.assertEqual("mine", out["items"][0]["text"])
+
+    def test_the_stores_state_is_not_the_reconciles_business(self):
+        # Status and question are laid by todoLayState; reconcile leaves
+        # them exactly as the rail has them.
+        out = self.reconcile([self.row("ta", "a", 0, "")],
+                             [self.row("ta", "a", 0, "done")],
+                             [self.row("ta", "a")])
+        self.assertEqual("", out["items"][0]["status"])
+
+    # --- through the rail itself ------------------------------------------
+
+    RAIL_DOM = (
+        "var host = document.createElement('div'); host.className = 'hc-todos';"
+        "var list = document.createElement('div'); list.className = 'hc-todos-list';"
+        "var acts = document.createElement('div'); acts.className = 'hc-todos-actions';"
+        "host.appendChild(list); host.appendChild(acts); panel.appendChild(host);"
+        "var tabs = document.createElement('span'); tabs.className = 'hc-rail-tabs';"
+        "panel.appendChild(tabs);"
+        "window.__hcPromptUI.acceptState({scope: 'chat', revision: 'r1', prompts: [],"
+        "  goals: [{id: 'g1', title: 'A', parent_goal_id: null, status: 'active',"
+        "           prompt_ids: [], sources: []}]});"
+        "function put(rows) {"
+        "  var goals = [{id: 'g1', title: 'A', todo_items: rows, todos_md: '',"
+        "                prompt_md: '', children: []}];"
+        "  store['hc-vault-ui-v1'] = JSON.stringify({v: 7, goals: goals, selId: 'g1'});"
+        "  store['hc-vault-ui-sync-v1'] = JSON.stringify({revision: 'r1', goals: goals});"
+        "}"
+        "var A = {id: 'ta', text: 'one', depth: 0, status: '', question: ''};"
+        "var B = {id: 'tb', text: 'restored', depth: 0, status: '', question: ''};"
+    )
+
+    def test_a_row_the_store_gained_while_the_rail_had_focus_survives_its_save(self):
+        # The rail loads [A]; the caret sits in it. The store gains B (a
+        # sync landed it). The reader types into A and the rail saves.
+        # Before: the save wrote [A] and the server read B as deleted.
+        out = self.run_js(
+            self.RAIL_DOM
+            + "put([A]);"
+            "window.__hcPromptUI.renderTodoRail();"
+            "var loaded = window.__hcPromptUI.todoState().items.map(function (r) { return r.id; });"
+            "put([A, B]);"
+            "document.activeElement = list;"
+            "window.__hcPromptUI.renderTodoRail();"
+            "var seen = window.__hcPromptUI.todoState().items.map(function (r) { return r.id; });"
+            "window.__hcPromptUI.todoState().items[0].text = 'one, edited';"
+            "listeners.filter(function (l) { return l[0] === 'blur'; })"
+            "  .forEach(function (l) { l[1]({target: list}); });"
+            "out = new Promise(function (r) { setTimeout(r, 0); }).then(function () {"
+            "  var posted = calls.filter(function (c) { return c[0] === '/api/import'; });"
+            "  var rows = posted.length ? posted[posted.length - 1][1].goals[0].todo_items : null;"
+            "  return [loaded, seen, rows && rows.map(function (r) { return [r.id, r.text]; })];"
+            "});")
+        self.assertEqual(["ta"], out[0])
+        self.assertEqual(["ta", "tb"], out[1],
+                         "a row the store gained must reach a rail mid-edit")
+        self.assertEqual([["ta", "one, edited"], ["tb", "restored"]], out[2],
+                         "the rail's save must carry the row it never typed")
+
+    def test_a_blank_the_rail_loaded_does_not_wipe_text_typed_elsewhere(self):
+        # This window loaded the row empty (as Enter leaves it); another
+        # window typed into it. This window's save must not blank it back.
+        out = self.run_js(
+            self.RAIL_DOM
+            + "var E = {id: 'te', text: '', depth: 0, status: '', question: ''};"
+            "put([A, E]);"
+            "window.__hcPromptUI.renderTodoRail();"
+            "document.activeElement = list;"
+            "put([A, {id: 'te', text: 'typed in the other window', depth: 0,"
+            "         status: '', question: ''}]);"
+            "window.__hcPromptUI.todoState().items[0].text = 'one, edited';"
+            "listeners.filter(function (l) { return l[0] === 'blur'; })"
+            "  .forEach(function (l) { l[1]({target: list}); });"
+            "out = new Promise(function (r) { setTimeout(r, 0); }).then(function () {"
+            "  var posted = calls.filter(function (c) { return c[0] === '/api/import'; });"
+            "  var rows = posted[posted.length - 1][1].goals[0].todo_items;"
+            "  return rows.map(function (r) { return [r.id, r.text]; });"
+            "});")
+        self.assertEqual([["ta", "one, edited"], ["te", "typed in the other window"]], out)
 
 
 class HoldGroundTests(BridgeTestCase):
@@ -4219,7 +4377,7 @@ class ChatPromptLinkTests(BridgeTestCase):
         # Chat prompt records carry no session_id (chat_state writes the
         # id, ordinal, role, text and created_at, and nothing else), so a
         # separator emitted beside the value renders with nothing after it
-        # on every row of every goal in the configuration /goals-ui opens.
+        # on every row of every goal in the configuration /bart opens.
         got = json.loads(self.patched_bundle(
             "var at = out.indexOf('conv: p.conv ?');"
             "var expr = out.slice(at + 'conv: '.length,"
@@ -5067,7 +5225,7 @@ class LaunchSkinTests(BridgeTestCase):
             [["head", "context injection"],
              ["off", "not sent to Claude yet"],
              ["", "reads: prompt · subagent · task"],
-             ["off", "off · /goals-ui turns it back on"]],
+             ["off", "off · /bart turns it back on"]],
             self.run_js(
                 "window.__hcPromptUI.injectionLines("
                 "  { cached: false, last_delta_chars: null, last_at: null,"
@@ -5097,7 +5255,7 @@ class LaunchSkinTests(BridgeTestCase):
             "    active: true, reads: [] });")
         self.assertIn(["on", "goal document sent ✓"], rows)
         self.assertIn(["", "~143 tok changed since it was last sent"], rows)
-        self.assertIn(["on", "on · /goals-ui disable turns it off"], rows)
+        self.assertIn(["on", "on · /bart disable turns it off"], rows)
 
     def test_a_document_the_model_is_current_on_says_so(self):
         rows = self.run_js(

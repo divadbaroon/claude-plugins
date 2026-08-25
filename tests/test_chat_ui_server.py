@@ -1421,7 +1421,7 @@ class ChatUiServerTests(unittest.TestCase):
         """A separator with nothing after it is not punctuation.
 
         `chat_state` writes a prompt record's id, ordinal, role, text and
-        created_at and no session_id, so in the configuration /goals-ui
+        created_at and no session_id, so in the configuration /bart
         actually launches every linked row read `Aug 17, 2026·`.
         """
         try:
@@ -2217,7 +2217,7 @@ class PreHydrationMaskTests(unittest.TestCase):
         self.assertIn("visibility:hidden", body)
         self.assertIn("hc-preboot", body[body.index("setTimeout"):],
                       "a failsafe must remove the mask if the unpack never runs")
-        # Every /goals-ui is a fresh port, so a chat workspace is always a new
+        # Every /bart is a fresh port, so a chat workspace is always a new
         # origin with no saved theme. Following the operating system there
         # paints white in front of a dark workspace -- the flash the mask was
         # added to remove.

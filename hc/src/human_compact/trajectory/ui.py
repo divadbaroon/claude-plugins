@@ -1229,7 +1229,7 @@ def _goal_revision(goals, important):
 
 # What Claude has been told about this chat's goals, read from the two files
 # that already record it: the context snapshot (the exact document the model
-# was last handed) and the session manifest (whether /goals-ui is on). Nothing
+# was last handed) and the session manifest (whether /bart is on). Nothing
 # here writes; the numbers are characters, and the browser labels them "~ tok"
 # because a token count is an estimate this side cannot make honestly.
 #
@@ -2425,7 +2425,7 @@ CHAT_GROUND = "#0d1117"
 def preboot_mask(chat_scoped):
     """Hide the artifact's own first frame, on the ground it will land on.
 
-    Every /goals-ui opens a fresh port, so a chat workspace is always a new
+    Every /bart opens a fresh port, so a chat workspace is always a new
     origin with no saved theme: following the operating system there means a
     white page in front of a dark workspace, which is the flash it was meant
     to remove. A chat opens dark unless the reader chose otherwise here.

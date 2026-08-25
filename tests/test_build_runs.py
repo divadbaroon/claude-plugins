@@ -1,10 +1,10 @@
 """The rail's Build: picked TODO rows handed to a headless Claude session.
 
 A stub `claude` on PATH stands in for the CLI: it prints stream-json the way
-the real one does, asks a question on its first turn and finishes the row on
-the resumed one. What is under test is the plumbing -- the prompt, the
-statuses, the question thread, the answer going back into the same session --
-never the model.
+the real one does, estimates the build, asks a question on its first turn and
+finishes the row on the resumed one. What is under test is the plumbing -- the
+prompt, the statuses, the question thread, the answer going back into the same
+session, the estimate read off the build's own words -- never the model.
 """
 
 import json
@@ -56,10 +56,17 @@ if os.environ.get("STUB_FAIL_ONCE") == "1":
     print(json.dumps({"type": "result", "is_error": False, "result": "done",
                       "usage": USAGE}))
     raise SystemExit(0)
+ESTIMATE = '{"estimate": {"tokens": 12000, "minutes": 3}}'
 if os.environ.get("STUB_FINISH") == "1" and not resume:
     with open(log, "a") as fh:
         fh.write(json.dumps({"args": args, "prompt": prompt}) + "\n")
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    # The protocol's first line: what the whole build will cost. STUB_HOLD
+    # keeps the build running after it, so a test can watch the countdown.
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": ESTIMATE}]}}), flush=True)
+    if os.environ.get("STUB_HOLD"):
+        time.sleep(float(os.environ["STUB_HOLD"]))
     for i in ids:
         print(json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}), flush=True)
@@ -75,6 +82,7 @@ def say(text):
         {"type": "text", "text": text}]}}), flush=True)
 if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    say(ESTIMATE)
     say("Looking at the rows.")
     say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
     print(json.dumps({"type": "result", "is_error": False, "result": "asked",
@@ -963,10 +971,100 @@ class WatchingABuildTests(BuildRunTests):
         self.assertFalse(live["running"])
         self.assertEqual(1, live["rows"])
         self.assertIsInstance(live["elapsed_s"], int)
-        # An estimate is for a build that is still going; this one is not.
+        # The build's own word on what it will cost rides along...
+        self.assertEqual(3, live["estimate"]["minutes"])
+        self.assertEqual(12000, live["estimate"]["tokens"])
+        # ...but a countdown is for a build that is still going; this one
+        # is not.
         self.assertIsNone(live["eta_s"])
         self.assertEqual("waiting on your answer", live["last"]["text"])
         self.assertTrue(live["can_open"], "its session can be resumed")
+
+    def test_the_prompt_asks_the_build_to_estimate_itself_first(self):
+        # The estimate is asked of the build session, which already holds the
+        # context, rather than of a second process handed a copy of it: one
+        # protocol line, before the rows, in a shape the reader can parse.
+        self.assertIn('{"estimate": {"tokens": <integer>, "minutes": <integer>}}',
+                      BUILD.PROTOCOL)
+        self.assertLess(BUILD.PROTOCOL.index('"estimate"'),
+                        BUILD.PROTOCOL.index('"question"'),
+                        "first, before the rows")
+        goals, important = chat_state.load_goals(self.session, self.root)
+        prompt = BUILD.preview(self.session, self.root, goals, important,
+                               GM.by_id(goals, "g1"), ["taaaa0001"])
+        self.assertIn('"estimate"', prompt)
+
+    def test_an_estimate_is_read_off_the_build_s_own_words(self):
+        self.assertEqual(
+            {"tokens": 120000, "minutes": 25},
+            BUILD.estimate_in('Sizing it up.\n'
+                              '{"estimate": {"tokens": 120000, "minutes": 25}}'))
+        # The later word wins; a half estimate still counts; fractions are
+        # whole numbers to the rail.
+        self.assertEqual(
+            {"tokens": 0, "minutes": 4},
+            BUILD.estimate_in('{"estimate": {"tokens": 1000}} no, '
+                              '{"estimate": {"minutes": 4.9}}'))
+        # Not an estimate: a row directive, a boolean, prose.
+        self.assertIsNone(BUILD.estimate_in('{"id": "taaaa0001", "state": "DONE"}'))
+        self.assertIsNone(BUILD.estimate_in('{"estimate": {"tokens": true}}'))
+        self.assertIsNone(BUILD.estimate_in("about 25 minutes, I think"))
+        # And a row directive is not mistaken for one, or vice versa.
+        self.assertEqual([], BUILD.directives('{"estimate": {"minutes": 4}}'))
+
+    def test_a_build_is_calculating_until_it_has_estimated_itself(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "1.1"          # before it prints anything
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertTrue(live["running"])
+        # No estimate yet: no number to count down from, and none invented.
+        self.assertIsNone(live["estimate"])
+        self.assertIsNone(live["eta_s"])
+        self.assertEqual(0, live["tokens"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"))
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["tokens"] > 0))
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertEqual({"tokens": 12000, "minutes": 3},
+                         {k: live["estimate"][k] for k in ("tokens", "minutes")})
+        self.assertIsNone(live["eta_s"], "stopped: nothing to count down")
+        # What it actually spent stands beside what it guessed.
+        self.assertEqual(5200, live["tokens"])
+        said = [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+        self.assertIn("estimated about 3 min and 12,000 tokens for the build",
+                      said)
+
+    def test_a_running_build_counts_down_from_its_own_estimate(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_HOLD"] = "1.5"           # after the estimate
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertTrue(live["running"])
+        # Three minutes, less the second or so it has been at it.
+        self.assertGreater(live["eta_s"], 160)
+        self.assertLessEqual(live["eta_s"], 180)
+        self.assertEqual(180 - live["elapsed_s"], live["eta_s"])
+
+    def test_a_new_build_does_not_inherit_the_last_one_s_estimate(self):
+        os.environ["STUB_FINISH"] = "1"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        os.environ["STUB_SLEEP"] = "1.1"          # the next says nothing yet
+        BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertTrue(live["running"])
+        self.assertIsNone(live["estimate"], "the last build's word is not this one's")
+        self.assertIsNone(live["eta_s"])
 
     def test_how_long_a_row_takes_is_measured_like_what_it_costs(self):
         empty = BUILD.cost(self.session, self.root)
