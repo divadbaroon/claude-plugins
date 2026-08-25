@@ -4755,7 +4755,7 @@ LAUNCH_CLASSES = (
     "hc-shell", "hc-main",
     "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
     "hc-rail-right", "hc-rail-actions", "hc-rail-copy",
-    "hc-rail-none",
+    "hc-rail-none", "hc-rail-understand",
     "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
     "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-chip-n", "hc-titlerow", "hc-chiprow", "hc-brand",

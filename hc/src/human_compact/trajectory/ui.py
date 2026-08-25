@@ -64,7 +64,7 @@ EXPERIMENTAL_ROUTES = ("/api/briefing", "/api/briefings", "/api/plan",
 GOAL_OPS = frozenset({
     "rename_goal", "set_status", "set_priority", "set_notes", "set_sources",
     "set_opening", "set_description", "toggle_todo", "set_relevance",
-    "add_todo",
+    "add_todo", "set_understanding",
 })
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
 
@@ -933,7 +933,7 @@ def ask_source(root, cwd, source, question, engine=None):
     return {"ok": True, "asked": words, "answer": out["answer"]}
 
 
-def _answer(lines, engine=None):
+def _answer(lines, engine=None, read_dirs=None, search_dir=""):
     """Put one assembled prompt to the configured provider.
 
     Nothing here decides what a question is worth asking about -- the caller
@@ -941,6 +941,14 @@ def _answer(lines, engine=None):
     it can come back with no answer said the same way in both places that
     ask: what the provider said went wrong when it could name it, and one
     guess at the usual cause when it could not.
+
+    *read_dirs* is for the one prompt whose material is not in it: a scenario
+    drafted from screenshots names files, and the provider has to be allowed
+    to open them.
+
+    *search_dir* is for the prompt that does not know where its material is:
+    a question about how the project behaves is answered out of the project,
+    so the call is made in that directory with the tools to search it.
     """
     from . import providers as PROVIDERS
     try:
@@ -949,8 +957,17 @@ def _answer(lines, engine=None):
         # A question is a question, not an agent turn. Providers that know
         # the difference are asked for the plain round trip; a test double
         # with one method keeps being called the one way it has.
-        speak = getattr(engine, "generate_plain", None) or engine.generate
-        answer = speak("\n".join(lines) + "\n")
+        if search_dir:
+            speak = getattr(engine, "generate_searching", None)
+            answer = (speak("\n".join(lines) + "\n", search_dir) if speak
+                      else engine.generate("\n".join(lines) + "\n"))
+        elif read_dirs:
+            speak = getattr(engine, "generate_reading", None)
+            answer = (speak("\n".join(lines) + "\n", read_dirs) if speak
+                      else engine.generate("\n".join(lines) + "\n"))
+        else:
+            speak = getattr(engine, "generate_plain", None) or engine.generate
+            answer = speak("\n".join(lines) + "\n")
     except PROVIDERS.ProviderError as exc:
         # What went wrong, in the provider's own words. A CLI that is not
         # installed, one that ran out of time and one whose login was
@@ -1054,14 +1071,20 @@ def _earlier_turns(turns):
     Only pairs that finished: a question whose answer never arrived is not
     something the next answer can build on, and a half turn quoted back at
     the model reads as an answer it already gave.
+
+    Two panels keep their turns and they spell them differently -- the ask
+    panel holds a conversation it will throw away, the Understanding tab
+    holds one it writes onto the goal. Both spellings are read here rather
+    than one of them being renamed to suit the other.
     """
     said = []
     for turn in list(turns or [])[-ASK_TURN_LIMIT:]:
         if not isinstance(turn, dict):
             continue
-        asked = " ".join(
-            str(turn.get("question") or "").split())[:ASK_QUESTION_LIMIT]
-        answer = str(turn.get("answer") or "").strip()[:ASK_ANSWER_LIMIT]
+        asked = " ".join(str(turn.get("question") or turn.get("q") or ""
+                             ).split())[:ASK_QUESTION_LIMIT]
+        answer = str(turn.get("answer") or turn.get("a")
+                     or "").strip()[:ASK_ANSWER_LIMIT]
         if asked and answer:
             said += ["Q: " + asked, "", "A: " + answer, ""]
     return said
@@ -1128,6 +1151,304 @@ def ask_selection(goals, goal_id, selection, question, objective="",
         return out
     return {"ok": True, "asked": words, "selection": passage,
             "answer": out["answer"]}
+
+
+# What is said to a call that has nothing but the prompt: no project on this
+# machine to look in, or a workspace that is somebody else's.
+SCENARIO_NO_TOOLS = [
+    "You have no tools on this call: nothing to search with, nothing to run,",
+    "no file to open. Everything the answer may come from is quoted below.",
+    "Do not write a tool call, a command or a search -- there is nothing here",
+    "to run it, and what you write is kept on the goal as the answer.",
+]
+
+# The shape every answer about a scenario comes back in. A scenario is a
+# situation, and a question about a situation is answered by naming what is
+# true, what happens, and what follows -- so the answer is asked for in the
+# one form that separates those three, rather than in a paragraph the reader
+# has to take apart to compare two answers against each other.
+SCENARIO_SHAPE = [
+    "Answer in GIVEN / WHEN / THEN and nothing else. One or more blocks,",
+    "each line beginning with its word in capitals:",
+    "",
+    "GIVEN <what is true before anything happens>",
+    "WHEN <what happens, or what someone does>",
+    "THEN <what follows from it>",
+    "",
+    "AND on its own line continues the GIVEN, WHEN or THEN above it. Write a",
+    "second block when the answer turns on a case the first does not cover.",
+    "No preamble, no heading, no closing paragraph, no restating of the",
+    "question.",
+]
+
+# Where the answer is allowed to come from when the prompt is all there is.
+SCENARIO_FROM_WORDS = [
+    "Answer from the scenario and the goal around it. Where they do not say,",
+    "do not fill the gap from what projects like this usually do: write the",
+    "assumption as its own line, GIVEN (assumed) <the assumption>. If the",
+    "question cannot be answered in this shape at all, write one line",
+    "beginning UNCLEAR, then one line saying what would settle it.",
+]
+
+SCENARIO_FORM = (SCENARIO_NO_TOOLS + [""] + SCENARIO_SHAPE + [""]
+                 + SCENARIO_FROM_WORDS)
+
+
+def scenario_from_code(where):
+    """What is said when the project the scenario is about is on this disk.
+
+    Half the questions a reader types into the tab are questions about what
+    the code already does -- what happens to the second build, which of two
+    edits wins -- and the honest answer to those is not an assumption, it is
+    the file that decides it. So the call is given the repository and told to
+    go and look, and told that UNCLEAR is what you write after looking and
+    not instead of it.
+    """
+    return [
+        "You are in the project this goal belongs to: %s. You can look" % where,
+        "through it -- Glob for files, Grep for the names the scenario uses,",
+        "Read what you find. Nothing here writes or runs anything.",
+        "",
+        "Where the question turns on what the code actually does, go and find",
+        "out before you answer. Do not answer such a question from what a",
+        "project like this usually does while the code that settles it is",
+        "sitting in front of you.",
+        "",
+        "Then answer from what you read, plus the scenario and the goal around",
+        "it. Name your evidence: a line that comes from the code ends with the",
+        "file and line it came from in parentheses, like (src/build.py:212).",
+        "Where nothing in the project or the scenario settles a point, write",
+        "the assumption as its own line, GIVEN (assumed) <the assumption>.",
+        "",
+        "UNCLEAR is for what is still open after you have looked. Write one",
+        "line beginning UNCLEAR and one line saying what would settle it --",
+        "and never that you could not check the code, because you can.",
+    ]
+
+# The words an answer is built out of, as the tab draws them. A reply with
+# none of them in it is not an answer in this shape -- a provider that reached
+# for a tool it was not given writes the tool call out instead, and one kept
+# on the goal is read as the answer for as long as the goal lives.
+SCENARIO_KEYWORD = re.compile(r"^(?:GIVEN|WHEN|THEN|AND|UNCLEAR)\b")
+
+
+def _scenario_line(line) -> str:
+    """One line of an answer with the markdown a model reached for taken off.
+
+    The tab colours a keyword by finding it at the head of the line, so a
+    keyword bulleted or set in bold is a keyword it cannot see. What the form
+    asked for is the bare line, and this is the bare line.
+    """
+    line = re.sub(r"^(?:[-*+]\s+|#{1,6}\s+|>\s+)", "", str(line).strip())
+    return line.replace("**", "").replace("__", "").strip()
+
+
+def scenario_answer(text) -> str:
+    """The GIVEN/WHEN/THEN in what came back, or "" when there is none.
+
+    Anything above the first keyword line is dropped -- a preamble the form
+    asked for none of, or the fence a model wrapped the whole answer in, is
+    not part of the answer and the tab draws these lines keyword by keyword.
+    """
+    lines = [_scenario_line(line) for line in str(text or "").splitlines()
+             if not line.strip().startswith("```")]
+    for n, line in enumerate(lines):
+        if SCENARIO_KEYWORD.match(line):
+            return "\n".join(lines[n:]).strip()
+    return ""
+
+
+# What is said to a provider that answered with something else. Its own reply
+# is not quoted back: what went wrong with it is that it was not in the shape,
+# and the shape is already above.
+SCENARIO_AGAIN = [
+    "",
+    "# Your last reply was not an answer",
+    "",
+    "It had no GIVEN, WHEN, THEN or UNCLEAR line in it. You have no tools on",
+    "this call and nothing to look at beyond what is quoted above: answer",
+    "from the scenario and the goal, in the shape asked for, and nothing",
+    "else. Where they do not say, write GIVEN (assumed) <the assumption>.",
+]
+
+# The same, said to a call that does have the project to look in. What went
+# wrong there is the shape, not the looking -- so it is not told to stop.
+SCENARIO_AGAIN_IN_CODE = [
+    "",
+    "# Your last reply was not an answer",
+    "",
+    "It had no GIVEN, WHEN, THEN or UNCLEAR line in it. What you write now is",
+    "kept on the goal as the answer, so write the answer itself: the lines",
+    "you were asked for, in the shape asked for, and nothing else around",
+    "them. Keep what you found in the code -- it is only the shape that was",
+    "wrong.",
+]
+
+
+def scenario_cwd(cwd):
+    """The project directory a question may be answered out of, or "".
+
+    A directory decides what a subprocess is allowed to open, so it is taken
+    from the workspace's own record of where this chat works rather than from
+    anything a browser posted -- and it is still only used when it is really
+    a directory on this machine, which a shared workspace's is not.
+    """
+    where = str(cwd or "").strip()
+    if not where:
+        return ""
+    try:
+        path = Path(where).expanduser().resolve()
+    except OSError:
+        return ""
+    return str(path) if path.is_dir() else ""
+
+
+def ask_scenario(goals, goal_id, scenario, question, objective="",
+                 turns=None, cwd="", engine=None):
+    """Answer one question about the scenario a goal's work is for.
+
+    The Understanding tab's question boxes come here. What is being asked
+    about is the situation the reader described, with the goal it belongs to
+    quoted around it -- and the answer comes back in GIVEN/WHEN/THEN, which
+    is the tab's whole reason for asking: a scenario is settled case by case,
+    and cases compare when they are written the same way.
+
+    *cwd* is the project this chat works in, when it is on this machine. Most
+    of what a reader asks the tab is a question about what the code already
+    does, and the answer to that is in the code: the call is put in that
+    directory and allowed to search it, rather than being asked to guess and
+    reporting back that it could not check. Without one -- a workspace shared
+    from another machine -- the question is answered from its own words, as
+    it always was.
+
+    *turns* is the thread this question already has, so a follow-up can lean
+    on the answer above it. Unlike ``ask_selection``, what comes back does get
+    kept -- the tab writes it onto the goal through ``set_understanding``, and
+    a build of the goal's rows opens on the answers along with the questions.
+    """
+    words = " ".join(str(question or "").split())[:ASK_QUESTION_LIMIT]
+    if not words:
+        return {"ok": False, "error": "ask something first"}
+    said = str(scenario or "").strip()[:GM.MAX_SCENARIO]
+    if not said:
+        return {"ok": False, "error": "describe the scenario first"}
+    around = goal_context(goals, goal_id, objective)
+    where = scenario_cwd(cwd)
+    ask = [
+        "You are answering ONE question about a scenario someone wrote in the",
+        "goal workspace of a project: the situation a goal's work is for, in",
+        "their own words, quoted below with the goal it belongs to.",
+        "",
+    ] + (scenario_from_code(where) + [""] + SCENARIO_SHAPE if where
+         else SCENARIO_FORM)
+    earlier = _earlier_turns(turns)
+    if earlier:
+        ask += ["",
+                "This question has been asked and answered already and what",
+                "follows is a follow-up. Everything below was said about this",
+                "same scenario; the last question is the one to answer, and it",
+                "may lean on what came before without repeating it."]
+    if around:
+        ask += ["", "# The goal it belongs to", "", around]
+    ask += ["", "# The scenario", "", said]
+    if earlier:
+        ask += ["", "# What has been asked and answered so far", ""] + earlier
+    ask += ["", "# The question", "", words]
+    out = _answer(ask, engine, search_dir=where)
+    if not out.get("ok"):
+        return out
+    shaped = scenario_answer(out["answer"])
+    if not shaped:
+        # Asked once more, told what was wrong with the first reply. What
+        # comes back here is kept on the goal and opens every build of its
+        # rows, so a reply in some other shape is worth a second call --
+        # and, if the second is no better, worth refusing rather than
+        # writing down.
+        out = _answer(ask + (SCENARIO_AGAIN_IN_CODE if where
+                             else SCENARIO_AGAIN), engine, search_dir=where)
+        if not out.get("ok"):
+            return out
+        shaped = scenario_answer(out["answer"])
+    if not shaped:
+        return {"ok": False, "error":
+                "the model did not answer in GIVEN / WHEN / THEN -- ask again"}
+    return {"ok": True, "asked": words, "answer": shaped}
+
+
+def scenario_shots(trajdir, shots):
+    """The posted screenshots that are really this workspace's, resolved.
+
+    A path arrives from a browser and decides what a subprocess is allowed to
+    open, so it is not taken on its word: only files that are already under
+    this workspace's own attachments directory survive, which is every file
+    /api/attachment ever handed out and nothing else.
+    """
+    try:
+        folder = Path(_scope(trajdir) / "attachments").resolve()
+    except OSError:
+        return []
+    out = []
+    for shot in GM.normalize_shots(shots):
+        try:
+            path = Path(shot["path"]).expanduser().resolve()
+        except OSError:
+            continue
+        if path.parent != folder or not path.is_file():
+            continue
+        out.append({"path": str(path), "name": shot["name"]})
+    return out
+
+
+def draft_scenario(trajdir, text, shots, objective="", engine=None):
+    """Write the scenario field from what the reader has to hand.
+
+    Screenshots of the thing, a few rough words about it, or both. The
+    screenshots are the point: a person who can show you the screen they mean
+    should not have to describe it first, and the model is given the files to
+    open rather than a description of them.
+
+    Comes back as prose for the reader to edit, not as something saved: the
+    tab puts it in the box and the box is still theirs.
+    """
+    notes = str(text or "").strip()[:GM.MAX_SCENARIO]
+    files = scenario_shots(trajdir, shots)
+    if not notes and not files:
+        return {"ok": False,
+                "error": "paste a screenshot or type something first"}
+    ask = [
+        "You are writing the SCENARIO field of one goal in a project's goal",
+        "workspace: the situation that goal's work is for, so that anyone",
+        "picking the work up knows what it is for before they read a single",
+        "task.",
+        "",
+        "A scenario is a situation in the present tense -- who is doing what,",
+        "where they are doing it, and what is true while they do. It is not a",
+        "task list, not a plan, and not a solution: nothing about what should",
+        "be built.",
+        "",
+        "Write one paragraph, at most six sentences, plain prose. No heading,",
+        "no bullets, no preamble, no closing offer of help.",
+        "",
+        "Say only what the material below supports. Where it leaves something",
+        "open, leave it open rather than inventing it.",
+    ]
+    objective = " ".join(str(objective or "").split())
+    if objective:
+        ask += ["", "# The project's objective", "", objective]
+    if files:
+        ask += ["", "# Screenshots of the situation", "",
+                "Open every one of these with Read before you write. They are",
+                "the material, not decoration.", ""]
+        ask += ["- " + shot["path"] for shot in files]
+    if notes:
+        ask += ["", "# What the reader typed", "", notes]
+    out = _answer(ask, engine,
+                  read_dirs=sorted({str(Path(s["path"]).parent)
+                                    for s in files}) if files else None)
+    if not out.get("ok"):
+        return out
+    return {"ok": True, "scenario": out["answer"][:GM.MAX_SCENARIO],
+            "shots": files}
 
 
 def _git_remote(cwd):
@@ -2314,6 +2635,13 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             # Accepts plain strings or the typed rows the artifact edits.
             g["sources"] = GM.normalize_sources(raw)
             g["updated_at"] = GM._now()
+        elif kind == "set_understanding" and g:
+            # The scenario this goal's work is for and the questions asked
+            # about it, as the Understanding tab holds them. Written whole:
+            # the tab owns both halves and posts both together, so a save is
+            # never half a scenario.
+            g["understanding"] = GM.normalize_understanding(op)
+            g["updated_at"] = GM._now()
         elif kind == "set_opening" and g:
             g["opening"] = str(op.get("opening", "")).strip()[:400]
             g["updated_at"] = GM._now()
@@ -2911,6 +3239,56 @@ class H(BaseHTTPRequestHandler):
                     objective=str((state.get("project") or {}).get(
                         "objective") or ""),
                     turns=body.get("turns")))
+            elif self.path == "/api/ask_scenario":
+                # One question from the Understanding tab, answered in
+                # GIVEN/WHEN/THEN. Reads goals like /api/ask_selection does,
+                # and waits on a model outside the state lock for the same
+                # reason -- the answer is written back by the tab afterwards,
+                # through the ordinary op, not from in here.
+                if not isinstance(body, dict):
+                    self._send(400, {"ok": False, "error": "expected a question"})
+                    return
+                shared = getattr(self.server, "shared_project", None)
+                if shared:
+                    from . import supabase_client as SB
+                    try:
+                        state = SB.shared_payload(shared)
+                    except SB.SupabaseError as exc:
+                        self._send(200, {"ok": False, "error": str(exc)[:200]})
+                        return
+                else:
+                    state = _payload(self.server.trajdir,
+                                     self.server.chat_scoped)
+                # Most of what the tab is asked is a question about what this
+                # project already does, so the answer is looked for in it.
+                # A shared workspace's directory is on somebody else's disk:
+                # whatever sits at that path here is not the project, so that
+                # question is answered from its own words instead.
+                self._send(200, ask_scenario(
+                    state.get("goals") or [], body.get("goal"),
+                    body.get("scenario"), body.get("question"),
+                    objective=str((state.get("project") or {}).get(
+                        "objective") or ""),
+                    turns=body.get("turns"),
+                    cwd="" if shared else str((state.get("project") or {}).get(
+                        "cwd") or "")))
+            elif self.path == "/api/draft_scenario":
+                # A scenario written from screenshots, rough words, or both.
+                # The images live on this machine, so a workspace that is
+                # somebody else's has none of them to open.
+                if not isinstance(body, dict):
+                    self._send(400, {"ok": False, "error": "expected a draft"})
+                    return
+                if getattr(self.server, "shared_project", None):
+                    self._send(200, {"ok": False, "error":
+                                     "a shared workspace has no screenshots "
+                                     "here to read"})
+                    return
+                state = _payload(self.server.trajdir, self.server.chat_scoped)
+                self._send(200, draft_scenario(
+                    self.server.trajdir, body.get("text"), body.get("shots"),
+                    objective=str((state.get("project") or {}).get(
+                        "objective") or "")))
             elif self.path == "/api/import":
                 if not isinstance(body, dict):
                     self._send(400, {
@@ -3447,6 +3825,12 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "relevance_for": prev.get("relevance_for", ""),
                         "project_cwd": prev.get("project_cwd", ""),
                         "opening": prev.get("opening", ""),
+                        # The Understanding tab's, written through its own op
+                        # and never posted with the tree: carried, or the next
+                        # thing typed in the artifact would erase it.
+                        "understanding": (prev.get("understanding")
+                                          or {"scenario": "", "shots": [],
+                                              "questions": []}),
                         "auto_prompt_ids": prev.get("auto_prompt_ids", []),
                         "detached_prompt_ids": prev.get("detached_prompt_ids", []),
                         "priority": node.get("prio") if node.get("prio") in

@@ -782,6 +782,196 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 browser.close()
 
 
+    def understanding(self):
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        return GM.by_id(goals, "g1")["understanding"]
+
+    def test_the_understanding_tab_keeps_a_scenario_and_its_questions(self):
+        # The rail's middle tab: what this goal's work is for, and what the
+        # reader wants answered about it. Both are kept on the goal and both
+        # open every build of its rows -- which is what the Prompt tab, one
+        # click away, is checked for here.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-rail-tabs", timeout=15000)
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Understanding", exact=True).click()
+                scenario = page.locator(".hc-understand-scenario")
+                expect(scenario).to_be_visible()
+                scenario.fill("Two people work one tree from two machines.")
+                # One box is always on offer; the link under it makes more.
+                expect(page.locator(".hc-understand-ask")).to_have_count(1)
+                page.locator(".hc-understand-ask").first.fill(
+                    "Who wins a conflict?")
+                page.get_by_text("+ Add question", exact=True).click()
+                expect(page.locator(".hc-understand-ask")).to_have_count(2)
+                page.locator(".hc-understand-ask").nth(1).fill(
+                    "Where do invites live?")
+                page.wait_for_timeout(1500)
+                held = self.understanding()
+                self.assertEqual("Two people work one tree from two machines.",
+                                 held["scenario"])
+                self.assertEqual(["Who wins a conflict?",
+                                  "Where do invites live?"],
+                                 [q["text"] for q in held["questions"]])
+                # What a build of this goal's rows would open on.
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Prompt", exact=True).click()
+                body = page.locator(".hc-rail-ctx-body")
+                expect(body).to_contain_text("# The scenario this goal is for",
+                                             timeout=15000)
+                expect(body).to_contain_text("Two people work one tree")
+                expect(body).to_contain_text("- Who wins a conflict?")
+                # A question dropped is dropped on the server too, and now
+                # rather than 600ms after the page has gone.
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Understanding", exact=True).click()
+                page.locator(".hc-understand-drop").first.click()
+                page.wait_for_timeout(1000)
+                self.assertEqual(
+                    ["Where do invites live?"],
+                    [q["text"] for q in self.understanding()["questions"]])
+            finally:
+                browser.close()
+
+    def test_the_scenario_comes_back_after_a_reload(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-rail-tabs", timeout=15000)
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Understanding", exact=True).click()
+                page.locator(".hc-understand-scenario").fill(
+                    "The invite link is the whole of the onboarding.")
+                page.wait_for_timeout(1500)
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-rail-tabs", timeout=15000)
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Understanding", exact=True).click()
+                expect(page.locator(".hc-understand-scenario")).to_have_value(
+                    "The invite link is the whole of the onboarding.",
+                    timeout=15000)
+            finally:
+                browser.close()
+
+    def open_understanding(self, page, url):
+        from playwright.sync_api import expect
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector(".hc-rail-tabs", timeout=15000)
+        page.locator(".hc-rail-tabs").get_by_text(
+            "Understanding", exact=True).click()
+        expect(page.locator(".hc-understand-scenario")).to_be_visible()
+
+    def test_a_question_is_answered_in_given_when_then_and_followed_up(self):
+        # The model is answered for here: what is under test is the tab --
+        # that a question goes with the scenario it is about, that the answer
+        # comes back under it in the shape it was asked for, and that a
+        # follow-up is asked with the answer above it.
+        from playwright.sync_api import expect, sync_playwright
+        asked = []
+
+        def answer(route):
+            asked.append(json.loads(route.request.post_data))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "ok": True,
+                              "asked": asked[-1]["question"],
+                              "answer": "GIVEN two writers\n"
+                                        "WHEN both save\n"
+                                        "THEN the later one wins"}))
+
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.route("**/api/ask_scenario", answer)
+                self.open_understanding(page, url)
+                page.locator(".hc-understand-scenario").fill(
+                    "Two people work one tree from two machines.")
+                page.locator(".hc-understand-ask").first.fill(
+                    "Who wins a conflict?")
+                page.get_by_text("Ask Claude", exact=True).click()
+                expect(page.locator(".hc-understand-answer")).to_contain_text(
+                    "THEN the later one wins", timeout=15000)
+                # The question travels with the scenario it is about.
+                self.assertEqual("Two people work one tree from two machines.",
+                                 asked[0]["scenario"])
+                self.assertEqual("Who wins a conflict?", asked[0]["question"])
+                self.assertEqual([], asked[0]["turns"])
+                # And the answer is the goal's now, not the panel's.
+                page.wait_for_timeout(1500)
+                thread = self.understanding()["questions"][0]["thread"]
+                self.assertEqual(1, len(thread))
+                self.assertIn("THEN the later one wins", thread[0]["a"])
+                # A follow-up is asked with what was already said.
+                page.locator(".hc-understand-follow").fill(
+                    "And if both are offline?")
+                page.get_by_text("Follow up", exact=True).click()
+                expect(page.locator(".hc-understand-answer")).to_have_count(
+                    2, timeout=15000)
+                self.assertEqual("And if both are offline?",
+                                 asked[1]["question"])
+                self.assertEqual(["Who wins a conflict?"],
+                                 [t["q"] for t in asked[1]["turns"]])
+                page.wait_for_timeout(1500)
+                self.assertEqual(
+                    2, len(self.understanding()["questions"][0]["thread"]))
+                # What a build of this goal's rows would open on.
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Prompt", exact=True).click()
+                expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
+                    "THEN the later one wins", timeout=15000)
+            finally:
+                browser.close()
+
+    def test_a_pasted_screenshot_is_kept_with_the_scenario(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                self.open_understanding(page, url)
+                page.locator(".hc-understand-scenario").click()
+                # The paste event a screenshot fires, with the same payload:
+                # playwright cannot put an image on the real clipboard.
+                page.evaluate(
+                    "() => { const bytes = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,0]);"
+                    " const dt = new DataTransfer();"
+                    " dt.items.add(new File([bytes], 'Rail.png', {type: 'image/png'}));"
+                    " document.activeElement.dispatchEvent(new ClipboardEvent('paste',"
+                    "   {clipboardData: dt, bubbles: true, cancelable: true})); }")
+                expect(page.locator(".hc-understand-shot")).to_have_count(
+                    1, timeout=15000)
+                expect(page.locator(".hc-understand-shot")).to_contain_text(
+                    "Rail.png")
+                # The bytes are on disk, under this workspace, and the
+                # scenario cites the file rather than holding the image.
+                page.wait_for_timeout(1500)
+                shots = self.understanding()["shots"]
+                self.assertEqual(1, len(shots))
+                path = Path(shots[0]["path"])
+                self.assertEqual(self.trajdir.resolve() / "attachments",
+                                 path.parent)
+                self.assertEqual(b"\x89PNG", path.read_bytes()[:4])
+                # The screenshot is the reader's own material: it stays beside
+                # what they type, and a build of the goal's rows opens on it.
+                page.locator(".hc-understand-scenario").fill(
+                    "Two people edit one goal tree from two machines at once.")
+                page.wait_for_timeout(1500)
+                self.assertEqual(
+                    "Two people edit one goal tree from two machines at once.",
+                    self.understanding()["scenario"])
+                page.locator(".hc-rail-tabs").get_by_text(
+                    "Prompt", exact=True).click()
+                expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
+                    str(path), timeout=15000)
+            finally:
+                browser.close()
+
+
 class SessionBuildBrowserTests(TodoPanelBrowserTests):
     """Default mode: the build waits for the connected session's next turn."""
 
