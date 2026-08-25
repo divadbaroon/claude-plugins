@@ -27,6 +27,12 @@ function El(tag) {
   this.className = ""; this.id = ""; this.textContent = "";
   this.appendChild = (n) => { this.children.push(n); n.parentNode = this; return n; };
   this.focus = () => {};
+  this.select = () => {};
+  // One rectangle for every node. Nothing here lays anything out, so the
+  // number matters only to code that has to put a floating thing somewhere
+  // -- a test that cares about where sets `rect` on the node itself.
+  this.rect = { left: 40, right: 120, top: 60, bottom: 76, width: 80, height: 16 };
+  this.getBoundingClientRect = () => this.rect;
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
     if (at < 0) this.children.push(n); else this.children.splice(at, 0, n);
@@ -40,13 +46,41 @@ function El(tag) {
     const at = this.parentNode.children.indexOf(this);
     return (at >= 0 ? this.parentNode.children[at + 1] : null) || null;
   } });
+  // One matcher for both finders. Class selectors, attribute selectors
+  // ([name] and [name="value"]) -- the page finds several of its controls
+  // by attribute rather than by class -- and bare tag names, which the
+  // document-level sweep has always taken as a comma-separated list.
+  this.matches = (child, sel) => {
+    const text = String(sel || "").trim();
+    // Either quote, or none: the page writes [data-hc-notice='x'] in one
+    // place and [data-hc-sb="url"] in another, and a matcher that knows
+    // only one of them silently finds nothing -- which reads as a control
+    // that does not work rather than a selector that was not understood.
+    const attr = /^\[([^\]=]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]$/
+      .exec(text);
+    if (attr) {
+      const got = child.getAttribute(attr[1]);
+      const want = attr[2] !== undefined ? attr[2]
+        : attr[3] !== undefined ? attr[3] : attr[4];
+      return got !== null && (want === undefined || got === want);
+    }
+    if (text.startsWith(".")) {
+      return String(child.className).split(" ").includes(text.slice(1));
+    }
+    if (text.indexOf(",") >= 0) {
+      return text.split(",").map(t => t.trim().toUpperCase())
+        .includes(String(child.tagName).toUpperCase());
+    }
+    // A bare token is a class name here as often as a tag: tests written
+    // against this harness have always passed "hc-search-input" meaning
+    // the class. Both readings are honoured, class first.
+    return child.className === text
+      || String(child.tagName).toUpperCase() === text.toUpperCase();
+  };
   this.querySelector = (sel) => {
-    const want = sel.replace(/^\./, "");
     const walk = (node) => {
       for (const child of node.children) {
-        if (sel.startsWith(".")
-            ? String(child.className).split(" ").includes(want)
-            : child.className === want) return child;
+        if (this.matches(child, sel)) return child;
         const deep = walk(child);
         if (deep) return deep;
       }
@@ -54,9 +88,17 @@ function El(tag) {
     };
     return walk(this);
   };
+  this.querySelectorAll = (sel) => {
+    const out = [];
+    (function walk(n) { (n.children || []).forEach((c) => {
+      if (root.matches(c, sel)) out.push(c);
+      walk(c); }); })(this);
+    return out;
+  };
   this.attrs = {};
   this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
   this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+  this.hasAttribute = (k) => k in this.attrs;
   this.removeAttribute = (k) => { delete this.attrs[k]; };
   this.insertBefore = (n, ref) => {
     const at = ref ? this.children.indexOf(ref) : -1;
@@ -89,6 +131,12 @@ const document = {
   readyState: "complete", documentElement: root, head: new El("head"),
   body: root, title: "Goals",
   addEventListener: (type, fn) => listeners.push([type, fn]),
+  // A dialog that listens for Escape at the document takes its listener
+  // away again when it closes; without this the close throws.
+  removeEventListener: (type, fn) => {
+    const at = listeners.findIndex(l => l[0] === type && l[1] === fn);
+    if (at >= 0) listeners.splice(at, 1);
+  },
   createElement: (t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
   querySelector: (s) => (s === ".hc" ? app : root.querySelector(s)),
@@ -97,19 +145,7 @@ const document = {
   // Walks the live tree, as a browser does: a node that has been
   // re-rendered away is not a result, and treating it as one sends the
   // button somewhere nobody can click it.
-  querySelectorAll: (sel) => {
-    const text = String(sel || '').trim();
-    const attr = text.match(/^\[([\w-]+)\]$/);
-    const tags = text.split(',').map(t => t.trim().toUpperCase());
-    const hit = (c) => attr
-      ? c.getAttribute && c.getAttribute(attr[1]) !== null
-      : tags.includes(String(c.tagName).toUpperCase());
-    const out = [];
-    (function walk(n) { (n.children || []).forEach(c => {
-      if (hit(c)) out.push(c);
-      walk(c); }); })(root);
-    return out;
-  }
+  querySelectorAll: (sel) => root.querySelectorAll(sel)
 };
 function XHR() {}
 // Every synchronous route the boot path opens, in order, so a test can say
@@ -143,6 +179,11 @@ const sandbox = {
       : (opts && opts.body && JSON.parse(opts.body).op === "launch_agent_run"
          && process.env.HC_FAIL_LAUNCH === "1")
       ? { ok: false, error: "no project directory is recorded" }
+      : (opts && opts.body && JSON.parse(opts.body).op === "prompt_preview")
+      // The composed prompt and what it costs with no rows in it -- the rail
+      // prices its TODO rows against the second number.
+      ? { ok: true, prompt: "# Project\nRouter\n\n# The work\n\n- a row\n",
+          context_tokens: 1400 }
       : (opts && opts.body && JSON.parse(opts.body).op === "preview_agent_run")
       ? { ok: true, goal_id: "g1", title: "Restyle UI to match Pentimento",
           cwd: "/repo", command: "hc work g1", add_dirs: ["/repo"],
@@ -850,6 +891,173 @@ class TodoSectionTests(BridgeTestCase):
         self.assertEqual(self.DOC, self.write(self.read()))
 
 
+class TodoCostTests(BridgeTestCase):
+    """The number in a row's lower right: the context its build opens on.
+
+    The same measurement the Prompt tab prints above the field -- the composed
+    prompt, counted -- so the two surfaces cannot disagree about what a row
+    costs. What the work on top of it will spend is a guess and lives in the
+    tooltip, labelled as one. A row that HAS been built prints what it actually
+    cost instead, and no "~".
+    """
+
+    COST = {"context_tokens": 2000, "row_tokens": 30000, "row_chars": 80,
+            "samples": 4}
+
+    def cost(self, row, cost=None):
+        state = {"scope": "chat", "goals": [], "prompts": [],
+                 "build_cost": self.COST if cost is None else cost}
+        return self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "out = window.__hcPromptUI.todoList.cost(%s);"
+            % (json.dumps(state), json.dumps(row)))
+
+    def row(self, text, **rest):
+        row = {"id": "taaaa0001", "text": text, "depth": 0, "status": "",
+               "question": ""}
+        row.update(rest)
+        return row
+
+    def test_a_row_is_priced_at_the_context_its_build_opens_on(self):
+        # 2000 of context, plus the 20 the row's own 80 characters add. The
+        # work is not in the number -- a corner that read "32k" for a row the
+        # Prompt tab priced at 2k was two answers to one question.
+        out = self.cost(self.row("x" * 80))
+        self.assertEqual("~2k tok", out["label"])
+        self.assertFalse(out["measured"])
+        # but it is still said, where it can be called a guess
+        self.assertIn("30k more", out["title"])
+        self.assertIn("over your last 4 builds", out["title"])
+
+    def test_a_longer_row_carries_more_of_itself(self):
+        # The context is the same string whatever the row says; only the row's
+        # own text grows.
+        self.assertEqual("~2.1k tok", self.cost(self.row("x" * 400))["label"])
+        self.assertEqual("~3k tok", self.cost(self.row("x" * 4000))["label"])
+        self.assertEqual("~2k tok", self.cost(self.row("x" * 20))["label"])
+
+    def test_the_work_in_the_tooltip_still_leans_on_the_row_s_length(self):
+        # Length is a weak signal about work: it may nudge the guess, up to
+        # 2.5x the median build, never set it.
+        self.assertIn("75k more", self.cost(self.row("x" * 400))["title"])
+        self.assertIn("75k more", self.cost(self.row("x" * 4000))["title"])
+        self.assertIn("15k more", self.cost(self.row("x" * 20))["title"])
+
+    def test_a_chat_that_has_built_nothing_says_where_the_number_came_from(self):
+        out = self.cost(self.row("x" * 80),
+                        dict(self.COST, samples=0))
+        self.assertIn("until this chat has built something", out["title"])
+
+    def test_a_built_row_prints_what_it_actually_spent(self):
+        out = self.cost(self.row("Add the route", status="done", tokens=8400))
+        self.assertEqual("8.4k tok", out["label"])
+        self.assertTrue(out["measured"])
+        self.assertIn("spent", out["title"])
+
+    def test_a_row_out_with_the_builder_is_past_being_estimated(self):
+        self.assertIsNone(self.cost(self.row("Add the route", status="building")))
+        self.assertIsNone(self.cost(self.row("Add the route", status="queued")))
+        # A row that came back failed is going out again: price it.
+        self.assertIsNotNone(self.cost(self.row("Add the route", status="failed")))
+
+    def test_an_empty_row_says_nothing(self):
+        self.assertIsNone(self.cost(self.row("")))
+        self.assertIsNone(self.cost(self.row("   ")))
+
+    def test_without_the_server_s_word_no_estimate_is_invented(self):
+        # An older server, or a global vault, sends no cost block: the corner
+        # stays empty rather than showing a number nothing stands behind.
+        self.assertIsNone(self.cost(self.row("Add the route"), cost={}))
+
+    def test_the_label_never_claims_more_precision_than_it_has(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = [L.costLabel(940), L.costLabel(8437), L.costLabel(31700),"
+            "       L.costLabel(0)];")
+        self.assertEqual(["940", "8.4k", "32k", ""], out)
+
+    def test_the_number_is_drawn_last_in_the_row_and_takes_no_caret(self):
+        state = {"scope": "chat", "goals": [], "prompts": [],
+                 "build_cost": self.COST}
+        out = self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "var slot = node.querySelector('.hc-todo-cost');"
+            "out = [slot.textContent, slot.getAttribute('contenteditable'),"
+            "  node.querySelector('.hc-todo-row').children.map("
+            "    function (c) { return c.className; })];"
+            % (json.dumps(state), json.dumps(self.row("x" * 80))))
+        self.assertEqual("~2k tok", out[0])
+        self.assertEqual("false", out[1], "an island, like the gutter")
+        self.assertEqual(["hc-todo-dash", "hc-todo-line", "hc-todo-cost"], out[2])
+
+    def test_the_stylesheet_puts_it_in_the_lower_right(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-todo-cost{flex:none;align-self:flex-end", css)
+
+
+class BuildWatchTests(BridgeTestCase):
+    """The line under the rows while a build is out.
+
+    A row that says "building" says nothing about what that means. The panel
+    says how far in the run is, roughly how much longer it has -- from what a
+    row has taken in this chat before -- and the last thing the agent did.
+    """
+
+    RUN = {"status": "running", "running": True, "rows": 2,
+           "elapsed_s": 130, "eta_s": 350, "per_row_s": 240, "measured": True,
+           "lines": 12, "can_open": True, "error": "",
+           "last": {"at": "2026-08-23T21:04:09+00:00", "kind": "tool",
+                    "text": "edited build.py"}}
+
+    def line(self, run="the run above"):
+        return self.run_js(
+            "out = window.__hcPromptUI.todoList.watchLine(%s);"
+            % json.dumps(self.RUN if run == "the run above" else run))
+
+    def test_a_running_build_says_how_long_it_has_been_and_has_left(self):
+        out = self.line()
+        self.assertEqual("building · 2m in · about 6m left", out["meta"])
+        self.assertEqual("edited build.py", out["last"])
+        self.assertTrue(out["running"])
+        self.assertIn("from this chat's own finished builds", out["title"])
+
+    def test_an_estimate_that_has_run_out_says_so_rather_than_sliding(self):
+        out = self.line(dict(self.RUN, eta_s=0))
+        self.assertIn("longer than usual", out["meta"])
+        self.assertNotIn("left", out["meta"])
+
+    def test_an_unmeasured_estimate_says_it_is_a_default(self):
+        out = self.line(dict(self.RUN, measured=False))
+        self.assertIn("until this chat has built", out["title"])
+
+    def test_a_build_that_has_stopped_is_not_given_a_countdown(self):
+        out = self.line(dict(self.RUN, status="waiting", running=False,
+                             eta_s=None))
+        self.assertEqual("waiting on your answer · 2m in", out["meta"])
+        self.assertFalse(out["running"])
+        self.assertTrue(out["canOpen"], "its session can still be opened")
+
+    def test_a_goal_with_no_build_has_no_panel(self):
+        self.assertIsNone(self.line(None))
+        self.assertIsNone(self.line({}))
+
+    def test_durations_are_short_and_even(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = [L.duration(0), L.duration(45), L.duration(130),"
+            "       L.duration(3600), L.duration(4500)];")
+        self.assertEqual(["0s", "45s", "2m", "1h", "1h 15m"], out)
+
+    def test_the_stylesheet_marks_a_running_build(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-todo-watch{", css)
+        self.assertIn("hc-todo-pulse", css)
+        # A guest reading someone else's workspace may see the log; opening a
+        # window on their machine is not theirs to do.
+        self.assertIn("[data-hc-readonly] [data-hc-todo-term]", css)
+
+
 class RailSyncTests(BridgeTestCase):
     """What the rail owns in the store, and how the server's tree lands.
 
@@ -1253,97 +1461,6 @@ class AddControlTests(BridgeTestCase):
             "box.children[1].value = 'typed but abandoned';"
             "box.children[1].onkeydown({ key: 'Escape', preventDefault: function () {} });"
             "p;"))
-
-
-class SourcesModalTests(BridgeTestCase):
-    """In a chat the sources are added and removed in one box, not a rail
-    of pills: the pane shows their names and a link that opens the box."""
-
-    def test_the_chat_rail_is_a_line_and_a_link_into_the_box(self):
-        out = self.patched_bundle(
-            "({ opens: out.indexOf('window.__hcSources({') >= 0,"
-            "   sum: out.indexOf('class=\"hc-sources-sum\"') >= 0,"
-            "   pills: out.indexOf('class=\"hc-src\"') >= 0"
-            "       || out.indexOf('class=\"hc-src-tag\"') >= 0"
-            "       || out.indexOf('class=\"hc-src-rm\"') >= 0,"
-            "   askSource: out.indexOf('__hcAskSource') >= 0,"
-            "   idempotent: window.__hcPromptUI.patchBundleSource(out) === out });",
-            scope="chat")
-        self.assertTrue(out["opens"], "the link does not open the box")
-        self.assertTrue(out["sum"], "the pane no longer names its sources")
-        self.assertFalse(out["pills"], "a source pill survived")
-        self.assertFalse(out["askSource"])
-        self.assertTrue(out["idempotent"])
-
-    def open_box(self):
-        return (
-            "var log = [];"
-            "var p = window.__hcSources({"
-            "  code: [{ id: 'c1', type: 'github', label: 'owner/repo' },"
-            "         { id: 'c2', type: 'local', label: '~/proj' }],"
-            "  docs: [{ id: 'd1', type: 'doc', label: 'spec.md' }],"
-            "  add: function (v) { log.push(['add', v.type, v.label]); return v; },"
-            "  remove: function (id) { log.push(['rm', id]); } });"
-            "var box = made.filter(function (e) {"
-            "  return String(e.className).indexOf('hc-srcs-box') >= 0; })[0];"
-            "var list = box.querySelector('.hc-srcs-list');"
-            "var input = box.querySelector('.hc-ask-input');"
-            "var rows = function () { return list.children.map(function (r) {"
-            "  return r.children[0].textContent + ' ' + r.children[1].textContent; }); };")
-
-    def test_the_box_lists_what_is_attached_with_its_kind(self):
-        self.assertEqual(["GITHUB owner/repo", "LOCAL ~/proj", "DOC spec.md"],
-                         self.run_js(self.open_box() + "rows();"))
-
-    def test_removing_a_row_writes_through_and_redraws(self):
-        out = self.run_js(
-            self.open_box()
-            + "list.children[1].children[2].onclick();"
-            "[rows(), log];")
-        self.assertEqual([["GITHUB owner/repo", "DOC spec.md"], [["rm", "c2"]]], out)
-
-    def test_attaching_writes_through_and_appends_a_row(self):
-        out = self.run_js(
-            self.open_box()
-            + "var kinds = box.querySelector('.hc-ask-kinds');"
-            "kinds.children[2].onclick();"  # Document
-            "input.value = '  notes/design.md ';"
-            "input.onkeydown({ key: 'Enter', preventDefault: function () {} });"
-            "[rows(), log, input.value];")
-        self.assertEqual(["GITHUB owner/repo", "LOCAL ~/proj", "DOC spec.md",
-                          "DOC notes/design.md"], out[0])
-        self.assertEqual([["add", "doc", "notes/design.md"]], out[1])
-        self.assertEqual("", out[2])
-
-    def test_a_blank_value_attaches_nothing(self):
-        out = self.run_js(
-            self.open_box()
-            + "input.value = '   ';"
-            "box.querySelector('.hc-srcs-form').children[1].onclick();"
-            "[rows().length, log];")
-        self.assertEqual([3, []], out)
-
-    def test_done_and_escape_close_with_the_lists_as_drawn(self):
-        out = self.run_js(
-            self.open_box()
-            + "list.children[0].children[2].onclick();"
-            "box.querySelector('.hc-ask-row').children[0].onclick();"
-            "p.then(function (v) { return [v.code.map(function (c) { return c.id; }),"
-            "  v.docs.map(function (d) { return d.id; }), box.parentNode.parentNode === null]; });")
-        self.assertEqual([["c2"], ["d1"], True], out)
-        gone = self.run_js(
-            self.open_box()
-            + "input.onkeydown({ key: 'Escape', preventDefault: function () {} });"
-            "box.parentNode.parentNode === null;")
-        self.assertTrue(gone)
-
-    def test_an_empty_box_says_so(self):
-        out = self.run_js(
-            "window.__hcSources({ code: [], docs: [] });"
-            "var box = made.filter(function (e) {"
-            "  return String(e.className).indexOf('hc-srcs-box') >= 0; })[0];"
-            "box.querySelector('.hc-srcs-list').children[0].className;")
-        self.assertEqual("hc-srcs-none", out)
 
 
 class SourceRoundTripTests(BridgeTestCase):
@@ -4183,41 +4300,6 @@ class ChatPromptLinkTests(BridgeTestCase):
                 " window.__hcPromptUI.goalLine('g1'),"
                 " window.__hcPromptUI.goalLine(null)]);")))
 
-    def test_the_workspace_wide_link_lives_in_the_header(self):
-        # One button, drawn once into the header slot the patch leaves, and
-        # the per-goal button in the pane is still there beside the prompt
-        # one. The header's is a different class: the click handler tells
-        # the two scopes apart by it.
-        got = json.loads(self.run_js(
-            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
-            "var head = document.createElement('span');"
-            "head.className = 'hc-chats';"
-            "document.body.appendChild(head);"
-            "var slot = document.createElement('span');"
-            "slot.className = 'hc-prompt-add';"
-            "document.body.appendChild(slot);"
-            "window.__hcPromptUI.renderPromptAdd();"
-            "window.__hcPromptUI.renderPromptAdd();"
-            "JSON.stringify([head.children.length,"
-            " head.children[0].className, head.children[0].textContent,"
-            " slot.children.map(function (c) { return c.className; })]);"))
-        self.assertEqual([1, "hc-chat-linkbtn", "+ chats",
-                          ["hc-chat-addbtn", "hc-prompt-addbtn"]], got)
-
-    def test_the_header_button_renders_without_the_pane(self):
-        # The header is on screen before any goal is selected, so the link
-        # does not wait for the pane's slot to exist.
-        got = json.loads(self.run_js(
-            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
-            "var head = document.createElement('span');"
-            "head.className = 'hc-chats';"
-            "document.body.appendChild(head);"
-            "var drew = window.__hcPromptUI.renderPromptAdd();"
-            "JSON.stringify([drew, head.children.length]);"))
-        self.assertEqual([False, 1], got)
-
-    # fetch -> json -> draw is several microtasks deep; this is enough
-    # of them for the picker to be on screen, and for a posted op to land.
     TICKS = ".then(function () {})" * 6
 
     CHATS = ("fetch = function (url, opts) {"
@@ -4303,35 +4385,6 @@ class ChatPromptLinkTests(BridgeTestCase):
         self.assertEqual([{"op": "link_chat", "session_id": "aaaaaaaa-1",
                            "label": "alpha", "goal_id": "g1"}],
                          [c for c in posted if c.get("op") == "link_chat"])
-
-    def test_the_two_buttons_open_pickers_of_their_own_scope(self):
-        # The pane's button links for the selected goal; the header's for
-        # the workspace. Same delegated click handler, told apart by class.
-        got = json.loads(self.run_js(
-            "localStorage.setItem('hc-vault-ui-v1',"
-            "  JSON.stringify({ selId: 'g1a' }));"
-            "window.__hcPromptUI.acceptState(%s);" % json.dumps(self.chat_state()) +
-            "var LINKED = [];" + self.CHATS +
-            "var head = document.createElement('span');"
-            "head.className = 'hc-chats'; document.body.appendChild(head);"
-            "var slot = document.createElement('span');"
-            "slot.className = 'hc-prompt-add'; document.body.appendChild(slot);"
-            "window.__hcPromptUI.renderPromptAdd();"
-            + self.CLICK +
-            "click(slot.querySelector('.hc-chat-addbtn'));"
-            "Promise.resolve()" + self.TICKS +
-            "  .then(function () {"
-            "    var t1 = document.querySelector('.hc-ask-title').textContent;"
-            "    var ov = document.querySelector('.hc-ask');"
-            "    ov.parentNode.removeChild(ov);"
-            "    click(head.querySelector('.hc-chat-linkbtn'));"
-            "    return Promise.resolve()" + self.TICKS +
-            "      .then(function () { return JSON.stringify([t1,"
-            "        document.querySelector('.hc-ask-title').textContent]); });"
-            "  });"))
-        self.assertEqual(["Chats this goal draws prompts from",
-                          "Chats this workspace draws prompts from"], got)
-
 
 class ChatNoticeTests(BridgeTestCase):
     """A goals workspace is a second window on a chat running in a terminal.
@@ -4590,6 +4643,34 @@ class ChatNoticeTests(BridgeTestCase):
             defer=True)
         self.assertEqual([0, 1], out)
 
+    def test_a_workspace_whose_server_stopped_says_so_until_one_lands(self):
+        # Reopening a workspace that is running older code than the plugin
+        # replaces it, which leaves this window pointed at a process that has
+        # ended. Nothing else on the page changes when that happens, so
+        # silence reads as a page that broke rather than one that closed.
+        # It is said where everything else is said now -- a card in the
+        # corner -- and taken back the moment a server answers again.
+        out = self.notices(
+            "var alive = false;"
+            "fetch = function () { return alive"
+            "  ? Promise.resolve({ ok: true, json: function () {"
+            "      return Promise.resolve({ goals: [], prompts: [],"
+            "        scope: 'chat', session_id: 's' }); } })"
+            "  : Promise.reject(new Error('gone')); };"
+            "var R = window.__hcPromptUI.refreshState;"
+            "var seen = [];"
+            "R().then(function () { seen.push(stack().length); return R(); })"
+            "  .then(function () { seen.push(stack().length); return R(); })"
+            "  .then(function () { seen.push(drawn()); alive = true; return R(); })"
+            "  .then(function () { seen.push(stack().length); return seen; });")
+        self.assertEqual(
+            [0, 0,
+             [["server_gone", "This workspace is no longer running",
+               "It was stopped or restarted — the newer one opens in its own "
+               "tab. Nothing typed here is being saved."]],
+             0],
+            out)
+
     def test_the_banner_setting_governs_it_like_a_build(self):
         # One switch in the gear panel, not two. Turning banners off still
         # leaves the entry behind the bell to find later.
@@ -4673,15 +4754,16 @@ LAUNCH_CLASSES = (
     "hc-row", "hc-rowtitle",
     "hc-shell", "hc-main",
     "hc-rail-left", "hc-rail-head", "hc-rail-name", "hc-rail-count",
-    "hc-rail-right", "hc-rail-code", "hc-rail-actions", "hc-rail-copy",
+    "hc-rail-right", "hc-rail-actions", "hc-rail-copy",
     "hc-rail-none",
-    "hc-sources", "hc-sources-label", "hc-sources-sum", "hc-src-add",
-    "hc-tabs",
+    "hc-sources", "hc-sources-label", "hc-src", "hc-src-tag", "hc-src-label",
+    "hc-src-rm", "hc-src-add", "hc-tabs",
     "hc-chip", "hc-chip-n", "hc-titlerow", "hc-chiprow", "hc-brand",
-    "hc-project", "hc-subbar", "hc-subtabs",
+    "hc-subbar", "hc-viewtabs",
     "hc-panels", "hc-session", "hc-chats", "hc-handoff", "hc-alerts",
     "hc-settings", "hc-updated",
-    "hc-search", "hc-search-input", "hc-search-hits",
+    "hc-search", "hc-search-field", "hc-search-glyph", "hc-search-input",
+    "hc-search-clear", "hc-search-hits",
 )
 
 
@@ -4708,6 +4790,75 @@ def _contrast(fg, bg):
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
+
+    def test_the_tabs_are_the_headers_second_row_and_read_as_the_counts_do(self):
+        # One header of two rows (--hc-row each) under one rule: the brand
+        # and the project on the first, the view tabs and the filter counts
+        # on the second. The tabs used to be a 32px strip of their own,
+        # fixed under a one-row header at its own indent with its own rule
+        # -- a second bar, and one that came apart from the header on a
+        # trackpad bounce.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        row = 37
+        self.assertIn("--hc-row:%dpx;--hc-top:%dpx" % (row, row * 2), css)
+        self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
+                      "background:var(--bg);height:var(--hc-top);box-sizing:border-box;"
+                      "padding:0 16px calc(var(--hc-row) - 1px)!important;", css)
+        # The second row is the header's own child at its foot, at the
+        # header's indent, with no rule of its own.
+        self.assertIn(".hc-subbar{position:absolute;left:0;right:0;bottom:0;"
+                      "height:calc(var(--hc-row) - 1px);", css)
+        self.assertRegex(css, r"\.hc-subbar\{[^}]*padding:0 16px\}")
+        self.assertNotRegex(css, r"\.hc-subbar\{[^}]*border-top")
+        self.assertNotIn(".hc-viewtabs{position:fixed", css)
+        self.assertNotIn(".hc-pillbar", css)
+        self.assertNotIn("[data-hc-viewtabs]", css)
+        # The tabs are set as the counts at the row's other end are: 11px,
+        # the same tracking, title case; the open one is bold and stands on
+        # the header's rule.
+        self.assertIn(".hc-viewtab{position:relative;display:inline-flex;"
+                      "align-items:center;height:100%;font:500 11px 'Source Code Pro',"
+                      "monospace;letter-spacing:.2px;color:var(--fnt);", css)
+        self.assertNotRegex(css, r"\.hc-viewtab\{[^}]*uppercase")
+        self.assertIn(".hc-viewtab[data-hc-on]{font-weight:700;color:var(--ink)}", css)
+        self.assertIn(".hc-viewtab[data-hc-on]::after{content:'';position:absolute;"
+                      "left:0;right:0;bottom:-1px;height:2px;", css)
+        # The counts: the artifact's own row, lifted to the second row's
+        # right end as words with no box around them, and gone on the
+        # overview -- counts describe the tree, and the overview is not it.
+        self.assertRegex(css, r"\.hc-titlerow\{position:fixed;top:var\(--hc-row\);"
+                              r"left:auto;right:16px;height:calc\(var\(--hc-row\) - 1px\);")
+        self.assertIn("[data-hc-launch][data-hc-overview] .hc-titlerow"
+                      "{display:none!important}", css)
+        self.assertIn(".hc-chip{padding:0;border:0;border-radius:0;background:transparent;",
+                      css)
+        # With the notice bar (34) under the header, what is under it drops
+        # by that much; the header keeps its two rows.
+        self.assertIn("[data-hc-launch][data-hc-notice]{--hc-top:%dpx}" % (row * 2 + 34), css)
+        self.assertIn("[data-hc-launch][data-hc-notice] .hc>div:first-child{height:%dpx}"
+                      % (row * 2), css)
+        self.assertIn("[data-hc-launch][data-hc-notice] .hc>div:nth-child(2)"
+                      "{padding-top:34px!important}", css)
+        self.assertIn(".hc-notice-stack{position:fixed;top:%dpx;" % (row * 2), css)
+        # And the page does not rubber-band: a bounce would carry the
+        # sticky header off while the fixed counts stayed.
+        self.assertRegex(css, r"\[data-hc-launch\]\{[^}]*overscroll-behavior:none\}")
+
+    def test_the_stamp_is_a_tick_that_leads_the_header_tools(self):
+        # The header used to end in a clock that changed every minute. It
+        # now opens the right-hand group with "saved" and a tick, and keeps
+        # the time as the stamp's title for whoever wants it.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-updated{order:-2;color:var(--fnt)", css)
+        self.assertIn(".hc-panels{order:-1;", css)
+
+    def test_the_rail_toggles_stand_down_on_the_overview(self):
+        # They arrange the goals page. On the overview there is no rail to
+        # hide, so they were two buttons that did nothing visible.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn("[data-hc-launch] .hc-panels{order:-1;", css)
+        self.assertIn("[data-hc-launch][data-hc-overview] .hc-panels{display:none}",
+                      css)
 
     def chat(self):
         return ("window.__hcPromptUI.acceptState("
@@ -4795,11 +4946,23 @@ class LaunchSkinTests(BridgeTestCase):
 
     def test_every_rule_in_the_sheet_is_gated_on_the_root_attribute(self):
         css = self.run_js("window.__hcPromptUI.launchCss();")
-        rules = [rule for rule in css.split("}") if rule.strip()]
+        # A @keyframes block is not a selector and cannot dress anything on
+        # its own: it applies only where an animation names it, and those
+        # declarations are rules like any other, gated below. Its steps
+        # ("0%,100%{...}") would otherwise read as ungated rules.
+        frames = re.compile(r"@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}")
+        selectors = frames.sub("", css)
+        rules = [rule for rule in selectors.split("}") if rule.strip()]
         self.assertTrue(rules)
         stray = [rule for rule in rules
                  if not rule.lstrip().startswith("[data-hc-launch]")]
         self.assertEqual([], stray)
+        # And the animation is only ever reached from a gated rule.
+        for name in re.findall(r"@keyframes\s+([\w-]+)", css):
+            for line in css.split("}"):
+                if name in line and "@keyframes" not in line:
+                    self.assertTrue(line.lstrip().startswith("[data-hc-launch]"),
+                                    "%s is used by an ungated rule" % name)
 
     def test_the_workspace_is_full_bleed(self):
         # The columns meet the window on every side and each other on one
@@ -4818,8 +4981,9 @@ class LaunchSkinTests(BridgeTestCase):
                       "border:0!important;border-radius:0!important", css)
         self.assertRegex(css, r"\.hc-rail-right\{[^}]*border-width:0 0 0 1px;"
                               r"border-radius:0;")
-        # The header is a fixed height and --hc-top is exactly that height,
-        # so the columns are sized against it, not against a guess.
+        # The header is a fixed height -- two rows of --hc-row -- and
+        # --hc-top is exactly that height, so the columns are sized against
+        # it, not against a guess.
         self.assertIn("--hc-row:37px;--hc-top:74px", css)
         # Sticky: the pills are pinned to the viewport, so the bar they sit
         # in must not scroll away from under them.
@@ -4838,27 +5002,6 @@ class LaunchSkinTests(BridgeTestCase):
                               r"top:var\(--hc-row\);left:auto;right:16px;"
                               r"height:calc\(var\(--hc-row\) - 1px\);"
                               r"margin:0;padding:0!important")
-        # And the tabs are drawn into the same bar, at the other end. It is
-        # a row short of --hc-row because it carries the header's own rule
-        # -- the one rule: none between the rows, so the header reads as
-        # one block rather than a bar with a strip under it.
-        self.assertIn(".hc-subbar{position:absolute;left:0;right:0;bottom:0;"
-                      "height:calc(var(--hc-row) - 1px);", css)
-        self.assertNotRegex(css, r"\.hc-subbar\{[^}]*border-top")
-        # The tabs are set as the counts are: 11px, the same tracking,
-        # title case; the open one is bold and stands on the header's rule.
-        self.assertIn(".hc-subtab{position:relative;display:inline-flex;"
-                      "align-items:center;height:100%;font:500 11px 'Source Code Pro',"
-                      "monospace;letter-spacing:.2px;color:var(--fnt);", css)
-        self.assertIn(".hc-subtab[data-hc-subtab-on]{font-weight:700;color:var(--ink)}", css)
-        # The counts go with the tree: OVERVIEW is not the tree.
-        self.assertIn("[data-hc-launch][data-hc-overview] .hc-titlerow"
-                      "{display:none!important}", css)
-        self.assertIn(".hc-subtab[data-hc-subtab-on]::after{content:'';position:absolute;"
-                      "left:0;right:0;bottom:-1px;height:2px;", css)
-        # And the page does not rubber-band: a bounce would carry the
-        # sticky header off while the fixed counts stayed.
-        self.assertRegex(css, r"\[data-hc-launch\]\{[^}]*overscroll-behavior:none\}")
 
     def layout(self, tail):
         # The harness's root has a bare style object; the bridge writes the
@@ -4916,16 +5059,6 @@ class LaunchSkinTests(BridgeTestCase):
             "   return [b.getAttribute('data-hc-panel'), b.className]; })];")
         self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel hc-panel-on"]]],
                          out)
-
-    def test_the_session_chip_names_the_conversation_the_window_watches(self):
-        out = self.run_js(
-            self.chat()
-            + "var slot = document.createElement('span');"
-            "slot.className = 'hc-session'; app.appendChild(slot);"
-            "var wrote = window.__hcPromptUI.renderSessionChip();"
-            "var again = window.__hcPromptUI.renderSessionChip();"
-            "[wrote, again, slot.textContent];")
-        self.assertEqual([True, False, "session 7f3a1b2c"], out)
 
     def test_the_injection_card_says_only_what_the_state_proves(self):
         # A chat nobody has opened the workspace for has been told nothing,

@@ -27,6 +27,10 @@ from human_compact.trajectory import ui  # noqa: E402
 
 STUB = r'''#!/usr/bin/env python3
 import json, sys, os, time
+# What the real CLI reports on its last line. The build reads it to learn what
+# a row costs; every turn here says the same, so a test can do the arithmetic.
+USAGE = {"input_tokens": 1000, "output_tokens": 200,
+         "cache_read_input_tokens": 4000}
 args = sys.argv[1:]
 prompt = args[args.index("-p") + 1]
 resume = "--resume" in args
@@ -49,7 +53,8 @@ if os.environ.get("STUB_FAIL_ONCE") == "1":
     for i in dict.fromkeys(ids):
         print(json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}), flush=True)
-    print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
+    print(json.dumps({"type": "result", "is_error": False, "result": "done",
+                      "usage": USAGE}))
     raise SystemExit(0)
 if os.environ.get("STUB_FINISH") == "1" and not resume:
     with open(log, "a") as fh:
@@ -58,7 +63,8 @@ if os.environ.get("STUB_FINISH") == "1" and not resume:
     for i in ids:
         print(json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}), flush=True)
-    print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
+    print(json.dumps({"type": "result", "is_error": False, "result": "done",
+                      "usage": USAGE}))
     raise SystemExit(0)
 with open(log, "a") as fh:
     fh.write(json.dumps({"args": args, "prompt": prompt, "cwd": os.getcwd(),
@@ -71,21 +77,24 @@ if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
     say("Looking at the rows.")
     say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
-    print(json.dumps({"type": "result", "is_error": False, "result": "asked"}))
+    print(json.dumps({"type": "result", "is_error": False, "result": "asked",
+                      "usage": USAGE}))
 else:
     try:
         msg = json.loads(prompt)
     except ValueError:
         # Not an answer: a withdrawal, or any other prose. Acknowledge and end.
         say("Moving on.")
-        print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
+        print(json.dumps({"type": "result", "is_error": False, "result": "ok",
+                          "usage": USAGE}))
         raise SystemExit(0)
     if "reopened" in msg:
         say("Fixing: %s" % msg["reopened"])
     else:
         say("Thanks: %s" % msg["answer"])
     say('{"id": "%s", "state": "DONE"}' % msg["id"])
-    print(json.dumps({"type": "result", "is_error": False, "result": "done"}))
+    print(json.dumps({"type": "result", "is_error": False, "result": "done",
+                      "usage": USAGE}))
 '''
 
 
@@ -132,6 +141,24 @@ class BuildRunTests(unittest.TestCase):
         os.environ.pop("HC_USE_API_KEY", None)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
+        # Registered last, so it runs first: a run's reader thread writes the
+        # run record and its log until the stub exits, and a temp directory
+        # removed under it is "Directory not empty" on the way out -- the
+        # one failure CI has had in this file, on both platforms.
+        self.addCleanup(self._drain_runs)
+
+    @staticmethod
+    def _drain_runs(seconds=10.0):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            threads = [run.thread for run in list(BUILD._RUNS.values())
+                       if getattr(run, "thread", None) is not None
+                       and run.thread.is_alive()]
+            if not threads:
+                break
+            for thread in threads:
+                thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        BUILD._RUNS.clear()
 
     def rows(self):
         goals, _ = chat_state.load_goals(self.session, self.root)
@@ -169,6 +196,57 @@ class BuildRunTests(unittest.TestCase):
         self.assertIn('{"id": "<row id>", "question": "<under 100 characters>"}', prompt)
         self.assertIn('{"id": "<row id>", "state": "DONE"}', prompt)
 
+    def test_the_prompt_names_the_project_it_will_run_in(self):
+        # The tree names goals; it never says the place they are for. That is
+        # the record the workspace already keeps for the directory the chat
+        # was started in -- what the reader called it and what they wrote it
+        # is for -- so the session opens knowing which repository it is in.
+        from human_compact.trajectory import project_store as PS
+        PS.save_project(self.root, str(self.root),
+                        {"name": "Router", "objective": "one router, no forks"})
+        goals, important = chat_state.load_goals(self.session, self.root)
+        g = GM.by_id(goals, "g1")
+        rows = BUILD.picked_with_children(g["todo_items"], ["taaaa0001"])
+        prompt = BUILD.compose_prompt(self.session, goals, important, [], g,
+                                      rows, root=self.root)
+        head = prompt.split("# Current goals")[0]
+        self.assertIn("# Project", head)
+        self.assertIn(f"Router · {self.root}", head)
+        self.assertIn("Objective: one router, no forks", head)
+
+    def test_a_preview_is_the_prompt_a_build_would_open_on(self):
+        # What the rail's Prompt tab prints above the reader's own words. With
+        # nothing picked it previews every row still to do, since that is the
+        # build the reader is standing in front of.
+        goals, important = chat_state.load_goals(self.session, self.root)
+        g = GM.by_id(goals, "g1")
+        every = BUILD.preview(self.session, self.root, goals, important, g, [])
+        work = every.split("# The work")[1]
+        self.assertIn("- Add the route [taaaa0001]", work)
+        self.assertIn("- Update the docs [taaaa0003]", work)
+        # and the picked rows alone once there are any
+        one = BUILD.preview(self.session, self.root, goals, important, g,
+                            ["taaaa0003"]).split("# The work")[1]
+        self.assertIn("- Update the docs [taaaa0003]", one)
+        self.assertNotIn("Add the route", one)
+
+    def test_the_context_a_preview_carries_is_that_string_without_the_rows(self):
+        # What the rail prices a TODO row against: the same prompt with no
+        # rows in it, counted the way the Prompt tab counts the whole of it.
+        # Anything less -- the goal-context file alone, which is what `cost`
+        # measures -- reads low beside the number the tab prints.
+        goals, important = chat_state.load_goals(self.session, self.root)
+        g = GM.by_id(goals, "g1")
+        bare = BUILD.compose_prompt(
+            self.session, goals, important,
+            chat_state.load_prompts(self.session, self.root), g, [],
+            root=self.root)
+        got = BUILD.preview_context_tokens(self.session, self.root, goals,
+                                           important, g)
+        self.assertEqual(len(bare) // 4, got)
+        self.assertGreater(
+            got, BUILD.cost(self.session, self.root)["context_tokens"])
+
     def test_a_build_asks_then_finishes_on_the_answer_in_the_same_session(self):
         started = BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
         self.assertTrue(started["ok"], started)
@@ -182,6 +260,11 @@ class BuildRunTests(unittest.TestCase):
         self.assertEqual(("", ""), self.rows()["taaaa0003"])
         run = BUILD._run_for(self.session, self.root, "g1")
         self.assertTrue(self.wait_for(lambda: not run.alive()))
+        # The reader thread writes the record's verdict a beat after the
+        # process is gone; wait for the word rather than for the exit.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
+            == "waiting"), BUILD.load_run(self.session, self.root, "g1"))
         record = BUILD.load_run(self.session, self.root, "g1")
         self.assertEqual("waiting", record["status"])
 
@@ -296,6 +379,13 @@ class ReopenTests(BuildRunTests):
         self.finish()
         run = BUILD._run_for(self.session, self.root, "g1")
         self.assertTrue(self.wait_for(lambda: not run.alive()))
+        # The reader thread writes the record's verdict a beat after the
+        # process is gone; a record removed before that write comes back.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
+            == "idle"))
+        if run.thread is not None:
+            run.thread.join(timeout=5)
         # The record of run 1 is gone -- a restart, an older build.
         BUILD._RUNS.clear()
         BUILD._run_path(self.session, self.root, "g1").unlink()
@@ -354,6 +444,166 @@ class QueueBehindARunTests(BuildRunTests):
         self.assertIn("[taaaa0003]", calls[1]["prompt"])
 
 
+class BuildCostTests(BuildRunTests):
+    """What a row will cost to build: measured where it can be, estimated
+    where it cannot, and never invented.
+
+    The stub reports 5,200 tokens on every turn it ends (see USAGE), so the
+    arithmetic below is exact.
+    """
+
+    TURN = 5200
+
+    def row(self, row_id):
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        return next(r for r in GM.by_id(goals, "g1")["todo_items"]
+                    if r["id"] == row_id)
+
+    def test_a_chat_that_has_built_nothing_says_so_with_the_default(self):
+        cost = BUILD.cost(self.session, self.root)
+        self.assertEqual(0, cost["samples"])
+        self.assertEqual(BUILD.DEFAULT_ROW_TOKENS, cost["row_tokens"])
+        self.assertEqual(BUILD.DEFAULT_ROW_CHARS, cost["row_chars"])
+
+    def test_the_context_every_build_opens_on_is_measured_not_guessed(self):
+        text = chat_state.write_goal_context(self.session, root=self.root)
+        cost = BUILD.cost(self.session, self.root)
+        self.assertEqual(len(text) // 4, cost["context_tokens"])
+        self.assertGreater(cost["context_tokens"], 0)
+
+    def test_usage_counts_the_cache_as_well_as_the_prompt(self):
+        self.assertEqual(5200, BUILD._usage_tokens(
+            {"type": "result", "usage": {"input_tokens": 1000,
+                                         "output_tokens": 200,
+                                         "cache_read_input_tokens": 4000}}))
+        # A CLI that reports nothing contributes nothing, rather than a zero
+        # that would drag the median down.
+        self.assertEqual(0, BUILD._usage_tokens({"type": "result"}))
+
+    def test_the_estimate_is_the_median_of_the_runs_it_has_seen(self):
+        for tokens in (10000, 90000, 20000):
+            BUILD.record_usage(self.session, self.root, 1, 40, tokens)
+        cost = BUILD.cost(self.session, self.root)
+        self.assertEqual(3, cost["samples"])
+        self.assertEqual(20000, cost["row_tokens"], "the middle run, not the mean")
+        self.assertEqual(40, cost["row_chars"])
+
+    def test_only_the_last_runs_are_kept(self):
+        for i in range(BUILD.USAGE_KEEP + 5):
+            BUILD.record_usage(self.session, self.root, 1, 40, 1000 + i)
+        self.assertEqual(BUILD.USAGE_KEEP, BUILD.cost(self.session, self.root)["samples"])
+
+    def test_a_finished_build_of_one_row_leaves_the_real_number_on_it(self):
+        os.environ["STUB_FINISH"] = "1"
+        self.assertTrue(BUILD.start(self.session, self.root, "g1", ["taaaa0003"])["ok"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done"))
+        self.assertTrue(self.wait_for(
+            lambda: "tokens" in self.row("taaaa0003")))
+        self.assertEqual(self.TURN, self.row("taaaa0003")["tokens"])
+        cost = BUILD.cost(self.session, self.root)
+        self.assertEqual(1, cost["samples"])
+        self.assertEqual(self.TURN, cost["row_tokens"])
+        self.assertEqual(len("Update the docs"), cost["row_chars"])
+        self.assertEqual(self.TURN,
+                         BUILD.load_run(self.session, self.root, "g1")["tokens"])
+
+    def test_a_build_of_two_rows_is_priced_per_row_and_marks_neither(self):
+        os.environ["STUB_FINISH"] = "1"
+        self.assertTrue(BUILD.start(self.session, self.root, "g1",
+                                    ["taaaa0001", "taaaa0003"])["ok"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.cost(self.session, self.root)["samples"] == 1))
+        cost = BUILD.cost(self.session, self.root)
+        self.assertEqual(self.TURN // 2, cost["row_tokens"])
+        # A number that cannot be attributed to one row is not written onto
+        # one: the rail keeps estimating those rows.
+        self.assertNotIn("tokens", self.row("taaaa0001"))
+        self.assertNotIn("tokens", self.row("taaaa0003"))
+
+    def test_a_question_and_its_answer_are_one_build_banked_once(self):
+        self.assertTrue(BUILD.start(self.session, self.root, "g1", ["taaaa0001"])["ok"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "asking"))
+        # Nothing is banked while the build is still waiting on the reader.
+        self.assertEqual(0, BUILD.cost(self.session, self.root)["samples"])
+        self.assertTrue(BUILD.answer(self.session, self.root, "g1",
+                                     "taaaa0001", "src/a.ts")["ok"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"))
+        self.assertTrue(self.wait_for(
+            lambda: "tokens" in self.row("taaaa0001")))
+        self.assertEqual(1, BUILD.cost(self.session, self.root)["samples"],
+                         "one build, not one per turn")
+        # Both turns: the one that asked and the one that finished.
+        self.assertEqual(self.TURN * 2, self.row("taaaa0001")["tokens"])
+
+    def test_normalize_keeps_only_a_number_there_is_a_reason_for(self):
+        out = GM.normalize_todo_items([
+            {"id": "taaaa0001", "text": "a", "depth": 0, "tokens": 5200},
+            {"id": "taaaa0002", "text": "b", "depth": 0, "tokens": 0},
+            {"id": "taaaa0003", "text": "c", "depth": 0, "tokens": "junk"},
+            {"id": "taaaa0004", "text": "d", "depth": 0},
+        ])
+        self.assertEqual(5200, out[0]["tokens"])
+        for row in out[1:]:
+            self.assertNotIn("tokens", row, "no key, so the two sides compare equal")
+
+    def test_the_measured_number_survives_the_browser_s_next_save(self):
+        # The browser owns text, depth and order; the server owns what a build
+        # spent. A page saving an edit does not send that number back, and a
+        # page that sends one anyway is not believed.
+        previous = [{"id": "taaaa0001", "text": "Add the route", "depth": 0,
+                     "status": "done", "tokens": 5200}]
+        out = ui._merge_todo_items(
+            [{"id": "taaaa0001", "text": "Add the route, carefully",
+              "depth": 0, "status": "", "tokens": 99}], previous)
+        self.assertEqual("Add the route, carefully", out[0]["text"])
+        self.assertEqual("done", out[0]["status"])
+        self.assertEqual(5200, out[0]["tokens"])
+        fresh = ui._merge_todo_items(
+            [{"id": "taaaa0009", "text": "new", "depth": 0, "tokens": 42}],
+            previous)
+        self.assertNotIn("tokens", fresh[0])
+
+    def test_a_row_out_with_the_builder_is_not_blanked_by_a_stale_page(self):
+        # A page whose import was composed before the reader finished typing
+        # -- and which lands after the build that carried the finished text
+        # -- posts the row blank. Taking that leaves a row saying "building"
+        # with nothing written on it. While a row is with the builder its
+        # text is what was sent; a blank over it is not an edit.
+        out = ui._merge_todo_items(
+            [{"id": "taaaa0001", "text": "", "depth": 0}],
+            [{"id": "taaaa0001", "text": "Add the route", "depth": 0,
+              "status": "building"}])
+        self.assertEqual("Add the route", out[0]["text"])
+        # A row nobody is building is the reader's: clearing it clears it.
+        for state in ("", "done", "failed"):
+            cleared = ui._merge_todo_items(
+                [{"id": "taaaa0001", "text": "", "depth": 0}],
+                [{"id": "taaaa0001", "text": "Add the route", "depth": 0,
+                  "status": state}])
+            self.assertEqual("", cleared[0]["text"], state)
+        # And a real edit while it builds is still the reader's.
+        edited = ui._merge_todo_items(
+            [{"id": "taaaa0001", "text": "Add the route, carefully", "depth": 0}],
+            [{"id": "taaaa0001", "text": "Add the route", "depth": 0,
+              "status": "building"}])
+        self.assertEqual("Add the route, carefully", edited[0]["text"])
+
+    def test_a_build_the_reader_cut_short_is_not_a_sample(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "5"
+        self.assertTrue(BUILD.start(self.session, self.root, "g1", ["taaaa0001"])["ok"])
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: run.alive()))
+        BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(lambda: not run.alive(), seconds=12))
+        time.sleep(0.3)
+        self.assertEqual(0, BUILD.cost(self.session, self.root)["samples"])
+        self.assertNotIn("tokens", self.row("taaaa0001"))
+
+
 class TransientRetryTests(BuildRunTests):
     """A provider 500 is retried in the same session, not a verdict."""
 
@@ -370,6 +620,11 @@ class TransientRetryTests(BuildRunTests):
         self.assertEqual(2, len(calls))
         self.assertFalse(calls[0]["resume"])
         self.assertTrue(calls[1]["resume"], "the retry resumes the same session")
+        # The reader thread writes the record's verdict a beat after the
+        # rows change; wait for the word rather than for the rows.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.load_run(self.session, self.root, "g1")["status"]
+            == "idle"), BUILD.load_run(self.session, self.root, "g1"))
         record = BUILD.load_run(self.session, self.root, "g1")
         self.assertEqual("idle", record["status"])
         self.assertEqual(1, record.get("retry"))
@@ -641,6 +896,121 @@ class SessionBuildTests(unittest.TestCase):
         self.assertTrue(BUILD.session_state(self.session, self.root)["ended_at"])
         hook("SessionStart", source="resume")
         self.assertFalse(BUILD.session_state(self.session, self.root)["ended_at"])
+
+
+class WatchingABuildTests(BuildRunTests):
+    """What a build says about itself while it works.
+
+    "building" and nothing else is a build the reader has to take on faith.
+    A run keeps a log of what it did, the state says how far in it is, and a
+    terminal can be opened on it -- following the log while it runs, resuming
+    its session once it has stopped.
+    """
+
+    def test_the_events_a_run_prints_become_phrases_not_contents(self):
+        self.assertEqual(
+            [("say", "Looking at the router."), ("tool", "read a.ts"),
+             ("tool", "ran pytest -q")],
+            BUILD.stream_activity({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Looking at the router.\nand more"},
+                {"type": "tool_use", "name": "Read",
+                 "input": {"file_path": "/repo/src/a.ts"}},
+                {"type": "tool_use", "name": "Bash",
+                 "input": {"command": "pytest -q"}}]}}))
+
+    def test_a_protocol_line_is_not_reported_as_work(self):
+        # The row's own badge already says what it did; saying it twice, in
+        # the shape the reader was never meant to see, is noise.
+        self.assertEqual([], BUILD.stream_activity(
+            {"type": "assistant", "message": {"content": [
+                {"type": "text",
+                 "text": '{"id": "taaaa0001", "state": "DONE"}'}]}}))
+
+    def test_the_log_is_bounded_and_does_not_repeat_itself(self):
+        for i in range(BUILD.ACTIVITY_KEEP + 5):
+            BUILD.note_activity(self.session, self.root, "g1", "tool",
+                                "read a-%d.ts" % i)
+        lines = BUILD.load_activity(self.session, self.root, "g1")
+        self.assertEqual(BUILD.ACTIVITY_KEEP, len(lines))
+        self.assertEqual("read a-%d.ts" % (BUILD.ACTIVITY_KEEP + 4),
+                         lines[-1]["text"])
+        self.assertFalse(BUILD.note_activity(self.session, self.root, "g1",
+                                             "tool", lines[-1]["text"]))
+        # And a terminal can follow the same lines without parsing anything.
+        followed = BUILD.watch_log(self.session, self.root, "g1").read_text()
+        self.assertIn("read a-0.ts", followed)
+
+    def settled(self):
+        """Wait for the run to have written its own last word."""
+        return self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "waiting")
+
+    def test_a_run_logs_what_it_did_and_where_it_stopped(self):
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.settled())
+        said = [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+        self.assertIn("started on 1 row", said)
+        self.assertIn("Looking at the rows.", said)
+        self.assertIn("waiting on your answer", said)
+
+    def test_the_state_says_how_far_in_the_build_is_and_what_it_last_did(self):
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.settled())
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertEqual("waiting", live["status"])
+        self.assertFalse(live["running"])
+        self.assertEqual(1, live["rows"])
+        self.assertIsInstance(live["elapsed_s"], int)
+        # An estimate is for a build that is still going; this one is not.
+        self.assertIsNone(live["eta_s"])
+        self.assertEqual("waiting on your answer", live["last"]["text"])
+        self.assertTrue(live["can_open"], "its session can be resumed")
+
+    def test_how_long_a_row_takes_is_measured_like_what_it_costs(self):
+        empty = BUILD.cost(self.session, self.root)
+        self.assertEqual(BUILD.DEFAULT_ROW_SECONDS, empty["row_seconds"])
+        self.assertEqual(0, empty["time_samples"])
+        BUILD.record_usage(self.session, self.root, 1, 80, 1000, 120)
+        BUILD.record_usage(self.session, self.root, 2, 80, 1000, 600)
+        priced = BUILD.cost(self.session, self.root)
+        self.assertEqual(210, priced["row_seconds"], "the median of 120 and 300")
+        self.assertEqual(2, priced["time_samples"])
+
+    def test_a_finished_build_leaves_how_long_it_took_behind_it(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "1.1"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"))
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.cost(self.session, self.root)["time_samples"] == 1))
+        self.assertGreaterEqual(
+            BUILD.cost(self.session, self.root)["row_seconds"], 1)
+
+    def test_the_op_route_reaches_the_log(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        BUILD.note_activity(self.session, self.root, "g1", "tool", "read a.ts")
+        out = ui._apply({"op": "build_log", "goal_id": "g1"}, trajdir, True)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(["read a.ts"], [l["text"] for l in out["lines"]])
+
+    def test_a_goal_with_no_build_has_no_terminal_to_open(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "watch_build", "goal_id": "g1"}, trajdir, True)
+        self.assertFalse(out["ok"])
+        self.assertIn("no build", out["error"])
+
+    def test_the_workspace_state_carries_every_build_it_knows_of(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.settled())
+        state = ui._payload(trajdir, True)
+        self.assertIn("g1", state["build_runs"])
+        self.assertEqual("waiting", state["build_runs"]["g1"]["status"])
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ def goal(goal_id, title, prompt_ids=None):
 def open_prompt_tab(page):
     """The rail opens on TODOs; the assembled prompt is the other tab."""
     page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
-    page.wait_for_selector("textarea.hc-rail-code", state="visible", timeout=10_000)
+    page.wait_for_selector(".hc-rail-copy", state="visible", timeout=10_000)
 
 
 def write_scope(path, goals, prompts):
@@ -67,8 +67,8 @@ def server_for(path, chat_scoped=True):
         thread.join(timeout=2)
 
 
-def get_json(url):
-    with NO_PROXY_OPENER.open(url, timeout=2) as response:
+def get_json(url, timeout=2):
+    with NO_PROXY_OPENER.open(url, timeout=timeout) as response:
         return json.loads(response.read())
 
 
@@ -165,9 +165,6 @@ class ChatUiServerTests(unittest.TestCase):
             )
             # Reported so a launcher can tell a stale server from a current one.
             self.assertIsInstance(health["version"], str)
-            # ...and whether the source on disk has already moved past it.
-            self.assertIs(False, health["source_stale"])
-            self.assertIs(False, state_a["source_stale"])
 
             self.assertEqual(
                 {"ok": True},
@@ -619,7 +616,7 @@ class ChatUiServerTests(unittest.TestCase):
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
                 open_prompt_tab(page)
-                expect(page.locator(".hc-rail-code")).to_be_visible()
+                expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
                 copy.click()
@@ -667,10 +664,8 @@ class ChatUiServerTests(unittest.TestCase):
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
                 open_prompt_tab(page)
-                code = page.locator(".hc-rail-code")
-                expect(code).to_be_visible()
-                # The field holds only the reader's words -- none yet -- and
-                # the assembled context rides along on copy. Read the copy.
+                expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
+                # What the tab prints is what Copy takes. Read the copy.
                 context = page.context
                 context.grant_permissions(["clipboard-read",
                                            "clipboard-write"])
@@ -1058,13 +1053,9 @@ class ChatUiServerTests(unittest.TestCase):
                 # The Conversations page lists a vault's whole history; this
                 # scope has one conversation and no route that serves the list.
                 expect(page.get_by_text("Conversations", exact=True)).to_be_hidden()
-                # The page heading went with it: the goal rail is where its
-                # name lives now, and the header's second row is where the
-                # page is chosen.
-                expect(page.locator(".hc-rail-left .hc-rail-name")
-                       ).to_have_text("GOALS")
-                expect(page.locator('[data-hc-subtab="goals"]')
-                       ).to_have_attribute("data-hc-subtab-on", "")
+                # The page heading went with it: this window has one page,
+                # and the goal rail is where its name lives now.
+                expect(page.get_by_text("GOALS", exact=True)).to_be_visible()
                 self.assertEqual("goals", page.evaluate(
                     "JSON.parse(localStorage.getItem('hc-vault-ui-v1')).page"))
 
@@ -1563,12 +1554,10 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_have_count(1)
 
                 open_prompt_tab(page)
-                # The field is for the reader's own words: the context the
-                # goal assembles is not printed in it (it is prepended on
-                # copy), so a goal with nothing written shows an empty field.
-                expect(rail.locator("textarea.hc-rail-code")).to_have_count(1)
-                draft = rail.locator(".hc-rail-code").input_value()
-                self.assertEqual("", draft)
+                # The tab prints the prompt and offers no box to type in:
+                # what is on screen is the whole of what a build would send.
+                expect(rail.locator(".hc-rail-ctx-body")).to_have_count(1)
+                expect(rail.locator("textarea.hc-rail-code")).to_have_count(0)
 
                 # Nothing here starts a run; every op behind one refuses.
                 expect(page.get_by_text("run agent", exact=True)
@@ -1588,22 +1577,25 @@ class ChatUiServerTests(unittest.TestCase):
                 # The label only changes once the clipboard has it.
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
-                # With nothing written, what leaves is the assembled prompt
-                # itself -- the field being empty does not empty the copy.
+                # What leaves is the assembled prompt itself -- the same
+                # string the tab is printing.
                 copied = page.evaluate("() => navigator.clipboard.readText()")
-                self.assertIn("Objective:\nShip the document pane.", copied)
-                self.assertIn("Decisions:\n- we chose sqlite", copied)
+                # The goal's notes ride in the tree, under the goal, as written.
+                self.assertIn("Ship the document pane.", copied)
+                self.assertIn("- we chose sqlite", copied)
                 context.close()
             finally:
                 browser.close()
 
-    def test_an_edited_prompt_is_kept_in_the_document_and_copied(self):
+    def test_the_prompt_is_assembled_from_the_document_and_copied(self):
         """It is assembled, not authored, and reading it changes nothing.
 
-        The old box kept no edit -- not across a reload, not across a
-        CONTEXT -> PROMPT round trip -- while the copy beside it said to edit
-        it here. The rail is a rendering of the goal's document, so there is
-        no edit to lose and nothing it can write back.
+        The tab was a box to type in with the assembled prompt printed above
+        it: the reader's paragraph landed in the goal's `prompt_md` and the
+        string that mattered was the one they could not touch. Only the
+        prompt is left. It is a rendering of the goal's document, so there is
+        no edit to lose and nothing it can write back -- and what Copy takes
+        is exactly what is on screen.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1634,43 +1626,32 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
                 open_prompt_tab(page)
-                code = page.locator(".hc-rail-code")
-                self.assertEqual("", code.input_value())
+                # No box to type in, and the objective from the document is
+                # in what the tab prints.
+                expect(page.locator("textarea.hc-rail-code")).to_have_count(0)
+                body = page.locator(".hc-rail-ctx-body")
+                expect(body).to_contain_text("Ship the document pane.",
+                                             timeout=15_000)
 
-                # An edit is the reader's, and it is kept where the rest of
-                # their writing is kept: a section of the goal's document.
-                # Browser storage would not do -- every /goals-ui opens a new
-                # port, and a new port is a new origin with nothing saved.
-                code.click()
-                page.keyboard.type("EDITED BY HAND")
-                page.wait_for_timeout(2_500)
+                # Reading it writes nothing back: the goal's own prompt field
+                # is still empty, and the document it was assembled from is
+                # untouched.
                 stored_goal = [g for g in get_json(url + "/api/state")["goals"]
                                if g["id"] == "a1"][0]
-                # Its own field, beside the document -- never in it.
-                self.assertIn("EDITED BY HAND", stored_goal["prompt_md"])
-                self.assertNotIn("EDITED BY HAND", stored_goal["notes"])
+                self.assertEqual("", stored_goal["prompt_md"])
                 self.assertNotIn("# Prompt", stored_goal["notes"])
-                # The objective it was assembled from is untouched by the edit.
                 self.assertIn("# Objective\nShip the document pane.",
                               stored_goal["notes"])
                 self.assertEqual("", stored_goal["description"])
 
-                page.reload(wait_until="domcontentloaded")
-                expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
-                open_prompt_tab(page)
-                expect(page.locator(".hc-rail-code")).to_have_value(
-                    __import__("re").compile("EDITED BY HAND"))
-
-                # Copy takes the assembled context AND the reader's words:
-                # what is on screen is theirs alone, what leaves is whole.
+                # Copy takes what is on screen, whole.
                 copy = page.get_by_text("Copy prompt", exact=True)
                 copy.click()
                 expect(page.get_by_text("copied \u2713", exact=True)
                        ).to_be_visible()
                 copied = page.evaluate("() => navigator.clipboard.readText()")
-                self.assertIn("Objective:\nShip the document pane.", copied)
-                self.assertTrue(copied.rstrip().endswith("EDITED BY HAND"),
-                                copied)
+                # The goal's notes ride in the tree, under the goal, as written.
+                self.assertIn("Ship the document pane.", copied)
                 self.assertNotIn("Implement this goal for me.", copied)
                 context.close()
             finally:
@@ -1831,40 +1812,31 @@ class ChatUiServerTests(unittest.TestCase):
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
                     page.goto(url, wait_until="domcontentloaded")
-                    line = page.locator(".hc-sources")
-                    expect(line).to_be_visible(timeout=10_000)
-                    expect(line.locator(".hc-sources-sum")).to_have_text(
-                        "none attached")
-                    # No pill anywhere on the page: the rail is gone.
+                    expect(page.locator(".hc-sources")).to_be_visible(
+                        timeout=10_000)
                     expect(page.locator(".hc-src")).to_have_count(0)
 
-                    line.get_by_text("+ Add source", exact=True).click()
-                    box = page.locator(".hc-srcs-box")
-                    expect(box).to_be_visible()
-                    expect(box.locator(".hc-srcs-none")).to_be_visible()
+                    page.get_by_text("+ Add source", exact=True).click()
+                    dialog = page.locator(".hc-ask-box")
+                    expect(dialog).to_be_visible()
                     # Which kind, then the value: the store keeps three, and
-                    # a placeholder row is not one of them. The box stays up
-                    # for the next one.
-                    box.get_by_text("GitHub repo", exact=True).click()
-                    box.locator("input").fill("owner/repo")
+                    # a placeholder row is not one of them.
+                    dialog.get_by_text("GitHub repo", exact=True).click()
+                    dialog.locator("input").fill("owner/repo")
                     page.keyboard.press("Enter")
-                    rows = box.locator(".hc-srcs-row")
-                    expect(rows).to_have_count(1)
-                    expect(rows.first.locator(".hc-srcs-tag")).to_have_text(
-                        "GITHUB")
-                    expect(rows.first.locator(".hc-srcs-label")).to_have_text(
+
+                    chip = page.locator(".hc-src")
+                    expect(chip).to_have_count(1)
+                    expect(chip.locator(".hc-src-tag")).to_have_text("GITHUB")
+                    expect(chip.locator(".hc-src-label")).to_have_text(
                         "owner/repo")
 
-                    box.get_by_text("Document", exact=True).click()
-                    box.locator("input").fill("design.md")
-                    box.get_by_text("Attach", exact=True).click()
-                    expect(rows).to_have_count(2)
-                    box.get_by_text("Done", exact=True).click()
-                    expect(box).to_have_count(0)
-                    expect(line.locator(".hc-sources-sum")).to_have_text(
-                        "owner/repo, design.md")
-                    expect(line.locator(".hc-src-add")).to_have_text(
-                        "Edit sources")
+                    page.get_by_text("+ Add source", exact=True).click()
+                    page.locator(".hc-ask-box").get_by_text(
+                        "Document", exact=True).click()
+                    page.locator(".hc-ask-box input").fill("design.md")
+                    page.keyboard.press("Enter")
+                    expect(page.locator(".hc-src")).to_have_count(2)
 
                     deadline = time.monotonic() + 6
                     stored = []
@@ -1880,8 +1852,8 @@ class ChatUiServerTests(unittest.TestCase):
 
                     # A reload of the same page reads them back.
                     page.reload(wait_until="domcontentloaded")
-                    expect(page.locator(".hc-sources-sum")).to_have_text(
-                        "owner/repo, design.md", timeout=10_000)
+                    expect(page.locator(".hc-src")).to_have_count(
+                        2, timeout=10_000)
 
                     # And so does a browser that never saw the page that
                     # wrote them: the record is the server's, not the tab's.
@@ -1897,21 +1869,13 @@ class ChatUiServerTests(unittest.TestCase):
                         viewport={"width": 1400, "height": 900})
                     page = fresh.new_page()
                     page.goto(second, wait_until="domcontentloaded")
-                    expect(page.locator(".hc-sources-sum")).to_have_text(
-                        "owner/repo, design.md", timeout=10_000)
+                    expect(page.locator(".hc-src")).to_have_count(
+                        2, timeout=10_000)
 
-                    # Removing one is the same round trip in reverse, from
-                    # inside the box.
-                    page.get_by_text("Edit sources", exact=True).click()
-                    box = page.locator(".hc-srcs-box")
-                    rows = box.locator(".hc-srcs-row")
-                    expect(rows).to_have_count(2)
-                    rows.first.locator(".hc-srcs-rm").click()
-                    expect(rows).to_have_count(1)
-                    page.keyboard.press("Escape")
-                    expect(box).to_have_count(0)
-                    expect(page.locator(".hc-sources-sum")).to_have_text(
-                        "design.md")
+                    # Removing one is the same round trip in reverse.
+                    page.locator(".hc-src").first.locator(
+                        ".hc-src-rm").click()
+                    expect(page.locator(".hc-src")).to_have_count(1)
                     deadline = time.monotonic() + 6
                     while time.monotonic() < deadline:
                         stored = sources(second)
@@ -2441,8 +2405,7 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
         return { hdr: r('.hc>div:first-child'), l: r('.hc-rail-left'),
                  m: r('.hc-main'), rt: r('.hc-rail-right'),
                  pills: r('.hc-titlerow'), brand: r('.hc-brand'),
-                 crumb: r('.hc-project'), sub: r('.hc-subbar'),
-                 tabs: r('.hc-subtabs'),
+                 sub: r('.hc-subbar'), tabs: r('.hc-viewtabs'),
                  brandFont: getComputedStyle(document.querySelector('.hc-brand')).fontFamily };
     }"""
 
@@ -2474,20 +2437,15 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 self.assertEqual(round(g["l"]["right"]), round(g["m"]["x"]))
                 self.assertEqual(round(g["m"]["right"]), round(g["rt"]["x"]))
                 self.assertEqual(1440, round(g["rt"]["right"]))
-                # The brand and the crumb naming the project are on the
-                # first row; the tabs and the filter counts share the second,
-                # one at each end. The brand is set in a serif.
-                self.assertLess(g["brand"]["bottom"], 37)
-                self.assertGreater(g["crumb"]["x"], g["brand"]["right"])
-                self.assertLess(g["crumb"]["bottom"], 37)
-                # The second row ends on the header's own rule, one pixel
-                # above where the columns start.
-                self.assertEqual(37, round(g["sub"]["y"]))
-                self.assertEqual(73, round(g["sub"]["bottom"]))
+                # The second row is the header's own, at the header's
+                # indent: the view tabs at its left end under the brand,
+                # the filter counts at its right end, flush with the tools
+                # above them. The brand is set in a serif.
+                self.assertEqual((0, 37, 1440, 36), tuple(round(g["sub"][k]) for k in ("x", "y", "width", "height")))
+                self.assertEqual(round(g["brand"]["x"]), round(g["tabs"]["x"]))
                 self.assertEqual(37, round(g["pills"]["y"]))
                 self.assertEqual(73, round(g["pills"]["bottom"]))
-                self.assertGreater(g["pills"]["x"], g["tabs"]["right"])
-                self.assertEqual(1424, round(g["pills"]["right"]))
+                self.assertEqual(1440 - 16, round(g["pills"]["right"]))
                 self.assertIn("Georgia", g["brandFont"])
 
                 # Drag the goals divider 80px right; the rail follows.
@@ -2517,80 +2475,6 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 self.assertEqual(0, g["l"]["width"])
                 self.assertEqual(0, round(g["m"]["x"]))
                 self.assertEqual(360, round(g["rt"]["width"]))
-            finally:
-                browser.close()
-
-
-class HeaderRowBrowserTests(unittest.TestCase):
-    """The header names the project, and its second row switches the page."""
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        root = Path(self.tmp.name)
-        self.project = root / "widgets"
-        self.project.mkdir()
-        self.a = root / "chat-a"
-        write_scope(self.a, [goal("g1", "one goal"),
-                             goal("g2", "another goal")], [])
-        (self.a / "manifest.json").write_text(json.dumps(
-            {"session_id": "chat-a", "cwd": str(self.project)}))
-        from human_compact.trajectory import ui as UI
-        UI._project_cache.update({"key": None, "at": 0.0, "value": None})
-
-    def test_the_crumb_names_the_project_and_the_tabs_switch_the_page(self):
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:  # pragma: no cover - exercised when installed
-            self.skipTest("playwright is not installed")
-        chrome = browser_executable()
-        if not chrome:
-            self.skipTest("Chrome/Chromium is not installed")
-        with server_for(self.a) as url, sync_playwright() as playwright:
-            browser = playwright.chromium.launch(executable_path=chrome,
-                                                 headless=True)
-            try:
-                page = browser.new_page(viewport={"width": 1440, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
-                page.wait_for_selector(".hc-project-name", timeout=10000)
-                page.wait_for_timeout(800)
-                # The crumb is the directory the session ran in, and it says
-                # the whole path when the pointer rests on it.
-                crumb = page.locator(".hc-project-name")
-                self.assertEqual("widgets",
-                                 crumb.locator(".hc-project-label").inner_text())
-                self.assertIn(str(self.project), crumb.get_attribute("title"))
-                # It opens a menu of the same facts, and Escape closes it.
-                crumb.click()
-                page.wait_for_selector(".hc-project-menu", timeout=5000)
-                self.assertIn(str(self.project),
-                              page.locator(".hc-project-menu").inner_text())
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(300)
-                self.assertEqual(0, page.locator(".hc-project-menu").count())
-                # GOALS is the page it opens on; the tree is on screen and
-                # the overview is not.
-                self.assertEqual(0, page.locator(".hc-ov").count())
-                self.assertIsNotNone(
-                    page.locator('[data-hc-subtab="goals"]')
-                        .get_attribute("data-hc-subtab-on"))
-                # OVERVIEW puts the project and what the tree adds up to over
-                # the columns; the counts are the workspace's own.
-                page.click('[data-hc-subtab="overview"]')
-                page.wait_for_selector(".hc-ov", timeout=5000)
-                page.wait_for_timeout(400)
-                text = page.locator(".hc-ov").inner_text()
-                self.assertIn("widgets", text)
-                self.assertIn(str(self.project), text)
-                self.assertIn("2 active", " ".join(text.split()))
-                self.assertIsNotNone(
-                    page.locator('[data-hc-subtab="overview"]')
-                        .get_attribute("data-hc-subtab-on"))
-                # And GOALS brings the tree back, untouched.
-                page.click('[data-hc-subtab="goals"]')
-                page.wait_for_timeout(400)
-                self.assertEqual(0, page.locator(".hc-ov").count())
-                page.wait_for_selector("text=one goal", timeout=5000)
             finally:
                 browser.close()
 
@@ -2824,43 +2708,3 @@ class GoalDocumentRoundTripTests(unittest.TestCase):
                 self.document,
                 get_json(url + "/api/state")["goals"][0]["notes"],
             )
-
-
-class SourceStaleTests(unittest.TestCase):
-    """A server's handlers are frozen at import; the page is read from disk
-    per request. `_source_stale` is how the process admits the two parted."""
-
-    def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix="hc-src-"))
-        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        (self.root / "trajectory").mkdir()
-        self.ui_py = self.root / "trajectory" / "ui.py"
-        self.ui_py.write_text("# frozen\n")
-        self.cache = self.root / "trajectory" / "__pycache__"
-        self.cache.mkdir()
-        (self.cache / "ui.cpython.pyc").write_bytes(b"")
-        (self.root / "trajectory" / "web").mkdir()
-        self.bridge = self.root / "trajectory" / "web" / "bridge.js"
-        self.bridge.write_text("// served from disk\n")
-
-    def test_sources_older_than_the_load_are_not_stale(self):
-        loaded = self.ui_py.stat().st_mtime + 5
-        self.assertFalse(ui._source_stale(self.root, loaded_at=loaded))
-
-    def test_a_python_file_newer_than_the_load_is_stale(self):
-        loaded = self.ui_py.stat().st_mtime - 5
-        self.assertTrue(ui._source_stale(self.root, loaded_at=loaded))
-
-    def test_only_python_counts(self):
-        # bridge.js and a .pyc written after the load are not staleness: the
-        # one is read per request, the other is this very process's cache.
-        loaded = self.ui_py.stat().st_mtime + 5
-        os.utime(self.bridge, (loaded + 60, loaded + 60))
-        os.utime(self.cache / "ui.cpython.pyc", (loaded + 60, loaded + 60))
-        self.assertFalse(ui._source_stale(self.root, loaded_at=loaded))
-
-    def test_the_running_package_is_fresh_at_import(self):
-        # The real package, judged against its own load: nothing in it was
-        # written after the test process imported ui, so the memoised answer
-        # a live server hands to /api/health is False.
-        self.assertFalse(ui._source_stale())

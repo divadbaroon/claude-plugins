@@ -53,6 +53,14 @@ class Base:
         return f"{self.kind}:{self.model}"
     def generate(self, prompt: str) -> str:
         raise NotImplementedError
+    def generate_plain(self, prompt: str) -> str:
+        """One question in, one answer out -- no tools, no agent turn.
+
+        The prompt already carries everything the answer is allowed to come
+        from. A provider that would otherwise go looking through the project
+        for it is spending a deadline on work nobody asked for.
+        """
+        return self.generate(prompt)
     def generate_json(self, prompt: str):
         for attempt in (1, 2):
             raw = self.generate(prompt if attempt == 1 else
@@ -86,14 +94,20 @@ def subscription_env(base=None):
 
 class ClaudeCLI(Base):
     kind = "claude"
-    def _run(self, prompt, *, structured=False):
+    def _run(self, prompt, *, structured=False, plain=False):
         command = ["claude", "-p", "--safe-mode", "--model", self.model,
                    "--no-session-persistence"]
+        if structured or plain:
+            # Neither of these is a coding-agent turn: the prompt carries the
+            # text the answer comes from, so a subprocess that starts reading
+            # the project instead spends the deadline and comes back with
+            # nothing to show for it.
+            command += ["--tools", ""]
         if structured:
-            # These are extraction/classification calls, not coding-agent
-            # turns. Pinning effort prevents a user's interactive preference
-            # (for example xhigh) from exhausting the subprocess deadline.
-            command += ["--effort", "low", "--tools", ""]
+            # These are extraction/classification calls. Pinning effort
+            # prevents a user's interactive preference (for example xhigh)
+            # from exhausting the subprocess deadline.
+            command += ["--effort", "low"]
         try:
             # Provider subprocesses are implementation details, not user chats.
             # Mark them so the always-on chat hook cannot recursively launch
@@ -115,6 +129,9 @@ class ClaudeCLI(Base):
 
     def generate(self, prompt):
         return self._run(prompt)
+
+    def generate_plain(self, prompt):
+        return self._run(prompt, plain=True)
 
     def generate_json(self, prompt):
         # Avoid a second full model call when a large rebuild response includes

@@ -282,14 +282,21 @@ class PromotionTests(unittest.TestCase):
         self.assertEqual(4, GM.depth(goals, leaf["id"]))
         self.assertEqual("g1a1", leaf["parent_goal_id"])   # not reparented away
 
-    def test_add_todo_op_creates_a_goal(self):
+    def test_add_todo_op_puts_a_row_on_the_goals_own_list(self):
+        # This used to make a child goal -- "a next action is a goal one
+        # level down". It no longer does: a next action belongs on the
+        # checklist beside its goal, not in the tree, or a dozen goals grow
+        # forty leaves that are really a to-do list.
         goals = GM.sanitize(self.tree([]))
+        before = len(goals["goals"])
         changes = GM.apply_ops(goals, {"items": []},
                                [{"op": "add_todo", "goal_id": "g1",
                                  "text": "new action", "evidence_ids": ["a#3"]}])
-        child = [g for g in goals["goals"] if g["parent_goal_id"] == "g1"][0]
-        self.assertEqual("new action", child["title"])
-        self.assertEqual(["a#3"], child["evidence_ids"])
+        self.assertEqual(before, len(goals["goals"]))
+        self.assertEqual([], [g for g in goals["goals"]
+                              if g["parent_goal_id"] == "g1"])
+        rows = GM.by_id(goals, "g1")["todo_items"]
+        self.assertEqual(["new action"], [r["text"] for r in rows])
         self.assertTrue(changes)
 
     def test_complete_todo_op_completes_the_child_goal(self):

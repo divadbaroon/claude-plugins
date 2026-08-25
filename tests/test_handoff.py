@@ -248,7 +248,9 @@ class RouteTests(unittest.TestCase):
 
     def test_a_chat_workspace_hands_off_its_tree_and_its_repository(self):
         with server_for(self.chat) as url:
-            body = get_json(url + "/api/handoff")
+            # git is shelled out to several times on the way; a cold CI
+            # runner has taken longer than the helper's two seconds once.
+            body = get_json(url + "/api/handoff", timeout=20)
         self.assertTrue(body["ok"], body)
         doc = body["markdown"]
         self.assertIn("### Chat goal  `[in progress]`", doc)
@@ -264,48 +266,11 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(doc, (self.chat / "handoff.md").read_text())
         self.assertEqual(len(doc.encode()), body["bytes"])
 
-    def test_the_header_crumb_names_the_directory_and_what_is_checked_out(self):
-        # The same git the hand-off reads, cut down to what a crumb and an
-        # overview need: which project, which branch, and where it came from.
-        from human_compact.trajectory import ui as UI
-        UI._project_cache.update({"key": None, "at": 0.0, "value": None})
-        with server_for(self.chat) as url:
-            body = get_json(url + "/api/project")
-        self.assertTrue(body["ok"], body)
-        self.assertEqual("repo", body["name"])
-        self.assertEqual(str(self.repo), body["cwd"])
-        self.assertTrue(body["git"])
-        self.assertEqual("feature/x", body["branch"])
-        self.assertEqual("acme/widgets", body["slug"])
-        self.assertEqual("https://github.com/acme/widgets", body["github"])
-        self.assertEqual("first light", body["subject"])
-        # b.txt is written and never added, so the tree is dirty by one.
-        self.assertEqual(1, body["dirty"])
-        self.assertEqual(["first light"],
-                         [c["subject"] for c in body["commits"]])
-
-    def test_a_workspace_over_no_repository_still_names_its_directory(self):
-        from human_compact.trajectory import ui as UI
-        bare = self.root / "bare"
-        bare.mkdir()
-        chat = self.root / "chat-b"
-        write_scope(chat, [goal("b1", "Chat goal")], [])
-        (chat / "manifest.json").write_text(json.dumps(
-            {"session_id": "chat-b", "cwd": str(bare)}))
-        UI._project_cache.update({"key": None, "at": 0.0, "value": None})
-        with server_for(chat) as url:
-            body = get_json(url + "/api/project")
-        self.assertTrue(body["ok"], body)
-        self.assertEqual("bare", body["name"])
-        self.assertFalse(body["git"])
-        self.assertEqual("", body["branch"])
-        self.assertEqual([], body["commits"])
-
     def test_a_global_vault_hands_off_too(self):
         vault = self.root / "vault"
         write_scope(vault, [goal("v1", "Vault goal")], [])
         with server_for(vault, chat_scoped=False) as url:
-            body = get_json(url + "/api/handoff")
+            body = get_json(url + "/api/handoff", timeout=20)
         self.assertTrue(body["ok"], body)
         self.assertIn("### Vault goal  `[active]`", body["markdown"])
         self.assertIn("from the global vault.", body["markdown"])
@@ -332,7 +297,9 @@ class HandoffButtonTests(BridgeTestCase):
         "    : { ok: true };"
         "  return Promise.resolve({ ok: true, json: function () {"
         "    return Promise.resolve(body); } }); };"
-        "var btn = function () { H.render(); return slot.querySelector('.hc-handoff-btn'); };"
+        "var P = window.__hcPromptUI;"
+        "var btn = function () { P.gear.open(); H.render();"
+        "  var panel = P.gear.panel(); return panel && panel.querySelector('.hc-handoff-btn'); };"
         "var said = function () { var b = btn(); return b ? [b.getAttribute('data-hc-handoff'),"
         "  b.querySelector('.hc-handoff-said').textContent] : null; };"
     )
@@ -341,15 +308,19 @@ class HandoffButtonTests(BridgeTestCase):
         return self.run_js((self.PRELUDE % json.dumps(scope)) + tail,
                            extra_env={"HC_DEFER_TIMEOUT": "1"})
 
-    def test_the_button_is_drawn_in_its_slot_for_a_chat_workspace(self):
-        got = self.handoff(
-            "var b = btn(); [!!b, b && b.getAttribute('role'), b && b.title,"
-            " b && slot.children.length, said()];")
-        self.assertEqual([True, "button", HO_TITLE, 1, [None, ""]], got)
-
     def test_a_global_vault_draws_no_button(self):
         got = self.handoff("[H.render(), slot.children.length];", scope="global")
         self.assertEqual([False, 0], got)
+
+    def test_the_header_slot_stays_empty_and_the_button_is_on_the_data_tab(self):
+        # Taken out of the header on purpose: beside controls that do small
+        # things it did a very large one. It is behind the gear, on the Data
+        # tab, under a line that says what it does.
+        got = self.handoff(
+            "var b = btn(); [slot.children.length, !!b, b && b.getAttribute('role'),"
+            " b && b.title, b && b.parentNode.parentNode.getAttribute('data-hc-tab'),"
+            " said()];")
+        self.assertEqual([0, True, "button", HO_TITLE, "data", [None, ""]], got)
 
     def test_a_click_fetches_the_document_copies_it_and_says_copied(self):
         got = self.handoff(
@@ -367,19 +338,6 @@ class HandoffButtonTests(BridgeTestCase):
              [None, ""]],
             got)
 
-    def test_a_clipboard_that_refuses_downloads_the_file_and_says_failed(self):
-        got = self.handoff(
-            "btn();"
-            "var mk = document.createElement;"
-            "document.createElement = function (t) { var el = mk(t);"
-            "  el.select = function () {}; el.click = function () {}; return el; };"
-            "navigator.clipboard = { writeText: function () { return Promise.reject(new Error('no')); } };"
-            "document.execCommand = function () { return false; };"
-            "H.copy().then(function (ok) { var s = said(); fireTimers();"
-            "  return [ok, s, said(), H.last() && H.last().filename]; });")
-        self.assertEqual([False, ["failed", "copy failed"], [None, ""],
-                          "hc-handoff-widgets.md"], got)
-
     def test_a_server_that_cannot_hand_off_says_failed_and_copies_nothing(self):
         got = self.handoff(
             "btn();"
@@ -387,30 +345,6 @@ class HandoffButtonTests(BridgeTestCase):
             "  return Promise.resolve({ ok: false, error: 'nope' }); } }); };"
             "H.copy().then(function (ok) { return [ok, said(), copied]; });")
         self.assertEqual([False, ["failed", "copy failed"], []], got)
-
-    def test_a_server_without_the_route_is_named_stale_not_failed(self):
-        # The process was started before /api/handoff existed: it answers
-        # the 404 body, which carries no `ok` at all. The page was read from
-        # disk and has the button; the cure is a relaunch, and the button
-        # says so -- and keeps saying so longer than a verdict would.
-        got = self.handoff(
-            "btn();"
-            "fetch = function () { return Promise.resolve({ ok: false, status: 404,"
-            "  json: function () { return Promise.resolve({ error: 'not found' }); } }); };"
-            "H.copy().then(function (ok) { var s = said(); return [ok, s, copied]; });")
-        self.assertEqual([False, ["stale", "server outdated · rerun /goals-ui"], []],
-                         got)
-
-    def test_a_server_that_admits_it_is_stale_is_named_so_on_any_refusal(self):
-        got = self.handoff(
-            "btn();"
-            "window.__hcPromptUI.acceptState({ goals: [], prompts: [], scope: 'chat',"
-            "  session_id: '7f3a1b2c-4d5e-4f60-8a9b-0c1d2e3f4a5b', source_stale: true });"
-            "fetch = function () { return Promise.resolve({ ok: true, json: function () {"
-            "  return Promise.resolve({ ok: false, error: 'nope' }); } }); };"
-            "H.copy().then(function (ok) { return [ok, said(), copied]; });")
-        self.assertEqual([False, ["stale", "server outdated · rerun /goals-ui"], []],
-                         got)
 
 
 HO_TITLE = ("Hand off: copy the whole workspace as markdown for a "

@@ -299,6 +299,31 @@ def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
         _atomic_json(p.manifest, manifest)
 
 
+def open_workspace_for(cwd, root: Optional[Path] = None) -> str:
+    """Start a workspace of this vault's own, for a directory, and name it.
+
+    Everything here is keyed by the chat a workspace serves, and a project
+    nobody has worked in yet has none -- which used to make it unopenable,
+    which made creating one a dead end. So one is made: a session this
+    vault minted rather than one Claude started, with the directory on it.
+
+    It holds goals, TODO rows and builds like any other, and a build of its
+    rows runs in that directory and leaves Claude's own session behind. The
+    difference is only where it came from, which is worth recording.
+    """
+    import uuid
+    session_id = "hcws-" + uuid.uuid4().hex[:24]
+    here = str(Path(str(cwd)).expanduser())
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = _default_manifest(session_id)
+        manifest["cwd"] = here
+        manifest["origin"] = "workspace"
+        manifest["goals_ui_invoked_at"] = _now()
+        p.session_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_json(p.manifest, manifest)
+    return session_id
+
+
 def disable_goals_ui(session_id: str, root: Optional[Path] = None) -> None:
     """Stop injecting and analyzing this chat until /goals-ui is run again."""
     with session_lock(session_id, root, wait_s=5) as p:
@@ -1481,7 +1506,13 @@ def save_goals(
         _atomic_json(p.important, important)
         text = _goal_context_text(session_id, goals, important, prompts)
         _atomic_write(p.goal_context, text.encode("utf-8"))
-        return True
+    # The project's own file -- one per directory, holding the goals of every
+    # chat started in it -- is a snapshot of what was just written, so it is
+    # refreshed here rather than by each of the many callers. Outside the
+    # lock, and imported here rather than at the top: it reads this module.
+    from . import project_store
+    project_store.refresh_for_session(session_id, root)
+    return True
 
 
 def _project_key(cwd: Path) -> str:
