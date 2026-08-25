@@ -817,6 +817,10 @@
       // the manifest recorded it: name, branch, origin, and the objective
       // written for it. Empty when the manifest never said.
       project: (st.project && typeof st.project === "object") ? st.project : null,
+      // Tri-state on purpose: undefined until a payload has arrived, so
+      // the wizard never flashes over a workspace it has not heard about.
+      projectBound: (typeof st.project_bound === "boolean")
+        ? st.project_bound : undefined,
       // Present only in a shared workspace: whose goals these are, what
       // this reader may change, and who else is here. Absent everywhere
       // else, which is how the page tells the two apart.
@@ -1812,6 +1816,7 @@
     // with the banner that prefixes it.
     return (hideLabelsIn(headerNav(), ["Conversations"])
             + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
+            + (renderOnboarding(false) ? 1 : 0)
             + (renderTodoRail(false) ? 1 : 0)
             + (applyPageTitle() ? 1 : 0)) > 0;
   }
@@ -2109,6 +2114,8 @@
       ".hc-settings-sec input[type=number]{width:56px;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:4px 6px}",
       ".hc-settings-sec input[type=text],.hc-settings-sec input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:7px 9px}",
       ".hc-settings-sec input:focus{outline:none;border-color:var(--acc,#a5492a)}",
+      ".hc-settings-sec select{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:6px 8px}",
+      ".hc-settings-sec select:focus{outline:none;border-color:var(--acc,#a5492a)}",
       ".hc-settings-field{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;cursor:default;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
       ".hc-settings-field>input{align-self:stretch;box-sizing:border-box}",
       ".hc-settings-hint{color:var(--fnt,#9b9b9b);font-size:10.5px;line-height:1.6;overflow-wrap:anywhere;margin-top:-3px}",
@@ -2119,7 +2126,9 @@
       ".hc-settings-btn[data-hc-busy]{opacity:.55;cursor:default}",
       ".hc-settings-say{font-size:10.5px;line-height:1.6;color:var(--mut,#575757);overflow-wrap:anywhere}",
       ".hc-settings-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
-      ".hc-settings-record{margin:0;white-space:pre;overflow:auto;max-height:46vh;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--dtxt,#333);font:11px/1.6 'Source Code Pro',monospace;padding:9px 11px}",
+      ".hc-record-said{display:none}",
+      ".hc-record-btn[data-hc-record-copy] .hc-record-said{display:inline;margin-left:6px;opacity:.85}",
+      ".hc-record-btn[data-hc-record-copy=\"busy\"]{opacity:.55;cursor:progress}",
       ".hc-settings-role{cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
       ".hc-settings-role:hover{color:var(--ink,#111)}",
       ".hc-settings-code{display:none;flex-direction:column;gap:6px}",
@@ -2563,6 +2572,11 @@
         copyHandoff();
         return;
       }
+      if (closestByClass(target, "hc-record-btn")) {
+        stop();
+        copyProjectRecord();
+        return;
+      }
       // One of the two is up at a time.
       if (closestByClass(target, "hc-bell")) {
         stop();
@@ -2641,6 +2655,8 @@
     }, true);
     document.addEventListener("change", function (event) {
       var target = event && event.target;
+      var build = (target && target.getAttribute) ? str(target.getAttribute("data-hc-build-set")) : "";
+      if (build) { settingsBuildSet(build, target.value); return; }
       var key = (target && target.getAttribute) ? str(target.getAttribute("data-hc-alert-set")) : "";
       if (!key) return;
       if (key === "banners") setAlertSettings({ banners: !!target.checked });
@@ -4554,14 +4570,13 @@
     return box;
   }
 
-  // The project's own file: every chat's goals of this directory, with
-  // where each sits in its tree, its notes, its TODO rows and their
-  // statuses, its prompt and the prompts marked related to it. Shown as the
-  // file reads -- this is the record a collaborator would be handed, and a
-  // reader checking what is kept should see exactly what is in it.
   // The project's own record, under the gear: one file per directory,
   // holding every goal of every chat started there. It is what this
   // machine keeps, which is a settings question rather than a project one.
+  // Named and copied, not shown: a real project's file runs to hundreds of
+  // kilobytes, and a pane that read the first quarter of it and then said
+  // it had stopped was a scroll to nowhere. The pane says where the file
+  // is and puts it on the clipboard whole, as the hand-off above it does.
   function renderProjectJson(result) {
     if (!settingsPanelBox) return;
     var pane = settingsPanelBox.querySelector("[data-hc-record]");
@@ -4579,11 +4594,15 @@
         " · not written yet; this is what it would hold"));
     }
     pane.appendChild(where);
-    pane.appendChild(el("pre", "hc-settings-record", str(result.text)));
-    if (result.truncated) {
-      pane.appendChild(el("div", "hc-settings-hint",
-        "… truncated; the record is longer than this pane reads"));
-    }
+    var row = el("div", "hc-settings-row");
+    var btn = el("span", "hc-settings-btn hc-record-btn", "Copy project record");
+    btn.setAttribute("role", "button");
+    btn.setAttribute("aria-label", "Copy the project record");
+    btn.title = RECORD_TITLE;
+    btn.appendChild(el("span", "hc-record-said", ""));
+    row.appendChild(btn);
+    pane.appendChild(row);
+    dressRecord(btn);
   }
 
   // The record is rewritten on every goal save, so an overview being opened
@@ -5370,7 +5389,7 @@
     var tabs = document.createElement("div");
     tabs.className = "hc-settings-tabs";
     [["account", "Account"], ["alerts", "Alerts"], ["sharing", "Sharing"],
-     ["cloud", "Cloud"], ["data", "Data"]].forEach(function (spec) {
+     ["cloud", "Cloud"], ["data", "Data"], ["builds", "Builds"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -5414,6 +5433,36 @@
     l2.appendChild(text("seconds"));
     sec.appendChild(l2);
     box.appendChild(sec);
+
+    // Builds: which model a TODO build runs on, and at what effort. The
+    // choices are read off the installed Claude Code binary when the panel
+    // opens -- it names every model it knows, so a CLI update is what adds
+    // the new ones -- and a change is kept by the server for every build
+    // after it. Nothing chosen is the CLI's own default, as before.
+    var builds = document.createElement("div");
+    builds.className = "hc-settings-sec";
+    builds.setAttribute("data-hc-settings-sec", "builds");
+    builds.setAttribute("data-hc-tab", "builds");
+    var bh = document.createElement("div");
+    bh.className = "hc-settings-sec-head";
+    bh.textContent = "TODO builds";
+    builds.appendChild(bh);
+    [["model", "Model"], ["effort", "Effort"]].forEach(function (spec) {
+      var field = document.createElement("label");
+      field.className = "hc-settings-field";
+      field.appendChild(text(spec[1]));
+      var pick = document.createElement("select");
+      pick.setAttribute("data-hc-build-set", spec[0]);
+      pick.setAttribute("aria-label", spec[1] + " for TODO builds");
+      field.appendChild(pick);
+      builds.appendChild(field);
+    });
+    var bsay = document.createElement("div");
+    bsay.className = "hc-settings-hint";
+    bsay.setAttribute("data-hc-build-say", "");
+    bsay.textContent = "reading the installed Claude Code…";
+    builds.appendChild(bsay);
+    box.appendChild(builds);
 
     // Supabase: where this workspace's projects are sent. The URL and the
     // anon key are typed and kept; the password is typed and is not -- it
@@ -5631,6 +5680,10 @@
     dh.className = "hc-settings-sec-head";
     dh.textContent = "Project record";
     data.appendChild(dh);
+    data.appendChild(el("div", "hc-settings-hint",
+      "Every goal of every chat started in this directory, as the JSON"
+      + " file this machine keeps. Copied whole — it is too long to"
+      + " read here."));
     var record = document.createElement("div");
     record.setAttribute("data-hc-record", "");
     record.appendChild(el("div", "hc-settings-hint", "reading\u2026"));
@@ -5870,6 +5923,96 @@
     return true;
   }
 
+  // --- the Builds tab: model and effort -------------------------------------
+
+  function settingsFillSelect(pick, pairs, chosen) {
+    // The options, redrawn; a chosen value the list does not carry (a
+    // model typed into the settings file by hand, an id the CLI no longer
+    // names) is kept as an option rather than silently reset.
+    while (pick.firstChild) pick.removeChild(pick.firstChild);
+    var seen = false;
+    pairs.forEach(function (pair) {
+      var option = document.createElement("option");
+      option.value = pair[0];
+      option.setAttribute("value", pair[0]);
+      option.textContent = pair[1];
+      if (pair[0] === chosen) seen = true;
+      pick.appendChild(option);
+    });
+    if (chosen && !seen) {
+      var extra = document.createElement("option");
+      extra.value = chosen;
+      extra.setAttribute("value", chosen);
+      extra.textContent = chosen;
+      pick.appendChild(extra);
+    }
+    pick.value = chosen;
+  }
+
+  function settingsBuildFill(state) {
+    if (!settingsPanelBox) return false;
+    var model = settingsPanelBox.querySelector('[data-hc-build-set="model"]');
+    var effort = settingsPanelBox.querySelector('[data-hc-build-set="effort"]');
+    var say = settingsPanelBox.querySelector("[data-hc-build-say]");
+    if (!model || !effort) return false;
+    var ok = !!(state && state.ok);
+    var chosen = (ok && state.settings && typeof state.settings === "object")
+      ? state.settings : {};
+    var pairs = [["", "CLI default"]];
+    array(ok && state.aliases).forEach(function (name) {
+      pairs.push([str(name), str(name) + " · latest"]);
+    });
+    array(ok && state.models).forEach(function (name) {
+      pairs.push([str(name), str(name)]);
+    });
+    settingsFillSelect(model, pairs, str(chosen.model));
+    var levels = [["", "CLI default"]];
+    array(ok && state.efforts).forEach(function (name) {
+      levels.push([str(name), str(name)]);
+    });
+    settingsFillSelect(effort, levels, str(chosen.effort));
+    if (say) {
+      say.removeAttribute("data-hc-bad");
+      if (!ok) {
+        say.setAttribute("data-hc-bad", "");
+        say.textContent = (state && state.error) || "could not read the models";
+      } else if (state.source && typeof state.source === "object") {
+        say.textContent = "models read from Claude Code"
+          + (state.source.version ? " " + str(state.source.version) : "")
+          + "; new ones appear when the CLI updates";
+      } else {
+        say.textContent = "the Claude Code binary was not found;"
+          + " the aliases still work";
+      }
+    }
+    return true;
+  }
+
+  function settingsBuildLoad() {
+    return fetchJSON("/api/models").then(settingsBuildFill);
+  }
+
+  function settingsBuildSet(key, value) {
+    if (!settingsPanelBox || (key !== "model" && key !== "effort")) return false;
+    var patch = { op: "set_build_settings" };
+    patch[key] = str(value);
+    var say = settingsPanelBox.querySelector("[data-hc-build-say]");
+    if (say) { say.removeAttribute("data-hc-bad"); say.textContent = "saving…"; }
+    post(patch).then(function (res) {
+      if (!say) return;
+      if (!res || !res.ok) {
+        say.setAttribute("data-hc-bad", "");
+        say.textContent = (res && res.error) || "the setting could not be saved";
+        return;
+      }
+      var now = res.settings || {};
+      say.textContent = "saved · builds run on "
+        + (str(now.model) || "the CLI's default model") + " at "
+        + (str(now.effort) ? str(now.effort) + " effort" : "the CLI's default effort");
+    });
+    return true;
+  }
+
   function renderSettingsPanel() {
     if (!settingsPanelShown()) return false;
     var cur = alertSettings();
@@ -5918,6 +6061,8 @@
     // Whether it is connected, and as whom: read when the panel opens, not
     // held from the last time it did.
     settingsSupabaseLoad();
+    // And which models the installed CLI names, the same way.
+    settingsBuildLoad();
     renderGear();
     return settingsPanelBox;
   }
@@ -6045,40 +6190,108 @@
       });
   }
 
-  function copyHandoff() {
-    if (handoffState === "busy") return null;
-    handoffSay("busy");
-    var onClipboard;
-    var fetched = fetchHandoff();
+  // A copy whose text arrives by fetch: *pick* reads the text out of the
+  // fetched body. Started inside the click and resolved by the fetch where
+  // the browser allows that (Safari wants the write in the gesture); the
+  // plain path otherwise, or when the browser refuses. Answers with a
+  // promise of whether the text is on the clipboard.
+  function clipboardFromFetch(fetched, pick) {
     if (typeof ClipboardItem === "function" && navigator.clipboard
         && navigator.clipboard.write) {
-      // Started inside the click, resolved by the fetch.
       var textPromise = fetched.then(function (body) {
-        return new Blob([body.markdown], { type: "text/plain" });
+        return new Blob([pick(body)], { type: "text/plain" });
       });
       var item;
       try { item = new ClipboardItem({ "text/plain": textPromise }); } catch (e) { item = null; }
-      onClipboard = item
+      var wrote = item
         ? navigator.clipboard.write([item]).then(function () { return true; },
                                                 function () { return false; })
         : Promise.resolve(false);
-      onClipboard = onClipboard.then(function (ok) {
+      return wrote.then(function (ok) {
         return ok ? fetched.then(function () { return true; })
-                  : fetched.then(function (body) { return handoffToClipboard(body.markdown); });
+                  : fetched.then(function (body) { return handoffToClipboard(pick(body)); });
       });
-    } else {
-      onClipboard = fetched.then(function (body) { return handoffToClipboard(body.markdown); });
     }
-    return onClipboard.then(function (ok) {
-      if (ok) { handoffSay("copied"); return true; }
-      var body = handoffLast;
-      if (body) handoffDownload(body.markdown, body.filename);
-      handoffSay("failed");
-      return false;
-    }, function () {
-      handoffSay("failed");
-      return false;
-    });
+    return fetched.then(function (body) { return handoffToClipboard(pick(body)); });
+  }
+
+  function copyHandoff() {
+    if (handoffState === "busy") return null;
+    handoffSay("busy");
+    var fetched = fetchHandoff();
+    return clipboardFromFetch(fetched, function (body) { return body.markdown; })
+      .then(function (ok) {
+        if (ok) { handoffSay("copied"); return true; }
+        var body = handoffLast;
+        if (body) handoffDownload(body.markdown, body.filename);
+        handoffSay("failed");
+        return false;
+      }, function () {
+        handoffSay("failed");
+        return false;
+      });
+  }
+
+  // --- the project record, under the hand-off -------------------------------
+  // The same shape as the hand-off: one click fetches the project's file
+  // whole -- not the pane-sized read the panel used to show, which cut a
+  // real project's record at a quarter -- and puts it on the clipboard.
+  // "cut" is a server older than this page answering the bounded read to
+  // the request for the whole: copied, but said so.
+  var recordState = "";            // "", busy, copied, cut, failed
+  var recordTimer = null;
+  var recordLast = null;           // the last body fetched, for tests
+  var RECORD_SAYS = { busy: "reading…", copied: "copied ✓",
+                      cut: "copied · cut short", failed: "copy failed" };
+  var RECORD_TITLE = "Copy the project record — every goal of every chat in this directory — as JSON";
+
+  function recordSay(state) {
+    recordState = state;
+    clearTimeout(recordTimer);
+    if (state === "copied" || state === "cut" || state === "failed") {
+      recordTimer = setTimeout(function () {
+        recordState = "";
+        renderRecordButton();
+      }, 1800);
+    }
+    renderRecordButton();
+  }
+
+  function renderRecordButton() {
+    if (!settingsPanelShown()) return false;
+    var btn = settingsPanelBox.querySelector(".hc-record-btn");
+    return btn ? dressRecord(btn) : false;
+  }
+
+  function fetchProjectRecord() {
+    return fetch("/api/project.json?full=1", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!(body && body.ok && typeof body.text === "string")) {
+          throw new Error((body && body.error) || "no record");
+        }
+        recordLast = body;
+        return body;
+      });
+  }
+
+  function copyProjectRecord() {
+    if (recordState === "busy") return null;
+    recordSay("busy");
+    var fetched = fetchProjectRecord();
+    return clipboardFromFetch(fetched, function (body) { return body.text; })
+      .then(function (ok) {
+        var body = recordLast;
+        if (ok) { recordSay(body && body.truncated ? "cut" : "copied"); return true; }
+        if (body) {
+          handoffDownload(body.text, str(body.path).split("/").pop() || "project.json");
+        }
+        recordSay("failed");
+        return false;
+      }, function () {
+        recordSay("failed");
+        return false;
+      });
   }
 
   // The hand-off button copied the whole workspace to the clipboard from
@@ -6095,20 +6308,27 @@
     return btn ? dressHandoff(btn) : false;
   }
 
-  // The button's state -- busy, copied, failed -- written onto it, and the
-  // words for it into its own label. Answers whether anything changed.
-  function dressHandoff(btn) {
+  // A copy button's state -- busy, copied, failed -- written onto it as
+  // *attr*, and the words for it into its own label. Answers whether
+  // anything changed.
+  function dressCopy(btn, attr, saidClass, state, says) {
     var changed = false;
-    var was = btn.getAttribute("data-hc-handoff");
-    if (handoffState && was !== handoffState) {
-      btn.setAttribute("data-hc-handoff", handoffState); changed = true;
-    } else if (!handoffState && was !== null) {
-      btn.removeAttribute("data-hc-handoff"); changed = true;
+    var was = btn.getAttribute(attr);
+    if (state && was !== state) {
+      btn.setAttribute(attr, state); changed = true;
+    } else if (!state && was !== null) {
+      btn.removeAttribute(attr); changed = true;
     }
-    var label = btn.querySelector(".hc-handoff-said");
-    var words = handoffState ? (HANDOFF_SAYS[handoffState] || "") : "";
+    var label = btn.querySelector("." + saidClass);
+    var words = state ? (says[state] || "") : "";
     if (label && label.textContent !== words) { label.textContent = words; changed = true; }
     return changed;
+  }
+  function dressHandoff(btn) {
+    return dressCopy(btn, "data-hc-handoff", "hc-handoff-said", handoffState, HANDOFF_SAYS);
+  }
+  function dressRecord(btn) {
+    return dressCopy(btn, "data-hc-record-copy", "hc-record-said", recordState, RECORD_SAYS);
   }
 
   function watchRunFeed() {
@@ -6428,6 +6648,27 @@
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
       // Two tabs and a save stamp, in place of the old single label.
+      // The onboarding, over everything: until a chat says which project
+      // it is for, there is nothing behind it worth reading.
+      "[data-hc-launch] .hc-onb-shade{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;background:rgba(1,4,9,.72)}",
+      "[data-hc-launch] .hc-onb{width:min(560px,92vw);max-height:86vh;overflow:auto;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:26px 28px 22px;box-shadow:0 18px 60px rgba(0,0,0,.5)}",
+      "[data-hc-launch] .hc-onb-title{font:600 17px/1.35 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink)}",
+      "[data-hc-launch] .hc-onb-note{margin-top:7px;font:13px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--fnt);max-width:52ch}",
+      "[data-hc-launch] .hc-onb-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}",
+      "[data-hc-launch] .hc-onb-btn{padding:7px 14px;border:1px solid var(--bd2);border-radius:6px;font:600 12.5px -apple-system,sans-serif;color:var(--dtxt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--acc);color:var(--ink)}",
+      "[data-hc-launch] .hc-onb-btn-on{background:var(--hc-ok);border-color:var(--hc-ok);color:#08130c}",
+      "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:12px;padding:9px 11px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);color:var(--dtxt);font:13px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;outline:none;resize:none}",
+      "[data-hc-launch] .hc-onb-field:focus{border-color:var(--acc)}",
+      "[data-hc-launch] .hc-onb-list{margin-top:14px;max-height:44vh;overflow:auto;border:1px solid var(--bd);border-radius:6px}",
+      "[data-hc-launch] .hc-onb-item{display:block;padding:10px 13px;border-bottom:1px solid var(--bd);cursor:pointer}",
+      "[data-hc-launch] .hc-onb-item:last-child{border-bottom:none}",
+      "[data-hc-launch] .hc-onb-item:hover{background:var(--hov)}",
+      "[data-hc-launch] .hc-onb-item-name{display:block;font:600 13px -apple-system,sans-serif;color:var(--ink)}",
+      "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:12px/1.5 -apple-system,sans-serif;color:var(--fnt)}",
+      "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:3px;font:10.5px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-onb-empty{padding:14px 13px;font:12.5px -apple-system,sans-serif;color:var(--fnt)}",
+      "[data-hc-launch] .hc-onb-said{margin-top:12px;font:12.5px -apple-system,sans-serif;color:var(--del)}",
       "[data-hc-launch] .hc-rail-tabs{display:inline-flex;gap:14px;align-items:baseline}",
       "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
@@ -7217,7 +7458,29 @@
     if (!est || typeof est !== "object") return null;
     var tokens = Math.max(0, +est.tokens || 0);
     var minutes = Math.max(0, +est.minutes || 0);
-    return (tokens || minutes) ? { tokens: tokens, minutes: minutes } : null;
+    // Whose number it is: the build's own ("build"), or -- while the build
+    // has said nothing -- a stand-in from this chat's earlier builds
+    // ("measured") or the defaults ("default"). An older server says
+    // nothing about it, and its number was always the build's.
+    var source = str(est.source) || "build";
+    return (tokens || minutes)
+      ? { tokens: tokens, minutes: minutes, source: source, own: source === "build" }
+      : null;
+  }
+
+  function todoWatchEstimateTitle(est, rows, spent) {
+    var size = "about " + buildDuration(est.minutes * 60) + " and "
+      + est.tokens.toLocaleString() + " tokens for " + rows
+      + (rows === 1 ? " row" : " rows")
+      + (spent > 0 ? "; it spent " + spent.toLocaleString() : "");
+    if (est.own) {
+      return "the build's own estimate, printed before it started on the"
+        + " rows: " + size;
+    }
+    return (est.source === "measured"
+            ? "a stand-in from this chat's earlier builds"
+            : "a stand-in (nothing measured in this chat yet)")
+      + ", until the build prints its own estimate: " + size;
   }
 
   function todoWatchLine(run) {
@@ -7237,10 +7500,12 @@
       // number that keeps moving away is worse than none.
       if (!est || !est.minutes || typeof run.eta_s !== "number") {
         parts.push("calculating…");
+      } else if (run.eta_s > 0) {
+        // The build's own word reads as "about"; a stand-in reads as "~",
+        // the way a guessed number does everywhere else on the rail.
+        parts.push((est.own ? "about " : "~") + buildDuration(run.eta_s) + " left");
       } else {
-        parts.push(run.eta_s > 0
-                   ? "about " + buildDuration(run.eta_s) + " left"
-                   : "longer than it estimated");
+        parts.push(est.own ? "longer than it estimated" : "longer than expected");
       }
     }
     // Tokens: what it expects to spend while it runs, "~" because it is its
@@ -7260,13 +7525,11 @@
       canOpen: !!run.can_open,
       error: str(run.error),
       title: est
-        ? "the build's own estimate, printed before it started on the rows:"
-          + " about " + buildDuration(est.minutes * 60) + " and "
-          + est.tokens.toLocaleString() + " tokens for " + rows
-          + (rows === 1 ? " row" : " rows")
-          + (spent > 0 ? "; it spent " + spent.toLocaleString() : "")
+        ? todoWatchEstimateTitle(est, rows, spent)
         : "the build prints its own estimate — how long, and how many tokens"
-          + " — before it starts on the rows; nothing is shown until it has"
+          + " — as its first line, before it starts on the rows; a stand-in"
+          + " from this chat's earlier builds takes its place if it has not"
+          + " within a few seconds"
     };
   }
 
@@ -7910,6 +8173,16 @@
       // Cmd+C, Cmd+V, Cmd+Z and the rest are the browser's (copy is
       // answered on the copy event, where the rows leave as markdown).
       return;
+    } else if (event.key === "Enter" && !event.shiftKey
+               && str(todoItems[index].status) === "building") {
+      // Enter on a row the build is working on does not split it into two:
+      // it opens the pane under the row where the reader adds to what the
+      // build was told -- the same thread Claude's own questions use. Not
+      // a new row, and not a reopen: a word to the session about this one.
+      event.preventDefault();
+      event.stopPropagation();
+      todoNoteOpen(todoItems[index].id);
+      return;
     } else if (!where.collapsed && where.a !== where.b) {
       // A selection across rows: the browser will not edit across editing
       // hosts, so what a key does to it is ours.
@@ -8297,6 +8570,39 @@
       });
   }
 
+  // The pane under a building row: a word to the session about that row,
+  // sent where an answer to one of its questions goes. Nothing on the list
+  // changes -- the row stays out, the note is not a row -- so the rail has
+  // nothing to hold; the watch line's log says what was sent.
+  var todoNoting = null;
+
+  function todoNoteOpen(id) {
+    todoNoting = id;
+    todoReopening = null;
+    todoBuildError = "";
+    renderTodoRail(true);
+    var box = document.querySelector("[data-hc-todo-note=\"" + id + "\"]");
+    if (box) box.focus();
+  }
+
+  function todoNote(id, text) {
+    var note = str(text).trim();
+    if (!todoGoalId || !note) return;
+    var goalId = todoGoalId;
+    todoNoting = null;
+    todoBuildError = "";
+    renderTodoRail(true);
+    post({ op: "note_todo", goal_id: goalId, id: id, note: note })
+      .then(function (res) {
+        if ((!res || !res.ok) && todoGoalId === goalId) {
+          todoBuildError = (res && res.error) || "the note could not be sent";
+        }
+        // The log is re-read on the next poll: it carries what was sent.
+        delete watchFetched[goalId];
+        todoSettle();
+      });
+  }
+
   function todoReopen(id, text) {
     // "No, you did a bad job": the row goes back out on its next run, told
     // what was wrong with the last one. The run that ended is kept, note and
@@ -8490,6 +8796,20 @@
         }
         return;
       }
+      if (node && node.getAttribute
+          && node.getAttribute("data-hc-todo-note") !== null) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          todoNote(node.getAttribute("data-hc-todo-note"), node.value);
+        } else if (event.key === "Escape") {
+          // Nothing sent; the build carries on as it was.
+          event.preventDefault();
+          event.stopPropagation();
+          todoNoting = null;
+          renderTodoRail(true);
+        }
+        return;
+      }
       // Cmd+Enter from anywhere that is not a place to type -- the Build
       // control just clicked, Select all, the tree -- is the build, the
       // same as from the list. Once: the reader should not have to click
@@ -8513,7 +8833,8 @@
       var typed = event.target;
       if (typed && typed.getAttribute
           && (typed.getAttribute("data-hc-todo-answer") !== null
-              || typed.getAttribute("data-hc-todo-reopen") !== null)) {
+              || typed.getAttribute("data-hc-todo-reopen") !== null
+              || typed.getAttribute("data-hc-todo-note") !== null)) {
         // The box grows with its text: one line until it needs two.
         typed.style.height = "auto";
         typed.style.height = typed.scrollHeight + "px";
@@ -8573,6 +8894,7 @@
       var clicked = at >= 0 && todoItems ? todoItems[at] : null;
       if (clicked && clicked.status === "done") {
         todoReopening = clicked.id;
+        todoNoting = null;
         renderTodoRail(true);
         var box = document.querySelector("[data-hc-todo-reopen]");
         if (box) box.focus();
@@ -8582,6 +8904,10 @@
       // pane away. Not inside it: the note is being typed there.
       if (todoReopening && !todoInReopenPane(node)) {
         todoReopening = null;
+        renderTodoRail(true);
+      }
+      if (todoNoting && !todoInNotePane(node)) {
+        todoNoting = null;
         renderTodoRail(true);
       }
       var dash = node.getAttribute("data-hc-todo-dash");
@@ -8644,6 +8970,14 @@
   function todoInReopenPane(node) {
     while (node && node !== document) {
       if (node.className === "hc-todo-ask hc-todo-reopen-pane") return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
+  function todoInNotePane(node) {
+    while (node && node !== document) {
+      if (node.className === "hc-todo-ask hc-todo-note-pane") return true;
       node = node.parentNode;
     }
     return false;
@@ -8799,7 +9133,39 @@
       // one place in the rail where the two of them talk about a row.
       wrap.appendChild(todoReopenNode(row));
     }
+    if (row.status === "building" && todoNoting === row.id) {
+      // And the reader adding to what the build was told, while it is on
+      // the row: the same thread again, opened by Enter on the row.
+      wrap.appendChild(todoNoteNode(row));
+    }
     return wrap;
+  }
+
+  function todoNoteNode(row) {
+    var pane = document.createElement("div");
+    pane.className = "hc-todo-ask hc-todo-note-pane";
+    pane.setAttribute("contenteditable", "false");
+    pane.style.marginLeft = (row.depth * 20 + 22) + "px";
+    var q = document.createElement("div");
+    q.className = "hc-todo-question";
+    q.textContent = "Anything to add while it builds this?";
+    pane.appendChild(q);
+    var reply = document.createElement("div");
+    reply.className = "hc-todo-reply";
+    var arrow = document.createElement("span");
+    arrow.className = "hc-todo-arrow";
+    arrow.textContent = "↳";
+    reply.appendChild(arrow);
+    var note = document.createElement("textarea");
+    note.className = "hc-todo-answer";
+    note.rows = 1;
+    note.setAttribute("rows", "1");
+    note.placeholder = "tell the build, then enter";
+    note.spellcheck = false;
+    note.setAttribute("data-hc-todo-note", row.id);
+    reply.appendChild(note);
+    pane.appendChild(reply);
+    return pane;
   }
 
   function todoReopenNode(row) {
@@ -8827,6 +9193,238 @@
     reply.appendChild(note);
     pane.appendChild(reply);
     return pane;
+  }
+
+  // --- onboarding: which project is this chat for? -------------------------
+  //
+  // A chat used to belong to the directory it was started in, which made
+  // every chat in a folder the same project, forever, with nothing to choose.
+  // Now the chat says: until it has been bound, the workspace opens on this
+  // instead of on an empty tree, because an empty tree is indistinguishable
+  // from a project with nothing in it yet.
+  //
+  // Drawn on documentElement rather than inside the artifact's own DOM, for
+  // the reason everything else here is: the artifact re-creates what it owns
+  // and a panel inside it loses its listeners the first time it redraws.
+
+  var onbBox = null;
+  var onbStep = "start";      // start · used · make · pick
+  var onbProjects = null;     // the reader's projects, once asked for
+  var onbBusy = false;
+  var onbSaid = "";
+
+  function onbNeeded() {
+    return serverState.scope === "chat"
+      && serverState.projectBound === false;
+  }
+
+  function onbClose() {
+    if (onbBox && onbBox.parentNode) onbBox.parentNode.removeChild(onbBox);
+    onbBox = null;
+  }
+
+  function onbSay(words) {
+    onbSaid = str(words);
+    renderOnboarding(true);
+  }
+
+  function onbBtn(label, act, primary) {
+    var b = el("span", "hc-onb-btn" + (primary ? " hc-onb-btn-on" : ""), label);
+    b.setAttribute("role", "button");
+    b.setAttribute("data-hc-onb", act);
+    return b;
+  }
+
+  function onbHead(box, title, note) {
+    box.appendChild(el("div", "hc-onb-title", title));
+    if (note) box.appendChild(el("div", "hc-onb-note", note));
+  }
+
+  // Every project this vault knows, newest first, for the "which one is it?"
+  // step. Asked for once and kept: the list does not change while a wizard
+  // is open, and a spinner per redraw would flicker.
+  function onbLoadProjects() {
+    if (onbProjects) return;
+    onbProjects = [];
+    fetchJSON("/api/projects").then(function (res) {
+      onbProjects = (res && res.ok && array(res.projects)) || [];
+      if (onbStep === "pick") renderOnboarding(true);
+    });
+  }
+
+  function onbBind(where, then) {
+    if (onbBusy) return;
+    onbBusy = true;
+    onbSay("");
+    post({ op: "bind_project", cwd: where }).then(function (res) {
+      onbBusy = false;
+      if (!res || !res.ok) {
+        onbSay((res && res.error) || "that project could not be opened");
+        return;
+      }
+      // Bound: the gate is answered locally too, so the wizard closes on this
+      // turn rather than on whenever the next poll happens to land.
+      serverState.projectBound = true;
+      if (serverState.project && res.project) serverState.project = res.project;
+      onbClose();
+      if (typeof then === "function") then();
+      refreshState();
+    });
+  }
+
+  // New project, or an existing one Engelbart has never seen: named, given a
+  // purpose, minted, bound, and then the canvas -- blank, but a blank that
+  // knows what it is for.
+  function onbMake() {
+    if (onbBusy) return;
+    var name = str((onbBox.querySelector("[data-hc-onb-name]") || {}).value).trim();
+    var why = str((onbBox.querySelector("[data-hc-onb-why]") || {}).value).trim();
+    if (!name) { onbSay("give the project a name"); return; }
+    onbBusy = true;
+    onbSay("");
+    post({ op: "new_project", name: name }).then(function (res) {
+      if (!res || !res.ok || !res.cwd) {
+        onbBusy = false;
+        onbSay((res && res.error) || "the project could not be made");
+        return null;
+      }
+      var home = res.cwd;
+      // The purpose is written against the project that was just made, which
+      // has no chat of its own yet -- so it is written here or not at all.
+      return post({ op: "project_setup", cwd: home, objective: why })
+        .then(function () { onbBusy = false; onbBind(home); });
+    });
+  }
+
+  function onbBody(box) {
+    if (onbStep === "start") {
+      onbHead(box, "Which project is this chat for?",
+              "Engelbart keeps goals per project. Say which one this "
+              + "conversation belongs to and it stays bound to it.");
+      var row = el("div", "hc-onb-row");
+      row.appendChild(onbBtn("Start a new project", "new", true));
+      row.appendChild(onbBtn("Resume an existing project", "existing"));
+      box.appendChild(row);
+      return;
+    }
+    if (onbStep === "used") {
+      onbHead(box, "Have you used Engelbart for this project before?",
+              "If you have, this chat joins the goals already there. If not, "
+              + "it starts them.");
+      var r2 = el("div", "hc-onb-row");
+      r2.appendChild(onbBtn("Yes — find it", "pick", true));
+      r2.appendChild(onbBtn("No — set it up", "make"));
+      r2.appendChild(onbBtn("Back", "back"));
+      box.appendChild(r2);
+      return;
+    }
+    if (onbStep === "make") {
+      onbHead(box, "Name the project",
+              "What it is called, and what it is for. The purpose is read "
+              + "beside every goal afterwards.");
+      var name = el("input", "hc-onb-field");
+      name.setAttribute("data-hc-onb-name", "");
+      name.setAttribute("placeholder", "Project name");
+      name.setAttribute("spellcheck", "false");
+      box.appendChild(name);
+      var why = el("textarea", "hc-onb-field hc-onb-area");
+      why.setAttribute("data-hc-onb-why", "");
+      why.setAttribute("placeholder", "What are you trying to accomplish?");
+      why.setAttribute("rows", "3");
+      why.setAttribute("spellcheck", "false");
+      box.appendChild(why);
+      var r3 = el("div", "hc-onb-row");
+      r3.appendChild(onbBtn(onbBusy ? "Working…" : "Continue", "continue", true));
+      r3.appendChild(onbBtn("Back", "back"));
+      box.appendChild(r3);
+      return;
+    }
+    // pick
+    onbHead(box, "Which one is it?",
+            "This chat is bound to the project you choose, and stays bound "
+            + "to it across resumes.");
+    onbLoadProjects();
+    var list = el("div", "hc-onb-list");
+    if (!onbProjects || !onbProjects.length) {
+      list.appendChild(el("div", "hc-onb-empty",
+        onbProjects ? "no projects yet — set this one up instead"
+                    : "looking…"));
+    } else {
+      onbProjects.forEach(function (row) {
+        var item = el("div", "hc-onb-item");
+        item.setAttribute("role", "button");
+        item.setAttribute("data-hc-onb", "bind");
+        item.setAttribute("data-hc-onb-cwd", str(row.cwd));
+        item.appendChild(el("span", "hc-onb-item-name",
+                            str(row.name || row.cwd)));
+        var why = str(row.objective || "").replace(/\s+/g, " ").trim();
+        if (why) item.appendChild(el("span", "hc-onb-item-why", why.slice(0, 90)));
+        item.appendChild(el("span", "hc-onb-item-where", str(row.cwd)));
+        list.appendChild(item);
+      });
+    }
+    box.appendChild(list);
+    var r4 = el("div", "hc-onb-row");
+    r4.appendChild(onbBtn("Back", "back"));
+    box.appendChild(r4);
+  }
+
+  var onbBound = false;
+
+  function onbDelegate() {
+    if (onbBound || !document.addEventListener) return;
+    onbBound = true;
+    document.addEventListener("click", function (event) {
+      var node = event.target;
+      while (node && node !== document && !(node.getAttribute
+             && node.getAttribute("data-hc-onb"))) {
+        node = node.parentNode;
+      }
+      if (!node || node === document || !node.getAttribute) return;
+      var act = node.getAttribute("data-hc-onb");
+      event.preventDefault();
+      event.stopPropagation();
+      if (act === "new") { onbStep = "make"; renderOnboarding(true); }
+      else if (act === "existing") { onbStep = "used"; renderOnboarding(true); }
+      else if (act === "pick") { onbStep = "pick"; renderOnboarding(true); }
+      else if (act === "make") { onbStep = "make"; renderOnboarding(true); }
+      else if (act === "back") {
+        onbStep = onbStep === "used" ? "start"
+                : (onbStep === "pick" ? "used" : "start");
+        renderOnboarding(true);
+      } else if (act === "continue") { onbMake(); }
+      else if (act === "bind") {
+        onbBind(node.getAttribute("data-hc-onb-cwd"));
+      }
+    }, true);
+  }
+
+  function renderOnboarding(force) {
+    onbDelegate();
+    if (!onbNeeded()) { if (onbBox) onbClose(); return false; }
+    // Already up and unchanged: rebuilding on every sweep would take the
+    // caret out of the name field between keystrokes.
+    if (onbBox && onbBox.parentNode && !force) return true;
+    var at = onbBox && onbBox.querySelector("[data-hc-onb-name]");
+    var typed = at ? at.value : null;
+    var area = onbBox && onbBox.querySelector("[data-hc-onb-why]");
+    var typedWhy = area ? area.value : null;
+    onbClose();
+    var shade = el("div", "hc-onb-shade");
+    var box = el("div", "hc-onb");
+    onbBody(box);
+    if (onbSaid) box.appendChild(el("div", "hc-onb-said", onbSaid));
+    shade.appendChild(box);
+    (document.documentElement || document.body).appendChild(shade);
+    onbBox = shade;
+    var name = shade.querySelector("[data-hc-onb-name]");
+    if (name) {
+      if (typed !== null) name.value = typed;
+      name.focus();
+    }
+    var why2 = shade.querySelector("[data-hc-onb-why]");
+    if (why2 && typedWhy !== null) why2.value = typedWhy;
+    return true;
   }
 
   function renderTodoRail(force) {
@@ -8991,12 +9589,15 @@
       }
     }
     var reply = null;
-    if (active && active.getAttribute
-        && active.getAttribute("data-hc-todo-answer") !== null) {
-      reply = { id: active.getAttribute("data-hc-todo-answer"),
+    ["data-hc-todo-answer", "data-hc-todo-reopen", "data-hc-todo-note"].forEach(function (attr) {
+      if (reply || !active || !active.getAttribute
+          || active.getAttribute(attr) === null) return;
+      // Whichever box of the thread is being typed in -- an answer, a
+      // reopen note, a note to a running build -- comes back as it was.
+      reply = { attr: attr, id: active.getAttribute(attr),
                 value: str(active.value),
                 at: typeof active.selectionStart === "number" ? active.selectionStart : null };
-    }
+    });
     list.setAttribute("data-hc-todo-shape", JSON.stringify(shape));
     list.setAttribute("contenteditable", TODO_EDITABLE);
     list.setAttribute("spellcheck", "false");
@@ -9027,7 +9628,7 @@
       }
     }
     if (reply) {
-      var box = list.querySelector("[data-hc-todo-answer=\"" + reply.id + "\"]");
+      var box = list.querySelector("[" + reply.attr + "=\"" + reply.id + "\"]");
       if (box) {
         box.value = reply.value;
         try {
@@ -11898,6 +12499,13 @@
       fetch: fetchHandoff,
       state: function () { return handoffState; },
       last: function () { return handoffLast; },
+    },
+    record: {
+      render: renderRecordButton,
+      copy: copyProjectRecord,
+      fetch: fetchProjectRecord,
+      state: function () { return recordState; },
+      last: function () { return recordLast; },
     },
     alerts: {
       track: trackTodoAlerts,

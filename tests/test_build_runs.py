@@ -704,8 +704,9 @@ class CancelTests(BuildRunTests):
         self.assertTrue(self.wait_for(lambda: len(self.calls()) == 2))
         second = self.calls()[1]
         self.assertTrue(second["resume"], "the same session, told to move on")
-        self.assertIn("withdrew", second["prompt"])
-        self.assertIn("taaaa0001", second["prompt"])
+        self.assertIn("deleted these TODO rows", second["prompt"])
+        self.assertIn("- Add the route [taaaa0001]", second["prompt"])
+        self.assertIn("- Update the docs [taaaa0003]", second["prompt"])
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0003"][0] == "done"))
         self.assertEqual(("", ""), self.rows()["taaaa0001"])
@@ -1109,6 +1110,316 @@ class WatchingABuildTests(BuildRunTests):
         state = ui._payload(trajdir, True)
         self.assertIn("g1", state["build_runs"])
         self.assertEqual("waiting", state["build_runs"]["g1"]["status"])
+
+
+class EstimateStandInTests(BuildRunTests):
+    """A build that never says what it will cost -- most do not, and one
+    that did took three minutes -- must not leave the rail on "calculating"
+    for the length of the build."""
+
+    def live(self):
+        return BUILD.live(self.session, self.root)["g1"]
+
+    def test_the_protocol_asks_for_the_estimate_before_the_first_read(self):
+        flat = " ".join(BUILD.PROTOCOL.split())
+        head = flat.index('"estimate"')
+        self.assertIn("before you read, search or run anything", flat[:head])
+        self.assertIn("same reply as your first tool call", flat)
+
+    def test_a_build_that_says_nothing_is_given_a_stand_in_after_the_grace(self):
+        os.environ["STUB_SLEEP"] = "2.5"          # says nothing for a while
+        grace = BUILD.ESTIMATE_GRACE_S
+        BUILD.ESTIMATE_GRACE_S = 1
+        self.addCleanup(setattr, BUILD, "ESTIMATE_GRACE_S", grace)
+        # This chat has measured one build: 100k tokens and 300s per row.
+        BUILD.record_usage(self.session, self.root, 2, 100, 200000, 600)
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        live = self.live()
+        self.assertTrue(live["running"])
+        self.assertIsNone(live["estimate"], "within the grace: calculating")
+        self.assertTrue(self.wait_for(lambda: self.live()["estimate"] is not None))
+        live = self.live()
+        self.assertEqual("measured", live["estimate"]["source"])
+        self.assertEqual(5, live["estimate"]["minutes"])
+        self.assertEqual(BUILD.cost(self.session, self.root)["context_tokens"]
+                         + 100000, live["estimate"]["tokens"])
+        self.assertIsInstance(live["eta_s"], int)
+        # The build's own word, when it comes, is the one that stands.
+        self.assertTrue(self.wait_for(
+            lambda: (self.live()["estimate"] or {}).get("source") == "build"))
+        self.assertEqual(3, self.live()["estimate"]["minutes"])
+
+    def test_with_nothing_measured_the_stand_in_is_the_default_and_says_so(self):
+        os.environ["STUB_SLEEP"] = "2"
+        grace = BUILD.ESTIMATE_GRACE_S
+        BUILD.ESTIMATE_GRACE_S = 1
+        self.addCleanup(setattr, BUILD, "ESTIMATE_GRACE_S", grace)
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(self.wait_for(lambda: self.live()["estimate"] is not None))
+        live = self.live()
+        self.assertEqual("default", live["estimate"]["source"])
+        self.assertEqual(2 * BUILD.DEFAULT_ROW_SECONDS // 60,
+                         live["estimate"]["minutes"])
+
+    def test_an_estimate_thought_rather_than_said_still_counts(self):
+        # What a build writes before its first tool call has reached the
+        # stream as a thinking block; the number in it is the number meant.
+        run = BUILD.Run(self.session, self.root, "g1", str(self.root), "sess")
+        run._estimate(BUILD._stream_thinking(
+            {"type": "assistant", "message": {"content": [
+                {"type": "thinking",
+                 "thinking": 'Sizing it: {"estimate": {"tokens": "1.2M", "minutes": 30}}'}]}}))
+        kept = BUILD.load_run(self.session, self.root, "g1")["estimate"]
+        self.assertEqual({"tokens": 1200000, "minutes": 30, "source": "build"},
+                         {k: kept[k] for k in ("tokens", "minutes", "source")})
+        # A row directive thought is not a row directive said.
+        self.assertEqual("", BUILD._stream_text(
+            {"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": '{"id": "taaaa0001", "state": "DONE"}'}]}}))
+        # And numbers written the way people write them.
+        self.assertEqual({"tokens": 600000, "minutes": 45},
+                         BUILD.estimate_in('{"estimate": {"tokens": "600k", "minutes": "45"}}'))
+        self.assertEqual({"tokens": 600000, "minutes": 0},
+                         BUILD.estimate_in('{"estimate": {"tokens": "600,000"}}'))
+        self.assertIsNone(BUILD.estimate_in('{"estimate": {"tokens": "lots"}}'))
+
+
+class TellTheBuildTests(BuildRunTests):
+    """A word for a build mid-work: a row deleted from under it, a note
+    added to one. The process reads nothing, so it is ended and its session
+    resumed on the message (Run.redirect)."""
+
+    def prompts(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def said(self):
+        return [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+
+    def settled(self):
+        return self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "waiting")
+
+    def hold(self):
+        # A build mid-work: the stub prints its estimate, then holds.
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_HOLD"] = "8"
+
+    def test_deleting_a_building_row_tells_the_build_and_reminds_it_of_the_rest(self):
+        self.hold()
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(out["ok"], out)
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("redirected"), out)
+        self.assertEqual("", self.rows()["taaaa0001"][0])
+        # The process was ended and the session resumed on the word.
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
+        second = self.prompts()[1]
+        self.assertTrue(second["resume"])
+        message = second["prompt"]
+        self.assertIn("deleted these TODO rows", message)
+        self.assertIn("- Add the route [taaaa0001]", message)
+        self.assertIn("  - and its test", message)
+        self.assertIn("print no protocol lines for them", message)
+        self.assertIn("The rows still yours, in order:", message)
+        self.assertIn("- Update the docs [taaaa0003]", message)
+        self.assertIn("you deleted 1 row from the build; telling it", self.said())
+        # The build goes on to its end: the other row lands, the deleted
+        # one stays off the build, and nothing reads as a failure.
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done"))
+        self.assertEqual("", self.rows()["taaaa0001"][0])
+        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+
+    def test_deleting_everything_still_ends_the_process_without_a_word(self):
+        self.hold()
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("stopped"), out)
+        self.assertNotIn("redirected", out)
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertEqual(1, len(self.prompts()), "nothing to resume on")
+
+    def test_a_row_deleted_while_a_question_stands_rides_in_with_the_answer(self):
+        # The stub asks on the first row; the second is building behind it.
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(self.settled())
+        self.assertEqual("building", self.rows()["taaaa0003"][0])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(out.get("pending"), out)
+        self.assertEqual("", self.rows()["taaaa0003"][0])
+        self.assertEqual(1, len(self.prompts()), "the answer is the ride")
+        out = BUILD.answer(self.session, self.root, "g1", "taaaa0001", "src/a.ts")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
+        message = self.prompts()[1]["prompt"]
+        self.assertIn("deleted these TODO rows", message)
+        self.assertIn("- Update the docs [taaaa0003]", message)
+        self.assertTrue(message.rstrip().endswith(
+            json.dumps({"id": "taaaa0001", "answer": "src/a.ts"})))
+        self.assertEqual([], BUILD.load_run(self.session, self.root, "g1")["pending"])
+
+    def test_a_note_on_a_building_row_reaches_the_session_and_the_build_carries_on(self):
+        self.hold()
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        out = BUILD.note(self.session, self.root, "g1", "taaaa0001",
+                         "use the v2 router, not v1")
+        self.assertTrue(out.get("redirected"), out)
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
+        message = self.prompts()[1]["prompt"]
+        self.assertTrue(self.prompts()[1]["resume"])
+        self.assertIn("added context to a TODO row", message)
+        self.assertIn("- Add the route [taaaa0001]", message)
+        self.assertIn('"use the v2 router, not v1"', message)
+        self.assertIn("you added to “Add the route”: use the v2 router, not v1",
+                      self.said())
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"))
+        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+
+    def test_a_note_needs_a_row_the_build_is_on_and_some_words(self):
+        self.assertFalse(BUILD.note(self.session, self.root, "g1",
+                                    "taaaa0001", "  ")["ok"])
+        out = BUILD.note(self.session, self.root, "g1", "taaaa0001", "hello")
+        self.assertFalse(out["ok"])
+        self.assertIn("working on", out["error"])
+        self.assertFalse(BUILD.note(self.session, self.root, "g1",
+                                    "nope", "hello")["ok"])
+
+    def test_the_op_route_reaches_the_note_and_a_waiting_run_holds_it(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "note_todo", "goal_id": "g1", "id": "taaaa0001",
+                         "note": "x"}, trajdir, True)
+        self.assertFalse(out["ok"])
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(self.settled())
+        out = ui._apply({"op": "note_todo", "goal_id": "g1", "id": "taaaa0003",
+                         "note": "mind the tests"}, trajdir, True)
+        self.assertTrue(out.get("pending"), out)
+        held = BUILD.load_run(self.session, self.root, "g1")["pending"]
+        self.assertEqual(1, len(held))
+        self.assertIn('"mind the tests"', held[0])
+
+
+class TellTheSessionTests(BuildRunTests):
+    """The same two words, when the build is the connected session: they
+    queue, and the next hook carries them."""
+
+    def test_a_deleted_row_and_a_note_reach_the_session_at_the_next_hook(self):
+        os.environ["HC_BUILD_MODE"] = "session"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(BUILD.deliver(self.session, self.root, "Stop"))
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("queued"), out)
+        self.assertEqual("", self.rows()["taaaa0001"][0])
+        out = BUILD.note(self.session, self.root, "g1", "taaaa0003", "keep it small")
+        self.assertTrue(out.get("queued"), out)
+        text = BUILD.deliver(self.session, self.root, "Stop")
+        self.assertIn("deleted these TODO rows", text)
+        self.assertIn("- Add the route [taaaa0001]", text)
+        self.assertIn("The rows still yours, in order:", text)
+        self.assertIn("- Update the docs [taaaa0003]", text)
+        self.assertIn("added context to a TODO row", text)
+        self.assertIn('"keep it small"', text)
+        self.assertEqual("", BUILD.deliver(self.session, self.root, "Stop"))
+
+    def test_a_row_that_only_waited_is_dropped_without_a_word(self):
+        os.environ["HC_BUILD_MODE"] = "session"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertNotIn("queued", out)
+        text = BUILD.deliver(self.session, self.root, "Stop")
+        self.assertNotIn("deleted", text)
+        self.assertIn("[taaaa0003]", text)
+        self.assertNotIn("[taaaa0001]", text)
+
+
+class BuildSettingsTests(BuildRunTests):
+    """Which model a build runs on, and at what effort: chosen once for the
+    vault, handed to every claude -p after."""
+
+    def test_the_chosen_model_and_effort_reach_the_command_line(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "set_build_settings", "model": "claude-opus-5",
+                         "effort": "high"}, trajdir, True)
+        self.assertEqual({"model": "claude-opus-5", "effort": "high"},
+                         out["settings"])
+        self.assertEqual(out["settings"], BUILD.load_settings(self.session, self.root))
+        run = BUILD.Run(self.session, self.root, "g1", str(self.root), "sess")
+        cmd = run._command("hi", resume=False)
+        self.assertEqual("claude-opus-5", cmd[cmd.index("--model") + 1])
+        self.assertEqual("high", cmd[cmd.index("--effort") + 1])
+        # One key at a time; nothing chosen is the CLI's own default.
+        out = ui._apply({"op": "set_build_settings", "effort": ""}, trajdir, True)
+        self.assertEqual({"model": "claude-opus-5", "effort": ""}, out["settings"])
+        self.assertNotIn("--effort", run._command("hi", resume=False))
+        ui._apply({"op": "set_build_settings", "model": ""}, trajdir, True)
+        self.assertNotIn("--model", run._command("hi", resume=False))
+        # The shell's word stands where nothing is chosen.
+        os.environ["HC_BUILD_MODEL"] = "sonnet"
+        os.environ["HC_BUILD_EFFORT"] = "low"
+        cmd = run._command("hi", resume=False)
+        self.assertEqual("sonnet", cmd[cmd.index("--model") + 1])
+        self.assertEqual("low", cmd[cmd.index("--effort") + 1])
+
+    def test_an_effort_the_cli_does_not_know_and_a_bad_model_id_are_refused(self):
+        self.assertFalse(BUILD.save_settings(self.session, self.root,
+                                             {"effort": "extreme"})["ok"])
+        self.assertFalse(BUILD.save_settings(self.session, self.root,
+                                             {"model": "not a model"})["ok"])
+        self.assertEqual({"model": "", "effort": ""},
+                         BUILD.load_settings(self.session, self.root))
+
+    def test_the_models_are_read_off_the_installed_binary_and_kept_beside_it(self):
+        # A stand-in binary: big enough to be a program, naming a few models
+        # the way the real one does, in the bytes between everything else.
+        versions = self.root / "versions"
+        versions.mkdir()
+        fake = versions / "2.1.245"
+        fake.write_bytes(b"\0" * 1_000_000
+                         + b"x claude-opus-5 y claude-sonnet-4-5-20250929 z"
+                         + b" claude-opus-4-6-fast claude-haiku-4-5\0"
+                         + b"claude-opus-4-1-20250805-v1 claude-opus-4-8")
+        os.environ["HC_CLAUDE_BINARY"] = str(fake)
+        got = BUILD.models(self.session, self.root)
+        self.assertEqual(["fable", "opus", "sonnet", "haiku"], got["aliases"])
+        self.assertEqual(list(BUILD.EFFORTS), got["efforts"])
+        # Newest first within a family; the fast and v1 variants are not
+        # models to choose.
+        self.assertEqual(["claude-opus-5", "claude-opus-4-8",
+                          "claude-sonnet-4-5-20250929", "claude-haiku-4-5"],
+                         got["models"])
+        self.assertEqual("2.1.245", got["source"]["version"])
+        self.assertEqual(str(fake.resolve()), got["source"]["path"])
+        self.assertEqual({"model": "", "effort": ""}, got["settings"])
+        # Read once: the second answer is the cache, stamped as the first was.
+        again = BUILD.models(self.session, self.root)
+        self.assertEqual(got["source"]["scanned_at"], again["source"]["scanned_at"])
+        # A binary that has changed is read again.
+        fake.write_bytes(b"\0" * 1_000_000 + b" claude-fable-5 ")
+        os.utime(fake, (time.time() + 5, time.time() + 5))
+        self.assertEqual(["claude-fable-5"],
+                         BUILD.models(self.session, self.root)["models"])
+
+    def test_without_a_binary_the_aliases_and_efforts_still_stand(self):
+        os.environ["HC_CLAUDE_BINARY"] = str(self.root / "nowhere")
+        os.environ["PATH"] = str(self.bin)      # the stub alone: a script
+        got = BUILD.models(self.session, self.root)
+        self.assertTrue(got["ok"])
+        self.assertIsNone(got["source"])
+        self.assertEqual([], got["models"])
+        self.assertEqual(["fable", "opus", "sonnet", "haiku"], got["aliases"])
 
 
 if __name__ == "__main__":

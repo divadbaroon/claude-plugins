@@ -299,6 +299,73 @@ def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
         _atomic_json(p.manifest, manifest)
 
 
+def bind_project(session_id: str, home, root: Optional[Path] = None) -> str:
+    """Tie this chat to one project, permanently, until it is tied to another.
+
+    The directory a chat was started in used to decide its project on its
+    own, which made every chat in a folder the same project and left nothing
+    to choose. The binding is recorded on the chat instead: it is what the
+    onboarding asks for, it survives a resume, and re-binding moves the chat
+    rather than refusing -- a chat put in the wrong project should be
+    correctable without being abandoned.
+    """
+    where = str(home or "").strip()
+    if not where:
+        raise ValueError("a project needs somewhere to be")
+    resolved = str(Path(where).expanduser())
+    with session_lock(session_id, root, wait_s=5) as p:
+        manifest = load_manifest(session_id, root)
+        manifest["project_home"] = resolved
+        manifest["project_bound_at"] = _now()
+        manifest["updated_at"] = _now()
+        _atomic_json(p.manifest, manifest)
+    return resolved
+
+
+def needs_project_onboarding(session_id: str, root: Optional[Path] = None) -> bool:
+    """Whether to ask this chat which project it is for.
+
+    A chat the hooks have seen always has a manifest -- SessionStart writes
+    one before anything else -- so "a manifest without a binding" is exactly
+    a chat that has never been asked. A scope with no manifest at all is not
+    a chat awaiting onboarding: it is a workspace opened directly on a
+    directory, and asking it would be asking nobody.
+    """
+    try:
+        p = paths(session_id, root)
+    except (ValueError, TypeError):
+        return False
+    if not p.manifest.is_file():
+        return False
+    return not project_bound(session_id, root)
+
+
+def bound_project(session_id: str, root: Optional[Path] = None) -> str:
+    """Where this chat's project lives, or "" when it was never bound."""
+    try:
+        return str(load_manifest(session_id, root).get("project_home") or "")
+    except (OSError, ValueError, TypeError):
+        return ""
+
+
+def project_bound(session_id: str, root: Optional[Path] = None) -> bool:
+    """Whether the reader has said which project this chat is for.
+
+    False is what sends a chat through onboarding, so it is answered from
+    the binding alone -- never from the directory, which every chat has and
+    which therefore could never tell a bound chat from a new one.
+
+    Answered from the moment of binding rather than from its target: a chat
+    can be past onboarding while still naming the directory it started in,
+    and reading the home instead would call that chat new forever.
+    """
+    try:
+        manifest = load_manifest(session_id, root)
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(manifest.get("project_bound_at") or manifest.get("project_home"))
+
+
 def open_workspace_for(cwd, root: Optional[Path] = None) -> str:
     """Start a workspace of this vault's own, for a directory, and name it.
 

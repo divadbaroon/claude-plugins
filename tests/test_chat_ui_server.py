@@ -46,11 +46,31 @@ def open_prompt_tab(page):
     page.wait_for_selector(".hc-rail-copy", state="visible", timeout=10_000)
 
 
-def write_scope(path, goals, prompts):
+def write_scope(path, goals, prompts, bound=True):
+    """A chat's scope on disk. Bound by default: a fixture with goals in it
+    is a chat already in use, and an unbound chat is asked which project it
+    is for before it is shown anything -- which is a different test."""
     path.mkdir(parents=True, exist_ok=True)
     (path / "goals.json").write_text(json.dumps({"version": 1, "goals": goals}))
     (path / "important.json").write_text(json.dumps({"items": []}))
     (path / "prompts.json").write_text(json.dumps({"prompts": prompts}))
+    spot = path / "manifest.json"
+    manifest = {}
+    if spot.exists():
+        try:
+            manifest = json.loads(spot.read_text())
+        except ValueError:
+            manifest = {}
+    manifest.setdefault("schema_version", 1)
+    manifest.setdefault("session_id", path.name)
+    if bound:
+        # The moment alone: no project_home, so the workspace still names
+        # whatever it named before this flag existed.
+        manifest["project_bound_at"] = "2026-01-01T00:00:00+00:00"
+    else:
+        manifest.pop("project_bound_at", None)
+        manifest.pop("project_home", None)
+    spot.write_text(json.dumps(manifest))
 
 
 @contextmanager
@@ -2708,3 +2728,132 @@ class GoalDocumentRoundTripTests(unittest.TestCase):
                 self.document,
                 get_json(url + "/api/state")["goals"][0]["notes"],
             )
+
+
+class ProjectOnboardingServerTests(unittest.TestCase):
+    """The server half of onboarding: is this chat bound, and bind it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "a goal")], [], bound=False)
+
+    def test_a_fresh_chat_reports_itself_unbound(self):
+        with server_for(self.a) as url:
+            state = get_json(url + "/api/state")
+        self.assertIn("project_bound", state)
+        self.assertFalse(state["project_bound"],
+                         "a chat nobody has bound must send the reader to onboarding")
+
+    def test_binding_answers_with_the_project_and_then_reports_bound(self):
+        home = str(Path(self.tmp.name) / "acme-router")
+        with server_for(self.a) as url:
+            done = post_json(url + "/api/op",
+                             {"op": "bind_project", "cwd": home})
+            self.assertTrue(done.get("ok"), done)
+            self.assertEqual(home, done["cwd"])
+            state = get_json(url + "/api/state")
+            self.assertTrue(state["project_bound"])
+            # And the workspace now names that project, not the directory
+            # the chat happened to start in.
+            self.assertEqual(home, state["project"]["cwd"])
+
+    def test_binding_without_a_project_is_refused(self):
+        with server_for(self.a) as url:
+            said = post_json(url + "/api/op", {"op": "bind_project", "cwd": "  "})
+        self.assertFalse(said.get("ok"))
+        self.assertIn("which project", said.get("error", ""))
+
+    def test_a_second_binding_moves_the_chat(self):
+        one = str(Path(self.tmp.name) / "one")
+        two = str(Path(self.tmp.name) / "two")
+        with server_for(self.a) as url:
+            post_json(url + "/api/op", {"op": "bind_project", "cwd": one})
+            post_json(url + "/api/op", {"op": "bind_project", "cwd": two})
+            state = get_json(url + "/api/state")
+        self.assertEqual(two, state["project"]["cwd"])
+
+
+class OnboardingBrowserTests(unittest.TestCase):
+    """An unbound chat is asked which project it is for, before anything else.
+
+    The tree behind the wizard is empty either way; what an empty tree cannot
+    say is whether this is a new project or one whose goals are somewhere
+    else. So the question is asked first, and answering it is what binds.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "a goal")], [], bound=False)
+
+    def open(self, page, url):
+        page.goto(url)
+        page.wait_for_selector("text=a goal", timeout=15000)
+
+    def test_an_unbound_chat_opens_on_the_question_not_the_tree(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            self.open(page, url)
+            page.wait_for_selector(".hc-onb", timeout=10_000)
+            self.assertIn("Which project is this chat for",
+                          page.locator(".hc-onb-title").inner_text())
+            for label in ("Start a new project", "Resume an existing project"):
+                self.assertEqual(1, page.get_by_text(label, exact=True).count())
+            b.close()
+
+    def test_naming_a_new_project_binds_the_chat_and_clears_the_way(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            self.open(page, url)
+            page.wait_for_selector(".hc-onb", timeout=10_000)
+            page.get_by_text("Start a new project", exact=True).click()
+            page.wait_for_selector("[data-hc-onb-name]", timeout=5_000)
+            page.fill("[data-hc-onb-name]", "Acme Router")
+            page.fill("[data-hc-onb-why]", "Rules a newcomer can predict.")
+            page.get_by_text("Continue", exact=True).click()
+            # Bound: the wizard goes, and does not come back on the next sweep.
+            page.wait_for_selector(".hc-onb", state="detached", timeout=15_000)
+            page.wait_for_timeout(1500)
+            self.assertEqual(0, page.locator(".hc-onb").count())
+            state = get_json(url + "/api/state")
+            b.close()
+        self.assertTrue(state["project_bound"])
+        self.assertEqual("Acme Router", state["project"]["name"])
+
+    def test_an_existing_project_is_offered_and_binds_when_picked(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            made = post_json(url + "/api/op",
+                             {"op": "new_project", "name": "Older Thing"})
+            self.assertTrue(made.get("ok"), made)
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            self.open(page, url)
+            page.wait_for_selector(".hc-onb", timeout=10_000)
+            page.get_by_text("Resume an existing project", exact=True).click()
+            self.assertIn("used Engelbart for this project before",
+                          page.locator(".hc-onb-title").inner_text())
+            page.get_by_text("Yes — find it", exact=True).click()
+            page.wait_for_selector(".hc-onb-item", timeout=10_000)
+            page.get_by_text("Older Thing", exact=True).first.click()
+            page.wait_for_selector(".hc-onb", state="detached", timeout=15_000)
+            state = get_json(url + "/api/state")
+            b.close()
+        self.assertTrue(state["project_bound"])
+        self.assertEqual("Older Thing", state["project"]["name"])

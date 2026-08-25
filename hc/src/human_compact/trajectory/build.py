@@ -14,7 +14,22 @@ picked rows -- each under an id the reader never sees -- and a small protocol:
   N}}`` -- what the whole build will spend and how long it will take. The
   rail's watch line says "calculating" until that line lands, then counts down
   from it. It is asked of the build session itself, which already holds the
-  context, rather than of a second process handed a copy of it.
+  context, rather than of a second process handed a copy of it. Builds do
+  not always say (one in four did, and one of those took three minutes to),
+  and what a build says before its first tool call can reach the stream as
+  a thinking block rather than text -- so the estimate is read out of both,
+  and after ESTIMATE_GRACE_S with no word the rail is given a stand-in from
+  this chat's measured runs (``cost``) until the build's own arrives.
+
+Two things reach a running build from the reader, both through the same
+door: the process is ended and its session resumed on a message, since a
+``claude -p`` process reads no input once started (``Run.redirect``).
+
+* a row deleted from the build while it is being worked on: the session is
+  told which rows are gone -- print nothing for them, not even their state
+  -- and reminded of the rows still its own;
+* a note typed under a building row (Enter on the row opens the pane): the
+  session is told what the reader added, and carries on.
 
 Everything else the process prints is a log. Rows are ``building`` from the
 moment they are submitted, ``asking`` while a question stands, ``done`` on the
@@ -84,14 +99,17 @@ never mention them to the user in prose.
 Protocol -- print these as bare JSON objects on their own line, nothing else on
 the line, exactly in these shapes:
 
-- First, before you start on the rows, print your estimate for the whole build
-  -- every row under "The work" together -- as
+- FIRST, as the opening line of your very first reply -- before you read,
+  search or run anything -- print your estimate for the whole build (every
+  row under "The work" together) as
   {"estimate": {"tokens": <integer>, "minutes": <integer>}}
   where tokens is what you expect this session to spend in total (everything
   it reads, writes and re-reads, cache included) and minutes is how long the
-  work will take. A quick look at the repository to size the rows is fine; no
-  edits before it. If your estimate changes materially as you work, print it
-  again with the new numbers.
+  work will take. Size it from the rows and the tree alone; a rough number
+  now is worth more than an exact one later, and the rail shows nothing until
+  it lands. Put it in the same reply as your first tool call, as plain reply
+  text, not inside a code block. If your estimate changes materially as you
+  work, print it again with the new numbers.
 - If a row is ambiguous and you cannot proceed without the user, print
   {"id": "<row id>", "question": "<under 100 characters>"}
   and then STOP your turn immediately. Do not continue with other rows in that
@@ -330,6 +348,14 @@ def deliver(session_id: str, root: Optional[Path], event: str) -> str:
                 " it, and print the DONE marker again when it is right.\n"
                 + json.dumps({"id": item.get("row_id"),
                               "reopened": item.get("text")}))
+        elif kind == "withdraw":
+            parts.append(withdraw_message(
+                session_id, root, str(item.get("goal_id") or ""),
+                [r for r in item.get("row_ids") or [] if isinstance(r, str)]))
+        elif kind == "note":
+            parts.append(note_message(
+                session_id, root, str(item.get("goal_id") or ""),
+                str(item.get("row_id") or ""), str(item.get("text") or "")))
     body = "\n\n".join(p for p in parts if p.strip())
     if not body:
         return ""
@@ -769,13 +795,33 @@ def directives(text: str) -> List[Dict[str, Any]]:
 _ESTIMATE = re.compile(r"\{\s*\"estimate\"\s*:\s*\{[^{}]*\}\s*\}")
 
 
+_ESTIMATE_NUMBER = re.compile(r"^\s*([0-9][0-9,_]*(?:\.[0-9]+)?)\s*([kKmM])?\s*$")
+
+
+def _estimate_number(value: Any) -> Optional[int]:
+    """A count as a build writes it: a number, or a string like "600k",
+    "1.2M" or "600,000". None for anything else (a boolean included)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    match = _ESTIMATE_NUMBER.match(str(value or ""))
+    if not match:
+        return None
+    number = float(match.group(1).replace(",", "").replace("_", ""))
+    scale = {"k": 1_000, "m": 1_000_000}.get((match.group(2) or "").lower(), 1)
+    return max(0, int(number * scale))
+
+
 def estimate_in(text: str) -> Optional[Dict[str, int]]:
     """The last estimate in a piece of assistant text, or None.
 
     ``{"tokens": N, "minutes": N}`` with both whole and non-negative; a line
     that names only one of them still counts, with the other at zero. The
     last one wins: a build that re-estimates as it goes means the later
-    number.
+    number. A number written as a string -- "600k", "1.2M", "600,000" -- is
+    read as the number it names, since a build that wrote it that way meant
+    it, and the line it sits on is otherwise lost.
     """
     found: Optional[Dict[str, int]] = None
     for match in _ESTIMATE.finditer(text or ""):
@@ -788,14 +834,34 @@ def estimate_in(text: str) -> Optional[Dict[str, int]]:
             continue
         out: Dict[str, int] = {}
         for key in ("tokens", "minutes"):
-            value = inner.get(key)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            out[key] = max(0, int(value))
+            number = _estimate_number(inner.get(key))
+            if number is not None:
+                out[key] = number
         if out:
             found = {"tokens": out.get("tokens", 0),
                      "minutes": out.get("minutes", 0)}
     return found
+
+
+# How long the rail waits on a running build's own estimate before it is
+# handed a stand-in: what this chat's finished runs have cost per row
+# (``cost``), or the defaults where nothing has been measured yet. Seconds,
+# not minutes -- a line that says "calculating" for longer than that is a
+# line that has stopped meaning anything. The build's own word, when it
+# comes, replaces the stand-in.
+ESTIMATE_GRACE_S = 15
+
+
+def fallback_estimate(session_id: str, root: Optional[Path],
+                      rows: int) -> Dict[str, Any]:
+    """What a build of ``rows`` rows is likely to cost, from what this chat's
+    earlier builds cost -- the stand-in for a build that has not said."""
+    priced = cost(session_id, root)
+    rows = max(1, int(rows or 1))
+    tokens = int(priced["context_tokens"]) + rows * int(priced["row_tokens"])
+    minutes = max(1, -(-rows * int(priced["row_seconds"]) // 60))
+    return {"tokens": tokens, "minutes": minutes,
+            "source": "measured" if priced["time_samples"] else "default"}
 
 
 def _stream_text(event: Dict[str, Any]) -> str:
@@ -808,6 +874,20 @@ def _stream_text(event: Dict[str, Any]) -> str:
     if event.get("type") == "result":
         return str(event.get("result") or "")
     return ""
+
+
+def _stream_thinking(event: Dict[str, Any]) -> str:
+    """What an assistant event thought rather than said. Read for the
+    estimate only: what a build writes before its first tool call has been
+    seen to reach the stream as a thinking block, and the number in it is
+    the number it meant. Row directives are never taken from here -- a
+    build thinking "DONE" is not a build saying it."""
+    if event.get("type") != "assistant":
+        return ""
+    message = event.get("message") or {}
+    parts = message.get("content") or []
+    return "".join(str(p.get("thinking") or "") for p in parts
+                   if isinstance(p, dict) and p.get("type") == "thinking")
 
 
 def _set_row(session_id: str, root: Optional[Path], goal_id: str,
@@ -845,6 +925,9 @@ _TRANSIENT = re.compile(
     r"|connection (reset|refused|error)|timed? ?out)")
 RETRY_LIMIT = 2
 RETRY_DELAY_S = 8.0
+# How old a build's process must be before a word for it (Run.redirect) ends
+# it: younger, and claude has not written the session a resume needs.
+REDIRECT_MIN_AGE_S = 4.0
 
 
 class Run:
@@ -879,6 +962,10 @@ class Run:
         # It is what the rail's "about N left" is made of.
         self.seconds = 0.0
         self.spawned_at = 0.0
+        # A message the reader sent a running build -- a row deleted from
+        # under it, a note added to one -- waits here while the process is
+        # ended, and the session is resumed on it the moment it has.
+        self.redirect_with = ""
 
     def record(self, **extra) -> Dict[str, Any]:
         rec = load_run(self.session_id, self.root, self.goal_id) or {}
@@ -905,9 +992,15 @@ class Run:
             command += ["--resume", self.claude_session]
         else:
             command += ["--session-id", self.claude_session]
-        model = os.environ.get("HC_BUILD_MODEL")
+        # The model and effort the reader chose in Settings, or the shell's
+        # word where they chose nothing (HC_BUILD_MODEL, HC_BUILD_EFFORT).
+        chosen = load_settings(self.session_id, self.root)
+        model = chosen.get("model") or os.environ.get("HC_BUILD_MODEL", "")
         if model:
             command += ["--model", model]
+        effort = chosen.get("effort") or os.environ.get("HC_BUILD_EFFORT", "")
+        if effort in EFFORTS:
+            command += ["--effort", effort]
         return command
 
     def spawn(self, message: str, resume: bool) -> None:
@@ -972,6 +1065,7 @@ class Run:
                 for kind, phrase in stream_activity(event):
                     self._say(kind, phrase)
                 self._fold(_stream_text(event))
+                self._estimate(_stream_thinking(event))
         finally:
             code = self.process.wait()
             self._finish(code)
@@ -992,6 +1086,29 @@ class Run:
                 return False
         return True
 
+    def redirect(self, message: str) -> bool:
+        """Tell a running build something: end the process and resume its
+        session on ``message``. The process reads no input once started, so
+        this is the one way a word reaches it mid-work; what the session had
+        done stays done, since the resume picks its transcript back up. The
+        reader thread does the resuming, in _finish, once the exit lands.
+        False when there is no live process to tell."""
+        if not self.alive():
+            return False
+        # A process only just started has not written its session yet, and
+        # a resume of a session that is not there fails outright: a word
+        # that comes in the first seconds waits for them to pass.
+        young = REDIRECT_MIN_AGE_S - (time.time() - self.spawned_at)
+        if young > 0:
+            time.sleep(young)
+            if not self.alive():
+                return False
+        self.redirect_with = message
+        if not self.stop():
+            self.redirect_with = ""
+            return False
+        return True
+
     def _fold(self, text: str) -> None:
         for obj in directives(text):
             row_id = obj["id"]
@@ -1005,12 +1122,15 @@ class Run:
             elif obj.get("state") == "DONE":
                 _set_row(self.session_id, self.root, self.goal_id, row_id,
                          status="done", question="")
+        self._estimate(text)
+
+    def _estimate(self, text: str) -> None:
         # The build's estimate of itself goes on the run record, where the
         # rail reads its countdown from; and into the log, so what the line
         # said is in plain words beside everything else the build did.
         estimate = estimate_in(text)
         if estimate:
-            self.record(estimate=dict(estimate, at=_now()))
+            self.record(estimate=dict(estimate, at=_now(), source="build"))
             self._say("say", "estimated about %d min and %s tokens for the build"
                       % (estimate["minutes"], f"{estimate['tokens']:,}"))
 
@@ -1034,6 +1154,19 @@ class Run:
         if self.spawned_at:
             self.seconds += max(0.0, time.time() - self.spawned_at)
             self.spawned_at = 0.0
+        # Ended to be told something (see redirect): not a verdict on the
+        # rows, which stay building; the session goes on from where its
+        # transcript stopped, with the reader's word as its next message.
+        if self.redirect_with:
+            message, self.redirect_with = self.redirect_with, ""
+            self.stopped = False
+            self.error = ""
+            self.record(status="redirecting")
+            try:
+                self.spawn(message, resume=True)
+                return
+            except (OSError, RuntimeError) as exc:
+                self.error = "could not resume the build: %s" % str(exc)[:120]
         # A provider-side death (a 500, an overload, a dropped connection)
         # is not a verdict on the rows: resume the same session and keep
         # going, up to the retry limit, with rows left as building.
@@ -1288,6 +1421,14 @@ def answer(session_id: str, root: Optional[Path], goal_id: str,
         with _RUNS_GUARD:
             _RUNS[f"{session_id}:{goal_id}"] = run
     message = json.dumps({"id": row_id, "answer": text})
+    # What the reader told the build while it waited on this question -- a
+    # row deleted, a note added -- goes ahead of the answer, in the same
+    # message: the answer is what resumes the session, so it is the ride.
+    held = _pop_pending(session_id, root, goal_id)
+    if held:
+        message = "\n\n".join(held + [
+            "And the user answered your question, in the shape the protocol"
+            " asked for:\n" + message])
     try:
         run.spawn(message, resume=True)
     except (FileNotFoundError, OSError) as exc:
@@ -1295,6 +1436,151 @@ def answer(session_id: str, root: Optional[Path], goal_id: str,
                  question="(could not resume the build: %s)" % str(exc)[:60])
         return {"ok": False, "error": str(exc)[:200]}
     return {"ok": True, "resumed": True, "row": row_id}
+
+
+# ------------------------------------------ a word for a build mid-work
+#
+# A ``claude -p`` process reads nothing once it has started, so what the
+# reader sends a running build goes in through Run.redirect: the process is
+# ended and its session resumed on the message, with everything the session
+# had done still in its transcript. Two things are sent this way.
+#
+# Deleting a row the build is working on (the corner, or Escape): the build
+# is told which rows are gone, that it is to print nothing for them -- not
+# even their state, since they are no longer on the list -- and which rows
+# are still its own, so "do the others" is a list and not a memory test.
+#
+# A note typed under a building row (Enter on the row opens the pane, the
+# same one Claude's own questions use): the build is told what the reader
+# added and carries on. Not a new row, and not a reopen: the row is out
+# already, and this is the reader talking to the session about it.
+#
+# When no process is up because the run stopped on another row's question,
+# the word waits on the run record and rides in with the answer.
+
+
+def _row_lines(goal: Dict[str, Any], ids: List[str]) -> List[str]:
+    """The rows named, as the prompt writes them: '- text [id]', a picked
+    row's children nested under it without ids of their own."""
+    rows = picked_with_children(goal.get("todo_items") or [], ids)
+    lines: List[str] = []
+    for row in rows:
+        indent = "  " * int(row.get("depth") or 0)
+        marker = f" [{row['id']}]" if row.get("_picked") else ""
+        lines.append(f"{indent}- {row.get('text', '')}{marker}")
+    return lines
+
+
+def _goal_for_message(session_id: str, root: Optional[Path],
+                      goal_id: str) -> Dict[str, Any]:
+    goals, _ = CS.load_goals(session_id, root)
+    return GM.by_id(goals, goal_id) or {"todo_items": []}
+
+
+def withdraw_message(session_id: str, root: Optional[Path], goal_id: str,
+                     gone: List[str]) -> str:
+    """What a build is told when rows are deleted from under it."""
+    goal = _goal_for_message(session_id, root, goal_id)
+    items = goal.get("todo_items") or []
+    kept = [row["id"] for row in items
+            if row.get("id") not in gone
+            and str(row.get("status") or "") in ("building", "asking", "queued")]
+    lines = ["[Engelbart] The user deleted these TODO rows from the build"
+             " while you were working on them:", ""]
+    lines += _row_lines(goal, gone) or ["- (rows no longer on the list)"]
+    lines += ["",
+              "Do not work on them, and print no protocol lines for them --"
+              " no DONE, no question, nothing that names their ids. They are"
+              " gone from the list, and their state is not yours to report.",
+              ""]
+    if kept:
+        lines += ["The rows still yours, in order:", ""]
+        lines += _row_lines(goal, kept)
+        lines += ["", "Continue with those, same protocol as your opening"
+                      " message: print {\"id\": \"<row id>\", \"state\":"
+                      " \"DONE\"} when each is finished."]
+    else:
+        lines += ["Nothing else was picked for this build: stop here."]
+    return "\n".join(lines)
+
+
+def note_message(session_id: str, root: Optional[Path], goal_id: str,
+                 row_id: str, text: str) -> str:
+    """What a build is told when the reader adds context to a row it is on."""
+    goal = _goal_for_message(session_id, root, goal_id)
+    text = " ".join(str(text or "").split())
+    lines = ["[Engelbart] The user added context to a TODO row you are"
+             " working on, from the goals workspace:", ""]
+    lines += _row_lines(goal, [row_id]) or [f"- [{row_id}]"]
+    lines += [f"  ↳ \"{text}\"", "",
+              "Take it into account for that row. Nothing else changes: the"
+              " same rows are yours, in the same order, under the same"
+              " protocol as your opening message. Continue."]
+    return "\n".join(lines)
+
+
+def _push_pending(session_id: str, root: Optional[Path], goal_id: str,
+                  message: str) -> None:
+    record = load_run(session_id, root, goal_id) or {"goal_id": goal_id}
+    held = [m for m in record.get("pending") or [] if isinstance(m, str)]
+    record["pending"] = held + [message]
+    _save_run(session_id, root, record)
+
+
+def _pop_pending(session_id: str, root: Optional[Path],
+                 goal_id: str) -> List[str]:
+    record = load_run(session_id, root, goal_id)
+    if not record:
+        return []
+    held = [m for m in record.get("pending") or [] if isinstance(m, str)]
+    if held:
+        record["pending"] = []
+        _save_run(session_id, root, record)
+    return held
+
+
+NOTABLE = ("building",)
+
+
+def note(session_id: str, root: Optional[Path], goal_id: str, row_id: str,
+         text: str) -> Dict[str, Any]:
+    """The reader's note on a row the build is working on: into the build's
+    session, now if a process is up, with the next answer if the run is
+    waiting on a question."""
+    text = " ".join(str(text or "").split())
+    if not text:
+        return {"ok": False, "error": "write the note first"}
+    goals, _ = CS.load_goals(session_id, root)
+    goal = GM.by_id(goals, goal_id)
+    if not goal:
+        return {"ok": False, "error": "goal not found"}
+    row = next((r for r in goal.get("todo_items") or []
+                if r.get("id") == row_id), None)
+    if row is None:
+        return {"ok": False, "error": "that TODO is not on this goal"}
+    status = str(row.get("status") or "")
+    session_mode = mode() == "session"
+    if status not in NOTABLE and not (session_mode and status == "queued"):
+        return {"ok": False,
+                "error": "only a TODO the build is working on can take a note"}
+    label = " ".join(str(row.get("text") or "").split())[:60]
+    note_activity(session_id, root, goal_id, "say",
+                  "you added to “%s”: %s" % (label, text))
+    if session_mode:
+        enqueue(session_id, root, {"kind": "note", "goal_id": goal_id,
+                                   "row_id": row_id, "text": text})
+        return {"ok": True, "queued": True, "mode": "session", "row": row_id}
+    message = note_message(session_id, root, goal_id, row_id, text)
+    run = _run_for(session_id, root, goal_id)
+    if run is not None and run.alive():
+        if run.redirect(message):
+            return {"ok": True, "redirected": True, "row": row_id}
+    record = load_run(session_id, root, goal_id) or {}
+    if record.get("status") == "waiting" or (run is not None and run.alive()):
+        # Stopped on another row's question: the answer carries the note.
+        _push_pending(session_id, root, goal_id, message)
+        return {"ok": True, "pending": True, "row": row_id}
+    return {"ok": False, "error": "the build is not running"}
 
 
 # ---------------------------------------------------------------- reopening
@@ -1486,7 +1772,16 @@ def cancel(session_id: str, root: Optional[Path], goal_id: str,
     _drop_later(session_id, root, goal_id, cancelled)
     _drop_queued(session_id, root, goal_id, cancelled)
     out: Dict[str, Any] = {"ok": True, "cancelled": cancelled}
+    # Rows the build had actually taken up -- building, or asking -- are
+    # told about, the way the reader would put it to a terminal: not that
+    # one; the others, which are these. A row that only waited its turn
+    # (queued) never reached the build, and there is nothing to tell.
+    told = [i for i in cancelled if were[i] in ("building", "asking")]
     if mode() == "session":
+        if told:
+            enqueue(session_id, root, {"kind": "withdraw", "goal_id": goal_id,
+                                       "row_ids": told})
+            out["queued"] = True
         return out
     run = _run_for(session_id, root, goal_id)
     record = load_run(session_id, root, goal_id)
@@ -1499,13 +1794,29 @@ def cancel(session_id: str, root: Optional[Path], goal_id: str,
     if run is not None and run.alive():
         if not still:
             out["stopped"] = run.stop()
+        elif told:
+            # Mid-work: the process is ended and its session resumed on the
+            # word, since the process itself reads nothing (see redirect).
+            note_activity(session_id, root, goal_id, "say",
+                          "you deleted %d row%s from the build; telling it"
+                          % (len(told), "" if len(told) == 1 else "s"))
+            out["redirected"] = run.redirect(
+                withdraw_message(session_id, root, goal_id, told))
         return out
     # No process: the run ended, on a question if anything is still building.
-    withdrew = [i for i in cancelled if were[i] == "asking"]
-    if withdrew and still:
+    if told and still:
         claude_session = (run.claude_session if run else
                           (record or {}).get("claude_session_id"))
         if not claude_session:
+            return out
+        message = withdraw_message(session_id, root, goal_id, told)
+        withdrew = [i for i in cancelled if were[i] == "asking"]
+        if not withdrew:
+            # A building row deleted while another row's question stands:
+            # the answer to that question is what resumes the session, and
+            # it carries this word with it.
+            _push_pending(session_id, root, goal_id, message)
+            out["pending"] = True
             return out
         if run is None:
             run = Run(session_id, root, goal_id,
@@ -1514,10 +1825,8 @@ def cancel(session_id: str, root: Optional[Path], goal_id: str,
             run.cancelled.update(cancelled)
             with _RUNS_GUARD:
                 _RUNS[f"{session_id}:{goal_id}"] = run
-        message = ("The user withdrew these rows from the build: "
-                   + ", ".join(withdrew)
-                   + ". Do not work on them and print no protocol lines "
-                     "for them. Continue with the remaining rows.")
+        note_activity(session_id, root, goal_id, "say",
+                      "you withdrew the question; telling the build")
         try:
             run.spawn(message, resume=True)
             out["resumed"] = True
@@ -1579,7 +1888,8 @@ def _estimate_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not tokens and not minutes:
         return None
     return {"tokens": tokens, "minutes": minutes,
-            "at": str(value.get("at") or "")}
+            "at": str(value.get("at") or ""),
+            "source": str(value.get("source") or "build")}
 
 
 def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
@@ -1611,6 +1921,11 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
                         None if running else record.get("updated_at"))
         rows = max(1, int(record.get("rows") or 1))
         estimate = _estimate_of(record)
+        if (running and not estimate and elapsed is not None
+                and elapsed >= ESTIMATE_GRACE_S):
+            # The build has had its chance to say; the rail gets the chat's
+            # own measure of a build this size instead, marked as such.
+            estimate = fallback_estimate(session_id, root, rows)
         try:
             spent = max(0, int(record.get("tokens") or 0))
         except (TypeError, ValueError):
@@ -1676,3 +1991,208 @@ def watch(session_id: str, root: Optional[Path], goal_id: str) -> Dict[str, Any]
         return {"ok": False, "error": str(exc)[:200], "command": line}
     return {"ok": True, "terminal": app, "cwd": cwd, "following": running,
             "command": line}
+
+
+# ------------------------------------------- which model, at what effort
+#
+# The rail's Settings has a Builds tab: the model a build runs on and the
+# effort it runs at, both handed to ``claude -p`` as ``--model`` and
+# ``--effort``. One file for the whole vault, since it is a choice about the
+# reader's builds and not about one chat. Nothing chosen means the CLI's own
+# defaults, which is what every build got before there was a choice.
+#
+# The models on offer are read off the installed Claude Code binary itself:
+# it names every model it knows, and a new release names the new ones -- so
+# the list keeps up with the CLI rather than with this file. The aliases
+# ("opus", "sonnet"...) always resolve to the latest of their family and are
+# offered first; the ids found in the binary follow, newest first. The scan
+# is a few seconds over a few hundred megabytes, so it is kept beside the
+# settings until the binary changes.
+
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_ALIASES = ("fable", "opus", "sonnet", "haiku")
+_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+# An id is the family and then numbers only -- "claude-opus-4-1",
+# "claude-sonnet-4-5-20250929" -- ending where anything else begins: the
+# binary also holds "claude-opus-4-6-fast", "claude-fable-5.md" and other
+# things that start like an id and are not one.
+_MODEL_BYTES = re.compile(
+    rb"claude-(?:fable|opus|sonnet|haiku)(?:-[0-9]+)+(?![0-9A-Za-z.\-_])")
+_MODEL_FAMILY = {name: rank for rank, name in enumerate(MODEL_ALIASES)}
+
+
+def _settings_path(session_id: str, root: Optional[Path]) -> Path:
+    return CS.paths(session_id, root).base / "build-settings.json"
+
+
+def _clean_settings(value: Any) -> Dict[str, str]:
+    out = {"model": "", "effort": ""}
+    if not isinstance(value, dict):
+        return out
+    model = str(value.get("model") or "").strip()
+    if _MODEL_ID.match(model):
+        out["model"] = model
+    effort = str(value.get("effort") or "").strip().lower()
+    if effort in EFFORTS:
+        out["effort"] = effort
+    return out
+
+
+def load_settings(session_id: str, root: Optional[Path]) -> Dict[str, str]:
+    """The reader's choice of model and effort for builds; "" means the
+    CLI's own default for either."""
+    try:
+        value = json.loads(_settings_path(session_id, root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"model": "", "effort": ""}
+    return _clean_settings(value)
+
+
+def save_settings(session_id: str, root: Optional[Path],
+                  patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Set either or both; a key not in the patch is left as it was. A
+    model that is not a plausible id, or an effort the CLI does not know,
+    is refused rather than silently dropped."""
+    if not isinstance(patch, dict):
+        return {"ok": False, "error": "nothing to set"}
+    current = load_settings(session_id, root)
+    if "model" in patch:
+        model = str(patch.get("model") or "").strip()
+        if model and not _MODEL_ID.match(model):
+            return {"ok": False, "error": "that is not a model id"}
+        current["model"] = model
+    if "effort" in patch:
+        effort = str(patch.get("effort") or "").strip().lower()
+        if effort and effort not in EFFORTS:
+            return {"ok": False,
+                    "error": "effort is one of " + ", ".join(EFFORTS)}
+        current["effort"] = effort
+    path = _settings_path(session_id, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, current)
+    return {"ok": True, "settings": current}
+
+
+def _cli_binary() -> Optional[Path]:
+    """The Claude Code binary itself, past any shim on PATH: the first
+    candidate big enough to be a program rather than a wrapper script."""
+    import shutil
+    home = Path.home()
+    # HC_CLAUDE_BINARY names the binary outright, for an install the search
+    # below would not find -- and is then the only place looked.
+    named = os.environ.get("HC_CLAUDE_BINARY", "").strip()
+    candidates = [named] if named else [
+        shutil.which("claude"),
+        str(home / ".local" / "bin" / "claude"),
+        str(home / ".claude" / "local" / "claude")]
+    seen: List[Path] = []
+    for name in candidates:
+        if not name:
+            continue
+        try:
+            real = Path(name).resolve()
+            size = real.stat().st_size
+        except OSError:
+            continue
+        if real in seen:
+            continue
+        seen.append(real)
+        if size >= 1_000_000:
+            return real
+    return None
+
+
+def _model_sort_key(name: str) -> Tuple[int, List[int], int, str]:
+    body = name[len("claude-"):]
+    family, _, rest = body.partition("-")
+    numbers = [int(n) for n in re.findall(r"[0-9]+", rest)]
+    dated = 1 if any(n >= 20000000 for n in numbers) else 0
+    version = [n for n in numbers if n < 20000000]
+    # Newest first: the sort is ascending, so the version is negated. The
+    # sentinel puts "opus-4" after "opus-4-0", not ahead of "opus-4-8".
+    return (_MODEL_FAMILY.get(family, 9), [-n for n in version] + [1], dated, name)
+
+
+def scan_models(path: Path) -> List[str]:
+    """Every model id the binary at ``path`` names, newest first within each
+    family. Variants that are not models to choose (``-fast``, ``-v1``) are
+    left out."""
+    found: Dict[str, int] = {}
+    tail = b""
+    try:
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(8 << 20)
+                if not chunk:
+                    break
+                data = tail + chunk
+                for match in _MODEL_BYTES.finditer(data):
+                    name = match.group(0).decode("ascii").rstrip(".-")
+                    found[name] = found.get(name, 0) + 1
+                tail = data[-96:]
+    except OSError:
+        return []
+    names = [n for n in found
+             if not n.endswith("-fast") and "-v1" not in n
+             and re.search(r"-[0-9]", n)]
+    return sorted(names, key=_model_sort_key)
+
+
+def _cli_version(binary: Path) -> str:
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", binary.name):
+        return binary.name
+    try:
+        out = subprocess.run([str(binary), "--version"], capture_output=True,
+                             text=True, timeout=8, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    match = re.search(r"[0-9]+\.[0-9]+\.[0-9]+", out.stdout or "")
+    return match.group(0) if match else ""
+
+
+def _models_cache_path(session_id: str, root: Optional[Path]) -> Path:
+    return CS.paths(session_id, root).base / "build-models.json"
+
+
+def models(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
+    """What the Builds tab offers: the aliases, the ids the installed CLI
+    names, the efforts, and what is chosen now."""
+    out: Dict[str, Any] = {"ok": True, "aliases": list(MODEL_ALIASES),
+                           "models": [], "efforts": list(EFFORTS),
+                           "source": None,
+                           "settings": load_settings(session_id, root)}
+    binary = _cli_binary()
+    if binary is None:
+        return out
+    try:
+        stamp = binary.stat()
+    except OSError:
+        return out
+    key = {"path": str(binary), "size": stamp.st_size,
+           "mtime": int(stamp.st_mtime)}
+    cache_path = _models_cache_path(session_id, root)
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = None
+    if (isinstance(cached, dict) and cached.get("key") == key
+            and isinstance(cached.get("models"), list)):
+        out["models"] = [m for m in cached["models"] if isinstance(m, str)]
+        out["source"] = {"path": key["path"],
+                         "version": str(cached.get("version") or ""),
+                         "scanned_at": str(cached.get("scanned_at") or "")}
+        return out
+    found = scan_models(binary)
+    version = _cli_version(binary)
+    scanned_at = _now()
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(cache_path, {"key": key, "models": found,
+                                       "version": version,
+                                       "scanned_at": scanned_at})
+    except OSError:
+        pass
+    out["models"] = found
+    out["source"] = {"path": key["path"], "version": version,
+                     "scanned_at": scanned_at}
+    return out

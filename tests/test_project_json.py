@@ -379,6 +379,21 @@ class ProjectJsonRouteTests(ProjectFixture):
         self.assertTrue(out["truncated"])
         self.assertEqual(ui.PROJECT_FILE_LIMIT, len(out["text"]))
 
+    def test_asked_for_in_full_the_record_comes_back_whole(self):
+        # The panel's copy button: a clipboard has no pane to bound it, and
+        # a record cut a quarter of the way in is not JSON.
+        self.save()
+        path = PS.project_path(self.root, self.project)
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record["goals"][0]["notes"] = "x" * (ui.PROJECT_FILE_LIMIT + 100)
+        path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+        with server_for(self.trajdir) as url:
+            out = get_json(url + "/api/project.json?full=1")
+        self.assertTrue(out["ok"])
+        self.assertFalse(out["truncated"])
+        self.assertEqual(path.read_text(encoding="utf-8"), out["text"])
+        self.assertEqual(record, json.loads(out["text"]))
+
 
 if __name__ == "__main__":
     unittest.main()

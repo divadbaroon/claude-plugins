@@ -661,7 +661,11 @@ def _project_identity(trajdir, chat_scoped, session_id):
         _sid, root = _chat_identity(trajdir)
     except (OSError, ValueError):
         return empty
-    cwd = _manifest_cwd(str(session_id), root)
+    # The chat says which project it is for; the directory it was started in
+    # is only the suggestion the onboarding opens on. Before the rename of
+    # this rule a chat could not be moved between projects at all, because
+    # every chat in a folder was the same project by definition.
+    cwd = CS.bound_project(str(session_id), root) or _manifest_cwd(str(session_id), root)
     if not cwd:
         return empty
     path = Path(str(cwd))
@@ -813,8 +817,8 @@ def source_body(root, cwd, source):
     return dict(project_file(cwd, rel), kind=kind)
 
 
-def project_json(root, cwd):
-    """The project's own record, as text, for the overview's JSON pane.
+def project_json(root, cwd, full=False):
+    """The project's own record, as text, for the settings panel's Data tab.
 
     The file as it stands on disk, byte for byte: what a reader opening it
     in an editor would see, indentation and all. A directory whose file has
@@ -822,9 +826,11 @@ def project_json(root, cwd):
     record it would hold, built now and not saved, marked ``written``
     false, so the pane shows the project rather than an absence.
 
-    Bounded like the README pane: a project of many chats can outgrow what
-    a pane should hand a browser, and a bound that says it was reached is
-    better than one that quietly is not.
+    Bounded like the README pane unless ``full`` is asked for: a project of
+    many chats can outgrow what a pane should hand a browser, and a bound
+    that says it was reached is better than one that quietly is not. The
+    panel's copy button asks for the whole file -- a clipboard has no such
+    bound, and a record cut at a quarter is not JSON.
     """
     if not cwd:
         return {"ok": False, "error": "no project"}
@@ -832,7 +838,7 @@ def project_json(root, cwd):
     written = True
     try:
         with open(path, "rb") as handle:
-            raw = handle.read(PROJECT_FILE_LIMIT + 1)
+            raw = handle.read(-1 if full else PROJECT_FILE_LIMIT + 1)
     except OSError:
         written = False
         try:
@@ -840,9 +846,11 @@ def project_json(root, cwd):
                    + "\n").encode("utf-8")
         except (OSError, ValueError, TypeError):
             return {"ok": False, "error": "unreadable"}
+    cut = not full and len(raw) > PROJECT_FILE_LIMIT
+    text = raw[:PROJECT_FILE_LIMIT] if cut else raw
     return {"ok": True, "path": str(path), "written": written,
-            "truncated": len(raw) > PROJECT_FILE_LIMIT,
-            "text": raw[:PROJECT_FILE_LIMIT].decode("utf-8", errors="replace")}
+            "truncated": cut,
+            "text": text.decode("utf-8", errors="replace")}
 
 
 README_NAMES = ("README.md", "readme.md", "README.markdown", "README")
@@ -1765,8 +1773,12 @@ def _payload(trajdir=None, chat_scoped=None):
             ana = json.loads((trajdir / "analysis.json").read_text())
         except (OSError, ValueError):
             pass
+        bound = False
         if chat_scoped:
             session_id, root = _chat_identity(trajdir)
+            # Resolved with the same root the rest of this payload uses: a
+            # server on a vault of its own must not answer from the default.
+            bound = not CS.needs_project_onboarding(session_id, root)
             analyzer = CS.get_analyzer_state(session_id, root)
             notices = CS.load_notices(session_id, root)
             session = session_id
@@ -1789,6 +1801,10 @@ def _payload(trajdir=None, chat_scoped=None):
                    # Where this chat works. Recorded in the manifest already; the
                    # workspace could only name a project by guessing without it.
                    "project": _project_identity(trajdir, chat_scoped, session),
+                   # False is what sends a chat through onboarding. Answered
+                   # from the binding alone: every chat has a directory, so a
+                   # directory could never tell a new chat from a bound one.
+                   "project_bound": bound,
                    "provider": _configured_provider(trajdir),
                    "revision": _goal_revision(goals, important)}
     if identity is not None:
@@ -1864,6 +1880,16 @@ def _apply(op, trajdir=None, chat_scoped=None):
     if kind == "reopen_todo":
         return BUILD.reopen(session_id, root, goal_id,
                             str(op.get("id") or ""), str(op.get("note") or ""))
+    if kind == "note_todo":
+        # A word for a row the build is on, from the pane Enter opens under
+        # it: into the build's session, not onto the list.
+        return BUILD.note(session_id, root, goal_id,
+                          str(op.get("id") or ""), str(op.get("note") or ""))
+    if kind == "set_build_settings":
+        # The Builds tab: which model, at what effort. Vault-wide.
+        return BUILD.save_settings(
+            session_id, root,
+            {k: op.get(k) for k in ("model", "effort") if k in op})
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -2011,6 +2037,22 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             return {"ok": True, "launched": True, "terminal": app, "cwd": cwd,
                     "sent": confirmed,
                     "command": f"cd {cwd} && hc work {g['id']} --start"}
+        if kind == "bind_project":
+            # What the onboarding's last step does, and the only thing that
+            # ends it: this chat is for that project, and stays for it across
+            # resumes until it is bound somewhere else.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            where = op.get("cwd")
+            if not isinstance(where, str) or not where.strip():
+                return {"ok": False, "error": "which project?"}
+            try:
+                session_id, root = _chat_identity(trajdir)
+                home = CS.bind_project(session_id, where, root)
+            except (OSError, ValueError, TypeError, TimeoutError) as exc:
+                return {"ok": False, "error": str(exc)[:200]}
+            return {"ok": True, "cwd": home,
+                    "project": _project_identity(trajdir, True, session_id)}
         if kind == "open_project":
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
@@ -2255,8 +2297,9 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
-                    "reopen_todo", "generate_prompt", "prompt_preview",
-                    "reopen_session", "build_log", "watch_build"):
+                    "reopen_todo", "note_todo", "generate_prompt",
+                    "prompt_preview", "reopen_session", "build_log",
+                    "watch_build", "set_build_settings"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -2265,7 +2308,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
             session_id, root = _chat_identity(trajdir)
-            if kind == "reopen_session":
+            if kind in ("reopen_session", "set_build_settings"):
                 return {"__deferred__": (kind, session_id, root, None, op)}
             if not g:
                 return {"ok": False, "error": "goal not found in this chat"}
@@ -2593,16 +2636,30 @@ class H(BaseHTTPRequestHandler):
                 if self.server.chat_scoped:
                     _, root = _chat_identity(self.server.trajdir)
                 self._send(200, _supabase_status(SB, root))
+            elif self.path == "/api/models":
+                # What the Builds tab offers: the models the installed CLI
+                # names, the efforts, and what is chosen. Chat scope, since
+                # builds are.
+                if not self.server.chat_scoped:
+                    self._send(200, {"ok": False, "error": "chat scope only"})
+                else:
+                    from . import build as BUILD
+                    self._send(200, BUILD.models(
+                        *_chat_identity(self.server.trajdir)))
             elif self.path.split("?", 1)[0] == "/api/project.json":
                 # The project's own record: one file per directory, holding
                 # every goal of every chat started there. Read from the vault
                 # base, not from the project directory -- it is what the
                 # workspace knows about the project, not a file of it.
+                # ?full=1 is the copy button asking for the whole file.
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                full = (query.get("full") or [""])[0] in ("1", "true")
                 trajdir = self.server.trajdir
                 session, root = ((_chat_identity(trajdir))
                                  if self.server.chat_scoped else (None, None))
                 who = _project_identity(trajdir, self.server.chat_scoped, session)
-                self._send(200, project_json(root, who["cwd"]))
+                self._send(200, project_json(root, who["cwd"], full=full))
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()

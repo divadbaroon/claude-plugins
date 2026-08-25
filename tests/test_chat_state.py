@@ -1097,3 +1097,49 @@ class ChatStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectBindingTests(unittest.TestCase):
+    """A chat belongs to the project it was bound to, not to a directory.
+
+    Binding by directory made every chat started in one folder the same
+    project, forever, with nothing to choose and nothing to change. An
+    explicit binding is what "connect this chat to an existing project"
+    can mean at all -- so it is recorded on the chat, and the directory
+    it happened to start in is only a suggestion until then.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        CS.ingest_hook({"session_id": self.sid, "hook_event_name": "SessionStart",
+                        "cwd": str(self.root / "somewhere")}, root=self.root)
+
+    def test_a_new_chat_is_not_bound_to_any_project(self):
+        self.assertFalse(CS.project_bound(self.sid, root=self.root))
+        self.assertEqual("", CS.bound_project(self.sid, root=self.root))
+
+    def test_binding_records_the_project_and_survives_a_reread(self):
+        home = str(self.root / "projects" / "acme")
+        CS.bind_project(self.sid, home, root=self.root)
+        self.assertTrue(CS.project_bound(self.sid, root=self.root))
+        self.assertEqual(str(Path(home)), CS.bound_project(self.sid, root=self.root))
+
+    def test_binding_again_moves_the_chat_rather_than_refusing(self):
+        first = str(self.root / "projects" / "one")
+        second = str(self.root / "projects" / "two")
+        CS.bind_project(self.sid, first, root=self.root)
+        CS.bind_project(self.sid, second, root=self.root)
+        self.assertEqual(str(Path(second)), CS.bound_project(self.sid, root=self.root))
+
+    def test_an_empty_binding_is_refused_rather_than_stored(self):
+        with self.assertRaises(ValueError):
+            CS.bind_project(self.sid, "   ", root=self.root)
+        self.assertFalse(CS.project_bound(self.sid, root=self.root))
+
+    def test_binding_does_not_disturb_the_goals_ui_opt_in(self):
+        CS.mark_goals_ui_invoked(self.sid, root=self.root)
+        CS.bind_project(self.sid, str(self.root / "p"), root=self.root)
+        self.assertTrue(CS.goals_ui_active(self.sid, root=self.root))

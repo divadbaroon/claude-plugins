@@ -36,7 +36,7 @@ def tokens_in(text):
 
 
 STUB = r'''#!/usr/bin/env python3
-import json, sys, os
+import json, sys, os, time
 args = sys.argv[1:]
 if "--output-format" not in args:
     # providers.ClaudeCLI: the prompt arrives on stdin, plain text goes out
@@ -45,18 +45,36 @@ if "--output-format" not in args:
     sys.exit(0)
 prompt = args[args.index("-p") + 1]
 resume = "--resume" in args
+if os.environ.get("STUB_LOG"):
+    with open(os.environ["STUB_LOG"], "a") as fh:
+        fh.write(json.dumps({"prompt": prompt, "resume": resume}) + "\n")
 def say(text):
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": text}]}}), flush=True)
+def end():
+    print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
+    sys.exit(0)
 if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    if os.environ.get("STUB_HOLD"):
+        # Mid-work for a while: long enough to be told something.
+        say('{"estimate": {"tokens": 12000, "minutes": 3}}')
+        time.sleep(float(os.environ["STUB_HOLD"]))
+        for i in ids:
+            say('{"id": "%s", "state": "DONE"}' % i)
+        end()
     say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
     for other in ids[1:]:
         say('{"id": "%s", "state": "DONE"}' % other)
 else:
-    msg = json.loads(prompt)
+    try:
+        msg = json.loads(prompt)
+    except ValueError:
+        # Not an answer -- a note, a deleted row: carry on to the end.
+        say("Moving on.")
+        end()
     say('{"id": "%s", "state": "DONE"}' % msg["id"])
-print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
+end()
 '''
 
 
@@ -96,6 +114,10 @@ class TodoPanelBrowserTests(unittest.TestCase):
         p.important.write_text(json.dumps({"items": []}))
         p.prompts.write_text(json.dumps({"prompts": []}))
         p.manifest.write_text(json.dumps({"cwd": str(self.root)}))
+        # A chat that has said which project it is for: otherwise the page
+        # opens on onboarding, whose shade sits over the rail and takes
+        # every click these tests make.
+        chat_state.bind_project(self.session, str(self.root), root=self.root)
         self.trajdir = p.session_dir
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -774,6 +796,57 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_enter_on_a_building_row_opens_a_note_pane_and_the_build_is_told(self):
+        # Enter on a row the build is on is not a new row: it opens the pane
+        # under the row, and what is typed there goes to the build's session
+        # -- the process ended and resumed on it -- which then carries on.
+        if BUILD.mode() == "session":
+            self.skipTest("a headless build's process is the one told mid-work")
+        os.environ["STUB_HOLD"] = "8"
+        log = self.root / "stub.log"
+        os.environ["STUB_LOG"] = str(log)
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("building", timeout=10_000)
+                self.tile(page, "Add the route").locator(".hc-todo-line").click()
+                page.keyboard.press("Enter")
+                pane = page.locator(".hc-todo-note-pane")
+                expect(pane).to_be_visible()
+                expect(pane).to_contain_text("Anything to add")
+                # The row was not split: one row reads "Add the route".
+                self.assertEqual(1, len([r for r in self.rows()
+                                         if r[0] == "Add the route"]))
+                page.keyboard.type("use the v2 router")
+                page.keyboard.press("Enter")
+                expect(page.locator(".hc-todo-note-pane")).to_have_count(0)
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    if log.exists() and len(log.read_text().splitlines()) == 2:
+                        break
+                    time.sleep(0.1)
+                lines = [json.loads(l) for l in log.read_text().splitlines()]
+                self.assertEqual(2, len(lines), lines)
+                self.assertTrue(lines[1]["resume"])
+                self.assertIn("added context to a TODO row", lines[1]["prompt"])
+                self.assertIn('"use the v2 router"', lines[1]["prompt"])
+                # And the build went on to its end.
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("done", timeout=10_000)
+                expect(page.locator(".hc-todo-error")).to_be_hidden()
+            finally:
+                browser.close()
+
 
 class SessionBuildBrowserTests(TodoPanelBrowserTests):
     """Default mode: the build waits for the connected session's next turn."""
@@ -882,7 +955,6 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
                 expect(page.locator(".hc-todo-error")).to_be_hidden()
             finally:
                 browser.close()
-
 
 if __name__ == "__main__":
     unittest.main()

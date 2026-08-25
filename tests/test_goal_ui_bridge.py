@@ -1031,6 +1031,20 @@ class BuildWatchTests(BridgeTestCase):
         self.assertIn("longer than it estimated", out["meta"])
         self.assertNotIn("left", out["meta"])
 
+    def test_a_stand_in_reads_as_a_guess_and_says_whose_it_is(self):
+        # The build said nothing within the grace: the server hands the rail
+        # what this chat's earlier builds cost, marked as such. A "~", not
+        # an "about" -- and the title says where the number came from.
+        guessed = dict(self.RUN["estimate"], source="measured")
+        out = self.line(dict(self.RUN, estimate=guessed))
+        self.assertEqual("building · 2m in · ~6m left · ~120k tok", out["meta"])
+        self.assertIn("a stand-in from this chat's earlier builds", out["title"])
+        self.assertIn("until the build prints its own estimate", out["title"])
+        out = self.line(dict(self.RUN, estimate=dict(guessed, source="default"),
+                             eta_s=0))
+        self.assertIn("longer than expected", out["meta"])
+        self.assertIn("nothing measured in this chat yet", out["title"])
+
     def test_a_build_that_has_stopped_is_not_given_a_countdown(self):
         out = self.line(dict(self.RUN, status="waiting", running=False,
                              eta_s=None))
