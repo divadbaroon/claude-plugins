@@ -1569,7 +1569,7 @@
         var overlay = document.createElement("div");
         overlay.className = "hc-ask";
         var box = document.createElement("div");
-        box.className = "hc-ask-box hc-pick-box";
+        box.className = "hc-ask-box hc-pick-box hc-chatpick-box";
         var title = document.createElement("div");
         title.className = "hc-ask-title";
         title.textContent = goalId
@@ -10754,6 +10754,10 @@
       ".hc-pick-text{display:block;white-space:pre-wrap;word-break:break-word}",
       ".hc-pick-none{padding:12px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
       ".hc-pick-box{position:relative}",
+      // A chat row carries a label and the directory it worked in, and the
+      // list is as long as the chats you have. The chat picker gets the
+      // room for both; the prompt picker stays the size it was.
+      ".hc-chatpick-box{width:min(1240px,100%);max-height:min(92vh,1080px)}",
       ".hc-pick-close{position:absolute;top:8px;right:8px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:2px;cursor:pointer;font:15px/1 'Source Code Pro',monospace}",
       ".hc-pick-close:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
   ].join("");
