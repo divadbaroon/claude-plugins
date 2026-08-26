@@ -1482,16 +1482,29 @@ def _cwd_for(session_id: str, root: Optional[Path], goals=None,
              goal_id: str = "") -> str:
     """Where a build runs.
 
-    The chat's own directory, unless the goal says otherwise: a project
-    made in the workspace has a directory of its own, and work on its goals
-    belongs there rather than wherever this chat happens to have started.
-    A directory that has gone away is not used -- a build in a path that no
-    longer exists fails in a way nobody can read.
+    The project this chat is bound to, unless the goal says otherwise: a
+    goal made under another project carries that project's directory and is
+    the narrower statement, so it is asked first.
+
+    The binding outranks the directory the chat was started in, because
+    every checkout of a repository is one project and a chat opened from a
+    worktree is still working the same project as one opened from the main
+    checkout. Read the other way round, the same work built into whichever
+    directory each chat happened to be opened from -- which is how one
+    feature came to be written twice, on two branches, by two builds of the
+    same goal tree.
+
+    The chat's own directory remains the answer for a chat that has never
+    been bound. A directory that has gone away is not used at any step -- a
+    build in a path that no longer exists fails in a way nobody can read.
     """
     if goals is not None and goal_id:
         wanted = _goal_cwd(goals, goal_id)
         if wanted and Path(wanted).expanduser().is_dir():
             return str(Path(wanted).expanduser())
+    home = CS.bound_project(session_id, root)
+    if home and Path(home).expanduser().is_dir():
+        return str(Path(home).expanduser())
     manifest = CS.load_manifest(session_id, root)
     cwd = str(manifest.get("cwd") or "").strip()
     if cwd and Path(cwd).is_dir():

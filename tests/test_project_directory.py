@@ -178,6 +178,50 @@ class BuildCwdTests(unittest.TestCase):
             self.assertEqual(self.tmp.name,
                              BUILD._cwd_for("chat-x", None, doc, "g1"))
 
+    def test_the_bound_project_wins_over_the_chats_directory(self):
+        # A chat is bound to a project; the directory it happened to start
+        # in is only where it was opened. Every checkout of a repository is
+        # one project, so the project's home is the one answer that does not
+        # change when the reader opens the same work from a second worktree.
+        doc = tree(GM.new_goal("g1", "Fix the rail"))
+        with mock.patch.object(
+                BUILD.CS, "load_manifest",
+                return_value={"cwd": self.tmp.name,
+                              "project_home": str(self.here)}):
+            self.assertEqual(str(self.here),
+                             BUILD._cwd_for("chat-x", None, doc, "g1"))
+
+    def test_a_goal_that_names_a_project_still_outranks_the_binding(self):
+        # The goal is the narrower statement: a goal made under another
+        # project says so on itself, and that is the whole point of saying it.
+        other = Path(self.tmp.name) / "elsewhere"
+        other.mkdir()
+        doc = tree(GM.new_goal("g1", "Draw it", project_cwd=str(other)))
+        with mock.patch.object(
+                BUILD.CS, "load_manifest",
+                return_value={"cwd": self.tmp.name,
+                              "project_home": str(self.here)}):
+            self.assertEqual(str(other),
+                             BUILD._cwd_for("chat-x", None, doc, "g1"))
+
+    def test_a_bound_project_that_has_gone_falls_back_to_the_chat(self):
+        # Same reason the goal's own directory is checked: a build in a path
+        # that no longer exists fails in a way nobody can read.
+        doc = tree(GM.new_goal("g1", "Fix the rail"))
+        with mock.patch.object(
+                BUILD.CS, "load_manifest",
+                return_value={"cwd": self.tmp.name,
+                              "project_home": str(self.here / "gone")}):
+            self.assertEqual(self.tmp.name,
+                             BUILD._cwd_for("chat-x", None, doc, "g1"))
+
+    def test_an_unbound_chat_is_the_chat_as_before(self):
+        doc = tree(GM.new_goal("g1", "Fix the rail"))
+        with mock.patch.object(
+                BUILD.CS, "load_manifest", return_value={"cwd": self.tmp.name}):
+            self.assertEqual(self.tmp.name,
+                             BUILD._cwd_for("chat-x", None, doc, "g1"))
+
     def test_called_without_a_goal_it_is_the_chat_as_before(self):
         with mock.patch.object(
                 BUILD.CS, "load_manifest", return_value={"cwd": self.tmp.name}):
