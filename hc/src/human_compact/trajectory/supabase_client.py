@@ -348,7 +348,6 @@ def sign_in(email: str, password: str,
 # the code is worthless to anyone who does not hold the verifier.
 
 OAUTH_PROVIDERS = (
-    "google",
     "github",
 )
 OAUTH_WAIT_S = 300

@@ -83,19 +83,15 @@ class PkceTests(unittest.TestCase):
 class AuthorizeUrlTests(Configured):
 
     def test_it_names_the_provider_the_redirect_and_the_challenge(self):
-        url = SB.authorize_url("google", "http://127.0.0.1:5050/callback", "CH")
+        url = SB.authorize_url("github", "http://127.0.0.1:5050/callback", "CH")
         parts = urllib.parse.urlsplit(url)
         query = urllib.parse.parse_qs(parts.query)
         self.assertEqual("https://ref.supabase.co/auth/v1/authorize",
                          parts.scheme + "://" + parts.netloc + parts.path)
-        self.assertEqual(["google"], query["provider"])
+        self.assertEqual(["github"], query["provider"])
         self.assertEqual(["http://127.0.0.1:5050/callback"], query["redirect_to"])
         self.assertEqual(["CH"], query["code_challenge"])
         self.assertEqual(["s256"], query["code_challenge_method"])
-
-    def test_github_is_offered_too(self):
-        self.assertIn("provider=github",
-                      SB.authorize_url("github", "http://127.0.0.1:1/cb", "C"))
 
     def test_a_provider_nobody_configured_is_refused_here(self):
         # Better than sending the reader to a page that will not load.
@@ -106,7 +102,7 @@ class AuthorizeUrlTests(Configured):
     def test_with_no_project_configured_it_says_so(self):
         (self.root / "supabase.json").write_text("{}")
         with self.assertRaises(SB.SupabaseError):
-            SB.authorize_url("google", "http://127.0.0.1:1/cb", "C")
+            SB.authorize_url("github", "http://127.0.0.1:1/cb", "C")
 
 
 class ExchangeTests(Configured):
@@ -157,7 +153,7 @@ class RoundTripTests(Configured):
 
     def test_a_signed_in_browser_leaves_the_terminal_signed_in(self):
         open_it, seen = self.browser()
-        out = SB.sign_in_with_browser("google", open_browser=open_it, wait_s=10)
+        out = SB.sign_in_with_browser("github", open_browser=open_it, wait_s=10)
         self.assertEqual("someone@example.com", out["email"])
         self.assertEqual({"auth_code": "THECODE",
                           "code_verifier": mock.ANY}, self.posted[0]["body"])
@@ -170,7 +166,7 @@ class RoundTripTests(Configured):
 
     def test_the_listener_is_on_loopback_and_a_port_nobody_reserved(self):
         open_it, seen = self.browser()
-        SB.sign_in_with_browser("google", open_browser=open_it, wait_s=10)
+        SB.sign_in_with_browser("github", open_browser=open_it, wait_s=10)
         back = urllib.parse.parse_qs(
             urllib.parse.urlsplit(seen["url"]).query)["redirect_to"][0]
         self.assertTrue(back.startswith("http://127.0.0.1:"), back)
@@ -178,7 +174,7 @@ class RoundTripTests(Configured):
 
     def test_the_browser_is_told_it_worked(self):
         open_it, seen = self.browser()
-        SB.sign_in_with_browser("google", open_browser=open_it, wait_s=10)
+        SB.sign_in_with_browser("github", open_browser=open_it, wait_s=10)
         self.assertEqual(200, seen["status"])
         self.assertIn("Signed in", seen["page"])
         self.assertIn("close this tab", seen["page"])
@@ -187,7 +183,7 @@ class RoundTripTests(Configured):
         open_it, seen = self.browser("?error=access_denied"
                                      "&error_description=User+said+no")
         with self.assertRaises(SB.SupabaseError) as caught:
-            SB.sign_in_with_browser("google", open_browser=open_it, wait_s=10)
+            SB.sign_in_with_browser("github", open_browser=open_it, wait_s=10)
         self.assertIn("User said no", str(caught.exception))
         self.assertEqual(400, seen["status"])
         self.assertEqual([], self.posted)
@@ -195,7 +191,7 @@ class RoundTripTests(Configured):
     def test_a_browser_that_never_comes_back_gives_up(self):
         # A reader who wanders off is not a reader to wait on for ever.
         with self.assertRaises(SB.SupabaseError) as caught:
-            SB.sign_in_with_browser("google", open_browser=lambda url: None,
+            SB.sign_in_with_browser("github", open_browser=lambda url: None,
                                     wait_s=1)
         self.assertIn("timed out", str(caught.exception))
         self.assertEqual([], self.posted)
@@ -203,7 +199,7 @@ class RoundTripTests(Configured):
     def test_the_reader_is_shown_the_url_in_case_it_did_not_open(self):
         said = []
         open_it, _seen = self.browser()
-        SB.sign_in_with_browser("google", open_browser=open_it, wait_s=10,
+        SB.sign_in_with_browser("github", open_browser=open_it, wait_s=10,
                                 announce=said.append)
         self.assertEqual(1, len(said))
         self.assertIn("/auth/v1/authorize", said[0])

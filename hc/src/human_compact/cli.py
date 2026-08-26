@@ -1536,7 +1536,7 @@ def supabase_main(argv=None):
     # --password is the way through for anyone who cannot open a browser
     # -- a remote shell, a machine with none.
     ap.add_argument("--provider", default=None,
-                    help="go straight to google or github at Supabase"
+                    help="go straight to GitHub at Supabase"
                          " instead of the connect page")
     ap.add_argument("--password", action="store_true",
                     help="type an email and password instead of the browser")
