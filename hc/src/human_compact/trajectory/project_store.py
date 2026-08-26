@@ -279,6 +279,71 @@ def repo_home(cwd) -> str:
     return answer
 
 
+def worktrees(cwd) -> List[Dict[str, Any]]:
+    """Every checkout of this repository, with the branch each one holds.
+
+    The reader runs Claude Code in one checkout and Engelbart's builds in
+    another only by accident; offering the list with branches is what lets
+    them say the two are the same. A directory git has never heard of is
+    its own single entry, so a caller always has something to show.
+    """
+    import subprocess
+    here = _resolved(cwd)
+    lone = [{"path": here, "branch": "", "head": "", "main": True}]
+    try:
+        listed = subprocess.run(
+            ("git", "worktree", "list", "--porcelain"),
+            cwd=here, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return lone
+    if listed.returncode != 0 or not (listed.stdout or "").strip():
+        return lone
+    out: List[Dict[str, Any]] = []
+    current: Dict[str, Any] = {}
+    def keep():
+        if current.get("path"):
+            out.append({"path": current["path"],
+                        "branch": current.get("branch", ""),
+                        "head": current.get("head", ""),
+                        # The first entry git prints is the main worktree;
+                        # it is the one repo_home names, and the one a
+                        # project falls back to when nothing is chosen.
+                        "main": not out})
+    for line in (listed.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            keep()
+            current = {"path": _resolved(line[len("worktree "):])}
+        elif line.startswith("HEAD "):
+            current["head"] = line[len("HEAD "):].strip()[:40]
+        elif line.startswith("branch "):
+            ref = line[len("branch "):].strip()
+            current["branch"] = ref.split("refs/heads/", 1)[-1][:200]
+        elif line.startswith("detached"):
+            current["branch"] = ""
+    keep()
+    return out or lone
+
+
+def chosen_dir(cwd, wanted) -> str:
+    """The checkout a project builds in, or "" for its own home.
+
+    Not taken on its word: what is written here decides where a build
+    writes, so only a checkout of this same repository -- one git itself
+    lists, and one still on disk -- survives. Naming the main worktree is
+    the same as naming nowhere, since that is what "" already means.
+    """
+    asked = str(wanted or "").strip()
+    if not asked:
+        return ""
+    here = _resolved(asked)
+    if not Path(here).is_dir():
+        return ""
+    for tree in worktrees(cwd):
+        if tree["path"] == here:
+            return "" if tree.get("main") else here
+    return ""
+
+
 def project_path(root: Optional[Path], cwd) -> Path:
     """Where the project's file lives: beside the chat sessions, keyed by the
     digest of the resolved directory -- never by the path itself, which is
@@ -339,6 +404,12 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     identity = section.get("id")
     if isinstance(identity, str) and identity:
         out["id"] = identity[:64]
+    # Re-checked on the way out as well as in: a worktree the reader has
+    # since removed would otherwise keep sending builds to a path that is
+    # no longer there.
+    where = chosen_dir(cwd, section.get("working_dir"))
+    if where:
+        out["working_dir"] = where
     return out
 
 
@@ -404,6 +475,13 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     held = authored.get("tree_session")
     if isinstance(held, str) and held:
         section["tree_session"] = held[:200]
+    # Which checkout of this repository the reader works in. Carried here
+    # for the same reason tree_session is: the section is rebuilt from a
+    # whitelist, and a key merely present in what was read is dropped by
+    # the next unrelated edit.
+    where = chosen_dir(cwd, authored.get("working_dir"))
+    if where:
+        section["working_dir"] = where
     return section
 
 

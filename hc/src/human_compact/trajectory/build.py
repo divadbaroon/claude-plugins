@@ -90,6 +90,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import chat_state as CS
 from . import goals as GM
+from . import project_store as PS
 from .secure_io import atomic_write_json
 
 
@@ -1503,8 +1504,20 @@ def _cwd_for(session_id: str, root: Optional[Path], goals=None,
         if wanted and Path(wanted).expanduser().is_dir():
             return str(Path(wanted).expanduser())
     home = CS.bound_project(session_id, root)
-    if home and Path(home).expanduser().is_dir():
-        return str(Path(home).expanduser())
+    if home:
+        # The checkout of that project the reader chose, when they have
+        # chosen one: a project is its whole repository, and which of its
+        # worktrees the builds run in is the reader's to say -- it is how
+        # Engelbart and the Claude Code they are typing in stay on one
+        # branch. Never a path this store has not vouched for.
+        try:
+            chosen = str(PS.load_project(root, home).get("working_dir") or "")
+        except (OSError, ValueError, TypeError):
+            chosen = ""
+        if chosen and Path(chosen).expanduser().is_dir():
+            return str(Path(chosen).expanduser())
+        if Path(home).expanduser().is_dir():
+            return str(Path(home).expanduser())
     manifest = CS.load_manifest(session_id, root)
     cwd = str(manifest.get("cwd") or "").strip()
     if cwd and Path(cwd).is_dir():

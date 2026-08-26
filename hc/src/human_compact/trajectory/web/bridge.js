@@ -2718,6 +2718,11 @@
         settingsBuildSet(build, build === "check" ? !!target.checked : target.value);
         return;
       }
+      if (target && target.getAttribute
+          && target.getAttribute("data-hc-worktree") !== null) {
+        setWorktree(str(target.value));
+        return;
+      }
       var key = (target && target.getAttribute) ? str(target.getAttribute("data-hc-alert-set")) : "";
       if (!key) return;
       if (key === "banners") setAlertSettings({ banners: !!target.checked });
@@ -3023,6 +3028,9 @@
       ".hc-overview-label small{font-weight:400;letter-spacing:.2px;text-transform:none;color:var(--fnt,#9b9b9b);margin-left:6px}",
       ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;font-size:15.5px!important;font-weight:600;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12.5px/1.6 'Source Code Pro',monospace;caret-color:var(--ink,#111)}",
       ".hc-overview-objective::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-worktree{align-items:center}",
+      ".hc-overview-wt{margin-left:6px;max-width:100%;border:1px solid var(--bd2);border-radius:3px;background:var(--panel2);color:var(--ink,#111);font:11.5px/1.5 'Source Code Pro',monospace;padding:2px 6px;cursor:pointer;outline:none}",
+      ".hc-overview-wt:hover{border-color:var(--acc)}",
       ".hc-overview-context{display:flex;box-sizing:border-box;max-width:100%;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);min-height:320px}",
       ".hc-overview-srcs{flex:0 0 220px;border-right:1px solid var(--bd,#e3e3e3);padding:14px 12px}",
       ".hc-overview-src{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:6px;cursor:pointer;user-select:none;margin-bottom:2px}",
@@ -5219,8 +5227,12 @@
     // git rather than written, so they sit apart from the two fields above
     // as facts rather than answers.
     var facts = el("div", "hc-overview-facts");
+    var trees = array(who.worktrees);
     [["directory", str(who.cwd), ""],
-     ["branch", str(who.branch), ""],
+     // The branch stays a fact only while there is one checkout to be on.
+     // With more than one it becomes the picker below, since then it is an
+     // answer the reader gives rather than one git gives.
+     ["branch", trees.length > 1 ? "" : str(who.branch), ""],
      ["origin", str(who.remote), remoteHref(who.remote)]].forEach(
       function (spec) {
         if (!spec[1]) return;
@@ -5238,6 +5250,35 @@
         facts.appendChild(row);
       });
     if (facts.children && facts.children.length) card.appendChild(facts);
+    // Which checkout the builds run in. Drawn only where there is a choice
+    // to make: one worktree is not a decision, and a select with one row in
+    // it reads as a setting the reader has failed to configure.
+    //
+    // This is the line that lets Engelbart and the reader's own Claude Code
+    // be used at once: they say here which checkout they are typing in, and
+    // every build of this project lands on that branch instead of on
+    // whichever directory the chat happened to be opened from.
+    if (trees.length > 1) {
+      var wtRow = el("div", "hc-overview-fact hc-overview-worktree");
+      wtRow.appendChild(el("span", "hc-overview-fact-k", "working in"));
+      var pick = el("select", "hc-overview-wt");
+      pick.setAttribute("data-hc-worktree", "");
+      pick.setAttribute("title", "Which checkout of this repository builds"
+                        + " run in. Set it to the one your Claude Code is"
+                        + " open on.");
+      trees.forEach(function (tree) {
+        var branch = str(tree.branch) || "detached";
+        var opt = el("option", "", branch + "  ·  " + str(tree.path));
+        // The main worktree is stored as "" -- it is what a project with no
+        // choice made already falls back to, and writing its path would be
+        // a second spelling of the same answer.
+        opt.value = tree.main ? "" : str(tree.path);
+        if (opt.value === str(who.working_dir)) opt.selected = true;
+        pick.appendChild(opt);
+      });
+      wtRow.appendChild(pick);
+      card.appendChild(wtRow);
+    }
 
     var objSec = el("div", "hc-overview-sec");
     var label = el("div", "hc-overview-label", "main objective");
@@ -5929,6 +5970,28 @@
       if (serverState.project) serverState.project.objective = str(result.objective);
       return true;
     });
+  }
+
+  function setWorktree(where) {
+    // Which checkout this project's builds run in. The server is the judge
+    // of what is a checkout of this repository, so what comes back is what
+    // stands -- including "" when the reader named something that is not
+    // one, which returns the project to its own home rather than failing
+    // silently at the next build.
+    var who = projectInfo();
+    if (!who) return Promise.resolve(false);
+    return post({ op: "set_project_meta", working_dir: str(where) })
+      .then(function (result) {
+        if (!result || !result.ok) return false;
+        if (serverState.project) {
+          serverState.project.working_dir = str(result.working_dir);
+          // The branch of the checkout just chosen, so the card says what
+          // the reader is now on without waiting for the next sweep.
+          serverState.project.branch = str(result.branch);
+        }
+        renderOverview();
+        return true;
+      });
   }
 
   function saveAbout(textarea) {

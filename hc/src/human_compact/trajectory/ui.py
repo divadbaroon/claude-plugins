@@ -722,7 +722,8 @@ def _project_identity(trajdir, chat_scoped, session_id):
     is kept once per directory, not once per chat.
     """
     empty = {"cwd": "", "name": "", "branch": "", "remote": "",
-             "objective": "", "description": "", "sources": [], "saved": []}
+             "objective": "", "description": "", "sources": [], "saved": [],
+             "working_dir": "", "worktrees": []}
     if not (chat_scoped and session_id):
         return empty
     try:
@@ -748,8 +749,20 @@ def _project_identity(trajdir, chat_scoped, session_id):
     # Named by the reader when they have named it; the directory's own name
     # is the fallback, not the answer -- a project can be renamed without
     # moving.
+    # Which checkout of this repository the builds run in, and every
+    # checkout there is to choose from. The branch reported is that
+    # directory's, not the main worktree's: what the reader is confirming
+    # is that Engelbart is on the branch their own Claude Code is on, and
+    # the main worktree's branch would answer a question nobody asked.
+    where = str(record.get("working_dir") or "") or str(path)
+    try:
+        trees = PS.worktrees(str(path))
+    except Exception:  # noqa: BLE001 - a repository git cannot read is still one
+        trees = []
     return {"cwd": str(path), "name": record.get("name") or path.name,
-            "branch": AE._git_branch(str(path)) or "",
+            "branch": AE._git_branch(where) or "",
+            "working_dir": str(record.get("working_dir") or ""),
+            "worktrees": trees,
             "remote": _git_remote(str(path)),
             "objective": record.get("objective", ""),
             # Written beside the objective and read back here: the overview
@@ -2779,6 +2792,15 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 if not isinstance(op.get("sources"), list):
                     return {"ok": False, "error": "sources must be a list"}
                 record["sources"] = GM.normalize_sources(op["sources"])
+            if "working_dir" in op:
+                # Which checkout of the repository the builds run in. Only
+                # a worktree of this same project survives the write (see
+                # project_store.chosen_dir), so a path the reader cannot
+                # have meant comes back as "the project's own home".
+                text = op.get("working_dir")
+                if not isinstance(text, str):
+                    return {"ok": False, "error": "working_dir must be text"}
+                record["working_dir"] = text.strip()
             if "saved" in op:
                 # The Saved page's whole list, posted back the way the
                 # sources are. Kept apart from them on purpose: nothing
@@ -2793,7 +2815,13 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                     # when nothing was written for it.
                     "name": saved.get("name") or Path(who["cwd"]).name,
                     "sources": saved.get("sources", []),
-                    "saved": saved.get("saved", [])}
+                    "saved": saved.get("saved", []),
+                    # Read back rather than echoed: a checkout that is not
+                    # this repository's was refused on the way in, and the
+                    # reader is told what actually stands.
+                    "working_dir": saved.get("working_dir", ""),
+                    "branch": AE._git_branch(
+                        saved.get("working_dir") or who["cwd"]) or ""}
         if kind in ("set_supabase_config", "supabase_login",
                     "supabase_logout"):
             # Connecting the workspace to the reader's own Supabase, from

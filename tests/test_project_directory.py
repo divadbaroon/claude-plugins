@@ -11,6 +11,7 @@ chose, and a goal remembers which project it is for.
 """
 import json
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -215,6 +216,32 @@ class BuildCwdTests(unittest.TestCase):
             self.assertEqual(self.tmp.name,
                              BUILD._cwd_for("chat-x", None, doc, "g1"))
 
+    def test_the_checkout_the_project_chose_wins_over_its_home(self):
+        # The whole point of choosing one: the project is the repository,
+        # and the reader says which of its checkouts the builds run in so
+        # that Engelbart and their own Claude Code sit on one branch.
+        doc = tree(GM.new_goal("g1", "Fix the rail"))
+        with mock.patch.object(
+                BUILD.CS, "load_manifest",
+                return_value={"cwd": self.tmp.name,
+                              "project_home": self.tmp.name}), \
+             mock.patch.object(
+                BUILD.PS, "load_project",
+                return_value={"working_dir": str(self.here)}):
+            self.assertEqual(str(self.here),
+                             BUILD._cwd_for("chat-x", None, doc, "g1"))
+
+    def test_with_no_checkout_chosen_the_project_home_still_answers(self):
+        doc = tree(GM.new_goal("g1", "Fix the rail"))
+        with mock.patch.object(
+                BUILD.CS, "load_manifest",
+                return_value={"cwd": self.tmp.name,
+                              "project_home": str(self.here)}), \
+             mock.patch.object(
+                BUILD.PS, "load_project", return_value={}):
+            self.assertEqual(str(self.here),
+                             BUILD._cwd_for("chat-x", None, doc, "g1"))
+
     def test_an_unbound_chat_is_the_chat_as_before(self):
         doc = tree(GM.new_goal("g1", "Fix the rail"))
         with mock.patch.object(
@@ -226,6 +253,94 @@ class BuildCwdTests(unittest.TestCase):
         with mock.patch.object(
                 BUILD.CS, "load_manifest", return_value={"cwd": self.tmp.name}):
             self.assertEqual(self.tmp.name, BUILD._cwd_for("chat-x", None))
+
+
+class WorktreeChoiceTests(unittest.TestCase):
+    """Which checkout of the repository the project builds in.
+
+    A project is its repository, not one directory of it: repo_home folds
+    every worktree onto the main one so the goal tree stays whole. But the
+    reader runs Claude Code in whichever checkout holds the branch they are
+    working, and a build that lands in a different checkout writes onto a
+    different branch. The project therefore names one working directory,
+    and it may be any checkout of the same repository.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self._git("init", "-b", "main")
+        self._git("config", "user.email", "t@example.com")
+        self._git("config", "user.name", "T")
+        (self.repo / "a.txt").write_text("a\n")
+        self._git("add", "a.txt")
+        self._git("commit", "-m", "one")
+        self.tree = self.root / "side"
+        self._git("worktree", "add", str(self.tree), "-b", "side")
+
+    def _git(self, *args):
+        subprocess.run(("git",) + args, cwd=self.repo, check=True,
+                       capture_output=True, text=True)
+
+    def test_every_checkout_is_offered_with_the_branch_it_holds(self):
+        # The reader picks by branch, not by path: the path is where the
+        # checkout sits and the branch is what they are working on.
+        found = PS.worktrees(self.repo)
+        by_path = {w["path"]: w for w in found}
+        self.assertEqual({PS._resolved(self.repo), PS._resolved(self.tree)},
+                         set(by_path))
+        self.assertEqual("main", by_path[PS._resolved(self.repo)]["branch"])
+        self.assertEqual("side", by_path[PS._resolved(self.tree)]["branch"])
+        self.assertTrue(by_path[PS._resolved(self.repo)]["main"])
+        self.assertFalse(by_path[PS._resolved(self.tree)]["main"])
+
+    def test_a_directory_git_never_heard_of_offers_only_itself(self):
+        plain = self.root / "plain"
+        plain.mkdir()
+        self.assertEqual([PS._resolved(plain)],
+                         [w["path"] for w in PS.worktrees(plain)])
+
+    def test_the_project_keeps_the_checkout_the_reader_chose(self):
+        PS.save_project(self.root, self.repo,
+                        {"name": "Repo", "working_dir": str(self.tree)})
+        self.assertEqual(PS._resolved(self.tree),
+                         PS.load_project(self.root, self.repo)["working_dir"])
+
+    def test_a_later_unrelated_edit_does_not_drop_the_choice(self):
+        # _project_section rebuilds from a whitelist on every write, so a
+        # field merely present in what was read is lost by the next edit.
+        PS.save_project(self.root, self.repo, {"working_dir": str(self.tree)})
+        held = PS.load_project(self.root, self.repo)
+        held["objective"] = "ship it"
+        PS.save_project(self.root, self.repo, held)
+        self.assertEqual(PS._resolved(self.tree),
+                         PS.load_project(self.root, self.repo)["working_dir"])
+
+    def test_a_checkout_of_another_repository_is_refused(self):
+        # The choice decides where a build writes. A path from elsewhere is
+        # not a view of this project and is not taken on its word.
+        other = self.root / "other"
+        other.mkdir()
+        subprocess.run(("git", "init"), cwd=other, check=True,
+                       capture_output=True, text=True)
+        PS.save_project(self.root, self.repo, {"working_dir": str(other)})
+        self.assertEqual("", PS.load_project(self.root, self.repo)
+                         .get("working_dir", ""))
+
+    def test_a_checkout_that_has_gone_away_is_refused(self):
+        PS.save_project(self.root, self.repo,
+                        {"working_dir": str(self.root / "never")})
+        self.assertEqual("", PS.load_project(self.root, self.repo)
+                         .get("working_dir", ""))
+
+    def test_choosing_nowhere_returns_the_project_to_its_own_home(self):
+        PS.save_project(self.root, self.repo, {"working_dir": str(self.tree)})
+        PS.save_project(self.root, self.repo, {"working_dir": ""})
+        self.assertEqual("", PS.load_project(self.root, self.repo)
+                         .get("working_dir", ""))
 
 
 class ImportKeepsTheProjectTests(unittest.TestCase):
