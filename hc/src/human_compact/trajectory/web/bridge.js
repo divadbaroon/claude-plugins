@@ -3735,10 +3735,18 @@
       ".hc-home-x{position:absolute;top:10px;right:11px;width:18px;height:18px;line-height:17px;text-align:center;border-radius:3px;color:var(--fnt,#9b9b9b);font-size:13px;cursor:pointer;opacity:0}",
       ".hc-home-card:hover .hc-home-x{opacity:1}",
       ".hc-home-x:hover{background:var(--hov,#f2f2f2);color:var(--bad,#a12d2d)}",
-      ".hc-home-card[data-hc-confirm] .hc-home-why,.hc-home-card[data-hc-confirm] .hc-home-facts,.hc-home-card[data-hc-confirm] .hc-home-where{display:none}",
-      ".hc-home-gone{display:none;flex-direction:column;gap:9px;font-size:11px;color:var(--mut,#575757);line-height:1.6}",
-      ".hc-home-card[data-hc-confirm] .hc-home-gone{display:flex}",
       ".hc-home-gone-row{display:flex;gap:10px;align-items:center}",
+      ".hc-home-modal{position:fixed;top:0;left:0;right:0;bottom:0;z-index:100010;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);padding:24px;box-sizing:border-box}",
+      ".hc-home-dialog{width:460px;max-width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:10px;background:var(--panel,#fff);color:var(--ink,#111);padding:20px 22px 18px;display:flex;flex-direction:column;gap:10px;box-shadow:0 18px 50px rgba(0,0,0,.3);font:12px/1.6 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-home-dialog-title{font:600 14px 'Source Code Pro',monospace;color:var(--bad,#a12d2d)}",
+      ".hc-home-dialog-body{font-size:11.5px;color:var(--mut,#575757);line-height:1.7;overflow-wrap:anywhere}",
+      ".hc-home-dialog-list{margin:0;padding-left:17px;font-size:11px;color:var(--mut,#575757);line-height:1.8}",
+      ".hc-home-dialog-warn{font:600 11px 'Source Code Pro',monospace;color:var(--bad,#a12d2d);letter-spacing:.3px;text-transform:uppercase}",
+      ".hc-home-dialog-ask{font-size:11px;color:var(--mut,#575757);overflow-wrap:anywhere}",
+      ".hc-home-dialog-ask b{color:var(--ink,#111);font-weight:600}",
+      ".hc-home-dialog-row{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding-top:2px}",
+      ".hc-home-btn[data-hc-off]{opacity:.4;cursor:not-allowed}",
+      ".hc-home-btn[data-hc-off]:hover{color:var(--mut,#575757);border-color:var(--bd2,#d5d5d5)}",
       ".hc-home-btn{cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:5px 9px;background:none}",
       ".hc-home-btn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-home-btn[data-hc-bad]:hover{color:var(--bad,#a12d2d);border-color:var(--bad,#a12d2d)}",
@@ -3760,7 +3768,8 @@
   var homeHere = "";        // the one this chat is in
   var homeSaid = "";
   var homeBusy = false;
-  var homeGoing = "";       // a card the reader is being asked to confirm
+  var homeGoing = "";       // the project the delete dialog is open over
+  var homeTyped = "";       // the name typed into it, which has to match
 
   function ensureHomeStyles() {
     if (document.getElementById("hc-home-style")) return false;
@@ -3795,11 +3804,10 @@
     card.setAttribute("data-hc-home-open", str(row.cwd));
     card.setAttribute("title", str(row.cwd));
     if (here) card.setAttribute("data-hc-active", "");
-    if (homeGoing === str(row.cwd)) card.setAttribute("data-hc-confirm", "");
     var x = el("span", "hc-home-x", "×");
     x.setAttribute("role", "button");
     x.setAttribute("data-hc-home-forget", str(row.cwd));
-    x.setAttribute("title", "Forget this project");
+    x.setAttribute("title", "Delete this project");
     card.appendChild(x);
     card.appendChild(el("div", "hc-home-name", str(row.name || row.cwd)));
     var why = str(row.objective || row.description || "").replace(/\s+/g, " ").trim();
@@ -3813,32 +3821,107 @@
                          + (Number(row.chats) === 1 ? " chat" : " chats")));
     if (here) facts.appendChild(el("span", "hc-home-here", "this chat"));
     card.appendChild(facts);
-    // Saying what goes and what stays, where the decision is made: forget
-    // reads like delete, and the goals are the thing a reader is afraid of
-    // losing. They are not in the project -- they are in the chats.
-    //
-    // Drawn only on the card being asked about. Drawn on all of them and
-    // hidden by CSS, every card carried a live Forget button, which is a
-    // row of armed controls one stray click from doing the wrong thing.
-    if (homeGoing !== str(row.cwd)) return card;
-    var gone = el("div", "hc-home-gone");
-    gone.appendChild(el("div", "",
-      "Forget " + str(row.name || row.cwd) + "? Its name, purpose and "
-      + "sources go. The goals stay in their chats, and every chat in it is "
-      + "asked which project it belongs to next time."));
-    var row2 = el("div", "hc-home-gone-row");
-    var yes = el("span", "hc-home-btn", "Forget");
+    return card;
+  }
+
+  // --- deleting a project -------------------------------------------------
+  //
+  // A dialog over the whole screen rather than a pair of buttons on the
+  // card, and the project's name typed out rather than a second click. What
+  // this deletes is not recoverable -- the goals, the TODO rows, the notes
+  // and the prompts of every chat in the project -- so the reader has to
+  // say which project they mean, in its own words, before the button works.
+  // What it does not touch is said too: the directory is the reader's.
+
+  function homeRowFor(where) {
+    var rows = homeRows || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (str(rows[i].cwd) === str(where)) return rows[i];
+    }
+    return null;
+  }
+
+  function homeName(row) {
+    return str(row && (row.name || row.cwd)).trim();
+  }
+
+  function homeTypedRight(row) {
+    var want = homeName(row);
+    return !!want && homeTyped.trim() === want;
+  }
+
+  function homeDialog() {
+    var row = homeRowFor(homeGoing);
+    if (!row) return null;
+    var name = homeName(row);
+    var goals = Number(row.goals || 0);
+    var chats = Number(row.chats || 0);
+    var shade = el("div", "hc-home-modal");
+    shade.setAttribute("data-hc-home-modal", "");
+    shade.onclick = function (event) {
+      if (event && event.target === shade) homeCancel();
+    };
+    var box = el("div", "hc-home-dialog");
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    box.setAttribute("aria-label", "Delete " + name);
+    box.appendChild(el("div", "hc-home-dialog-title", "Delete " + name + "?"));
+    box.appendChild(el("div", "hc-home-dialog-body",
+      "Everything Engelbart keeps for this project goes:"));
+    var list = el("ul", "hc-home-dialog-list");
+    list.appendChild(el("li", "", goals + (goals === 1 ? " goal" : " goals")
+      + ", with their notes, TODO rows and prompts"));
+    list.appendChild(el("li", "", "the workspace of " + chats
+      + (chats === 1 ? " chat" : " chats") + " in this project"));
+    list.appendChild(el("li", "", "its name, purpose and sources"));
+    box.appendChild(list);
+    box.appendChild(el("div", "hc-home-dialog-body",
+      "The directory itself — " + str(row.cwd)
+      + " — and everything in it is left alone."));
+    box.appendChild(el("div", "hc-home-dialog-warn",
+      "This is irreversible. There is no undo and no copy kept."));
+    var ask = el("div", "hc-home-dialog-ask");
+    ask.appendChild(document.createTextNode("Type "));
+    ask.appendChild(el("b", "", name));
+    ask.appendChild(document.createTextNode(" to confirm."));
+    box.appendChild(ask);
+    var field = el("input", "hc-home-field");
+    field.setAttribute("data-hc-home-confirm", "");
+    field.setAttribute("placeholder", name);
+    field.setAttribute("spellcheck", "false");
+    field.value = homeTyped;
+    box.appendChild(field);
+    var buttons = el("div", "hc-home-dialog-row");
+    var no = el("span", "hc-home-btn", "Cancel");
+    no.setAttribute("role", "button");
+    no.setAttribute("data-hc-home-forget-no", "");
+    var yes = el("span", "hc-home-btn",
+                 homeBusy ? "Deleting…" : "Delete permanently");
     yes.setAttribute("role", "button");
     yes.setAttribute("data-hc-bad", "");
     yes.setAttribute("data-hc-home-forget-yes", str(row.cwd));
-    var no = el("span", "hc-home-btn", "Keep");
-    no.setAttribute("role", "button");
-    no.setAttribute("data-hc-home-forget-no", "");
-    row2.appendChild(yes);
-    row2.appendChild(no);
-    gone.appendChild(row2);
-    card.appendChild(gone);
-    return card;
+    if (!homeTypedRight(row)) yes.setAttribute("data-hc-off", "");
+    field.oninput = function () {
+      homeTyped = str(field.value);
+      if (homeTypedRight(row)) yes.removeAttribute("data-hc-off");
+      else yes.setAttribute("data-hc-off", "");
+    };
+    field.onkeydown = function (event) {
+      if (!event || event.key !== "Enter") return;
+      if (event.preventDefault) event.preventDefault();
+      if (homeTypedRight(row)) homeForget(str(row.cwd));
+    };
+    buttons.appendChild(no);
+    buttons.appendChild(yes);
+    box.appendChild(buttons);
+    shade.appendChild(box);
+    return shade;
+  }
+
+  function homeCancel() {
+    homeGoing = "";
+    homeTyped = "";
+    renderHome(true);
   }
 
   function renderHome(force) {
@@ -3924,6 +4007,19 @@
       var backWhy = host.querySelector("[data-hc-home-why]");
       if (backWhy) backWhy.value = typedWhy;
     }
+    // Inside the page rather than on the body: the theme's colours are set
+    // on this host, and a dialog outside it would be drawn in the other one.
+    if (homeGoing) {
+      var dialog = homeDialog();
+      if (!dialog) homeGoing = "";
+      else {
+        host.appendChild(dialog);
+        var field = dialog.querySelector("[data-hc-home-confirm]");
+        if (field) setTimeout(function () {
+          try { field.focus(); } catch (e) {}
+        }, 0);
+      }
+    }
     return true;
   }
 
@@ -3942,6 +4038,7 @@
     closeProjectMenu();
     closeOverview();
     homeGoing = "";
+    homeTyped = "";
     homeSaid = "";
     root.setAttribute("data-hc-home", "");
     renderHome(true);
@@ -3956,6 +4053,7 @@
     root.removeAttribute("data-hc-home");
     root.removeAttribute("data-hc-home-adding");
     homeGoing = "";
+    homeTyped = "";
     return was;
   }
 
@@ -3984,20 +4082,29 @@
 
   function homeForget(where) {
     if (homeBusy) return;
+    var row = homeRowFor(where);
+    // The typed name is the confirmation, so it is checked here as well as
+    // on the button: Enter in the field and a click both land here.
+    if (!row || !homeTypedRight(row)) return;
+    var name = homeName(row);
     homeBusy = true;
+    renderHome(true);
     post({ op: "forget_project", cwd: where }).then(function (res) {
       homeBusy = false;
       homeGoing = "";
+      homeTyped = "";
       if (!res || !res.ok) {
-        homeSay((res && res.error) || "that project could not be forgotten",
+        homeSay((res && res.error) || "that project could not be deleted",
                 true);
+        renderHome(true);
         return;
       }
-      homeSay(Number(res.freed) > 0
-              ? ("forgotten — " + Number(res.freed)
-                 + (Number(res.freed) === 1 ? " chat is" : " chats are")
-                 + " free to be put somewhere else")
-              : "forgotten");
+      var goals = Number(res.goals || 0);
+      var chats = Number(res.chats || 0);
+      homeSay("deleted " + name + " — " + goals
+              + (goals === 1 ? " goal and " : " goals and ") + chats
+              + (chats === 1 ? " chat workspace are gone"
+                             : " chat workspaces are gone"));
       loadHome();
     });
   }
@@ -4059,8 +4166,13 @@
       var root = document.documentElement;
       if (act === "data-hc-brand") { toggleHome(); return; }
       if (act === "data-hc-home-open") { homeOpen(where); return; }
-      if (act === "data-hc-home-forget") { homeGoing = where; renderHome(true); return; }
-      if (act === "data-hc-home-forget-no") { homeGoing = ""; renderHome(true); return; }
+      if (act === "data-hc-home-forget") {
+        homeGoing = where;
+        homeTyped = "";
+        renderHome(true);
+        return;
+      }
+      if (act === "data-hc-home-forget-no") { homeCancel(); return; }
       if (act === "data-hc-home-forget-yes") { homeForget(where); return; }
       if (act === "data-hc-home-add") {
         if (root && root.setAttribute) root.setAttribute("data-hc-home-adding", "");
@@ -5772,6 +5884,9 @@
           if (typeof target.blur === "function") target.blur();
           return;
         }
+        // The delete dialog is the innermost thing open here too: Escape
+        // takes it, and leaves the projects behind it where they were.
+        if (homeGoing) { homeCancel(); return; }
         if (homeShown()) { closeHome(); return; }
         if (overviewShown()) closeOverview();
         return;
@@ -7328,10 +7443,13 @@
       // question above it rather than as the next thing in the column.
       "[data-hc-launch] .hc-understand-thread{display:flex;flex-direction:column;gap:9px;margin:2px 0 0 3px;padding-left:10px;border-left:1px solid var(--bd)}",
       "[data-hc-launch] .hc-understand-followq{font:11px/1.55 'Source Code Pro',monospace;color:var(--mut)}",
-      // GIVEN / WHEN / THEN, line for line as the model wrote them: the shape
-      // is the answer, so it is never reflowed into a paragraph.
+      // The answer, wrapped like the prose it is but keeping the breaks the
+      // model put in: its paragraphs are its own.
       "[data-hc-launch] .hc-understand-answer{white-space:pre-wrap;font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-understand-kw{color:var(--acc);font-weight:600}",
+      // The lines a shaped scenario left blank, and what would fill them.
+      "[data-hc-launch] .hc-understand-blanks{display:flex;flex-direction:column;gap:3px}",
+      "[data-hc-launch] .hc-understand-blank-head{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-understand-blank{font:10.5px/1.55 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-understand-go{align-self:flex-start;font:11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-understand-go:hover{color:var(--acc)}",
       "[data-hc-launch] .hc-understand-go[data-hc-busy]{color:var(--mut);cursor:default}",
@@ -7356,16 +7474,6 @@
       "[data-hc-launch] .hc-search-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt);font:14px/1 'Source Code Pro',monospace;padding:2px}",
       "[data-hc-launch] .hc-search-clear:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-search-field[data-hc-typed] .hc-search-clear{display:block}",
-      "[data-hc-launch] .hc-relbar{display:none;flex-wrap:wrap;gap:5px;padding-top:8px}",
-      "[data-hc-launch] .hc-relbar[data-hc-on]{display:flex}",
-      "[data-hc-launch] .hc-relchip{display:inline-flex;align-items:baseline;gap:5px;cursor:pointer;user-select:none;border:1px solid var(--bd2);border-radius:999px;padding:3px 9px;font:10px 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap}",
-      "[data-hc-launch] .hc-relchip:hover{color:var(--ink);border-color:var(--ink)}",
-      "[data-hc-launch] .hc-relchip[data-hc-on]{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
-      "[data-hc-launch] .hc-relchip-n{opacity:.7}",
-      "[data-hc-launch] .hc-row[data-hc-rel-off]{display:none!important}",
-      // While searching, the hits replace the tree and there is nothing
-      // for the filter to act on.
-      "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-relbar{display:none}",
       "[data-hc-launch] .hc-search-input{flex:1 1 auto;display:block;width:100%;min-width:0;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:7px 0;font:11.5px 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
       "[data-hc-launch] .hc-search-input::placeholder{color:var(--fnt)}",
       "[data-hc-launch] .hc-search-input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}",
@@ -9647,6 +9755,10 @@
       if (!node || !node.getAttribute) return;
       // The Understanding tab's controls, first: they sit in another column
       // and none of the row reasoning below applies to them.
+      if (node.getAttribute("data-hc-understand-map") !== null) {
+        understandMap();
+        return;
+      }
       if (node.getAttribute("data-hc-understand-add") !== null) {
         understandAdd();
         return;
@@ -10656,9 +10768,18 @@
   var understandFollow = {};
   var understandAsking = {};
   var understandError = {};
-  // Why a pasted screenshot never became a chip. About the scenario box as a
-  // whole rather than any one question, and shown under it.
+  // Why a pasted screenshot never became a chip, or why the rough words in
+  // the box would not map. About the scenario box as a whole rather than any
+  // one question, and shown under it.
   var understandShotError = "";
+  // The scenario box being shaped: whether the call is out, what came back
+  // that the reader has to fill in themselves, and a count that tells a
+  // redraw from a repeat. None of it is the goal's -- a blank is a question
+  // about the box in front of this reader, not something to write into a
+  // document somebody else may be reading.
+  var understandMapping = false;
+  var understandBlanks = [];
+  var understandMapSeq = 0;
   // Why the button at the foot of the tab sent nothing. Not a question's --
   // it is about the tab as a whole, and it is what is shown beside the
   // button that earned it.
@@ -10761,6 +10882,8 @@
     understandError = {};
     understandShotError = "";
     understandSendError = "";
+    understandMapping = false;
+    understandBlanks = [];
   }
 
   function understandSaveNow() {
@@ -10959,6 +11082,55 @@
     pending.forEach(function (row) { understandAsk(row.id); });
   }
 
+  function understandMap() {
+    // The scenario, in whatever words the reader had, mapped onto
+    // GIVEN / WHEN / THEN. They should not have to learn a form to write
+    // down a situation they already know -- they type it, or paste the
+    // screen it happens on, and the shape is put on it here.
+    //
+    // What their words do not say comes back as a keyword with nothing after
+    // it, and the question that would fill it drawn under the box. The blank
+    // stays a blank: a plausible line written in for them is a line nobody
+    // knows to check, and this field opens every build of the goal's rows.
+    if (!understandData || understandMapping) return;
+    var words = str(understandData.scenario).replace(/^\s+|\s+$/g, "");
+    var shots = array(understandData.shots);
+    if (!words && !shots.length) {
+      understandShotError = "write the scenario roughly first, or paste a"
+        + " screenshot of it";
+      renderTodoRail(true);
+      return;
+    }
+    understandShotError = "";
+    understandBlanks = [];
+    understandMapping = true;
+    var goalId = understandGoalId;
+    renderTodoRail(true);
+    fetch("/api/draft_scenario", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: words, shots: shots })
+    }).then(function (r) { return r.json(); })
+      .catch(function () { return null; })
+      .then(function (res) {
+        understandMapping = false;
+        understandMapSeq += 1;
+        if (understandGoalId !== goalId) return;
+        if (!res || !res.ok) {
+          understandShotError = str(res && res.error)
+            || "the scenario could not be shaped";
+          renderTodoRail(true);
+          return;
+        }
+        if (str(res.scenario)) understandData.scenario = str(res.scenario);
+        understandBlanks = array(res.asks).map(str).filter(function (ask) {
+          return !!ask;
+        });
+        understandSaveNow();
+        renderTodoRail(true);
+      });
+  }
+
   function understandShotAdd(shot) {
     if (!understandData || !shot || !str(shot.path)) return;
     if (array(understandData.shots).length >= MAX_SHOTS) return;
@@ -11060,30 +11232,15 @@
     return sec;
   }
 
-  // The words an answer is built out of. They open a line and the rest of
-  // the line belongs to them, so the line is never reflowed and the word is
-  // never hidden inside a sentence.
-  var UNDERSTAND_KEYWORD = /^(GIVEN|WHEN|THEN|AND|UNCLEAR)\b/;
-
   function understandAnswerBlock(text) {
-    // GIVEN / WHEN / THEN, line for line as Claude wrote them. The shape is
-    // what makes two answers about one scenario comparable, so it survives
-    // into the tab rather than being flattened into a paragraph.
+    // The answer as Claude wrote it: prose, wrapped by the box it sits in,
+    // its own line breaks kept. It used to be drawn keyword by keyword,
+    // because answers came back in GIVEN / WHEN / THEN -- that shape belongs
+    // to the scenario now, which is written once and read by every build,
+    // and not to an answer read once by the person who asked for it.
     var box = document.createElement("div");
     box.className = "hc-understand-answer";
-    str(text).split("\n").forEach(function (line, n) {
-      if (n) box.appendChild(document.createTextNode("\n"));
-      var word = UNDERSTAND_KEYWORD.exec(line);
-      if (!word) {
-        box.appendChild(document.createTextNode(line));
-        return;
-      }
-      var lead = document.createElement("span");
-      lead.className = "hc-understand-kw";
-      lead.textContent = word[1];
-      box.appendChild(lead);
-      box.appendChild(document.createTextNode(line.slice(word[1].length)));
-    });
+    box.textContent = str(text);
     return box;
   }
 
@@ -11133,7 +11290,7 @@
 
   function understandQuestionRow(question) {
     // The question, and under it the thread it has been answered in: each
-    // answer in GIVEN/WHEN/THEN, and a box to follow up in. A question with
+    // answer as it was written, and a box to follow up in. A question with
     // no answer yet is only a box -- the foot of the tab is what sends it.
     var block = document.createElement("div");
     block.className = "hc-understand-sec";
@@ -11251,6 +11408,12 @@
                         }),
                         str(understandShotError),
                         str(understandSendError),
+                        // The mapping by its state and its count: a shaping
+                        // that came back with the blanks the last one had
+                        // still rewrote the box, and a box the reader is
+                        // standing in is a box understandSync will not touch.
+                        understandMapping, understandMapSeq,
+                        understandBlanks,
                         data.questions.map(function (row) {
                           // The thread by its length: turns are only ever
                           // appended, so a longer one is a new answer and a
@@ -11276,7 +11439,8 @@
     }
     var scene = [understandArea("scenario", "", data.scenario,
                                 "Describe the scenario this work happens in,"
-                                  + " or paste screenshots of it…")];
+                                  + " or paste screenshots of it — then shape"
+                                  + " it…")];
     var shots = array(data.shots);
     if (shots.length) {
       var strip = document.createElement("div");
@@ -11288,6 +11452,27 @@
     }
     if (understandShotError) {
       scene.push(understandSaid(str(understandShotError)));
+    }
+    scene.push(understandGo(
+      understandMapping ? "shaping…" : "Shape it into GIVEN / WHEN / THEN",
+      "data-hc-understand-map", "", understandMapping));
+    if (understandBlanks.length) {
+      // The lines the reader's own words did not fill. Under the box rather
+      // than in it: what is in the box is the scenario, and a question is
+      // not part of the situation it asks about.
+      var blanks = document.createElement("div");
+      blanks.className = "hc-understand-blanks";
+      var lead = document.createElement("div");
+      lead.className = "hc-understand-blank-head";
+      lead.textContent = "Fill these in above:";
+      blanks.appendChild(lead);
+      understandBlanks.forEach(function (ask) {
+        var line = document.createElement("div");
+        line.className = "hc-understand-blank";
+        line.textContent = "· " + ask;
+        blanks.appendChild(line);
+      });
+      scene.push(blanks);
     }
     box.appendChild(understandSection("SCENARIO", scene));
     var rows = data.questions.map(understandQuestionRow);
@@ -12042,132 +12227,6 @@
 
   var searchDrawn = null, searchActive = 0, searchBound = false;
 
-  // --- filtering by how a goal stands to the objective ---------------------
-  //
-  // Inference tags every goal core, supporting or unrelated against the
-  // project's stated objective. The tags were only ever readable one goal
-  // at a time; this is the other half -- a way to see the tree through one
-  // of them. It sits under the search field because it answers the same
-  // question the search does: show me less than everything.
-
-  var relevanceFilter = "";
-  var RELEVANCE_ORDER = ["core", "supporting", "unrelated"];
-  var RELEVANCE_WORDS = { core: "On objective", supporting: "Supporting",
-                          unrelated: "Off objective" };
-
-  function relevanceOf(goal) {
-    var tag = str(goal && goal.relevance);
-    return RELEVANCE_ORDER.indexOf(tag) >= 0 ? tag : "core";
-  }
-
-  function relevanceCounts() {
-    var out = { core: 0, supporting: 0, unrelated: 0, all: 0 };
-    array(serverState.goals).forEach(function (g) {
-      if (!g || typeof g.id !== "string") return;
-      if (str(g.status) === "abandoned") return;
-      out[relevanceOf(g)] += 1;
-      out.all += 1;
-    });
-    return out;
-  }
-
-  function setRelevanceFilter(tag) {
-    var want = RELEVANCE_ORDER.indexOf(str(tag)) >= 0 ? str(tag) : "";
-    if (want === relevanceFilter) want = "";
-    relevanceFilter = want;
-    renderRelevance();
-    applyRelevanceFilter();
-    return relevanceFilter;
-  }
-
-  // A goal survives the filter if it carries the tag, and so does every
-  // goal above it: hiding a parent whose child matched would put the child
-  // at the root of a tree it does not belong to.
-  function relevanceKeep() {
-    if (!relevanceFilter) return null;
-    var parents = {}, keep = {};
-    var rows = array(serverState.goals).filter(function (g) {
-      return g && typeof g.id === "string";
-    });
-    rows.forEach(function (g) { parents[g.id] = str(g.parent_goal_id); });
-    rows.forEach(function (g) {
-      // Counted out above, so kept out here: a tombstone that answered a
-      // filter would make the chip's number disagree with the tree.
-      if (str(g.status) === "abandoned") return;
-      if (relevanceOf(g) !== relevanceFilter) return;
-      for (var at = g.id, hops = 0; at && hops < 64; hops += 1) {
-        keep[at] = true;
-        at = parents[at];
-      }
-    });
-    return keep;
-  }
-
-  function applyRelevanceFilter() {
-    var tree = document.querySelector(".hc-tree") || document;
-    if (!tree || !tree.querySelectorAll) return false;
-    var keep = relevanceKeep();
-    var rows = tree.querySelectorAll(".hc-row");
-    var moved = false;
-    for (var i = 0; i < rows.length; i += 1) {
-      var id = rows[i].getAttribute && rows[i].getAttribute("data-hc-goal");
-      var off = !!(keep && id && !keep[id]);
-      var had = rows[i].getAttribute("data-hc-rel-off") !== null;
-      if (off === had) continue;
-      if (off) rows[i].setAttribute("data-hc-rel-off", "");
-      else rows[i].removeAttribute("data-hc-rel-off");
-      moved = true;
-    }
-    return moved;
-  }
-
-  function renderRelevance() {
-    if (serverState.scope !== "chat") return false;
-    var box = searchBox();
-    if (!box) return false;
-    // The chips are handled beside the search's own controls, so the bar
-    // must not depend on the search having drawn to be clickable.
-    bindSearch();
-    var bar = box.querySelector(".hc-relbar");
-    if (!bar) {
-      bar = el("div", "hc-relbar");
-      bar.setAttribute("data-hc-relbar", "");
-      var field = box.querySelector(".hc-search-field");
-      if (field && field.nextSibling && box.insertBefore) {
-        box.insertBefore(bar, field.nextSibling);
-      } else {
-        box.appendChild(bar);
-      }
-    }
-    var counts = relevanceCounts();
-    // Nothing to choose between when the whole tree is one tag -- which is
-    // every project until inference has read enough to disagree.
-    var kinds = RELEVANCE_ORDER.filter(function (tag) { return counts[tag] > 0; });
-    var want = JSON.stringify([relevanceFilter, counts, kinds]);
-    if (bar.getAttribute("data-hc-drawn") === want) return false;
-    bar.setAttribute("data-hc-drawn", want);
-    wipe(bar);
-    if (kinds.length < 2) {
-      bar.removeAttribute("data-hc-on");
-      return true;
-    }
-    bar.setAttribute("data-hc-on", "");
-    var chip = function (tag, words, n, on) {
-      var node = el("span", "hc-relchip", "");
-      node.setAttribute("role", "button");
-      node.setAttribute("data-hc-rel", tag);
-      if (on) node.setAttribute("data-hc-on", "");
-      node.appendChild(el("span", "", words));
-      node.appendChild(el("span", "hc-relchip-n", String(n)));
-      bar.appendChild(node);
-    };
-    chip("", "All", counts.all, !relevanceFilter);
-    kinds.forEach(function (tag) {
-      chip(tag, RELEVANCE_WORDS[tag], counts[tag], relevanceFilter === tag);
-    });
-    return true;
-  }
-
   function searchBox() { return document.querySelector(".hc-search"); }
   function searchInputEl() {
     var box = searchBox();
@@ -12251,12 +12310,6 @@
     }, true);
     document.addEventListener("click", function (event) {
       var target = event && event.target;
-      var chip = closestByClass(target, "hc-relchip");
-      if (chip) {
-        stop(event);
-        setRelevanceFilter(chip.getAttribute("data-hc-rel"));
-        return;
-      }
       if (closestByClass(target, "hc-search-clear")) {
         stop(event);
         clearSearch(true);
@@ -12408,8 +12461,6 @@
       renderBell();
       renderGear();
       renderSearch();
-      renderRelevance();
-      applyRelevanceFilter();
       renderInjection(injectionState);
     }
     sweep();
@@ -14007,13 +14058,6 @@
     allChatsFor: allChatsFor,
     renderSourceBody: renderSourceBody,
     loadSyncStatus: loadSyncStatus,
-    relevance: {
-      render: renderRelevance,
-      apply: applyRelevanceFilter,
-      set: setRelevanceFilter,
-      counts: relevanceCounts,
-      filter: function () { return relevanceFilter; }
-    },
     settingsSupabaseLoad: settingsSupabaseLoad,
     settingsSupabaseFill: settingsSupabaseFill,
     settingsSupabaseDo: settingsSupabaseDo,
