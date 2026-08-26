@@ -22,6 +22,7 @@ Env vars win over the file, for a machine that keeps its secrets elsewhere:
 from __future__ import annotations
 
 import json
+import base64
 import os
 import time
 import urllib.error
@@ -331,6 +332,166 @@ def sign_in(email: str, password: str,
         {"apikey": config["anon_key"]},
         {"email": email, "password": password}, "auth")
     return _store_session(payload, root)
+
+
+# --- signing in through the browser -------------------------------------
+#
+# A password typed at a terminal is a password the terminal has seen. The
+# ordinary way in is the browser the reader is already signed into: they
+# press a provider button, and the CLI is handed the result.
+#
+# PKCE rather than the implicit flow, for one practical reason: the
+# implicit flow returns tokens in the URL *fragment*, which a browser never
+# sends to a server, so a local listener cannot see them without a page
+# that reads location.hash and posts it back. PKCE returns a code in the
+# query string, which the listener reads directly -- no page script, and
+# the code is worthless to anyone who does not hold the verifier.
+
+OAUTH_PROVIDERS = ("google", "github")
+OAUTH_WAIT_S = 300
+
+
+def pkce_pair() -> Dict[str, str]:
+    """A fresh verifier and the challenge derived from it.
+
+    The verifier never leaves this process until it is exchanged, and the
+    challenge is what travels through the browser -- so a code lifted from
+    the redirect cannot be spent by whoever lifted it.
+    """
+    import hashlib
+    verifier = base64.urlsafe_b64encode(os.urandom(64)).decode("ascii")
+    verifier = verifier.rstrip("=")
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return {"verifier": verifier, "challenge": challenge}
+
+
+def authorize_url(provider: str, redirect: str, challenge: str,
+                  root: Optional[Path] = None) -> str:
+    """Where to send the browser to sign in with a provider."""
+    from urllib.parse import urlencode
+    name = str(provider or "").strip().lower()
+    if name not in OAUTH_PROVIDERS:
+        raise SupabaseError("unknown sign-in provider: " + (name or "(none)"))
+    config = load_config(root)
+    if not config["url"] or not config["anon_key"]:
+        raise SupabaseError(f"fill in {config_path(root)} first")
+    query = urlencode({
+        "provider": name,
+        "redirect_to": redirect,
+        "code_challenge": challenge,
+        "code_challenge_method": "s256",
+    })
+    return f"{config['url']}/auth/v1/authorize?{query}"
+
+
+def exchange_code(code: str, verifier: str,
+                  root: Optional[Path] = None) -> Dict[str, Any]:
+    """Turn the code the browser handed back into a stored session.
+
+    The same landing place as a password sign-in: one session file, at
+    0600, with the refresh token that keeps it alive. Nothing about the
+    rest of the client knows which way the reader came in.
+    """
+    config = load_config(root)
+    if not config["url"] or not config["anon_key"]:
+        raise SupabaseError(f"fill in {config_path(root)} first")
+    if not str(code or "").strip():
+        raise SupabaseError("the browser did not hand back a code")
+    payload = _post(
+        f"{config['url']}/auth/v1/token?grant_type=pkce",
+        {"apikey": config["anon_key"]},
+        {"auth_code": str(code).strip(), "code_verifier": str(verifier)},
+        "auth")
+    return _store_session(payload, root)
+
+
+DONE_PAGE = (
+    "<!doctype html><meta charset=utf-8><title>Signed in</title>"
+    "<style>body{font:15px/1.6 ui-monospace,Menlo,monospace;color:#111;"
+    "background:#fff;display:flex;align-items:center;justify-content:center;"
+    "height:100vh;margin:0}p{max-width:26em;text-align:center}"
+    "@media (prefers-color-scheme:dark){body{background:#0d1117;color:#e6edf3}}"
+    "</style><p><strong>%s</strong><br>%s</p>")
+
+
+def _one_shot_listener():
+    """A server that exists to catch one redirect and stop.
+
+    Bound to the loopback address on a port the operating system picks:
+    nothing outside this machine can reach it, and nothing has to be
+    reserved in advance. It answers exactly one request -- whatever the
+    browser sends first -- and holds what it saw for the caller.
+    """
+    import http.server
+    from urllib.parse import parse_qs, urlsplit
+
+    caught = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):                       # noqa: N802 - the API's name
+            query = parse_qs(urlsplit(self.path).query)
+            caught["code"] = (query.get("code") or [""])[0]
+            # A reader who presses cancel in the browser is redirected here
+            # too, with why. Saying it beats a CLI that waits five minutes
+            # for something that is never coming.
+            caught["error"] = (query.get("error_description")
+                               or query.get("error") or [""])[0]
+            good = bool(caught["code"]) and not caught["error"]
+            body = (DONE_PAGE % (
+                "Signed in." if good else "Sign-in did not finish.",
+                "You can close this tab and go back to the terminal."
+                if good else str(caught["error"] or "No code came back.")
+            )).encode("utf-8")
+            self.send_response(200 if good else 400)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args):
+            """Quiet: this is a sign-in, not a web server."""
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    return server, caught
+
+
+def sign_in_with_browser(provider: str = "google",
+                         root: Optional[Path] = None,
+                         open_browser=None, wait_s: int = OAUTH_WAIT_S,
+                         announce=None) -> Dict[str, Any]:
+    """Sign in through the browser the reader is already signed into.
+
+    The whole round trip: a listener on loopback, a provider page in the
+    browser, and the code it redirects back with, exchanged for a session
+    that lands where a password sign-in would have put it.
+
+    Nothing here is interactive on this side. A reader who never finishes
+    is not a reader to wait on for ever, so the listener has a deadline.
+    """
+    import threading
+    import webbrowser
+    pair = pkce_pair()
+    server, caught = _one_shot_listener()
+    redirect = "http://127.0.0.1:%d/callback" % server.server_address[1]
+    try:
+        where = authorize_url(provider, redirect, pair["challenge"], root)
+    except SupabaseError:
+        server.server_close()
+        raise
+    thread = threading.Thread(target=server.handle_request, daemon=True)
+    thread.start()
+    if announce:
+        announce(where)
+    (open_browser or webbrowser.open)(where)
+    thread.join(timeout=max(1, int(wait_s)))
+    server.server_close()
+    if thread.is_alive():
+        raise SupabaseError(
+            "timed out waiting for the browser -- nothing was signed in")
+    if caught.get("error"):
+        raise SupabaseError("sign-in was refused: " + str(caught["error"]))
+    return exchange_code(caught.get("code") or "", pair["verifier"], root)
 
 
 def sign_out(root: Optional[Path] = None) -> None:
