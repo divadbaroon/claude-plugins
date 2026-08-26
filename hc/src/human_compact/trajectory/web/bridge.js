@@ -6648,27 +6648,31 @@
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
       // Two tabs and a save stamp, in place of the old single label.
-      // The onboarding, over everything: until a chat says which project
-      // it is for, there is nothing behind it worth reading.
+      // The onboarding, over everything: until a chat says which project it
+      // is for, there is nothing behind it worth reading. Styled from the
+      // workspace's own project-setup idiom -- bordered uppercase buttons on
+      // a 2px radius, the rust accent, no filled green anywhere -- because a
+      // panel that asks the same question should not look like another app.
       "[data-hc-launch] .hc-onb-shade{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;background:rgba(1,4,9,.72)}",
-      "[data-hc-launch] .hc-onb{width:min(560px,92vw);max-height:86vh;overflow:auto;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:26px 28px 22px;box-shadow:0 18px 60px rgba(0,0,0,.5)}",
-      "[data-hc-launch] .hc-onb-title{font:600 17px/1.35 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink)}",
-      "[data-hc-launch] .hc-onb-note{margin-top:7px;font:13px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--fnt);max-width:52ch}",
-      "[data-hc-launch] .hc-onb-row{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px}",
-      "[data-hc-launch] .hc-onb-btn{padding:7px 14px;border:1px solid var(--bd2);border-radius:6px;font:600 12.5px -apple-system,sans-serif;color:var(--dtxt);cursor:pointer;user-select:none}",
-      "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--hc-ok);color:var(--ink)}",
-      "[data-hc-launch] .hc-onb-btn-on{background:var(--hc-ok);border-color:var(--hc-ok);color:#08130c}",
-      "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:12px;padding:9px 11px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);color:var(--dtxt);font:13px/1.55 -apple-system,BlinkMacSystemFont,sans-serif;outline:none;resize:none}",
-      "[data-hc-launch] .hc-onb-field:focus{border-color:var(--hc-ok)}",
-      "[data-hc-launch] .hc-onb-list{margin-top:14px;max-height:44vh;overflow:auto;border:1px solid var(--bd);border-radius:6px}",
-      "[data-hc-launch] .hc-onb-item{display:block;padding:10px 13px;border-bottom:1px solid var(--bd);cursor:pointer}",
+      "[data-hc-launch] .hc-onb{width:min(500px,92vw);max-height:86vh;overflow:auto;background:var(--panel,#fff);border:1px solid var(--bd,#e3e3e3);border-radius:3px;padding:18px 20px 16px;box-shadow:0 18px 60px rgba(0,0,0,.45)}",
+      "[data-hc-launch] .hc-onb-title{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      "[data-hc-launch] .hc-onb-note{margin-top:7px;font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b);max-width:58ch}",
+      "[data-hc-launch] .hc-onb-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:15px;align-items:center}",
+      "[data-hc-launch] .hc-onb-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:6px 10px}",
+      "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
+      "[data-hc-launch] .hc-onb-btn-on{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
+      "[data-hc-launch] .hc-onb-quiet{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:10.5px 'Source Code Pro',monospace;padding:0 4px}",
+      "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:9px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:6px 8px;outline:none}",
+      "[data-hc-launch] .hc-onb-field:focus{border-color:var(--acc,#a5492a)}",
+      "[data-hc-launch] .hc-onb-list{margin-top:11px;max-height:44vh;overflow:auto;border:1px solid var(--bd,#e3e3e3);border-radius:2px;background:var(--panel2,#f6f6f6)}",
+      "[data-hc-launch] .hc-onb-item{display:block;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);cursor:pointer}",
       "[data-hc-launch] .hc-onb-item:last-child{border-bottom:none}",
-      "[data-hc-launch] .hc-onb-item:hover{background:var(--hov)}",
-      "[data-hc-launch] .hc-onb-item-name{display:block;font:600 13px -apple-system,sans-serif;color:var(--ink)}",
-      "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:12px/1.5 -apple-system,sans-serif;color:var(--fnt)}",
-      "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:3px;font:10.5px 'Source Code Pro',monospace;color:var(--mut)}",
-      "[data-hc-launch] .hc-onb-empty{padding:14px 13px;font:12.5px -apple-system,sans-serif;color:var(--fnt)}",
-      "[data-hc-launch] .hc-onb-said{margin-top:12px;font:12.5px -apple-system,sans-serif;color:var(--hc-warn)}",
+      "[data-hc-launch] .hc-onb-item:hover{background:var(--hov,#f2f2f2)}",
+      "[data-hc-launch] .hc-onb-item-name{display:block;font:600 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:10px/1.5 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:2px;font:9.5px 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      "[data-hc-launch] .hc-onb-empty{padding:11px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      "[data-hc-launch] .hc-onb-said{margin-top:10px;font:10.5px 'Source Code Pro',monospace;color:var(--hc-warn,#a12d2d)}",
       "[data-hc-launch] .hc-rail-tabs{display:inline-flex;gap:14px;align-items:baseline}",
       "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
@@ -9229,7 +9233,9 @@
   }
 
   function onbBtn(label, act, primary) {
-    var b = el("span", "hc-onb-btn" + (primary ? " hc-onb-btn-on" : ""), label);
+    var quiet = act === "back";
+    var b = el("span", quiet ? "hc-onb-quiet"
+               : "hc-onb-btn" + (primary ? " hc-onb-btn-on" : ""), label);
     b.setAttribute("role", "button");
     b.setAttribute("data-hc-onb", act);
     return b;
@@ -9400,7 +9406,7 @@
   }
 
   var ONB_VARS = ["--panel", "--panel2", "--ink", "--dtxt", "--fnt", "--mut",
-                  "--bd", "--bd2", "--hov", "--hc-ok", "--hc-warn"];
+                  "--bd", "--bd2", "--hov", "--hc-ok", "--hc-warn", "--acc"];
 
   function onbCarryTheme(node) {
     var shell = document.querySelector(".hc");

@@ -1143,3 +1143,96 @@ class ProjectBindingTests(unittest.TestCase):
         CS.mark_goals_ui_invoked(self.sid, root=self.root)
         CS.bind_project(self.sid, str(self.root / "p"), root=self.root)
         self.assertTrue(CS.goals_ui_active(self.sid, root=self.root))
+
+
+class ProjectTreeSharingTests(unittest.TestCase):
+    """A chat bound to a project reads and writes that project's tree.
+
+    Binding used to change only what a chat called itself. The workspace
+    still read the chat's own store, so joining a project you had been
+    working in for weeks opened on nothing -- the project's name in the
+    header, and an empty tree under it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        self.og = "aaaaaaaa-1111-4ccc-8ddd-eeeeeeeeeeee"
+        self.new = "bbbbbbbb-2222-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.new):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "work already under way", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+
+    def test_a_bound_chat_sees_the_project_tree_not_its_own_empty_one(self):
+        empty, _ = CS.load_goals(self.new, root=self.root)
+        self.assertEqual([], empty["goals"], "it starts with nothing of its own")
+        CS.bind_project(self.new, self.home, root=self.root)
+        seen, _ = CS.load_goals(self.new, root=self.root)
+        self.assertEqual(["work already under way"],
+                         [g["title"] for g in seen["goals"]])
+
+    def test_what_a_bound_chat_writes_reaches_the_project(self):
+        CS.bind_project(self.new, self.home, root=self.root)
+        goals, important = CS.load_goals(self.new, root=self.root)
+        goals["goals"].append({"id": "g2", "title": "added from the new chat",
+                               "status": "active", "parent_goal_id": None})
+        self.assertTrue(CS.save_goals(self.new, goals, important, root=self.root))
+        # The other chat is looking at the same tree, not a copy of it.
+        theirs, _ = CS.load_goals(self.og, root=self.root)
+        self.assertIn("added from the new chat",
+                      [g["title"] for g in theirs["goals"]])
+
+    def test_the_first_chat_in_a_new_project_keeps_its_own_tree(self):
+        lone = "cccccccc-3333-4ccc-8ddd-eeeeeeeeeeee"
+        CS.ingest_hook({"session_id": lone, "hook_event_name": "SessionStart",
+                        "cwd": str(self.root / "brand-new")}, root=self.root)
+        CS.bind_project(lone, str(self.root / "brand-new"), root=self.root)
+        CS.save_goals(lone, {"version": 1, "goals": [
+            {"id": "g1", "title": "mine", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        seen, _ = CS.load_goals(lone, root=self.root)
+        self.assertEqual(["mine"], [g["title"] for g in seen["goals"]])
+
+
+class BoundChatInjectionTests(unittest.TestCase):
+    """What a bound chat shows and what it tells Claude are the same tree.
+
+    Redirecting the store alone left the workspace reading the project's
+    goals while the injection read the chat's own document -- which did not
+    exist. The reader saw a full tree and the model was told nothing, which
+    is a worse failure than the blank page it replaced, because it is quiet.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        self.og = "aaaaaaaa-1111-4ccc-8ddd-eeeeeeeeeeee"
+        self.new = "bbbbbbbb-2222-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.new):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "the project's work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        CS.bind_project(self.new, self.home, root=self.root)
+        CS.mark_goals_ui_invoked(self.new, root=self.root)
+
+    def test_a_bound_chat_injects_the_project_tree(self):
+        text = CS.render_context_injection(self.new, "full", root=self.root,
+                                           remember=False)
+        self.assertIn("the project's work", text,
+                      "the model must be told what the reader is looking at")
+
+    def test_the_snapshot_stays_the_chat_s_own(self):
+        # Two chats on one tree have seen different amounts of it, so what
+        # each was last told is its own business.
+        CS.render_context_injection(self.new, "full", root=self.root)
+        self.assertTrue(CS.paths(self.new, self.root).context_snapshot.is_file())
+        self.assertFalse(CS.paths(self.og, self.root).context_snapshot.is_file())

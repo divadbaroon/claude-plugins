@@ -2956,3 +2956,36 @@ class OnboardingLooksLikeTheWorkspaceTests(unittest.TestCase):
                          "the panel should wear the same panel colour as the shell")
         self.assertLess(seen["midX"], 3)
         self.assertLess(seen["midY"], 3)
+
+
+class AddRootGoalTests(unittest.TestCase):
+    """Adding a goal at the top of the tree, which the server used to refuse.
+
+    The branch that decides which project a new root goal belongs to asked
+    the workspace who it was, using a name that does not exist where it was
+    written -- so every root goal raised before it was ever appended.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "already here")], [])
+
+    def test_a_root_goal_can_be_added(self):
+        with server_for(self.a) as url:
+            said = post_json(url + "/api/op",
+                             {"op": "add_goal", "title": "a new one"})
+            self.assertTrue(said.get("ok"), said)
+            titles = [g["title"] for g in get_json(url + "/api/state")["goals"]]
+        self.assertIn("a new one", titles)
+
+    def test_a_subgoal_can_still_be_added(self):
+        with server_for(self.a) as url:
+            said = post_json(url + "/api/op", {"op": "add_goal",
+                                               "title": "under it",
+                                               "parent_goal_id": "g1"})
+            self.assertTrue(said.get("ok"), said)
+            tree = {g["title"]: g.get("parent_goal_id")
+                    for g in get_json(url + "/api/state")["goals"]}
+        self.assertEqual("g1", tree["under it"])

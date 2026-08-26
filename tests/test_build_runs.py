@@ -80,6 +80,29 @@ with open(log, "a") as fh:
 def say(text):
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": text}]}}), flush=True)
+if resume and '{"restart": true' in prompt:
+    # The restart check: the finished build's session, resumed on the
+    # question. STUB_RESTART says how it answers; STUB_CHECK_HOLD keeps it
+    # out for a while first, so a test can look at a check in progress.
+    if os.environ.get("STUB_CHECK_HOLD"):
+        time.sleep(float(os.environ["STUB_CHECK_HOLD"]))
+    verdict = os.environ.get("STUB_RESTART", "no")
+    if verdict == "yes":
+        say("Looking back over the change.")
+        say(json.dumps({"restart": True,
+                        "why": "the session-cache change lives in the running dev server",
+                        "prompt": "Restart the goals-ui dev process so the new session-cache"
+                                  " code loads: kill `goals-ui serve`, run `goals-ui serve"
+                                  " --dev`, confirm the log says {loaded}."}))
+    elif verdict == "no":
+        say('{"restart": false}')
+    elif verdict == "thought":
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "thinking", "thinking": 'Nothing long-running: {"restart": false}'}]}}),
+              flush=True)
+    print(json.dumps({"type": "result", "is_error": False, "result": "checked",
+                      "usage": USAGE}))
+    raise SystemExit(0)
 if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
     say(ESTIMATE)
@@ -143,6 +166,11 @@ class BuildRunTests(unittest.TestCase):
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
         os.environ["STUB_LOG"] = str(self.log)
         os.environ["HC_BUILD_MODE"] = "headless"
+        # A finished build is followed by the restart check -- a second
+        # process, a second prompt in the stub's log. The tests below count
+        # prompts and processes; the check has its own class, which turns
+        # it back on.
+        os.environ["HC_BUILD_RESTART_CHECK"] = "0"
         # An API key in the server's shell must not reach the build: the
         # reader's subscription pays for the reader's button.
         os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-should-not-leak"
@@ -1353,7 +1381,8 @@ class BuildSettingsTests(BuildRunTests):
         trajdir = chat_state.paths(self.session, self.root).session_dir
         out = ui._apply({"op": "set_build_settings", "model": "claude-opus-5",
                          "effort": "high"}, trajdir, True)
-        self.assertEqual({"model": "claude-opus-5", "effort": "high"},
+        self.assertEqual({"model": "claude-opus-5", "effort": "high",
+                          "check": True, "check_model": "", "check_effort": ""},
                          out["settings"])
         self.assertEqual(out["settings"], BUILD.load_settings(self.session, self.root))
         run = BUILD.Run(self.session, self.root, "g1", str(self.root), "sess")
@@ -1362,7 +1391,8 @@ class BuildSettingsTests(BuildRunTests):
         self.assertEqual("high", cmd[cmd.index("--effort") + 1])
         # One key at a time; nothing chosen is the CLI's own default.
         out = ui._apply({"op": "set_build_settings", "effort": ""}, trajdir, True)
-        self.assertEqual({"model": "claude-opus-5", "effort": ""}, out["settings"])
+        self.assertEqual(("claude-opus-5", ""),
+                         (out["settings"]["model"], out["settings"]["effort"]))
         self.assertNotIn("--effort", run._command("hi", resume=False))
         ui._apply({"op": "set_build_settings", "model": ""}, trajdir, True)
         self.assertNotIn("--model", run._command("hi", resume=False))
@@ -1378,7 +1408,7 @@ class BuildSettingsTests(BuildRunTests):
                                              {"effort": "extreme"})["ok"])
         self.assertFalse(BUILD.save_settings(self.session, self.root,
                                              {"model": "not a model"})["ok"])
-        self.assertEqual({"model": "", "effort": ""},
+        self.assertEqual(dict(BUILD.SETTINGS_DEFAULTS),
                          BUILD.load_settings(self.session, self.root))
 
     def test_the_models_are_read_off_the_installed_binary_and_kept_beside_it(self):

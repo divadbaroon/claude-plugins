@@ -60,6 +60,19 @@ and the first line of what it says between them -- so that "building" is not
 the whole of what the reader gets to know. The rail reads the last line back
 with the state, opens the rest on request, and can put the run in a terminal
 window: following its log while it runs, resuming its session once it stops.
+
+Once a headless run has finished its rows on its own -- every row done, no
+question standing, nothing queued behind it -- the same session is resumed
+one more time, on a cheaper model at high effort (``CHECK_MODEL``,
+``CHECK_EFFORT``, or the Builds tab's choice), and asked one question: do the
+changes it made live in a process that is already running and keeps the old
+code until restarted? It answers ``{"restart": false}`` or ``{"restart": true,
+"why": ..., "prompt": ...}`` where ``prompt`` is the exact message to paste
+into the Claude Code chat that runs the program locally. The verdict goes on
+the run record as ``restart`` (see ``live``); the rail draws the check under
+the rows while it runs, then the reason and the prompt with a copy button
+when the answer is yes, and nothing at all when it is no. A verdict of yes
+is what the page raises an action-needed notification for.
 """
 
 from __future__ import annotations
@@ -864,6 +877,74 @@ def fallback_estimate(session_id: str, root: Optional[Path],
             "source": "measured" if priced["time_samples"] else "default"}
 
 
+# --------------------------------------------- does the program need restarting
+#
+# The rows are done and the code is on disk; whether the code that is RUNNING
+# is that code is a separate question, and the session that made the change is
+# the one thing that knows where it lives. So it is asked -- once, at the end,
+# as a check and not a build -- and its answer is the exact prompt the reader
+# pastes into the local chat, or nothing.
+
+CHECK_MODEL = "sonnet"
+CHECK_EFFORT = "high"
+
+RESTART_CHECK = """\
+[Engelbart] The rows are done. This is a different job, and a short one: \
+check, do not build.
+
+Look back over what this session changed and answer one question: does any \
+of it live in a process that is already running on this machine and keeps \
+the old code until it is restarted or reinstalled -- a server, a daemon, a \
+watcher, an installed CLI or wheel, an app that loaded a module at startup? \
+Edits that are read fresh each time they are used (files a server reads \
+from disk per request, tests, docs, config read on every call) do not count.
+
+Answer with exactly one bare JSON object on its own line, nothing else on \
+the line:
+
+- {"restart": false} -- nothing that is running needs restarting;
+- {"restart": true, "why": "<one sentence: which change lives in which \
+running process>", "prompt": "<the exact message to paste into the Claude \
+Code chat that runs this program locally: what to stop, what to start \
+again, and how to confirm the new code is the one running>"}
+
+Edit nothing, and run nothing that changes state. Say nothing else.
+"""
+
+_RESTART_KEY = re.compile(r"\{\s*\"restart\"\s*:")
+
+
+def restart_in(text: str) -> Optional[Dict[str, Any]]:
+    """The last restart verdict in a piece of assistant text, or None.
+
+    Read with a real JSON decoder from each place the key appears, rather
+    than with a regex over the braces: the prompt inside is prose the model
+    wrote, and prose can hold a brace."""
+    found = None
+    decoder = json.JSONDecoder()
+    text = str(text or "")
+    for match in _RESTART_KEY.finditer(text):
+        try:
+            obj, _ = decoder.raw_decode(text, match.start())
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("restart"), bool):
+            found = obj
+    if found is None:
+        return None
+    return {"restart": found["restart"],
+            "why": " ".join(str(found.get("why") or "").split())[:300],
+            "prompt": str(found.get("prompt") or "").strip()[:4000]}
+
+
+def check_enabled(session_id: str, root: Optional[Path]) -> bool:
+    """Whether a finished build is followed by the restart check: off in the
+    Builds tab, or by HC_BUILD_RESTART_CHECK=0 in the server's shell."""
+    if os.environ.get("HC_BUILD_RESTART_CHECK", "").strip() == "0":
+        return False
+    return bool(load_settings(session_id, root).get("check", True))
+
+
 def _stream_text(event: Dict[str, Any]) -> str:
     """The text an assistant stream-json event carries, if any."""
     if event.get("type") == "assistant":
@@ -966,6 +1047,11 @@ class Run:
         # under it, a note added to one -- waits here while the process is
         # ended, and the session is resumed on it the moment it has.
         self.redirect_with = ""
+        # What the process up right now is doing: building the rows, or --
+        # once they are done -- checking whether the program needs a restart
+        # (see RESTART_CHECK). The check is the same session, resumed on a
+        # different model; what it prints is a verdict, never a row's state.
+        self.phase = "rows"
 
     def record(self, **extra) -> Dict[str, Any]:
         rec = load_run(self.session_id, self.root, self.goal_id) or {}
@@ -984,7 +1070,8 @@ class Run:
     def alive(self) -> bool:
         return bool(self.process and self.process.poll() is None)
 
-    def _command(self, message: str, resume: bool) -> List[str]:
+    def _command(self, message: str, resume: bool, model: str = "",
+                 effort: str = "") -> List[str]:
         command = ["claude", "-p", message, "--output-format", "stream-json",
                    "--verbose", "--permission-mode",
                    os.environ.get("HC_BUILD_PERMISSION_MODE", "acceptEdits")]
@@ -993,17 +1080,19 @@ class Run:
         else:
             command += ["--session-id", self.claude_session]
         # The model and effort the reader chose in Settings, or the shell's
-        # word where they chose nothing (HC_BUILD_MODEL, HC_BUILD_EFFORT).
+        # word where they chose nothing (HC_BUILD_MODEL, HC_BUILD_EFFORT) --
+        # unless the caller names its own, as the restart check does.
         chosen = load_settings(self.session_id, self.root)
-        model = chosen.get("model") or os.environ.get("HC_BUILD_MODEL", "")
+        model = model or chosen.get("model") or os.environ.get("HC_BUILD_MODEL", "")
         if model:
             command += ["--model", model]
-        effort = chosen.get("effort") or os.environ.get("HC_BUILD_EFFORT", "")
+        effort = effort or chosen.get("effort") or os.environ.get("HC_BUILD_EFFORT", "")
         if effort in EFFORTS:
             command += ["--effort", effort]
         return command
 
-    def spawn(self, message: str, resume: bool) -> None:
+    def spawn(self, message: str, resume: bool, phase: str = "rows",
+              model: str = "", effort: str = "") -> None:
         from .providers import subscription_env
         # On the reader's subscription, not an API key the server happened
         # to inherit (see providers.subscription_env).
@@ -1019,17 +1108,32 @@ class Run:
         if not resume:
             _open_watch_log(self.session_id, self.root, self.goal_id)
         self.process = subprocess.Popen(
-            self._command(message, resume), cwd=self.cwd, env=env,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=log,
-            text=True, close_fds=True, start_new_session=True)
+            self._command(message, resume, model, effort), cwd=self.cwd,
+            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=log, text=True, close_fds=True, start_new_session=True)
         self.asked = None
         self.spawned_at = time.time()
+        self.phase = phase
+        if phase == "check":
+            # The rows are done and their clock has stopped (ended_at stays);
+            # what runs now is the question about them. The verdict record
+            # was written by _check before this, and is not touched here.
+            self.record(status="checking", phase="check",
+                        last_message=message[-400:])
+            self._say("check", "checking whether these changes go stale"
+                               " without a local restart…")
+            self.thread = threading.Thread(target=self._read, daemon=True)
+            self.thread.start()
+            return
         # The clock the rail shows starts again with every turn of the build,
         # a resume included: what it is timing is the work happening now, and
         # an hour spent waiting for the reader's answer is not that. How many
         # rows are out is a fresh run's to say -- a resume may be a Run that
-        # only knows the session, not what was picked into it.
-        fresh: Dict[str, Any] = {"started_at": _now()}
+        # only knows the session, not what was picked into it. A build in
+        # progress has no restart verdict: whatever the last one said is
+        # about code this one is changing.
+        fresh: Dict[str, Any] = {"started_at": _now(), "ended_at": None,
+                                 "phase": "rows", "restart": None}
         if not resume:
             fresh["rows"] = len(self.picked) or 1
             # A new build has not said what it will cost yet; the last
@@ -1064,11 +1168,20 @@ class Run:
                     self.tokens += _usage_tokens(event)
                 for kind, phrase in stream_activity(event):
                     self._say(kind, phrase)
+                if self.phase == "check":
+                    # A verdict, said or thought; never a row's state -- the
+                    # rows are done and the check has no say over them.
+                    self._verdict(_stream_text(event))
+                    self._verdict(_stream_thinking(event))
+                    continue
                 self._fold(_stream_text(event))
                 self._estimate(_stream_thinking(event))
         finally:
             code = self.process.wait()
-            self._finish(code)
+            if self.phase == "check":
+                self._finish_check(code)
+            else:
+                self._finish(code)
 
     def stop(self) -> bool:
         """End the process: the reader pulled back everything it was doing.
@@ -1133,6 +1246,78 @@ class Run:
             self.record(estimate=dict(estimate, at=_now(), source="build"))
             self._say("say", "estimated about %d min and %s tokens for the build"
                       % (estimate["minutes"], f"{estimate['tokens']:,}"))
+
+    def _restart(self) -> Dict[str, Any]:
+        value = (load_run(self.session_id, self.root, self.goal_id) or {}).get("restart")
+        return dict(value) if isinstance(value, dict) else {}
+
+    def _verdict(self, text: str) -> None:
+        # The check's one answer, onto the run record where the rail reads
+        # it: the reason and the prompt when the program needs restarting,
+        # a bare "no" otherwise.
+        said = restart_in(text)
+        if not said:
+            return
+        held = self._restart()
+        held.update({"status": "yes" if said["restart"] else "no",
+                     "why": said["why"], "prompt": said["prompt"],
+                     "at": _now()})
+        self.record(restart=held)
+        self._say("check", ("restart needed: " + (said["why"] or "the running"
+                            " instance keeps the old code until restarted"))
+                  if said["restart"] else "no restart needed")
+
+    def _check(self) -> bool:
+        """The rows are done: resume the session on the restart question, on
+        the check's own model and effort. False when it could not start."""
+        chosen = load_settings(self.session_id, self.root)
+        model = chosen.get("check_model") or CHECK_MODEL
+        effort = chosen.get("check_effort") or CHECK_EFFORT
+        built_on = chosen.get("model") or os.environ.get("HC_BUILD_MODEL", "")
+        self.stopped = False
+        self.error = ""
+        self.record(restart={"status": "checking", "model": model,
+                             "effort": effort, "from_model": built_on,
+                             "why": "", "prompt": "", "at": _now()})
+        try:
+            self.spawn(RESTART_CHECK, resume=True, phase="check",
+                       model=model, effort=effort)
+        except (OSError, RuntimeError) as exc:
+            held = self._restart()
+            held.update({"status": "unknown", "at": _now(),
+                         "error": "could not start the check: %s" % str(exc)[:120]})
+            self.record(status="idle", phase="", restart=held)
+            self.phase = "rows"
+            return False
+        return True
+
+    def _finish_check(self, code: int) -> None:
+        # The check's process has ended. Its verdict, if it gave one, is on
+        # the record already; a check that said nothing -- or was stopped for
+        # a reopen -- leaves the question open rather than answered.
+        self.spawned_at = 0.0
+        self.seconds = 0.0
+        spent, self.tokens = self.tokens, 0
+        held = self._restart()
+        if held.get("status") == "checking":
+            held["status"] = "skipped" if self.stopped else "unknown"
+            held["at"] = _now()
+            if self.error:
+                held["error"] = self.error
+            self._say("check", "the check was stopped" if self.stopped
+                      else "the check gave no answer"
+                           + (": " + self.error if self.error else ""))
+        held["tokens"] = spent
+        self.record(status="idle", phase="", exit_code=code, restart=held,
+                    check_error=self.error)
+        self.phase = "rows"
+        self.stopped = False
+        self.error = ""
+        # Rows picked while the check was out waited behind it, as they
+        # would have behind the build.
+        held_rows = _pop_later(self.session_id, self.root, self.goal_id)
+        if held_rows:
+            start(self.session_id, self.root, self.goal_id, held_rows)
 
     def _bank(self) -> None:
         """Bank what this build spent: one sample for the estimate, and -- when
@@ -1200,7 +1385,10 @@ class Run:
         spent = {"tokens": self.tokens} if self.tokens else {}
         ended = ("waiting" if waiting else "cancelled" if self.stopped
                  else ("failed" if code else "idle"))
-        self.record(status=ended, exit_code=code, error=self.error, **spent)
+        # ended_at freezes the clock the rail shows: a check that follows,
+        # and every write it makes to the record, is not the build's time.
+        self.record(status=ended, exit_code=code, error=self.error,
+                    ended_at=_now(), **spent)
         self._say("end", {"waiting": "waiting on your answer",
                           "cancelled": "you stopped the build",
                           "failed": "the build stopped: "
@@ -1218,6 +1406,12 @@ class Run:
             held = _pop_later(self.session_id, self.root, self.goal_id)
             if held:
                 start(self.session_id, self.root, self.goal_id, held)
+            elif (ended == "idle" and not self.error
+                  and check_enabled(self.session_id, self.root)
+                  and _rows_in(self.session_id, self.root, self.goal_id, "done")):
+                # Finished on its own terms, with nothing behind it: the one
+                # question left is whether what it changed is what is running.
+                self._check()
 
 
 # A headless run takes one process per goal, and that process reads nothing
@@ -1607,7 +1801,15 @@ def reopen(session_id: str, root: Optional[Path], goal_id: str,
         return {"ok": False, "error": "say what went wrong first"}
     live = _run_for(session_id, root, goal_id)
     if live and live.alive():
-        return {"ok": False, "error": "the build is still running"}
+        if live.phase != "check":
+            return {"ok": False, "error": "the build is still running"}
+        # Only the restart check is out, and it is about code the reader is
+        # sending back: it is ended, and the reopen has the session.
+        live.stop()
+        if live.thread is not None:
+            live.thread.join(timeout=10)
+        if live.alive():
+            return {"ok": False, "error": "the build is still running"}
     session_mode = mode() == "session"
     with CS.session_lock(session_id, root, wait_s=5):
         goals, important = CS.load_goals(session_id, root)
@@ -1793,7 +1995,11 @@ def cancel(session_id: str, root: Optional[Path], goal_id: str,
              + _rows_in(session_id, root, goal_id, "asking"))
     if run is not None and run.alive():
         if not still:
-            out["stopped"] = run.stop()
+            # A process with nothing of this build left to do is ended --
+            # unless it is the restart check, which is about rows already
+            # done and not about the ones taken back.
+            if run.phase != "check":
+                out["stopped"] = run.stop()
         elif told:
             # Mid-work: the process is ended and its session resumed on the
             # word, since the process itself reads nothing (see redirect).
@@ -1892,6 +2098,30 @@ def _estimate_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "source": str(value.get("source") or "build")}
 
 
+RESTART_STATES = ("checking", "yes", "no", "unknown", "skipped")
+
+
+def _restart_of(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Where the restart check stands, as the rail is shown it: None until a
+    build has been asked; then checking, yes (with the reason and the prompt
+    to paste), no, or -- when the check said nothing or was stopped --
+    unknown/skipped, which the rail treats as no."""
+    value = record.get("restart")
+    if not isinstance(value, dict):
+        return None
+    status = str(value.get("status") or "")
+    if status not in RESTART_STATES:
+        return None
+    return {"status": status,
+            "model": str(value.get("model") or CHECK_MODEL),
+            "effort": str(value.get("effort") or CHECK_EFFORT),
+            "from_model": str(value.get("from_model") or ""),
+            "why": str(value.get("why") or ""),
+            "prompt": str(value.get("prompt") or ""),
+            "at": str(value.get("at") or ""),
+            "error": str(value.get("error") or "")[:200]}
+
+
 def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
     """Every build this chat has a record of, by goal: where it stands, how
     long it has been at it, the last thing it did, and -- while it is running
@@ -1916,12 +2146,18 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
         goal_id = record["goal_id"]
         run = _run_for(session_id, root, goal_id)
         running = bool(run and run.alive())
+        # The restart check is a process of this build, but not the build:
+        # the rows are done, their clock has stopped, and there is nothing
+        # to count down.
+        checking = running and str(record.get("phase") or "") == "check"
+        building = running and not checking
         lines = load_activity(session_id, root, goal_id)
         elapsed = _span(record.get("started_at"),
-                        None if running else record.get("updated_at"))
+                        record.get("ended_at")
+                        or (None if running else record.get("updated_at")))
         rows = max(1, int(record.get("rows") or 1))
         estimate = _estimate_of(record)
-        if (running and not estimate and elapsed is not None
+        if (building and not estimate and elapsed is not None
                 and elapsed >= ESTIMATE_GRACE_S):
             # The build has had its chance to say; the rail gets the chat's
             # own measure of a build this size instead, marked as such.
@@ -1931,7 +2167,8 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             spent = 0
         out[goal_id] = {
-            "status": "running" if running else str(record.get("status") or ""),
+            "status": ("checking" if checking else "running" if running
+                       else str(record.get("status") or "")),
             "running": running,
             "started_at": record.get("started_at"),
             "updated_at": record.get("updated_at"),
@@ -1942,9 +2179,12 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
             # show than one that keeps moving away. None until the build has
             # printed one, and None again once it has stopped.
             "eta_s": (max(0, estimate["minutes"] * 60 - elapsed)
-                      if running and estimate and elapsed is not None
+                      if building and estimate and elapsed is not None
                       else None),
             "estimate": estimate,
+            # Whether what the build changed is what is running: see
+            # RESTART_CHECK. None until a finished build has been asked.
+            "restart": _restart_of(record),
             # What it actually spent, once it has stopped and said.
             "tokens": spent,
             "last": lines[-1] if lines else None,
@@ -2025,48 +2265,67 @@ def _settings_path(session_id: str, root: Optional[Path]) -> Path:
     return CS.paths(session_id, root).base / "build-settings.json"
 
 
-def _clean_settings(value: Any) -> Dict[str, str]:
-    out = {"model": "", "effort": ""}
+SETTINGS_DEFAULTS: Dict[str, Any] = {
+    # What a build runs on; "" is the CLI's own default.
+    "model": "", "effort": "",
+    # Whether a finished build is followed by the restart check, and what
+    # that check runs on; "" is CHECK_MODEL / CHECK_EFFORT.
+    "check": True, "check_model": "", "check_effort": ""}
+
+
+def _clean_settings(value: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = dict(SETTINGS_DEFAULTS)
     if not isinstance(value, dict):
         return out
-    model = str(value.get("model") or "").strip()
-    if _MODEL_ID.match(model):
-        out["model"] = model
-    effort = str(value.get("effort") or "").strip().lower()
-    if effort in EFFORTS:
-        out["effort"] = effort
+    for key in ("model", "check_model"):
+        model = str(value.get(key) or "").strip()
+        if _MODEL_ID.match(model):
+            out[key] = model
+    for key in ("effort", "check_effort"):
+        effort = str(value.get(key) or "").strip().lower()
+        if effort in EFFORTS:
+            out[key] = effort
+    if "check" in value:
+        out["check"] = bool(value.get("check"))
     return out
 
 
-def load_settings(session_id: str, root: Optional[Path]) -> Dict[str, str]:
-    """The reader's choice of model and effort for builds; "" means the
-    CLI's own default for either."""
+def load_settings(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
+    """The reader's choice of model and effort for builds, and for the
+    restart check that follows one; "" means the default for either."""
     try:
         value = json.loads(_settings_path(session_id, root).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return {"model": "", "effort": ""}
+        return dict(SETTINGS_DEFAULTS)
     return _clean_settings(value)
 
 
 def save_settings(session_id: str, root: Optional[Path],
                   patch: Dict[str, Any]) -> Dict[str, Any]:
-    """Set either or both; a key not in the patch is left as it was. A
+    """Set any of the keys; one not in the patch is left as it was. A
     model that is not a plausible id, or an effort the CLI does not know,
     is refused rather than silently dropped."""
     if not isinstance(patch, dict):
         return {"ok": False, "error": "nothing to set"}
     current = load_settings(session_id, root)
-    if "model" in patch:
-        model = str(patch.get("model") or "").strip()
-        if model and not _MODEL_ID.match(model):
-            return {"ok": False, "error": "that is not a model id"}
-        current["model"] = model
-    if "effort" in patch:
-        effort = str(patch.get("effort") or "").strip().lower()
-        if effort and effort not in EFFORTS:
-            return {"ok": False,
-                    "error": "effort is one of " + ", ".join(EFFORTS)}
-        current["effort"] = effort
+    for key in ("model", "check_model"):
+        if key in patch:
+            model = str(patch.get(key) or "").strip()
+            if model and not _MODEL_ID.match(model):
+                return {"ok": False, "error": "that is not a model id"}
+            current[key] = model
+    for key in ("effort", "check_effort"):
+        if key in patch:
+            effort = str(patch.get(key) or "").strip().lower()
+            if effort and effort not in EFFORTS:
+                return {"ok": False,
+                        "error": "effort is one of " + ", ".join(EFFORTS)}
+            current[key] = effort
+    if "check" in patch:
+        value = patch.get("check")
+        if isinstance(value, str):
+            value = value.strip().lower() not in ("", "0", "false", "no", "off")
+        current["check"] = bool(value)
     path = _settings_path(session_id, root)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, current)
@@ -2160,7 +2419,11 @@ def models(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": True, "aliases": list(MODEL_ALIASES),
                            "models": [], "efforts": list(EFFORTS),
                            "source": None,
-                           "settings": load_settings(session_id, root)}
+                           "settings": load_settings(session_id, root),
+                           # What the restart check runs on when nothing
+                           # is chosen for it.
+                           "check_defaults": {"model": CHECK_MODEL,
+                                              "effort": CHECK_EFFORT}}
     binary = _cli_binary()
     if binary is None:
         return out

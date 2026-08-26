@@ -127,6 +127,10 @@ class TodoPanelBrowserTests(unittest.TestCase):
         self.old_env = dict(os.environ)
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
         os.environ["HC_BUILD_MODE"] = "headless"
+        # The restart check that follows a finished build is a second
+        # process on the same session; the tests that are about it turn it
+        # on themselves (see RestartCheckBrowserTests).
+        os.environ["HC_BUILD_RESTART_CHECK"] = "0"
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
 

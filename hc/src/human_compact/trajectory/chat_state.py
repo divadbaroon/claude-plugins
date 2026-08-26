@@ -299,6 +299,72 @@ def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
         _atomic_json(p.manifest, manifest)
 
 
+def _project_tree_session(home: str, root: Optional[Path],
+                          unless: str = "") -> str:
+    """Which chat's store holds a project's tree.
+
+    A project's goals live in one chat's directory -- the first one that was
+    ever worked in there. Every chat bound afterwards reads and writes that
+    same store, which is what makes joining a project show the project rather
+    than an empty page. Preferring a store that actually has goals over the
+    merely oldest matters: a chat opened, abandoned and never written in
+    would otherwise become the project's tree forever.
+    """
+    base = _state_base(root)
+    target = str(Path(str(home)).expanduser())
+    written, any_here = "", ""
+    try:
+        entries = sorted(base.iterdir(), key=lambda entry: entry.name)
+    except OSError:
+        return ""
+    for entry in entries:
+        if not entry.is_dir() or entry.name == unless:
+            continue
+        try:
+            manifest = json.loads((entry / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        where = manifest.get("project_home") or manifest.get("cwd") or ""
+        try:
+            same = str(Path(str(where)).expanduser()) == target
+        except (OSError, RuntimeError, TypeError):
+            same = False
+        if not same:
+            continue
+        any_here = any_here or entry.name
+        if not written:
+            try:
+                held = json.loads((entry / "goals.json").read_text(encoding="utf-8"))
+                if isinstance(held, dict) and held.get("goals"):
+                    written = entry.name
+            except (OSError, ValueError):
+                pass
+    return written or any_here
+
+
+def tree_session(session_id: str, root: Optional[Path] = None) -> str:
+    """The session whose store this chat's goals actually live in.
+
+    Itself, until it is bound to a project somebody has already worked in;
+    from then on, that project's store. Resolved from what was written down
+    at binding rather than rescanned, so the answer cannot change under a
+    chat while it is being read.
+    """
+    try:
+        held = str(load_manifest(session_id, root).get("project_tree") or "")
+    except (OSError, ValueError, TypeError):
+        return session_id
+    if not held or held == session_id:
+        return session_id
+    try:
+        paths(held, root)
+    except (ValueError, TypeError):
+        return session_id
+    return held
+
+
 def bind_project(session_id: str, home, root: Optional[Path] = None) -> str:
     """Tie this chat to one project, permanently, until it is tied to another.
 
@@ -316,6 +382,10 @@ def bind_project(session_id: str, home, root: Optional[Path] = None) -> str:
     with session_lock(session_id, root, wait_s=5) as p:
         manifest = load_manifest(session_id, root)
         manifest["project_home"] = resolved
+        # Decided here rather than on every read: a project's tree must not
+        # change hands under a chat that is in the middle of reading it.
+        shared = _project_tree_session(resolved, root, unless=session_id)
+        manifest["project_tree"] = shared or session_id
         manifest["project_bound_at"] = _now()
         manifest["updated_at"] = _now()
         _atomic_json(p.manifest, manifest)
@@ -1406,7 +1476,7 @@ def _ensure_prompt_ids(goals: Dict[str, Any]) -> Dict[str, Any]:
 def load_goals(
     session_id: str, root: Optional[Path] = None
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    p = paths(session_id, root)
+    p = paths(tree_session(session_id, root), root)
     goals = _read_json(p.goals, {"version": 1, "goals": []})
     important = _read_json(p.important, {"items": []})
     if not isinstance(goals, dict):
@@ -1574,6 +1644,10 @@ def save_goals(
     expected_revision: Optional[str] = None,
 ) -> bool:
     """Atomically save scoped goals and refresh their cached agent context."""
+    # Written where the tree lives, and locked there too: two chats bound to
+    # one project are two writers of one file, and a lock taken on the chat
+    # rather than on the store would not keep them apart.
+    session_id = tree_session(session_id, root)
     with session_lock(session_id, root, wait_s=5) as p:
         current_goals, current_important = load_goals(session_id, root)
         if expected_revision is not None and expected_revision != _revision_of(
@@ -1660,7 +1734,8 @@ def mirror_goal_context(
     deleted.  Best effort by construction -- a hook must not fail over a copy.
     """
     try:
-        text = paths(session_id, root).goal_context.read_text(encoding="utf-8")
+        text = paths(tree_session(session_id, root),
+                     root).goal_context.read_text(encoding="utf-8")
     except (OSError, ValueError, TypeError):
         return None
     try:
@@ -1716,14 +1791,18 @@ def render_context_injection(
     session lock; a hook on the model's own turn cannot afford the default.
     """
     p = paths(session_id, root)
+    # The document comes from wherever this chat's tree lives; the snapshot
+    # of what THIS chat was last told stays its own, because two chats on one
+    # project have seen different amounts of it.
+    held = paths(tree_session(session_id, root), root)
     try:
-        current = p.goal_context.read_text(encoding="utf-8")
+        current = held.goal_context.read_text(encoding="utf-8")
     except (OSError, ValueError):
         return ""
     if not current.strip():
         return ""
     location = mirror_goal_context(session_id, transcript_path, cwd, root) \
-        or p.goal_context
+        or held.goal_context
     full = (f"# Goals for this Claude chat (full file: {location})\n\n"
             f"{current}")
 

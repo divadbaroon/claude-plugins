@@ -1915,10 +1915,12 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return BUILD.note(session_id, root, goal_id,
                           str(op.get("id") or ""), str(op.get("note") or ""))
     if kind == "set_build_settings":
-        # The Builds tab: which model, at what effort. Vault-wide.
+        # The Builds tab: which model, at what effort -- for a build, and
+        # for the restart check that follows one. Vault-wide.
         return BUILD.save_settings(
             session_id, root,
-            {k: op.get(k) for k in ("model", "effort") if k in op})
+            {k: op.get(k) for k in ("model", "effort", "check",
+                                    "check_model", "check_effort") if k in op})
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -2463,9 +2465,20 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 where = str(GM.by_id(goals, parent).get("project_cwd") or "")
             else:
                 asked = str(op.get("project_cwd") or "").strip()
-                here = _project_identity(trajdir, chat_scoped, session_id)
-                if asked and asked != str(here.get("cwd") or ""):
-                    where = asked
+                # Asked for by name here rather than taken from a variable
+                # this function never had: written that way, every root goal
+                # raised before it could be appended.
+                if asked:
+                    mine = ""
+                    if chat_scoped:
+                        try:
+                            said, _root = _chat_identity(trajdir)
+                            mine = str(_project_identity(
+                                trajdir, True, said).get("cwd") or "")
+                        except (OSError, ValueError, TypeError):
+                            mine = ""
+                    if asked != mine:
+                        where = asked
             goals["goals"].append(GM.new_goal(
                 gid, (op.get("title") or "Untitled").strip()[:120], parent,
                 origin="user", project_cwd=where))
