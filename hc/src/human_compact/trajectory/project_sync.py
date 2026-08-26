@@ -116,7 +116,9 @@ def project_uuid(root: Optional[Path], cwd, mint: bool = True) -> str:
         return derived
     minted = str(uuid.uuid4())
     try:
-        PS.save_project(root, cwd, {"id": minted})
+        # Bookkeeping, not authorship: minting an id must not bring a project
+        # the reader deleted back onto their screen.
+        PS.save_project(root, cwd, {"id": minted}, revive=False)
     except OSError:
         return derived
     return minted

@@ -7999,6 +7999,21 @@
     return { items: rows, index: index };
   }
 
+  function todoUnsent(row) {
+    // A row the next TODO can be typed into: one never sent. Not a failed
+    // row, which came back out of a build and is the build's row still.
+    // Asked of the row itself, never of the band its family sits in: a row
+    // above rows nested under it is banded with them, out with the builder,
+    // and it is still the row the reader types in.
+    return !!(row && !str(row.status));
+  }
+
+  function todoUnsentCount(items) {
+    var n = 0;
+    array(items).forEach(function (row) { if (todoUnsent(row)) n++; });
+    return n;
+  }
+
   function todoBackspace(items, index, caret) {
     // Only the start of a row is ours; anywhere else is ordinary typing.
     if (caret !== 0) return null;
@@ -8008,6 +8023,9 @@
     if (!row.text) {
       if (row.depth > 0) return todoOutdent(rows, index);
       if (rows.length === 1) return null;
+      // The one unsent row left stays: it is the row the next TODO is typed
+      // into, whatever sits out or done below it -- or nested under it.
+      if (todoUnsent(row) && todoUnsentCount(rows) === 1) return null;
       rows.splice(index, 1);
       var back = Math.max(0, index - 1);
       return { items: rows, index: back, caret: rows[back].text.length };
@@ -8023,6 +8041,10 @@
   function todoRemove(items, index) {
     var rows = todoCopyRows(items);
     if (!rows[index]) return null;
+    // The empty row the list keeps for typing into is not removed: there
+    // would be nothing to put in its place but another.
+    if (!str(rows[index].text).trim() && todoUnsent(rows[index])
+        && todoUnsentCount(rows) === 1) return null;
     rows.splice(index, 1);
     if (!rows.length) rows.push(todoRow("", 0));
     var next = Math.min(index, rows.length - 1);
@@ -10617,7 +10639,17 @@
     // previewed build would carry.
     var tree = "";
     try { tree = JSON.stringify(readLocalGoals()); } catch (e) { tree = ""; }
-    return goal.id + "|" + todoPickedIds().join(",") + "|" + tree;
+    // The scenario and the answers under it are not in that tree and never
+    // were -- the artifact rebuilds each goal from a field list, so this one
+    // has its own op (see understandFromServer). They do open the build
+    // prompt, though, so a key made of the tree alone left the Prompt tab
+    // printing the build as it stood before the scenario was written.
+    var scene = "";
+    try {
+      scene = JSON.stringify(understandFromServer(goal.id));
+    } catch (e) { scene = ""; }
+    return goal.id + "|" + todoPickedIds().join(",") + "|" + scene + "|"
+      + tree;
   }
 
   function promptCtxLoad(goal, once) {

@@ -3099,7 +3099,7 @@ class ProjectsHomeBrowserTests(unittest.TestCase):
                                    timeout=10_000)
             b.close()
 
-    def test_forgetting_a_project_asks_first_and_then_drops_it(self):
+    def test_deleting_a_project_takes_its_name_typed_out_first(self):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:  # pragma: no cover
@@ -3111,15 +3111,51 @@ class ProjectsHomeBrowserTests(unittest.TestCase):
             page.wait_for_selector(".hc-home-card", timeout=10_000)
             page.eval_on_selector(
                 '[data-hc-home-forget="' + self.other + '"]', "n => n.click()")
-            page.wait_for_selector("[data-hc-home-forget-yes]", timeout=10_000)
-            # What goes and what stays, said where the decision is made.
-            self.assertIn("goals stay in their chats",
-                          page.inner_text(".hc-home-card[data-hc-confirm]"))
+            page.wait_for_selector(".hc-home-dialog", timeout=10_000)
+            # What goes, what stays, and that there is no way back.
+            said = page.inner_text(".hc-home-dialog")
+            self.assertIn("irreversible", said.lower())
+            self.assertIn("left alone", said)
+            # Armed by the project's own name and nothing else: a click
+            # before anything is typed, and a click on a near miss, both do
+            # nothing at all.
+            page.click("[data-hc-home-forget-yes]")
+            page.fill("[data-hc-home-confirm]", "widgets")
+            page.click("[data-hc-home-forget-yes]")
+            self.assertTrue(PS.project_path(self.a.parent, self.other).exists())
+            page.fill("[data-hc-home-confirm]", "widget")
             page.click("[data-hc-home-forget-yes]")
             page.wait_for_function(
                 "() => !document.querySelector('[data-hc-home-open=\""
                 + self.other + "\"]')", timeout=10_000)
             self.assertFalse(PS.project_path(self.a.parent, self.other).exists())
+            b.close()
+
+    def test_the_delete_dialog_can_be_left_without_deleting_anything(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            page.eval_on_selector(
+                '[data-hc-home-forget="' + self.other + '"]', "n => n.click()")
+            page.wait_for_selector(".hc-home-dialog", timeout=10_000)
+            page.click("[data-hc-home-forget-no]")
+            page.wait_for_selector(".hc-home-dialog", state="detached",
+                                   timeout=10_000)
+            page.eval_on_selector(
+                '[data-hc-home-forget="' + self.other + '"]', "n => n.click()")
+            page.wait_for_selector(".hc-home-dialog", timeout=10_000)
+            page.keyboard.press("Escape")
+            page.wait_for_selector(".hc-home-dialog", state="detached",
+                                   timeout=10_000)
+            # Escape took the dialog, not the projects behind it.
+            self.assertTrue(page.is_visible(".hc-home-card"))
+            self.assertTrue(PS.project_path(self.a.parent, self.other).exists())
             b.close()
 
     def test_a_new_project_can_be_added_without_leaving_the_page(self):

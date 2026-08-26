@@ -363,6 +363,40 @@ class TodoListModelTests(BridgeTestCase):
         self.assertEqual(
             "- [active] one\n    - [building] two\n- [done] three\n", out)
 
+    def test_the_last_unsent_row_survives_a_backspace_at_its_bullet(self):
+        # Backspacing an empty bullet removes it -- except when it is the only
+        # row still unsent. Rows out with a build sit below it and cannot be
+        # typed into, so deleting it would leave no way to add a TODO at all.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.backspace(["
+            "  {id: 't00000001', text: '', depth: 0, status: ''},"
+            "  {id: 't00000002', text: 'out', depth: 0, status: 'building'},"
+            "  {id: 't00000003', text: 'gone', depth: 0, status: 'done'}],"
+            "  0, 0);")
+        self.assertIsNone(out)
+
+    def test_a_second_unsent_row_is_still_removable(self):
+        # The guard is the LAST unsent row, not every empty one: with two to
+        # type into, backspacing one of them behaves as it always did.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.backspace(["
+            "  {id: 't00000001', text: 'keep', depth: 0, status: ''},"
+            "  {id: 't00000002', text: '', depth: 0, status: ''}],"
+            "  1, 0).items.length;")
+        self.assertEqual(1, out)
+
+    def test_the_last_unsent_row_survives_an_explicit_remove(self):
+        # Cmd+Backspace takes the same guard: an empty last unsent row is not
+        # removed, since there would be nothing to put in its place but another.
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "out = L.remove(["
+            "  {id: 't00000001', text: '  ', depth: 0, status: ''},"
+            "  {id: 't00000002', text: 'out', depth: 0, status: 'queued'}], 0);")
+        self.assertIsNone(out)
+
     def test_the_todo_copy_carries_the_notes_as_context_only(self):
         # The Copy TODOs body: rows with states first, then the goal's notes
         # under a CONTEXT header that says not to act on them.

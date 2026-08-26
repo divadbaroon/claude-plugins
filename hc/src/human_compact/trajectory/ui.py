@@ -772,6 +772,10 @@ def _all_projects(root, active=""):
     """
     rows = {PS._resolved(row["cwd"]): row for row in PS.list_projects(root)}
     here = PS._resolved(active) if active else ""
+    # Unless it was just deleted: putting the directory this window happens
+    # to sit in back on the list is how a deletion looked like it had failed.
+    if here and PS.deleted(root, active):
+        here = ""
     if here and here not in rows:
         rows[here] = {"cwd": active, "name": Path(here).name or here,
                       "objective": "", "description": "",
@@ -1245,32 +1249,26 @@ SCENARIO_NO_TOOLS = [
     "to run it, and what you write is kept on the goal as the answer.",
 ]
 
-# The shape every answer about a scenario comes back in. A scenario is a
-# situation, and a question about a situation is answered by naming what is
-# true, what happens, and what follows -- so the answer is asked for in the
-# one form that separates those three, rather than in a paragraph the reader
-# has to take apart to compare two answers against each other.
+# The shape every answer about a scenario comes back in. It was GIVEN / WHEN
+# / THEN, on the reasoning that cases compare when they are written the same
+# way -- but a reader asking "what happens to the second build" wants the
+# answer, and reading it back out of three capitalised clauses is work the
+# form was supposed to save. The shape belongs to the scenario, which is one
+# situation written once; the answers are ordinary answers.
 SCENARIO_SHAPE = [
-    "Answer in GIVEN / WHEN / THEN and nothing else. One or more blocks,",
-    "each line beginning with its word in capitals:",
-    "",
-    "GIVEN <what is true before anything happens>",
-    "WHEN <what happens, or what someone does>",
-    "THEN <what follows from it>",
-    "",
-    "AND on its own line continues the GIVEN, WHEN or THEN above it. Write a",
-    "second block when the answer turns on a case the first does not cover.",
-    "No preamble, no heading, no closing paragraph, no restating of the",
-    "question.",
+    "Answer in plain prose -- a few sentences, or a short paragraph or two",
+    "where the question needs them. No heading, no bullets, no preamble, no",
+    "closing offer of help, and no restating of the question: the first",
+    "sentence is already the answer.",
 ]
 
 # Where the answer is allowed to come from when the prompt is all there is.
 SCENARIO_FROM_WORDS = [
     "Answer from the scenario and the goal around it. Where they do not say,",
-    "do not fill the gap from what projects like this usually do: write the",
-    "assumption as its own line, GIVEN (assumed) <the assumption>. If the",
-    "question cannot be answered in this shape at all, write one line",
-    "beginning UNCLEAR, then one line saying what would settle it.",
+    "do not fill the gap from what projects like this usually do: say what",
+    "you are assuming, in the sentence that rests on it. If the question",
+    "cannot be answered from what is here at all, say so in one sentence and",
+    "then say what would settle it.",
 ]
 
 SCENARIO_FORM = (SCENARIO_NO_TOOLS + [""] + SCENARIO_SHAPE + [""]
@@ -1298,73 +1296,72 @@ def scenario_from_code(where):
         "sitting in front of you.",
         "",
         "Then answer from what you read, plus the scenario and the goal around",
-        "it. Name your evidence: a line that comes from the code ends with the",
-        "file and line it came from in parentheses, like (src/build.py:212).",
-        "Where nothing in the project or the scenario settles a point, write",
-        "the assumption as its own line, GIVEN (assumed) <the assumption>.",
+        "it. Name your evidence: a sentence that comes from the code ends with",
+        "the file and line it came from in parentheses, like",
+        "(src/build.py:212). Where nothing in the project or the scenario",
+        "settles a point, say what you are assuming, in the sentence that",
+        "rests on it.",
         "",
-        "UNCLEAR is for what is still open after you have looked. Write one",
-        "line beginning UNCLEAR and one line saying what would settle it --",
-        "and never that you could not check the code, because you can.",
+        "Say plainly what is still open after you have looked, and what would",
+        "settle it -- but never that you could not check the code, because you",
+        "can.",
     ]
 
-# The words an answer is built out of, as the tab draws them. A reply with
-# none of them in it is not an answer in this shape -- a provider that reached
-# for a tool it was not given writes the tool call out instead, and one kept
-# on the goal is read as the answer for as long as the goal lives.
-SCENARIO_KEYWORD = re.compile(r"^(?:GIVEN|WHEN|THEN|AND|UNCLEAR)\b")
-
-
-def _scenario_line(line) -> str:
-    """One line of an answer with the markdown a model reached for taken off.
-
-    The tab colours a keyword by finding it at the head of the line, so a
-    keyword bulleted or set in bold is a keyword it cannot see. What the form
-    asked for is the bare line, and this is the bare line.
-    """
-    line = re.sub(r"^(?:[-*+]\s+|#{1,6}\s+|>\s+)", "", str(line).strip())
-    return line.replace("**", "").replace("__", "").strip()
+# A reply that is not an answer at all but a tool call written out as text: a
+# provider that reached for a tool it was not given prints the call instead of
+# running it, and a call kept on the goal is read as the answer for as long as
+# the goal lives. Prose is prose, so there is no shape left to check -- this
+# is the one thing still worth refusing.
+SCENARIO_TOOL_CALL = re.compile(
+    r'^(?:\*\*|#{1,6}\s*)?tool(?:\s+(?:call|use|name))?\s*(?:\*\*)?\s*:'
+    r'|^\{\s*"(?:command|tool|tool_name|name|input|parameters)"\s*:', re.I)
 
 
 def scenario_answer(text) -> str:
-    """The GIVEN/WHEN/THEN in what came back, or "" when there is none.
+    """What came back, as the tab keeps it -- or "" when it is not an answer.
 
-    Anything above the first keyword line is dropped -- a preamble the form
-    asked for none of, or the fence a model wrapped the whole answer in, is
-    not part of the answer and the tab draws these lines keyword by keyword.
+    A whole reply wrapped in one code fence is unwrapped: the fence is the
+    model's packaging, not the reader's answer. A fence around part of a reply
+    is left alone, because there it is usually the code being quoted back.
+
+    Only the opening line is weighed against a tool call. A printed-out call
+    always opens with one; an answer that quotes a line of JSON in the middle
+    of itself is an answer, and refusing that would be refusing the answers
+    that went and looked.
     """
-    lines = [_scenario_line(line) for line in str(text or "").splitlines()
-             if not line.strip().startswith("```")]
-    for n, line in enumerate(lines):
-        if SCENARIO_KEYWORD.match(line):
-            return "\n".join(lines[n:]).strip()
-    return ""
+    body = str(text or "").strip()
+    fenced = re.match(r"^```[^\n]*\n(.*)\n```$", body, re.S)
+    if fenced:
+        body = fenced.group(1).strip()
+    if not body or SCENARIO_TOOL_CALL.match(body):
+        return ""
+    return body
 
 
-# What is said to a provider that answered with something else. Its own reply
-# is not quoted back: what went wrong with it is that it was not in the shape,
-# and the shape is already above.
+# What is said to a provider that wrote a tool call out instead of answering.
+# Its own reply is not quoted back: what went wrong with it is that it was not
+# an answer, and what an answer is is already above.
 SCENARIO_AGAIN = [
     "",
     "# Your last reply was not an answer",
     "",
-    "It had no GIVEN, WHEN, THEN or UNCLEAR line in it. You have no tools on",
-    "this call and nothing to look at beyond what is quoted above: answer",
-    "from the scenario and the goal, in the shape asked for, and nothing",
-    "else. Where they do not say, write GIVEN (assumed) <the assumption>.",
+    "It was a tool call, printed out. You have no tools on this call and",
+    "nothing to look at beyond what is quoted above: answer from the scenario",
+    "and the goal, in prose, and nothing else. Where they do not say, say",
+    "what you are assuming in the sentence that rests on it.",
 ]
 
-# The same, said to a call that does have the project to look in. What went
-# wrong there is the shape, not the looking -- so it is not told to stop.
+# The same, said to a call that does have the project to look in. Its looking
+# was never the problem -- so it is not told to stop, only to run the search
+# rather than print it.
 SCENARIO_AGAIN_IN_CODE = [
     "",
     "# Your last reply was not an answer",
     "",
-    "It had no GIVEN, WHEN, THEN or UNCLEAR line in it. What you write now is",
-    "kept on the goal as the answer, so write the answer itself: the lines",
-    "you were asked for, in the shape asked for, and nothing else around",
-    "them. Keep what you found in the code -- it is only the shape that was",
-    "wrong.",
+    "It was a tool call, printed out rather than run. What you write now is",
+    "kept on the goal as the answer, so write the answer itself: prose, and",
+    "nothing else around it. You really can search this project -- make the",
+    "call, read what comes back, and answer from it.",
 ]
 
 
@@ -1392,9 +1389,10 @@ def ask_scenario(goals, goal_id, scenario, question, objective="",
 
     The Understanding tab's question boxes come here. What is being asked
     about is the situation the reader described, with the goal it belongs to
-    quoted around it -- and the answer comes back in GIVEN/WHEN/THEN, which
-    is the tab's whole reason for asking: a scenario is settled case by case,
-    and cases compare when they are written the same way.
+    quoted around it, and what comes back is an ordinary answer in prose. The
+    GIVEN/WHEN/THEN shape lives on the scenario itself -- see
+    ``draft_scenario`` -- where it is written once and read many times; an
+    answer is read once, by the person who asked.
 
     *cwd* is the project this chat works in, when it is on this machine. Most
     of what a reader asks the tab is a question about what the code already
@@ -1440,22 +1438,22 @@ def ask_scenario(goals, goal_id, scenario, question, objective="",
     out = _answer(ask, engine, search_dir=where)
     if not out.get("ok"):
         return out
-    shaped = scenario_answer(out["answer"])
-    if not shaped:
+    said_back = scenario_answer(out["answer"])
+    if not said_back:
         # Asked once more, told what was wrong with the first reply. What
         # comes back here is kept on the goal and opens every build of its
-        # rows, so a reply in some other shape is worth a second call --
-        # and, if the second is no better, worth refusing rather than
+        # rows, so a reply that is a printed-out tool call is worth a second
+        # call -- and, if the second is no better, worth refusing rather than
         # writing down.
         out = _answer(ask + (SCENARIO_AGAIN_IN_CODE if where
                              else SCENARIO_AGAIN), engine, search_dir=where)
         if not out.get("ok"):
             return out
-        shaped = scenario_answer(out["answer"])
-    if not shaped:
+        said_back = scenario_answer(out["answer"])
+    if not said_back:
         return {"ok": False, "error":
-                "the model did not answer in GIVEN / WHEN / THEN -- ask again"}
-    return {"ok": True, "asked": words, "answer": shaped}
+                "the model wrote a tool call instead of an answer -- ask again"}
+    return {"ok": True, "asked": words, "answer": said_back[:GM.MAX_ANSWER]}
 
 
 def scenario_shots(trajdir, shots):
@@ -1482,6 +1480,74 @@ def scenario_shots(trajdir, shots):
     return out
 
 
+# The shape a scenario is written in. Not the answers -- those are prose now
+# -- but the situation itself, which is written once and then read by every
+# build of the goal's rows: what is true before anything happens, what
+# happens, and what follows. A line whose keyword the reader's words do not
+# fill is left standing empty rather than invented, and comes back with a
+# question beside it.
+SCENARIO_MAP_FORM = [
+    "Map what they wrote onto GIVEN / WHEN / THEN and write nothing else.",
+    "One or more blocks, each line beginning with its word in capitals:",
+    "",
+    "GIVEN <what is true before anything happens>",
+    "WHEN <what happens, or what someone does>",
+    "THEN <what follows from it>",
+    "",
+    "AND on its own line continues the GIVEN, WHEN or THEN above it. Write a",
+    "second block when their words cover a case the first does not.",
+    "",
+    "Use their own words wherever they gave you words to use. This is a",
+    "mapping, not a rewrite: nothing about what should be built, no task",
+    "list, no solution, nothing they did not say.",
+    "",
+    "Where their words do not say what belongs on a line, do not invent it",
+    "and do not leave the line out. Write the keyword alone on its line, and",
+    "add one line beginning ASK, saying what you would need them to tell you",
+    "to fill it in -- one ASK for each empty line, in the order they appear.",
+    "If their words map onto nothing at all, write no GIVEN, WHEN or THEN and",
+    "only the ASK lines.",
+]
+
+# The words a mapped scenario is built out of, and the question beside a line
+# it could not fill.
+SCENARIO_MAP_KEYWORD = re.compile(r"^(?:GIVEN|WHEN|THEN|AND)\b")
+SCENARIO_MAP_ASK = re.compile(r"^ASK\b[\s:>-]*")
+
+
+def _scenario_line(line) -> str:
+    """One line with the markdown a model reached for taken off.
+
+    A keyword bulleted or set in bold is a keyword the tab cannot see at the
+    head of the line. What the form asked for is the bare line, and this is
+    the bare line.
+    """
+    line = re.sub(r"^(?:[-*+]\s+|#{1,6}\s+|>\s+)", "", str(line).strip())
+    return line.replace("**", "").replace("__", "").strip()
+
+
+def scenario_mapped(text):
+    """A mapped scenario out of what came back: (lines, questions).
+
+    The keyword lines are the scenario, in the order they were written. The
+    ASK lines are not part of it -- they are what the reader has to fill in
+    themselves, and the tab shows them under the box rather than writing them
+    into it, because a question is not a situation.
+    """
+    lines, asks = [], []
+    for raw in str(text or "").splitlines():
+        line = _scenario_line(raw)
+        if not line or line.startswith("```"):
+            continue
+        if SCENARIO_MAP_ASK.match(line):
+            words = SCENARIO_MAP_ASK.sub("", line).strip()
+            if words and len(asks) < GM.MAX_QUESTIONS:
+                asks.append(words[:ASK_QUESTION_LIMIT])
+        elif SCENARIO_MAP_KEYWORD.match(line):
+            lines.append(line)
+    return "\n".join(lines)[:GM.MAX_SCENARIO], asks
+
+
 def draft_scenario(trajdir, text, shots, objective="", engine=None):
     """Write the scenario field from what the reader has to hand.
 
@@ -1490,8 +1556,13 @@ def draft_scenario(trajdir, text, shots, objective="", engine=None):
     should not have to describe it first, and the model is given the files to
     open rather than a description of them.
 
-    Comes back as prose for the reader to edit, not as something saved: the
-    tab puts it in the box and the box is still theirs.
+    What comes back is their own natural language mapped onto GIVEN / WHEN /
+    THEN, plus the questions for whatever would not map -- an empty THEN
+    comes back as an empty THEN and a question beside it, not as a plausible
+    sentence somebody has to notice was invented.
+
+    Nothing here is saved: the tab puts the lines in the box and the box is
+    still theirs to edit.
     """
     notes = str(text or "").strip()[:GM.MAX_SCENARIO]
     files = scenario_shots(trajdir, shots)
@@ -1505,16 +1576,9 @@ def draft_scenario(trajdir, text, shots, objective="", engine=None):
         "task.",
         "",
         "A scenario is a situation in the present tense -- who is doing what,",
-        "where they are doing it, and what is true while they do. It is not a",
-        "task list, not a plan, and not a solution: nothing about what should",
-        "be built.",
+        "where they are doing it, and what is true while they do.",
         "",
-        "Write one paragraph, at most six sentences, plain prose. No heading,",
-        "no bullets, no preamble, no closing offer of help.",
-        "",
-        "Say only what the material below supports. Where it leaves something",
-        "open, leave it open rather than inventing it.",
-    ]
+    ] + SCENARIO_MAP_FORM
     objective = " ".join(str(objective or "").split())
     if objective:
         ask += ["", "# The project's objective", "", objective]
@@ -1530,8 +1594,14 @@ def draft_scenario(trajdir, text, shots, objective="", engine=None):
                                     for s in files}) if files else None)
     if not out.get("ok"):
         return out
-    return {"ok": True, "scenario": out["answer"][:GM.MAX_SCENARIO],
-            "shots": files}
+    mapped, asks = scenario_mapped(out["answer"])
+    if not mapped and not asks:
+        # Neither a line nor a question came back. Refused rather than
+        # emptying the box the reader typed into: what they wrote is still
+        # the best scenario anyone has.
+        return {"ok": False, "error":
+                "that did not map onto GIVEN / WHEN / THEN -- write it here"}
+    return {"ok": True, "scenario": mapped, "asks": asks, "shots": files}
 
 
 def _git_remote(cwd):
@@ -2502,6 +2572,11 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 out["open"] = elsewhere
             return out
         if kind == "forget_project":
+            # Deletion, and named as one on the screen: the reader types the
+            # project's name to get here. Everything the vault keeps for it
+            # goes -- its records, its window, and the goals, TODO rows,
+            # notes and prompts of every chat in it. The repository itself is
+            # untouched.
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
             where = op.get("cwd")
@@ -2511,16 +2586,20 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 _, root = _chat_identity(trajdir)
             except Exception:                                # noqa: BLE001
                 root = None
-            # The chats first: a chat left naming a record that is gone reads
-            # an empty tree and is never asked why. Cut loose, it goes back
-            # through onboarding and the reader says where it belongs.
-            freed = []
-            for sid in CS.chats_in_project(where, root):
-                if CS.unbind_project(sid, root):
-                    freed.append(sid)
-            if not PS.forget_project(root, where):
+            # The chats first: a chat left naming a project that is gone
+            # reads an empty tree and is never asked why. Cut loose, it goes
+            # back through onboarding and the reader says where it belongs.
+            # Done before the directories go, so a chat whose store survives
+            # -- one bound from elsewhere -- is asked rather than stranded.
+            members = CS.chats_in_project(where, root)
+            freed = [sid for sid in members if CS.unbind_project(sid, root)]
+            # Named to the deletion: an unbound chat no longer says which
+            # project it was in, so the list has to travel with the call.
+            gone = PS.delete_project(root, where, members)
+            if not gone:
                 return {"ok": False, "error": "no such project"}
-            return {"ok": True, "cwd": where, "freed": len(freed)}
+            return {"ok": True, "cwd": gone["cwd"], "freed": len(freed),
+                    "chats": gone["chats"], "goals": gone["goals"]}
         if kind == "open_project":
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
@@ -3455,8 +3534,8 @@ class H(BaseHTTPRequestHandler):
                         "objective") or ""),
                     turns=body.get("turns")))
             elif self.path == "/api/ask_scenario":
-                # One question from the Understanding tab, answered in
-                # GIVEN/WHEN/THEN. Reads goals like /api/ask_selection does,
+                # One question from the Understanding tab, answered in prose.
+                # Reads goals like /api/ask_selection does,
                 # and waits on a model outside the state lock for the same
                 # reason -- the answer is written back by the tab afterwards,
                 # through the ordinary op, not from in here.
