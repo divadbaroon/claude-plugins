@@ -1527,7 +1527,19 @@ def supabase_main(argv=None):
     ap = argparse.ArgumentParser(
         prog="hc supabase",
         description="Connect the goal workspace to your own Supabase project.")
-    ap.add_argument("action", choices=("setup", "login", "logout", "status"))
+    ap.add_argument("action",
+                    choices=("setup", "login", "logout", "status", "whoami"))
+    # The browser is the ordinary way in: the reader is already signed in
+    # there, and a password typed at a terminal is a password the terminal
+    # has seen. By default it opens the connect page, which sends a sign-in
+    # link to an email; --provider skips the page for a provider button.
+    # --password is the way through for anyone who cannot open a browser
+    # -- a remote shell, a machine with none.
+    ap.add_argument("--provider", default=None,
+                    help="go straight to google or github at Supabase"
+                         " instead of the connect page")
+    ap.add_argument("--password", action="store_true",
+                    help="type an email and password instead of the browser")
     args = ap.parse_args(argv or [])
     from .trajectory import supabase_client as SB
 
@@ -1547,6 +1559,15 @@ def supabase_main(argv=None):
         say("signed out; the stored tokens are gone")
         return 0
 
+    if args.action == "whoami":
+        try:
+            session = SB.current_session()
+        except SB.SupabaseError as exc:
+            say(str(exc))
+            return 1
+        say(session.get("email") or session.get("user_id") or "signed in")
+        return 0
+
     if args.action == "status":
         state = SB.status()
         say(f"config    {state['config_path']}")
@@ -1563,6 +1584,22 @@ def supabase_main(argv=None):
     if not config["url"] or not config["anon_key"]:
         say(f"fill in {SB.config_path()} first (run `hc supabase setup`)")
         return 1
+    if not args.password:
+        say("Opening your browser to sign in\u2026")
+        try:
+            session = SB.sign_in_with_browser(
+                args.provider,
+                announce=lambda url: say("If it did not open: " + url))
+        except SB.SupabaseError as exc:
+            say(str(exc))
+            say("If this machine has no browser, use"
+                " `hc supabase login --password`.")
+            return 1
+        say(f"signed in as {session['email']}")
+        say("the workspace can now send this project from the project"
+            " overview")
+        return 0
+
     email = config.get("email") or ""
     if not email or email == "you@example.com":
         email = input("email: ").strip()
