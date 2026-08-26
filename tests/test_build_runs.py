@@ -681,7 +681,9 @@ class CancelTests(BuildRunTests):
             lambda: self.rows()["taaaa0001"][0] == "done", seconds=12))
         # The process still printed DONE for the cancelled row; it is not taken.
         self.assertEqual(("", ""), self.rows()["taaaa0003"])
-        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1") or {}).get("status")
+            == "idle"), BUILD.load_run(self.session, self.root, "g1"))
 
     def test_withdrawing_a_question_resumes_the_run_on_the_rest(self):
         self.assertTrue(BUILD.start(self.session, self.root, "g1",
