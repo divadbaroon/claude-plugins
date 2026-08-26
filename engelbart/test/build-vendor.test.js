@@ -136,7 +136,7 @@ test('a stale build tree cannot leak a deleted asset into the wheel', (t) => {
 
   assert.equal(names.some((n) => n.includes('hc-ui-skill')), false,
     'the deleted hc-ui skill must not reach the wheel');
-  assert.equal(names.includes('human_compact/assets/goals-ui-skill/SKILL.md'), true,
+  assert.equal(names.includes('human_compact/assets/bart-skill/SKILL.md'), true,
     'the real skill asset must still be there');
   assert.equal(fs.existsSync(stale), false,
     'the build must have removed the stale tree, not merely ignored it');
