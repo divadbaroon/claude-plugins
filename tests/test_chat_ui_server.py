@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import ui  # noqa: E402
 from human_compact.trajectory import chat_state  # noqa: E402
+from human_compact.trajectory import project_store as PS  # noqa: E402
 
 
 NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -2752,12 +2753,12 @@ class ProjectOnboardingServerTests(unittest.TestCase):
             done = post_json(url + "/api/op",
                              {"op": "bind_project", "cwd": home})
             self.assertTrue(done.get("ok"), done)
-            self.assertEqual(home, done["cwd"])
+            self.assertEqual(PS._resolved(home), done["cwd"])
             state = get_json(url + "/api/state")
             self.assertTrue(state["project_bound"])
             # And the workspace now names that project, not the directory
             # the chat happened to start in.
-            self.assertEqual(home, state["project"]["cwd"])
+            self.assertEqual(PS._resolved(home), state["project"]["cwd"])
 
     def test_binding_without_a_project_is_refused(self):
         with server_for(self.a) as url:
@@ -2772,7 +2773,7 @@ class ProjectOnboardingServerTests(unittest.TestCase):
             post_json(url + "/api/op", {"op": "bind_project", "cwd": one})
             post_json(url + "/api/op", {"op": "bind_project", "cwd": two})
             state = get_json(url + "/api/state")
-        self.assertEqual(two, state["project"]["cwd"])
+        self.assertEqual(PS._resolved(two), state["project"]["cwd"])
 
 
 class OnboardingBrowserTests(unittest.TestCase):

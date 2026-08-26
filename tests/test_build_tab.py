@@ -121,6 +121,46 @@ class BuildTabTests(BridgeTestCase):
         self.assertEqual([["claude-opus-4-1-20250805"], "claude-opus-4-1-20250805"],
                          got)
 
+    # --- the restart check ---------------------------------------------------
+
+    def test_the_check_has_its_own_switch_model_and_effort_with_the_defaults_named(self):
+        offered = dict(MODELS, check_defaults={"model": "sonnet", "effort": "high"},
+                       settings={"model": "claude-opus-5", "effort": "high",
+                                 "check": True, "check_model": "",
+                                 "check_effort": "low"})
+        got = self.panel(
+            "var on = panel.querySelector('[data-hc-build-set=\"check\"]');"
+            "var cm = panel.querySelector('[data-hc-build-set=\"check_model\"]');"
+            "var ce = panel.querySelector('[data-hc-build-set=\"check_effort\"]');"
+            "return JSON.stringify([on.checked, on.parentNode.children[1].textContent,"
+            " values(cm).slice(0, 3), cm.children[0].textContent, cm.value,"
+            " values(ce), ce.children[0].textContent, ce.value]);",
+            models=offered)
+        self.assertEqual(
+            [True, "After a build, ask whether the program needs a local restart",
+             ["", "fable", "opus"], "default · sonnet", "",
+             ["", "low", "medium", "high", "xhigh", "max"], "default · high", "low"],
+            got)
+
+    def test_turning_the_check_off_and_choosing_its_model_are_posted(self):
+        got = self.panel(
+            "var on = panel.querySelector('[data-hc-build-set=\"check\"]');"
+            "on.checked = false; fire('change', on);"
+            "var cm = panel.querySelector('[data-hc-build-set=\"check_model\"]');"
+            "cm.value = 'haiku'; fire('change', cm);"
+            "return later(function () { return JSON.stringify(["
+            " calls.filter(function (c) { return c[1] && c[1].op === 'set_build_settings'; })"
+            "   .map(function (c) { return [c[1].check, c[1].check_model]; }),"
+            " panel.querySelector('[data-hc-build-say]').textContent]); });",
+            models=dict(MODELS, settings={"model": "", "effort": "",
+                                          "check": True, "check_model": "",
+                                          "check_effort": ""}))
+        # The stub server keeps model/effort only, so the line after the
+        # second change reads the check as on with the defaults.
+        self.assertEqual([[[False, None], [None, "haiku"]],
+                          "saved · after a build, the restart check runs on sonnet"
+                          " at high effort"], got)
+
 
 if __name__ == "__main__":
     unittest.main()

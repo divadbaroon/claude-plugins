@@ -643,6 +643,32 @@ def project_tree(root, depth=3):
     return walk(base, 1)
 
 
+def _adopt_server_for_project(trajdir, session_id, root) -> bool:
+    """Hand this window to the project the chat just joined.
+
+    A chat stands its workspace up before it has a project -- it is about to
+    be asked which -- so the window is registered under the chat. Left there,
+    the next chat to join the project looks where the project points, finds
+    nothing, and opens a second window on the same tree.
+    """
+    try:
+        from .. import cli
+        from . import project_store as PS
+        mine = CS.paths(session_id, root).session_dir
+        record = cli._read_server_registry(mine)
+        if not record:
+            return False
+        home = CS.bound_project(session_id, root)
+        if home:
+            PS.set_server_record(root, home, record)
+        held = CS.tree_session(session_id, root)
+        if held and held != session_id:
+            cli._write_server_registry(CS.paths(held, root).session_dir, record)
+        return bool(home or held)
+    except Exception:  # noqa: BLE001 - a binding must not fail over a registry
+        return False
+
+
 def _ask_which_project(trajdir, session_id, root, goals) -> bool:
     """Whether to put this chat through onboarding -- and if not, say so once.
 
@@ -2080,6 +2106,12 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             try:
                 session_id, root = _chat_identity(trajdir)
                 home = CS.bind_project(session_id, where, root)
+                # This window was stood up for a chat that had no project
+                # yet, so it is registered under the chat. Now that the chat
+                # has one, the registration moves to the project's store --
+                # otherwise the next chat to join looks there, finds nothing,
+                # and opens a second window onto the same tree.
+                _adopt_server_for_project(trajdir, session_id, root)
             except (OSError, ValueError, TypeError, TimeoutError) as exc:
                 return {"ok": False, "error": str(exc)[:200]}
             return {"ok": True, "cwd": home,

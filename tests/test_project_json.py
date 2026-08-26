@@ -397,3 +397,96 @@ class ProjectJsonRouteTests(ProjectFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectHomeIsTheRepositoryTests(unittest.TestCase):
+    """A checkout is where a project sits today, not what the project is.
+
+    A git worktree is a second directory of the SAME repository, opened to
+    hold another branch. Keyed by its own path it became a second project
+    with a second goal tree, and the reader -- working the same repo from
+    two checkouts -- saw two different sets of TODOs and no way to say they
+    were one thing.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def _git(self, *args, cwd):
+        import subprocess
+        subprocess.run(("git",) + args, cwd=str(cwd), check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def test_a_directory_that_is_not_a_checkout_is_its_own_project(self):
+        plain = self.root / "notes"
+        plain.mkdir()
+        self.assertEqual(str(plain.resolve()), PS.repo_home(plain))
+
+    def test_a_path_that_does_not_exist_is_returned_as_it_came(self):
+        # Asked about a directory that has been moved or deleted, the answer
+        # is the path itself: a project record must still be findable.
+        gone = self.root / "gone"
+        self.assertEqual(PS._resolved(gone), PS.repo_home(gone))
+
+    def test_a_worktree_and_its_repository_are_one_project(self):
+        repo = self.root / "repo"
+        repo.mkdir()
+        self._git("init", "-q", "-b", "main", cwd=repo)
+        self._git("-c", "user.email=a@b", "-c", "user.name=a",
+                  "commit", "-q", "--allow-empty", "-m", "first", cwd=repo)
+        tree = self.root / "repo-feature"
+        self._git("worktree", "add", "-q", "-b", "feature", str(tree),
+                  cwd=repo)
+        self.assertEqual(PS.repo_home(repo), PS.repo_home(tree),
+                         "a worktree is the same project as its repository")
+        self.assertEqual(str(repo.resolve()), PS.repo_home(tree))
+        self.assertEqual(PS.project_path(self.root, repo),
+                         PS.project_path(self.root, tree))
+
+
+class ProjectOwnsItsWorkspaceTests(unittest.TestCase):
+    """Where the project's one running workspace is, written on the project.
+
+    Kept beside the project rather than inside a chat's directory: which
+    chat happens to have started the server is not something the next chat
+    knows, and it is the project that has one workspace, not the chat.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+
+    def test_a_project_with_no_workspace_says_so(self):
+        self.assertIsNone(PS.server_record(self.root, self.home))
+
+    def test_the_workspace_a_project_records_is_the_one_it_reads_back(self):
+        PS.set_server_record(self.root, self.home, {
+            "session_id": "s1", "url": "http://127.0.0.1:9/", "pid": 1})
+        self.assertEqual("http://127.0.0.1:9/",
+                         PS.server_record(self.root, self.home)["url"])
+
+    def test_a_worktree_reads_the_repository_s_workspace(self):
+        # Same project, so the same one window -- this is the whole point of
+        # recording it on the project rather than on a directory.
+        with mock.patch.object(PS, "repo_home", return_value=self.home):
+            PS.set_server_record(self.root, self.root / "acme-feature", {
+                "session_id": "s1", "url": "http://127.0.0.1:9/", "pid": 1})
+            seen = PS.server_record(self.root, self.root / "acme-other")
+        self.assertEqual("http://127.0.0.1:9/", seen["url"])
+
+    def test_the_record_is_forgotten_when_the_workspace_is_stopped(self):
+        PS.set_server_record(self.root, self.home, {
+            "session_id": "s1", "url": "http://127.0.0.1:9/", "pid": 1})
+        PS.clear_server_record(self.root, self.home)
+        self.assertIsNone(PS.server_record(self.root, self.home))
+
+    def test_recording_a_workspace_does_not_disturb_what_the_reader_wrote(self):
+        PS.save_project(self.root, self.home, {"objective": "ship it"})
+        PS.set_server_record(self.root, self.home, {
+            "session_id": "s1", "url": "http://127.0.0.1:9/", "pid": 1})
+        self.assertEqual("ship it",
+                         PS.load_project(self.root, self.home)["objective"])

@@ -1598,14 +1598,33 @@ def chat_serve_main(argv=None):
     from .trajectory import chat_state as CS, ui
     p = CS.paths(args.session)
 
+    from .trajectory import project_store as PS
+    # Only an explicit binding: recording this window against the directory
+    # the store happens to name would hand an unbound chat's workspace to a
+    # project it has never joined.
+    home = ""
+    try:
+        home = CS.bound_project(args.session)
+    except Exception:  # noqa: BLE001 - a store with no manifest has no project
+        home = ""
+
     def ready(url, _server):
-        _write_server_registry(p.session_dir, {
+        record = {
             "schema_version": 1,
             "session_id": args.session,
             "pid": os.getpid(),
             "url": url,
             "started_at": time.time(),
-        })
+        }
+        _write_server_registry(p.session_dir, record)
+        # And on the project, which is what every other chat of it reads:
+        # a workspace nobody else can find is a second window waiting to
+        # happen.
+        if home:
+            try:
+                PS.set_server_record(None, home, record)
+            except Exception:  # noqa: BLE001 - never fail to serve over this
+                pass
 
     try:
         ui.run(port=args.port, open_browser=False, trajdir=p.session_dir,
@@ -1614,6 +1633,13 @@ def chat_serve_main(argv=None):
         current = _read_server_registry(p.session_dir)
         if current and current.get("pid") == os.getpid():
             _server_registry(p.session_dir).unlink(missing_ok=True)
+        if home:
+            try:
+                noted = PS.server_record(None, home)
+                if noted and noted.get("pid") == os.getpid():
+                    PS.clear_server_record(None, home)
+            except Exception:  # noqa: BLE001 - shutdown must still finish
+                pass
     return 0
 
 
@@ -1688,8 +1714,47 @@ def chat_ui_main(argv=None):
                            CS.load_manifest(args.session).get("transcript_path"),
                            session_cwd)
 
-    with CS.session_lock(args.session, wait_s=8):
-        record = _read_server_registry(p.session_dir)
+    # A workspace belongs to a project, not to a chat. A project has many
+    # chats, and one window between them: the question asked here used to be
+    # "is a server running for ME?", which every chat but the first answered
+    # no to -- three chats in a project meant three ports, three windows and
+    # three trees. It is asked of the project now, and the project is the one
+    # that remembers, so a chat that has never run a server of its own still
+    # finds the one that is up.
+    from .trajectory import project_store as PS
+    serve = args.session
+    try:
+        serve = CS.tree_session(args.session) or args.session
+    except Exception:  # noqa: BLE001 - an unresolvable project serves itself
+        serve = args.session
+    home = ""
+    try:
+        home = CS.bound_project(args.session)
+    except Exception:  # noqa: BLE001 - an unbound chat has only itself
+        home = ""
+    sp = CS.paths(serve)
+    sp.session_dir.mkdir(parents=True, exist_ok=True)
+
+    def _known():
+        """What is running for this project, as the project and the store
+        that serves it each remember it. The project is asked first: it is
+        the answer that holds when the chat asking has never served."""
+        if home:
+            noted = PS.server_record(None, home)
+            if isinstance(noted, dict) and noted.get("url"):
+                return noted
+        return _read_server_registry(sp.session_dir)
+
+    def _note(value):
+        if home and isinstance(value, dict):
+            PS.set_server_record(None, home, value)
+
+    def _forget():
+        if home:
+            PS.clear_server_record(None, home)
+
+    with CS.session_lock(serve, wait_s=8):
+        record = _known()
         note = ""
         # Reopening a workspace whose code has moved on is a restart, not a
         # reuse: otherwise the reader is handed back the same old server that
@@ -1698,19 +1763,28 @@ def chat_ui_main(argv=None):
         # Staleness first: it is a handful of stat calls, and the health probe
         # below is a request the common path should only pay for once.
         if (_server_outran_its_code(record)
-                and _healthy_chat_server(record, args.session)):
-            if _chat_server_is_building(p.session_dir):
+                and _healthy_chat_server(record, serve)):
+            if _chat_server_is_building(sp.session_dir):
                 note = ("kept the running workspace: a build is in flight."
                         " Reopen it when the build lands to pick up the"
                         " newer code.")
             elif _stop_chat_server(record):
                 record = None
-        if not _healthy_chat_server(record, args.session):
-            log_path = p.session_dir / "server.log"
+                _forget()
+        # Whose store the running workspace serves, as it says itself: a
+        # record made before this chat joined the project names the store it
+        # was started on, which is the store this chat now reads too.
+        running = str((record or {}).get("session_id") or serve)
+        if _healthy_chat_server(record, running):
+            _note(record)
+        else:
+            _forget()
+            record = None
+            log_path = sp.session_dir / "server.log"
             log_path.touch(mode=0o600, exist_ok=True)
             log_path.chmod(0o600)
             command = [sys.executable, "-m", "human_compact.cli", "chat-serve",
-                       "--session", args.session, "--port", str(args.port)]
+                       "--session", serve, "--port", str(args.port)]
             child_env = os.environ.copy()
             child_env.pop("HC_CHAT_INFERENCE", None)
             with log_path.open("ab", buffering=0) as log:
@@ -1733,9 +1807,13 @@ def chat_ui_main(argv=None):
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     break
-                candidate = _read_server_registry(p.session_dir)
-                if _healthy_chat_server(candidate, args.session):
+                # Either place the new server registers itself: its own
+                # store, which is what it writes, or the project's note,
+                # which is what the next chat will read.
+                candidate = _known()
+                if _healthy_chat_server(candidate, serve):
                     record = candidate
+                    _note(record)
                     break
                 time.sleep(0.05)
             if record is None:

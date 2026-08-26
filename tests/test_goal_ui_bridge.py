@@ -1078,6 +1078,83 @@ class BuildWatchTests(BridgeTestCase):
         # window on their machine is not theirs to do.
         self.assertIn("[data-hc-readonly] [data-hc-todo-term]", css)
 
+    # --- the restart check, under the line ----------------------------------
+
+    CHECK = {"status": "checking", "model": "sonnet", "effort": "high",
+             "from_model": "opus", "why": "", "prompt": "",
+             "at": "2026-08-26T06:37:00+00:00", "error": ""}
+
+    def test_while_the_check_runs_the_line_says_finished_and_counts_nothing_down(self):
+        out = self.line(dict(self.RUN, status="checking", running=True,
+                             eta_s=None, tokens=131400, restart=self.CHECK))
+        self.assertEqual("finished · 2m in · 131k tok", out["meta"])
+        self.assertTrue(out["running"])
+        self.assertTrue(out["checking"])
+        self.assertEqual("checking", out["restart"]["status"])
+        self.assertEqual(("sonnet", "high", "opus"),
+                         (out["restart"]["model"], out["restart"]["effort"],
+                          out["restart"]["fromModel"]))
+
+    def test_a_build_not_yet_asked_carries_no_verdict(self):
+        self.assertIsNone(self.line()["restart"])
+        self.assertIsNone(self.line(dict(self.RUN, restart=None))["restart"])
+
+    def paint(self, restart):
+        return self.run_js(
+            "var box = document.createElement('div');"
+            "var L = window.__hcPromptUI.todoList;"
+            "var node = L.renderRestart(box, L.restartOf({ restart: %s }), 'g1');"
+            "var deep = function (n) { return String(n.textContent || '')"
+            "  + (n.children || []).map(deep).join(''); };"
+            "out = node ? { state: node.getAttribute('data-hc-todo-restart'),"
+            "  text: deep(node), kids: node.children.map(function (k) { return k.className; }),"
+            "  copy: (function () { var c = box.querySelector('[data-hc-todo-restart-copy]');"
+            "    return c ? [c.textContent, c.getAttribute('data-hc-todo-restart-copy')] : null; })(),"
+            "  prompt: (function () { var p = box.querySelector('.hc-todo-restart-prompt');"
+            "    return p ? [p.tagName, p.textContent] : null; })() } : null;"
+            % json.dumps(restart))
+
+    def test_the_check_in_progress_names_the_model_it_moved_to(self):
+        out = self.paint(self.CHECK)
+        self.assertEqual("checking", out["state"])
+        self.assertEqual(["hc-todo-restart-model", "hc-todo-restart-busy"], out["kids"])
+        self.assertIn("modelopus→sonnet · effort high", out["text"])
+        self.assertIn("checking whether these changes go stale without a local restart…",
+                      out["text"])
+        self.assertIsNone(out["copy"])
+        # A build that ran on the CLI's default has nothing to strike through.
+        out = self.paint(dict(self.CHECK, from_model=""))
+        self.assertIn("model→sonnet · effort high", out["text"])
+
+    def test_a_yes_draws_the_reason_and_the_prompt_with_a_copy_button(self):
+        out = self.paint(dict(self.CHECK, status="yes",
+                              why="the session-cache change lives in a long-running process",
+                              prompt="Restart the goals-ui dev process so the new code loads."))
+        self.assertEqual("yes", out["state"])
+        self.assertEqual(["hc-todo-restart-why", "hc-todo-restart-send"], out["kids"])
+        self.assertIn("⚠the session-cache change lives in a long-running process",
+                      out["text"])
+        self.assertIn("send to local claude code", out["text"])
+        self.assertEqual(["copy", "g1"], out["copy"])
+        self.assertEqual(["pre", "Restart the goals-ui dev process so the new code loads."],
+                         out["prompt"])
+        # A yes with no reason given still says what a yes means.
+        out = self.paint(dict(self.CHECK, status="yes", prompt="p"))
+        self.assertIn("the running instance keeps the old code until restarted.",
+                      out["text"])
+
+    def test_a_no_and_an_open_question_draw_nothing(self):
+        for status in ("no", "unknown", "skipped"):
+            self.assertIsNone(self.paint(dict(self.CHECK, status=status)), status)
+        self.assertIsNone(self.paint(None))
+
+    def test_the_stylesheet_carries_the_check(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        for cls in (".hc-todo-restart{", ".hc-todo-restart-spin{", "hc-todo-spin",
+                    ".hc-todo-restart-from{text-decoration:line-through",
+                    ".hc-todo-restart-copy{", ".hc-todo-restart-prompt{"):
+            self.assertIn(cls, css)
+
 
 class RailSyncTests(BridgeTestCase):
     """What the rail owns in the store, and how the server's tree lands.

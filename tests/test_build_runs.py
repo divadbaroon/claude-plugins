@@ -1432,7 +1432,8 @@ class BuildSettingsTests(BuildRunTests):
                          got["models"])
         self.assertEqual("2.1.245", got["source"]["version"])
         self.assertEqual(str(fake.resolve()), got["source"]["path"])
-        self.assertEqual({"model": "", "effort": ""}, got["settings"])
+        self.assertEqual(dict(BUILD.SETTINGS_DEFAULTS), got["settings"])
+        self.assertEqual({"model": "sonnet", "effort": "high"}, got["check_defaults"])
         # Read once: the second answer is the cache, stamped as the first was.
         again = BUILD.models(self.session, self.root)
         self.assertEqual(got["source"]["scanned_at"], again["source"]["scanned_at"])
@@ -1450,6 +1451,236 @@ class BuildSettingsTests(BuildRunTests):
         self.assertIsNone(got["source"])
         self.assertEqual([], got["models"])
         self.assertEqual(["fable", "opus", "sonnet", "haiku"], got["aliases"])
+
+
+class RestartCheckTests(BuildRunTests):
+    """A build that finished on its own is asked, in the same session and on
+    the check's own model, whether what it changed is what is running. The
+    answer -- the reason and the prompt to paste into the local chat, or a
+    bare no -- goes on the run record for the rail; the rows are not
+    touched by it."""
+
+    def on(self, verdict="no", hold=None):
+        # Per test rather than in setUp: the base class's tests run again
+        # under this one, and they count prompts with the check off.
+        os.environ["HC_BUILD_RESTART_CHECK"] = "1"
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_RESTART"] = verdict
+        if hold is not None:
+            os.environ["STUB_CHECK_HOLD"] = str(hold)
+
+    def prompts(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def said(self):
+        return [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+
+    def live(self):
+        return BUILD.live(self.session, self.root)["g1"]
+
+    def restart(self):
+        return (self.live() or {}).get("restart") or {}
+
+    def build(self, ids=("taaaa0001",)):
+        out = BUILD.start(self.session, self.root, "g1", list(ids))
+        self.assertTrue(out["ok"], out)
+        return BUILD._run_for(self.session, self.root, "g1")
+
+    def checked(self):
+        # The check has answered, or given up: the record says which, and
+        # no process of the run is left.
+        return self.wait_for(
+            lambda: self.restart().get("status") in ("yes", "no", "unknown", "skipped")
+            and not self.live()["running"], seconds=12)
+
+    def test_the_verdict_is_read_off_the_check_s_words_with_a_real_decoder(self):
+        self.assertEqual(
+            {"restart": False, "why": "", "prompt": ""},
+            BUILD.restart_in('Nothing long-running here.\n{"restart": false}'))
+        # A prompt is prose, and prose can hold a brace: a regex over the
+        # braces would have cut this one short.
+        got = BUILD.restart_in(
+            'Yes.\n{"restart": true, "why": "the server caches the module",'
+            ' "prompt": "kill it, then run `serve --dev` and confirm {loaded}"}')
+        self.assertEqual("the server caches the module", got["why"])
+        self.assertEqual("kill it, then run `serve --dev` and confirm {loaded}",
+                         got["prompt"])
+        # The last word wins, as with the estimate; a non-boolean is not a
+        # verdict; neither is a row directive or an estimate.
+        self.assertFalse(BUILD.restart_in(
+            '{"restart": true, "why": "x"} -- no, on reflection {"restart": false}')["restart"])
+        self.assertIsNone(BUILD.restart_in('{"restart": "yes"}'))
+        self.assertIsNone(BUILD.restart_in('{"id": "taaaa0001", "state": "DONE"}'))
+        self.assertIsNone(BUILD.restart_in('{"estimate": {"minutes": 4}}'))
+        self.assertIsNone(BUILD.restart_in("restart it, I think"))
+        self.assertEqual([], BUILD.directives('{"restart": false}'))
+
+    def test_a_finished_build_is_asked_in_its_own_session_on_the_check_model(self):
+        self.on("yes")
+        run = self.build()
+        self.assertTrue(self.wait_for(lambda: self.rows()["taaaa0001"][0] == "done"))
+        self.assertTrue(self.checked(), self.live())
+        # Two prompts: the build, then the check -- resumed on the same
+        # session, on sonnet at high effort rather than what the build got.
+        prompts = self.prompts()
+        self.assertEqual(2, len(prompts))
+        check = prompts[1]
+        self.assertTrue(check["resume"])
+        self.assertIn("--resume", check["args"])
+        self.assertEqual(run.claude_session, check["args"][check["args"].index("--resume") + 1])
+        self.assertEqual("sonnet", check["args"][check["args"].index("--model") + 1])
+        self.assertEqual("high", check["args"][check["args"].index("--effort") + 1])
+        self.assertIn("[Engelbart] The rows are done", check["prompt"])
+        self.assertIn('{"restart": false}', check["prompt"])
+        self.assertIn("Edit nothing", check["prompt"])
+        # The verdict, as the rail is shown it.
+        verdict = self.restart()
+        self.assertEqual("yes", verdict["status"])
+        self.assertEqual("the session-cache change lives in the running dev server",
+                         verdict["why"])
+        self.assertIn("confirm the log says {loaded}", verdict["prompt"])
+        self.assertEqual({"model": "sonnet", "effort": "high"},
+                         {k: verdict[k] for k in ("model", "effort")})
+        live = self.live()
+        self.assertEqual("idle", live["status"])
+        self.assertFalse(live["running"])
+        # The rows are the build's verdict, not the check's: still done.
+        self.assertEqual("done", self.rows()["taaaa0001"][0])
+        # The log tells the story in order.
+        said = self.said()
+        self.assertLess(said.index("the build finished"),
+                        said.index("checking whether these changes go stale"
+                                   " without a local restart…"))
+        self.assertIn("restart needed: the session-cache change lives in the"
+                      " running dev server", said)
+
+    def test_a_no_leaves_nothing_but_the_word_no(self):
+        self.on("no")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        verdict = self.restart()
+        self.assertEqual("no", verdict["status"])
+        self.assertEqual(("", ""), (verdict["why"], verdict["prompt"]))
+        self.assertIn("no restart needed", self.said())
+
+    def test_a_verdict_thought_rather_than_said_still_counts(self):
+        self.on("thought")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("no", self.restart()["status"])
+
+    def test_a_check_that_says_nothing_leaves_the_question_open(self):
+        self.on("silent")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("unknown", self.restart()["status"])
+        self.assertIn("the check gave no answer", self.said())
+
+    def test_while_the_check_runs_the_rail_sees_checking_and_no_countdown(self):
+        self.on("yes", hold=3)
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        live = self.live()
+        self.assertTrue(live["running"])
+        self.assertIsNone(live["eta_s"], "nothing to count down: the rows are done")
+        self.assertEqual("checking", live["restart"]["status"])
+        self.assertEqual(("sonnet", "high"),
+                         (live["restart"]["model"], live["restart"]["effort"]))
+        # The build's clock stopped when its rows did; the check's writes
+        # to the record do not move it.
+        frozen = live["elapsed_s"]
+        time.sleep(1.2)
+        self.assertEqual(frozen, self.live()["elapsed_s"])
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("yes", self.restart()["status"])
+
+    def test_the_next_build_starts_with_no_verdict_and_ends_with_its_own(self):
+        self.on("yes")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("yes", self.restart()["status"])
+        os.environ["STUB_RESTART"] = "no"
+        os.environ["STUB_SLEEP"] = "1"
+        self.build(["taaaa0003"])
+        self.assertIsNone(self.live()["restart"],
+                          "the last build's word is about code this one changes")
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("no", self.restart()["status"])
+
+    def test_rows_picked_during_the_check_wait_behind_it(self):
+        self.on("no", hold=2)
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(out.get("after_run"), out)
+        self.assertEqual("queued", self.rows()["taaaa0003"][0])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done", seconds=15))
+        # build, check, build, check: the second build opened fresh, after
+        # the check had answered.
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 4, seconds=12))
+        self.assertNotIn("--resume", self.prompts()[2]["args"])
+
+    def test_a_reopen_ends_the_check_and_takes_the_session(self):
+        self.on("yes", hold=4)
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        out = BUILD.reopen(self.session, self.root, "g1", "taaaa0001", "wrong file")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["resumed"])
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        self.assertTrue(self.wait_for(lambda: self.rows()["taaaa0001"][0] == "done"))
+        # The stopped check is recorded as such, then the reopened run's
+        # own finish asks again.
+        self.assertIn("the check was stopped", self.said())
+        os.environ["STUB_CHECK_HOLD"] = ""
+        self.assertTrue(self.wait_for(
+            lambda: self.restart().get("status") == "yes"
+            and not self.live()["running"], seconds=15))
+
+    def test_the_check_can_be_turned_off_and_its_model_chosen(self):
+        self.on("no")
+        BUILD.save_settings(self.session, self.root, {"check": False})
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "idle"))
+        time.sleep(0.5)
+        self.assertEqual(1, len(self.prompts()), "no check was run")
+        self.assertIsNone(self.live()["restart"])
+        # Back on, on a model and effort of the reader's choosing.
+        out = BUILD.save_settings(self.session, self.root,
+                                  {"check": "true", "check_model": "haiku",
+                                   "check_effort": "low"})
+        self.assertTrue(out["ok"], out)
+        os.environ["STUB_RESTART"] = "no"
+        self.build(["taaaa0003"])
+        self.assertTrue(self.checked(), self.live())
+        check = self.prompts()[-1]
+        self.assertEqual("haiku", check["args"][check["args"].index("--model") + 1])
+        self.assertEqual("low", check["args"][check["args"].index("--effort") + 1])
+        self.assertEqual(("haiku", "low"),
+                         (self.restart()["model"], self.restart()["effort"]))
+        # The shell can turn it off for every build a server starts.
+        os.environ["HC_BUILD_RESTART_CHECK"] = "0"
+        self.assertFalse(BUILD.check_enabled(self.session, self.root))
+        # And what the Builds tab is offered names the defaults.
+        offered = BUILD.models(self.session, self.root)
+        self.assertEqual({"model": "sonnet", "effort": "high"}, offered["check_defaults"])
+        self.assertEqual(("haiku", "low", True),
+                         tuple(offered["settings"][k]
+                               for k in ("check_model", "check_effort", "check")))
+
+    def test_a_build_the_reader_stopped_or_that_failed_is_not_asked(self):
+        self.on("yes")
+        os.environ["STUB_HOLD"] = "6"
+        run = self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["estimate"]))
+        BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        time.sleep(0.5)
+        self.assertEqual(1, len(self.prompts()))
+        self.assertIsNone(self.live()["restart"])
+        self.assertEqual("cancelled", self.live()["status"])
 
 
 if __name__ == "__main__":

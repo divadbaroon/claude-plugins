@@ -299,6 +299,27 @@ def mark_goals_ui_invoked(session_id: str, root: Optional[Path] = None) -> None:
         _atomic_json(p.manifest, manifest)
 
 
+def _project_home(where) -> str:
+    """One spelling of a project's home, for every writer and every reader.
+
+    Two chats that name the same directory differently -- one through a
+    symlink, one through the checkout it was cloned into -- do not meet in
+    the middle on their own, and a project whose chats disagree about its
+    address has as many trees as it has spellings.
+    """
+    said = str(where or "").strip()
+    if not said:
+        return ""
+    try:
+        from . import project_store as PS
+        return PS.repo_home(said)
+    except Exception:  # noqa: BLE001 - a path git cannot read is still a path
+        try:
+            return str(Path(said).expanduser().resolve())
+        except (OSError, RuntimeError):
+            return str(Path(said).expanduser())
+
+
 def _project_tree_session(home: str, root: Optional[Path],
                           unless: str = "") -> str:
     """Which chat's store holds a project's tree.
@@ -311,8 +332,8 @@ def _project_tree_session(home: str, root: Optional[Path],
     would otherwise become the project's tree forever.
     """
     base = _state_base(root)
-    target = str(Path(str(home)).expanduser())
-    written, any_here = "", ""
+    target = _project_home(home)
+    best, best_score = "", None
     try:
         entries = sorted(base.iterdir(), key=lambda entry: entry.name)
     except OSError:
@@ -328,34 +349,64 @@ def _project_tree_session(home: str, root: Optional[Path],
             continue
         where = manifest.get("project_home") or manifest.get("cwd") or ""
         try:
-            same = str(Path(str(where)).expanduser()) == target
+            same = bool(where) and _project_home(where) == target
         except (OSError, RuntimeError, TypeError):
             same = False
         if not same:
             continue
-        any_here = any_here or entry.name
-        if not written:
-            try:
-                held = json.loads((entry / "goals.json").read_text(encoding="utf-8"))
-                if isinstance(held, dict) and held.get("goals"):
-                    written = entry.name
-            except (OSError, ValueError):
-                pass
-    return written or any_here
+        # How much of the project's work this store actually holds, and when
+        # it was last touched. Ordering the directories instead picked by
+        # name, and a session id is a UUID -- so the winner was whichever
+        # random string sorted first, which is how a seven-goal store beat a
+        # hundred-goal one.
+        try:
+            held = json.loads((entry / "goals.json").read_text(encoding="utf-8"))
+            count = len(held.get("goals") or []) if isinstance(held, dict) else 0
+        except (OSError, ValueError):
+            count = 0
+        try:
+            when = (entry / "goals.json").stat().st_mtime
+        except OSError:
+            when = 0.0
+        score = (count, when)
+        if best_score is None or score > best_score:
+            best, best_score = entry.name, score
+    return best
 
 
 def tree_session(session_id: str, root: Optional[Path] = None) -> str:
     """The session whose store this chat's goals actually live in.
 
-    Itself, until it is bound to a project somebody has already worked in;
-    from then on, that project's store. Resolved from what was written down
-    at binding rather than rescanned, so the answer cannot change under a
-    chat while it is being read.
+    Itself, until this chat belongs to a project; from then on whichever
+    store that project says is its tree. The project is asked rather than
+    the chat, because two chats working it out for themselves can disagree
+    -- and did, one reading a seven-goal store while the other read a
+    hundred-goal one, both naming the same project.
     """
     try:
-        held = str(load_manifest(session_id, root).get("project_tree") or "")
+        manifest = load_manifest(session_id, root)
     except (OSError, ValueError, TypeError):
         return session_id
+    # The binding only, never the raw cwd: reading a project's tree because
+    # of the directory a chat happens to sit in is the implicit rule this
+    # replaced, and it would show an unbound chat the goals it is about to be
+    # asked which project it belongs to. Migration writes project_home from
+    # the cwd, so a chat that predates binding still joins.
+    home = str(manifest.get("project_home") or "")
+    held = ""
+    if home:
+        try:
+            from . import project_store as PS
+            held = PS.tree_session(root, home)
+            if not held:
+                # Nobody has named it yet: the store holding the project's
+                # work is named now, once, for every chat that follows.
+                held = PS.set_tree_session(
+                    root, home,
+                    _project_tree_session(home, root) or session_id)
+        except Exception:  # noqa: BLE001 - a read must never fail over this
+            held = ""
+    held = held or str(manifest.get("project_tree") or "")
     if not held or held == session_id:
         return session_id
     try:
@@ -378,7 +429,7 @@ def bind_project(session_id: str, home, root: Optional[Path] = None) -> str:
     where = str(home or "").strip()
     if not where:
         raise ValueError("a project needs somewhere to be")
-    resolved = str(Path(where).expanduser())
+    resolved = _project_home(where)
     with session_lock(session_id, root, wait_s=5) as p:
         manifest = load_manifest(session_id, root)
         manifest["project_home"] = resolved
@@ -400,10 +451,23 @@ def mark_project_migrated(session_id: str, root: Optional[Path] = None) -> None:
     """
     with session_lock(session_id, root, wait_s=5) as p:
         manifest = load_manifest(session_id, root)
-        if manifest.get("project_bound_at"):
+        already = bool(manifest.get("project_bound_at"))
+        if already and manifest.get("project_home"):
             return
-        manifest["project_bound_at"] = _now()
-        manifest["project_bound_by"] = "migration"
+        # Filling in, not re-binding: the first migration wrote only the
+        # moment, so a chat declared already-in-a-project had no project to
+        # be in -- it kept reading its own store, and one directory served
+        # two trees. The moment stands; what it was missing is added.
+        if not already:
+            manifest["project_bound_at"] = _now()
+            manifest["project_bound_by"] = "migration"
+        home = str(manifest.get("project_home") or manifest.get("cwd") or "")
+        if not home:
+            if not already:
+                manifest["updated_at"] = _now()
+                _atomic_json(p.manifest, manifest)
+            return
+        manifest["project_home"] = _project_home(home)
         manifest["updated_at"] = _now()
         _atomic_json(p.manifest, manifest)
 

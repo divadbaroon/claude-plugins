@@ -107,7 +107,7 @@ class ProjectTests(unittest.TestCase):
     def test_the_state_names_the_project_from_the_manifest(self):
         with server_for(self.trajdir) as url:
             who = get_json(url + "/api/state")["project"]
-        self.assertEqual(str(self.project), who["cwd"])
+        self.assertEqual(PS._resolved(self.project), who["cwd"])
         self.assertEqual("myrepo", who["name"])
         self.assertEqual("feat/x", who["branch"])
         self.assertEqual("https://github.com/acme/myrepo.git", who["remote"])
@@ -478,7 +478,7 @@ class ProjectTests(unittest.TestCase):
         # In the file's `project` section: the flat shape it was first
         # written in is migrated on read, not written any more.
         self.assertEqual("Ship the thing, well.", record["project"]["objective"])
-        self.assertEqual(str(self.project), record["project"]["cwd"])
+        self.assertEqual(PS._resolved(self.project), record["project"]["cwd"])
 
     def test_the_project_can_be_renamed_and_the_directory_is_the_fallback(self):
         # A directory is where a project sits today, not what it is called.
@@ -763,7 +763,8 @@ class CloneProjectTests(unittest.TestCase):
 
         def run(command, **kwargs):
             seen["commands"].append(list(command))
-            seen["env"] = kwargs.get("env") or {}
+            seen.setdefault("envs", []).append(kwargs.get("env") or {})
+            seen["env"] = seen["envs"][0]
             if raises is not None:
                 raise raises
             if not returncode:

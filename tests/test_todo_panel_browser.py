@@ -54,6 +54,19 @@ def say(text):
 def end():
     print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
     sys.exit(0)
+if resume and '{"restart": true' in prompt:
+    # The restart check that follows a finished build (RestartCheckBrowserTests).
+    if os.environ.get("STUB_CHECK_HOLD"):
+        time.sleep(float(os.environ["STUB_CHECK_HOLD"]))
+    if os.environ.get("STUB_RESTART") == "yes":
+        say(json.dumps({"restart": True,
+                        "why": "the session-cache change lives in a long-running process",
+                        "prompt": "Restart the goals-ui dev process so the new session-cache"
+                                  " code loads: kill the running `goals-ui serve`, then"
+                                  " re-run `goals-ui serve --dev`."}))
+    else:
+        say('{"restart": false}')
+    end()
 if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
     if os.environ.get("STUB_HOLD"):
@@ -852,6 +865,70 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 browser.close()
 
 
+    def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):
+        # The rows land done; the same session is then asked, on sonnet at
+        # high effort, whether the program needs a local restart. The rail
+        # shows the check under the rows while it runs, then -- the stub
+        # says yes -- the reason and the exact prompt to paste, with a copy
+        # button; and a banner that asks for a hand and stays up until it
+        # gets one.
+        from playwright.sync_api import expect, sync_playwright
+        os.environ["HC_BUILD_RESTART_CHECK"] = "1"
+        os.environ["STUB_HOLD"] = "1"
+        os.environ["STUB_RESTART"] = "yes"
+        os.environ["STUB_CHECK_HOLD"] = "4"
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Cache goals.md per session")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("done", timeout=15_000)
+                checking = page.locator(".hc-todo-restart[data-hc-todo-restart=\"checking\"]")
+                expect(checking).to_be_visible(timeout=10_000)
+                expect(checking).to_contain_text("sonnet · effort high")
+                expect(checking).to_contain_text(
+                    "checking whether these changes go stale without a local restart")
+                meta = page.locator(".hc-todo-watch-meta")
+                expect(meta).to_contain_text("finished")
+                expect(meta).not_to_contain_text("calculating")
+                yes = page.locator(".hc-todo-restart[data-hc-todo-restart=\"yes\"]")
+                expect(yes).to_be_visible(timeout=15_000)
+                expect(checking).to_have_count(0)
+                expect(yes).to_contain_text(
+                    "the session-cache change lives in a long-running process")
+                expect(yes).to_contain_text("send to local claude code")
+                expect(yes.locator(".hc-todo-restart-prompt")).to_contain_text(
+                    "re-run `goals-ui serve --dev`")
+                banner = page.locator(".hc-alert[data-hc-alert-kind=\"restart\"]")
+                expect(banner).to_be_visible(timeout=10_000)
+                expect(banner).to_contain_text("Restart needed")
+                expect(banner).to_contain_text(
+                    "the session-cache change lives in a long-running process")
+                # Past the six seconds a finish banner gets: still up.
+                page.wait_for_timeout(7000)
+                expect(banner).to_be_visible()
+                # Copy puts the prompt on the clipboard, verbatim.
+                yes.locator("[data-hc-todo-restart-copy]").click()
+                expect(yes.locator("[data-hc-todo-restart-copy]")).to_have_text("copied ✓")
+                prompt = page.evaluate("() => navigator.clipboard.readText()")
+                self.assertTrue(prompt.startswith("Restart the goals-ui dev process"), prompt)
+                self.assertTrue(prompt.endswith("re-run `goals-ui serve --dev`."), prompt)
+                # The row is the build's verdict, not the check's: still done.
+                self.assertEqual(["done"], [r[2] for r in self.rows()])
+                # Dismissing the banner marks it read; it does not come back.
+                banner.locator(".hc-alert-close").click()
+                expect(banner).to_have_count(0)
+            finally:
+                browser.close()
+
+
 class SessionBuildBrowserTests(TodoPanelBrowserTests):
     """Default mode: the build waits for the connected session's next turn."""
 
@@ -928,6 +1005,11 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         self.skipTest("headless-only")
 
     def test_a_build_pressed_mid_save_still_carries_the_row_it_names(self):
+        self.skipTest("headless-only")
+
+    def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):
+        # The check is a second process on the build's session; there is no
+        # process in session mode.
         self.skipTest("headless-only")
 
     def test_a_row_out_with_the_builder_comes_back_on_escape_or_its_corner(self):

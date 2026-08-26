@@ -840,6 +840,7 @@
     // Row status is not in the fingerprint -- the tree does not redraw for
     // it -- so the builder's transitions are read before the early return.
     trackTodoAlerts(st);
+    trackRestartAlerts(st);
     if (fingerprint === stateFingerprint) return true;
     stateFingerprint = fingerprint;
     return true;
@@ -2038,6 +2039,10 @@
   ALERT_SAYS.done = "TODO finished";
   ALERT_SAYS.failed = "TODO failed";
   ALERT_SAYS.asking = "Claude has a question";
+  // The build's own answer to whether the program needs a local restart:
+  // yes, and the prompt for the local chat is on the rail. Action needed,
+  // so the banner stays up until it is read (see alertSticky).
+  ALERT_SAYS.restart = "Restart needed — the prompt for your local Claude Code is on the rail";
   // What a synced chat did, said in the same three lines a build gets.
   ALERT_SAYS.session_stopped = "Claude finished responding";
   ALERT_SAYS.subagent_returned = "A subagent returned";
@@ -2051,6 +2056,7 @@
       ".hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:var(--hc-ok,#1a7f37)}",
       ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
+      ".hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:var(--hc-warn,#9a6700)}",
       ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
       ".hc-alert-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -2085,6 +2091,7 @@
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:#3fb950}",
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:#f85149}",
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:#d29922}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:#d29922}",
       "[data-hc-theme=\"dark\"] .hc-alert-title,[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:#e6edf3}",
       "[data-hc-theme=\"dark\"] .hc-alert-detail,[data-hc-theme=\"dark\"] .hc-alert-close,[data-hc-theme=\"dark\"] .hc-alert-center-act,[data-hc-theme=\"dark\"] .hc-alert-center-empty,[data-hc-theme=\"dark\"] .hc-alert-row .hc-alert-title{color:#8b949e}",
       "[data-hc-theme=\"dark\"] .hc-alert-goal,[data-hc-theme=\"dark\"] .hc-alert-when{color:#6e7681}",
@@ -2166,6 +2173,7 @@
   var GEAR_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"></circle><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"></path></svg>";
 
   var alertPrev = null;            // row id -> status, from the last state
+  var restartPrev = null;          // goal id -> its restart verdict's stamp
   var alertLog = null;             // newest first; loaded on first use
   var alertSettingsCache = null;
   var alertStackBox = null;
@@ -2363,7 +2371,8 @@
     var window_ms = alertSettings().seconds * 1000;
     var now = Date.now();
     var back = loadAlertLog().filter(function (entry) {
-      return !entry.read && now - entry.at < window_ms && !alertBannerFor(entry.id);
+      return !entry.read && (alertSticky(entry.kind) || now - entry.at < window_ms)
+        && !alertBannerFor(entry.id);
     }).slice(0, NOTICE_MAX).reverse();
     back.forEach(function (entry) {
       showAlertBanner(entry, window_ms - (now - entry.at));
@@ -2375,9 +2384,47 @@
     if (!st || serverState.scope !== "chat" || !Array.isArray(st.goals)) return [];
     var diff = todoAlertsFrom(st.goals, alertPrev);
     alertPrev = diff.next;
-    if (!diff.fresh.length) return [];
+    return raiseAlerts(diff.fresh);
+  }
+
+  // The build's last word on itself: whether what it changed is what is
+  // running. A verdict of yes -- once per verdict, told apart by its stamp --
+  // is news that needs a hand: the prompt on the rail has to reach the local
+  // chat. The first state seen is the baseline, as for the rows: a page
+  // opening on an old verdict finds it on the rail, not in a banner.
+  function restartAlertsFrom(runs, goals, prev) {
+    var next = Object.create(null), fresh = [];
+    var titles = Object.create(null);
+    array(goals).forEach(function (goal) {
+      if (goal && typeof goal.id === "string") {
+        titles[goal.id] = str(goal.title).trim() || "Untitled";
+      }
+    });
+    Object.keys(runs && typeof runs === "object" ? runs : {}).forEach(function (goalId) {
+      var verdict = runs[goalId] && runs[goalId].restart;
+      if (!verdict || typeof verdict !== "object" || !str(verdict.status)) return;
+      var stamp = str(verdict.status) + "@" + str(verdict.at);
+      next[goalId] = stamp;
+      if (!prev) return;
+      if (str(verdict.status) !== "yes" || prev[goalId] === stamp) return;
+      fresh.push({ kind: "restart", goalId: goalId,
+                   goalTitle: titles[goalId] || "Untitled", rowId: "",
+                   text: str(verdict.why).trim(), question: "" });
+    });
+    return { next: next, fresh: fresh };
+  }
+
+  function trackRestartAlerts(st) {
+    if (!st || serverState.scope !== "chat") return [];
+    var diff = restartAlertsFrom(st.build_runs, st.goals, restartPrev);
+    restartPrev = diff.next;
+    return raiseAlerts(diff.fresh);
+  }
+
+  function raiseAlerts(fresh) {
+    if (!fresh || !fresh.length) return [];
     var log = reloadAlertLog();
-    var made = diff.fresh.map(function (row) {
+    var made = fresh.map(function (row) {
       alertSeq += 1;
       var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
                     kind: row.kind, goalId: row.goalId, goalTitle: row.goalTitle,
@@ -2423,6 +2470,7 @@
 
   function alertDetailOf(entry) {
     if (entry.kind === "asking" && entry.question) return entry.question;
+    if (entry.kind === "restart") return entry.text || RESTART_WHY;
     // A hook that carried nothing to quote gets a headline and no blank
     // line pretending there was something to say. A TODO always has a row
     // to name, so an empty one there is a bug worth seeing.
@@ -2486,10 +2534,20 @@
     delete alertTimers[id];
   }
 
+  // A banner that asks for a hand -- the restart prompt to carry over --
+  // has no clock: it stays until it is read or dismissed, and comes back
+  // on a reload for as long as it is unread.
+  function alertSticky(kindOrBox) {
+    var kind = (kindOrBox && kindOrBox.getAttribute)
+      ? str(kindOrBox.getAttribute("data-hc-alert-kind")) : str(kindOrBox);
+    return kind === "restart";
+  }
+
   function armAlert(box, ms) {
     var id = alertIdOf(box);
     if (!id) return;
     holdAlert(box);
+    if (alertSticky(box)) return;
     var wait = (typeof ms === "number" && isFinite(ms) && ms > 0)
       ? ms : alertSettings().seconds * 1000;
     alertTimers[id] = setTimeout(function () { dropAlertBanner(box); }, wait);
@@ -2656,7 +2714,10 @@
     document.addEventListener("change", function (event) {
       var target = event && event.target;
       var build = (target && target.getAttribute) ? str(target.getAttribute("data-hc-build-set")) : "";
-      if (build) { settingsBuildSet(build, target.value); return; }
+      if (build) {
+        settingsBuildSet(build, build === "check" ? !!target.checked : target.value);
+        return;
+      }
       var key = (target && target.getAttribute) ? str(target.getAttribute("data-hc-alert-set")) : "";
       if (!key) return;
       if (key === "banners") setAlertSettings({ banners: !!target.checked });
@@ -5457,6 +5518,27 @@
       field.appendChild(pick);
       builds.appendChild(field);
     });
+    // And the check that follows a finished build: whether to run it, and
+    // what it runs on -- a cheaper model at high effort unless chosen
+    // otherwise (the server names the defaults with the models).
+    var ch3 = document.createElement("label");
+    var c3 = document.createElement("input");
+    c3.type = "checkbox";
+    c3.setAttribute("type", "checkbox");
+    c3.setAttribute("data-hc-build-set", "check");
+    ch3.appendChild(c3);
+    ch3.appendChild(text("After a build, ask whether the program needs a local restart"));
+    builds.appendChild(ch3);
+    [["check_model", "Check model"], ["check_effort", "Check effort"]].forEach(function (spec) {
+      var field = document.createElement("label");
+      field.className = "hc-settings-field";
+      field.appendChild(text(spec[1]));
+      var pick = document.createElement("select");
+      pick.setAttribute("data-hc-build-set", spec[0]);
+      pick.setAttribute("aria-label", spec[1] + " for the restart check");
+      field.appendChild(pick);
+      builds.appendChild(field);
+    });
     var bsay = document.createElement("div");
     bsay.className = "hc-settings-hint";
     bsay.setAttribute("data-hc-build-say", "");
@@ -5971,6 +6053,24 @@
       levels.push([str(name), str(name)]);
     });
     settingsFillSelect(effort, levels, str(chosen.effort));
+    // The restart check's own pair, and whether it runs at all. The blank
+    // choice is the check's default, which the server names.
+    var defaults = (ok && state.check_defaults && typeof state.check_defaults === "object")
+      ? state.check_defaults : {};
+    var checkModel = settingsPanelBox.querySelector('[data-hc-build-set="check_model"]');
+    var checkEffort = settingsPanelBox.querySelector('[data-hc-build-set="check_effort"]');
+    var check = settingsPanelBox.querySelector('[data-hc-build-set="check"]');
+    if (checkModel) {
+      settingsFillSelect(checkModel,
+        [["", "default · " + (str(defaults.model) || "sonnet")]].concat(pairs.slice(1)),
+        str(chosen.check_model));
+    }
+    if (checkEffort) {
+      settingsFillSelect(checkEffort,
+        [["", "default · " + (str(defaults.effort) || "high")]].concat(levels.slice(1)),
+        str(chosen.check_effort));
+    }
+    if (check) check.checked = ok ? chosen.check !== false : true;
     if (say) {
       say.removeAttribute("data-hc-bad");
       if (!ok) {
@@ -5992,10 +6092,13 @@
     return fetchJSON("/api/models").then(settingsBuildFill);
   }
 
+  var BUILD_SETTING_KEYS = { model: true, effort: true, check: true,
+                             check_model: true, check_effort: true };
+
   function settingsBuildSet(key, value) {
-    if (!settingsPanelBox || (key !== "model" && key !== "effort")) return false;
+    if (!settingsPanelBox || !BUILD_SETTING_KEYS[key]) return false;
     var patch = { op: "set_build_settings" };
-    patch[key] = str(value);
+    patch[key] = key === "check" ? !!value : str(value);
     var say = settingsPanelBox.querySelector("[data-hc-build-say]");
     if (say) { say.removeAttribute("data-hc-bad"); say.textContent = "saving…"; }
     post(patch).then(function (res) {
@@ -6006,9 +6109,17 @@
         return;
       }
       var now = res.settings || {};
-      say.textContent = "saved · builds run on "
-        + (str(now.model) || "the CLI's default model") + " at "
-        + (str(now.effort) ? str(now.effort) + " effort" : "the CLI's default effort");
+      if (key === "model" || key === "effort") {
+        say.textContent = "saved · builds run on "
+          + (str(now.model) || "the CLI's default model") + " at "
+          + (str(now.effort) ? str(now.effort) + " effort" : "the CLI's default effort");
+      } else if (now.check === false) {
+        say.textContent = "saved · no restart check after a build";
+      } else {
+        say.textContent = "saved · after a build, the restart check runs on "
+          + (str(now.check_model) || "sonnet") + " at "
+          + (str(now.check_effort) || "high") + " effort";
+      }
     });
     return true;
   }
@@ -6755,6 +6866,23 @@
       "[data-hc-launch] .hc-todo-watch-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
       "[data-hc-launch] .hc-todo-watch-row{display:flex;gap:8px;font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-watch-at{flex:none;color:var(--bd2)}",
+      // The restart check, under the watch line: the model the session
+      // moved to and a spinner while it asks; the reason and the prompt to
+      // paste, boxed with its own copy button, when the answer is yes.
+      "[data-hc-launch] .hc-todo-restart{margin-top:8px;padding-top:8px;border-top:1px solid var(--bd);user-select:none}",
+      "[data-hc-launch] .hc-todo-restart-model{display:flex;align-items:center;gap:7px;font:11px/1.7 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-from{text-decoration:line-through;color:var(--mut)}",
+      "[data-hc-launch] .hc-todo-restart-to{padding:0 8px;border:1px solid var(--bd2);border-radius:5px;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-todo-restart-busy{display:flex;align-items:flex-start;gap:8px;margin-top:6px;font:11.5px/1.5 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-spin{flex:none;width:11px;height:11px;margin-top:3px;box-sizing:border-box;border:1.5px solid var(--bd2);border-top-color:var(--hc-blue, #58a6ff);border-radius:50%;animation:hc-todo-spin 1s linear infinite}",
+      "@keyframes hc-todo-spin{to{transform:rotate(360deg)}}",
+      "[data-hc-launch] .hc-todo-restart-why{display:flex;align-items:flex-start;gap:8px;font:11.5px/1.5 'Source Code Pro',monospace;color:var(--dtxt);user-select:text}",
+      "[data-hc-launch] .hc-todo-restart-warn{flex:none;color:var(--hc-warn)}",
+      "[data-hc-launch] .hc-todo-restart-send{margin-top:8px;border:1px solid var(--bd);border-radius:6px;background:var(--panel);overflow:hidden}",
+      "[data-hc-launch] .hc-todo-restart-send-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;border-bottom:1px solid var(--bd);font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-copy{flex:none;font-weight:600;color:var(--hc-blue, #58a6ff);cursor:pointer}",
+      "[data-hc-launch] .hc-todo-restart-copy:hover{text-decoration:underline}",
+      "[data-hc-launch] .hc-todo-restart-prompt{margin:0;padding:8px 10px;font:11.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-copy:hover{color:var(--ink);border-color:var(--ink)}",
@@ -7443,7 +7571,10 @@
   var WATCH_HEAD = {
     running: "building", retrying: "retrying after an API error",
     waiting: "waiting on your answer", cancelled: "stopped",
-    failed: "failed", idle: "finished"
+    failed: "failed", idle: "finished",
+    // The rows are done; what is up is the restart check (see
+    // todoRestartPaint), which is not a build and has nothing to count down.
+    checking: "finished"
   };
 
   function buildDuration(seconds) {
@@ -7493,11 +7624,12 @@
     var head = WATCH_HEAD[str(run.status)] || str(run.status);
     var est = todoWatchEstimate(run);
     var spent = Math.max(0, +run.tokens || 0);
+    var checking = str(run.status) === "checking";
     var parts = [head];
     if (typeof run.elapsed_s === "number") {
       parts.push(buildDuration(run.elapsed_s) + " in");
     }
-    if (run.running) {
+    if (run.running && !checking) {
       // How much longer, by the build's own reckoning -- and "calculating"
       // until it has reckoned, rather than a number nothing stands behind.
       // An estimate that has run out says so rather than sliding forward: a
@@ -7514,7 +7646,7 @@
     }
     // Tokens: what it expects to spend while it runs, "~" because it is its
     // guess; what it actually spent once it has stopped and said.
-    if (!run.running && spent > 0) {
+    if ((!run.running || checking) && spent > 0) {
       parts.push(todoTokenLabel(spent) + " tok");
     } else if (est && est.tokens > 0) {
       parts.push("~" + todoTokenLabel(est.tokens) + " tok");
@@ -7523,11 +7655,15 @@
     return {
       head: head,
       running: !!run.running,
+      checking: checking,
       meta: parts.join(" · "),
       last: (run.last && typeof run.last === "object") ? str(run.last.text) : "",
       lines: +run.lines || 0,
       canOpen: !!run.can_open,
       error: str(run.error),
+      // Where the restart check stands, drawn under the line by
+      // todoRestartPaint; null until a finished build has been asked.
+      restart: todoRestartOf(run),
       title: est
         ? todoWatchEstimateTitle(est, rows, spent)
         : "the build prints its own estimate — how long, and how many tokens"
@@ -7535,6 +7671,134 @@
           + " from this chat's earlier builds takes its place if it has not"
           + " within a few seconds"
     };
+  }
+
+  // --- does the program need restarting ------------------------------------
+  //
+  // The rows are done and the code is on disk; whether the code that is
+  // running is that code is the build's last question to itself, asked of
+  // the same session on a cheaper model at high effort (build.RESTART_CHECK).
+  // The state carries where that stands as run.restart: "checking" while the
+  // question is out, then "yes" -- with the reason and the exact prompt to
+  // paste into the local Claude Code chat -- or "no", which draws nothing at
+  // all, since there is nothing to do. The block sits under the watch line,
+  // in the panel that already belongs to the build.
+
+  function todoRestartOf(run) {
+    var held = run && run.restart;
+    if (!held || typeof held !== "object" || !str(held.status)) return null;
+    return { status: str(held.status),
+             model: str(held.model) || "sonnet",
+             effort: str(held.effort) || "high",
+             fromModel: str(held.from_model),
+             why: str(held.why).trim(),
+             prompt: str(held.prompt).trim(),
+             at: str(held.at), error: str(held.error) };
+  }
+
+  var RESTART_CHECKING = "checking whether these changes go stale without a local restart…";
+  var RESTART_WHY = "the running instance keeps the old code until restarted.";
+  var todoRestartCopied = "";   // the goal whose prompt was just copied
+
+  function todoRestartPaint(box, restart, goalId) {
+    // Nothing until a finished build has been asked, and nothing on a no.
+    if (!restart || (restart.status !== "checking" && restart.status !== "yes")) {
+      return null;
+    }
+    var span = function (cls, words) {
+      var s = document.createElement("span");
+      s.className = cls;
+      s.textContent = words;
+      return s;
+    };
+    var wrap = document.createElement("div");
+    wrap.className = "hc-todo-restart";
+    wrap.setAttribute("data-hc-todo-restart", restart.status);
+    wrap.setAttribute("contenteditable", "false");
+    if (restart.status === "checking") {
+      // Which model the session moved to for the question -- struck
+      // through, what the build ran on -- and that it is at it.
+      var model = document.createElement("div");
+      model.className = "hc-todo-restart-model";
+      model.appendChild(span("hc-todo-restart-label", "model"));
+      if (restart.fromModel) {
+        model.appendChild(span("hc-todo-restart-from", restart.fromModel));
+      }
+      model.appendChild(span("hc-todo-restart-arrow", "→"));
+      model.appendChild(span("hc-todo-restart-to",
+                             restart.model + " · effort " + restart.effort));
+      wrap.appendChild(model);
+      var busy = document.createElement("div");
+      busy.className = "hc-todo-restart-busy";
+      busy.appendChild(span("hc-todo-restart-spin", ""));
+      busy.appendChild(span("hc-todo-restart-busy-text", RESTART_CHECKING));
+      wrap.appendChild(busy);
+      return box.appendChild(wrap);
+    }
+    var why = document.createElement("div");
+    why.className = "hc-todo-restart-why";
+    why.appendChild(span("hc-todo-restart-warn", "⚠"));
+    why.appendChild(span("hc-todo-restart-why-text", restart.why || RESTART_WHY));
+    wrap.appendChild(why);
+    // The prompt, boxed and labelled for where it goes, with a copy button
+    // in the box's own corner: the whole point of the check is this text
+    // reaching the other chat unchanged.
+    var send = document.createElement("div");
+    send.className = "hc-todo-restart-send";
+    var head = document.createElement("div");
+    head.className = "hc-todo-restart-send-head";
+    head.appendChild(span("hc-todo-restart-send-label", "send to local claude code"));
+    var copy = span("hc-todo-restart-copy",
+                    todoRestartCopied === str(goalId) ? "copied ✓" : "copy");
+    copy.setAttribute("data-hc-todo-restart-copy", str(goalId));
+    copy.setAttribute("role", "button");
+    copy.title = "copy the prompt for the Claude Code chat that runs this program";
+    head.appendChild(copy);
+    send.appendChild(head);
+    var text = document.createElement("pre");
+    text.className = "hc-todo-restart-prompt";
+    text.textContent = restart.prompt;
+    send.appendChild(text);
+    wrap.appendChild(send);
+    return box.appendChild(wrap);
+  }
+
+  var todoRestartCopiedTimer = null;
+
+  function todoRestartCopy(goalId) {
+    var runs = serverState.buildRuns || {};
+    var restart = todoRestartOf(runs[goalId]);
+    if (!restart || !restart.prompt) return false;
+    var text = restart.prompt;
+    var done = function () {
+      todoRestartCopied = str(goalId);
+      clearTimeout(todoRestartCopiedTimer);
+      todoRestartCopiedTimer = setTimeout(function () {
+        todoRestartCopied = "";
+        renderTodoRail(true);
+      }, 1600);
+      renderTodoRail(true);
+    };
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      (document.body || document.documentElement).appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy") === true; } catch (e) { ok = false; }
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+      return ok;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        if (fallback()) done();
+      });
+    } else if (fallback()) {
+      done();
+    }
+    return true;
   }
 
   var watchOpen = {};        // goal id -> the log is unfolded
@@ -7579,8 +7843,13 @@
     // Redrawn only when it would say something different. A poll lands every
     // second and a half; a log rebuilt under the reader would take their
     // scroll position and any line they were selecting with it.
+    var restart = line && line.restart;
     var key = JSON.stringify([todoGoalId, open, line && line.meta,
-                              line && line.last, logged.length]);
+                              line && line.last, logged.length,
+                              restart && [restart.status, restart.why,
+                                          restart.prompt, restart.model,
+                                          restart.effort, restart.fromModel],
+                              todoRestartCopied === str(todoGoalId)]);
     if (box.getAttribute("data-hc-watch-key") !== key) {
       box.setAttribute("data-hc-watch-key", key);
       todoWatchPaint(box, line, open, logged);
@@ -7635,6 +7904,7 @@
       || (line.running ? "starting…" : "");
     last.style.display = last.textContent ? "" : "none";
     box.appendChild(last);
+    todoRestartPaint(box, line.restart, todoGoalId);
     if (!open) return true;
     var body = document.createElement("div");
     body.className = "hc-todo-watch-log";
@@ -8933,6 +9203,12 @@
         watchOpen[logFor] = !watchOpen[logFor];
         if (watchOpen[logFor] && !watchLines[logFor]) todoLoadLog(logFor);
         renderTodoRail(true);
+        return;
+      }
+      var copyFor = node.getAttribute("data-hc-todo-restart-copy");
+      if (copyFor !== null) {
+        event.preventDefault();
+        todoRestartCopy(copyFor);
         return;
       }
       var termFor = node.getAttribute("data-hc-todo-term");
@@ -12371,6 +12647,9 @@
       duration: buildDuration,
       watchLine: todoWatchLine,
       renderWatch: renderTodoWatch,
+      restartOf: todoRestartOf,
+      renderRestart: todoRestartPaint,
+      copyRestart: todoRestartCopy,
       openLog: function (goalId) {
         watchOpen[goalId] = true;
         todoLoadLog(goalId);
@@ -12541,6 +12820,9 @@
     alerts: {
       track: trackTodoAlerts,
       diff: todoAlertsFrom,
+      trackRestart: trackRestartAlerts,
+      restartDiff: restartAlertsFrom,
+      sticky: alertSticky,
       noteOut: alertNoteOut,
       stack: alertStack,
       log: function () { return loadAlertLog().slice(); },
