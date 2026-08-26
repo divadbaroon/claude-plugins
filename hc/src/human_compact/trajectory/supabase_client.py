@@ -350,6 +350,19 @@ def sign_in(email: str, password: str,
 OAUTH_PROVIDERS = ("google", "github")
 OAUTH_WAIT_S = 300
 
+# --- the connect page -------------------------------------------------
+#
+# A provider button needs a provider somebody configured, and Supabase only
+# sends a browser back to an address on the project's allow-list -- which a
+# loopback port picked at run time can never be on. The connect page is the
+# one fixed address Supabase knows. It takes an email, sends the sign-in
+# link with THIS process's challenge attached, and when the link brings the
+# browser back with a code, hands the code on to the listener here. The page
+# never holds a token: a code without the verifier is nothing, and the
+# verifier never left this process.
+CONNECT_URL = "https://engelbart.mathetic.com/connect"
+CONNECT_WAIT_S = 600        # an email has to arrive and be opened first
+
 
 def pkce_pair() -> Dict[str, str]:
     """A fresh verifier and the challenge derived from it.
@@ -406,6 +419,30 @@ def exchange_code(code: str, verifier: str,
     return _store_session(payload, root)
 
 
+def connect_page_url(redirect: str, challenge: str,
+                     root: Optional[Path] = None) -> str:
+    """Where to send the browser when no provider was named.
+
+    Everything the page needs rides in the URL *fragment*, not the query:
+    a fragment never leaves the browser, so the project's address and its
+    public key reach the page's script and nothing else -- not the host,
+    not its logs. ``HC_CONNECT_URL`` points a machine at another page.
+    """
+    from urllib.parse import urlencode
+    config = load_config(root)
+    if not config["url"] or not config["anon_key"]:
+        raise SupabaseError(f"fill in {config_path(root)} first")
+    base = (os.environ.get("HC_CONNECT_URL") or CONNECT_URL).strip()
+    fragment = urlencode({
+        "url": config["url"],
+        "apikey": config["anon_key"],
+        "challenge": challenge,
+        "redirect": redirect,
+        "email": config.get("email") or "",
+    })
+    return f"{base}#{fragment}"
+
+
 DONE_PAGE = (
     "<!doctype html><meta charset=utf-8><title>Signed in</title>"
     "<style>body{font:15px/1.6 ui-monospace,Menlo,monospace;color:#111;"
@@ -456,18 +493,24 @@ def _one_shot_listener():
     return server, caught
 
 
-def sign_in_with_browser(provider: str = "google",
+def sign_in_with_browser(provider: Optional[str] = None,
                          root: Optional[Path] = None,
-                         open_browser=None, wait_s: int = OAUTH_WAIT_S,
+                         open_browser=None, wait_s: Optional[int] = None,
                          announce=None) -> Dict[str, Any]:
     """Sign in through the browser the reader is already signed into.
 
-    The whole round trip: a listener on loopback, a provider page in the
-    browser, and the code it redirects back with, exchanged for a session
-    that lands where a password sign-in would have put it.
+    The whole round trip: a listener on loopback, a page in the browser,
+    and the code it redirects back with, exchanged for a session that
+    lands where a password sign-in would have put it.
+
+    With no provider named, the page is the connect page: it takes an
+    email and sends the sign-in link. With one named, the browser goes
+    straight to that provider's button at Supabase -- which needs the
+    listener's address on the project's redirect allow-list.
 
     Nothing here is interactive on this side. A reader who never finishes
-    is not a reader to wait on for ever, so the listener has a deadline.
+    is not a reader to wait on for ever, so the listener has a deadline --
+    a longer one when an email has to arrive first.
     """
     import threading
     import webbrowser
@@ -475,7 +518,12 @@ def sign_in_with_browser(provider: str = "google",
     server, caught = _one_shot_listener()
     redirect = "http://127.0.0.1:%d/callback" % server.server_address[1]
     try:
-        where = authorize_url(provider, redirect, pair["challenge"], root)
+        if provider:
+            where = authorize_url(provider, redirect, pair["challenge"], root)
+            deadline = OAUTH_WAIT_S if wait_s is None else wait_s
+        else:
+            where = connect_page_url(redirect, pair["challenge"], root)
+            deadline = CONNECT_WAIT_S if wait_s is None else wait_s
     except SupabaseError:
         server.server_close()
         raise
@@ -484,7 +532,7 @@ def sign_in_with_browser(provider: str = "google",
     if announce:
         announce(where)
     (open_browser or webbrowser.open)(where)
-    thread.join(timeout=max(1, int(wait_s)))
+    thread.join(timeout=max(1, int(deadline)))
     server.server_close()
     if thread.is_alive():
         raise SupabaseError(

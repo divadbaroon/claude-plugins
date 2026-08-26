@@ -216,5 +216,90 @@ class RoundTripTests(Configured):
         self.assertEqual([], opened)
 
 
+
+class ConnectPageTests(Configured):
+    """No provider named: the connect page, and the state it is handed."""
+
+    def test_everything_rides_in_the_fragment_and_nothing_in_the_query(self):
+        url = SB.connect_page_url("http://127.0.0.1:5050/callback", "CH")
+        parts = urllib.parse.urlsplit(url)
+        self.assertEqual("https://engelbart.mathetic.com/connect",
+                         parts.scheme + "://" + parts.netloc + parts.path)
+        self.assertEqual("", parts.query)
+        state = urllib.parse.parse_qs(parts.fragment)
+        self.assertEqual(["https://ref.supabase.co"], state["url"])
+        self.assertEqual(["eyJanon"], state["apikey"])
+        self.assertEqual(["CH"], state["challenge"])
+        self.assertEqual(["http://127.0.0.1:5050/callback"], state["redirect"])
+
+    def test_the_configured_email_is_offered_as_a_prefill(self):
+        (self.root / "supabase.json").write_text(json.dumps(
+            {"url": "https://ref.supabase.co", "anon_key": "eyJanon",
+             "email": "reader@example.com"}))
+        state = urllib.parse.parse_qs(urllib.parse.urlsplit(
+            SB.connect_page_url("http://127.0.0.1:1/callback", "C")).fragment)
+        self.assertEqual(["reader@example.com"], state["email"])
+
+    def test_a_machine_can_point_at_another_page(self):
+        with mock.patch.dict("os.environ",
+                             {"HC_CONNECT_URL": "http://localhost:3000/connect"}):
+            url = SB.connect_page_url("http://127.0.0.1:1/callback", "C")
+        self.assertTrue(url.startswith("http://localhost:3000/connect#"), url)
+
+    def test_with_no_project_configured_it_says_so(self):
+        (self.root / "supabase.json").write_text("{}")
+        with self.assertRaises(SB.SupabaseError):
+            SB.connect_page_url("http://127.0.0.1:1/callback", "C")
+
+
+class ConnectRoundTripTests(RoundTripTests):
+    """The page hands the code to the listener; the exchange is the same."""
+
+    def page(self, query="?code=THECODE"):
+        """Stand in for the connect page forwarding Supabase's code."""
+        seen = {}
+
+        def open_it(url):
+            seen["url"] = url
+            state = urllib.parse.parse_qs(urllib.parse.urlsplit(url).fragment)
+            back = state["redirect"][0]
+            with urllib.request.urlopen(back + query, timeout=5) as r:
+                seen["status"] = r.status
+                seen["page"] = r.read().decode()
+        return open_it, seen
+
+    def test_no_provider_means_the_connect_page(self):
+        open_it, seen = self.page()
+        out = SB.sign_in_with_browser(open_browser=open_it, wait_s=10)
+        self.assertEqual("someone@example.com", out["email"])
+        self.assertIn("engelbart.mathetic.com/connect#", seen["url"])
+        self.assertEqual(200, seen["status"])
+        self.assertIn("Signed in", seen["page"])
+
+    def test_the_challenge_the_page_carries_is_the_verifier_exchanged(self):
+        open_it, seen = self.page()
+        SB.sign_in_with_browser(open_browser=open_it, wait_s=10)
+        state = urllib.parse.parse_qs(urllib.parse.urlsplit(seen["url"]).fragment)
+        want = base64.urlsafe_b64encode(hashlib.sha256(
+            self.posted[0]["body"]["code_verifier"].encode()).digest()
+        ).decode().rstrip("=")
+        self.assertEqual([want], state["challenge"])
+
+    def test_a_named_provider_still_goes_straight_to_supabase(self):
+        open_it, seen = self.browser()
+        SB.sign_in_with_browser("github", open_browser=open_it, wait_s=10)
+        self.assertIn("/auth/v1/authorize", seen["url"])
+        self.assertIn("provider=github", seen["url"])
+
+    def test_an_email_gets_longer_to_arrive_than_a_button_gets_to_be_pressed(self):
+        self.assertGreater(SB.CONNECT_WAIT_S, SB.OAUTH_WAIT_S)
+
+    def test_a_project_nobody_configured_never_opens_a_listener(self):
+        (self.root / "supabase.json").write_text("{}")
+        opened = []
+        with self.assertRaises(SB.SupabaseError):
+            SB.sign_in_with_browser(open_browser=opened.append, wait_s=1)
+        self.assertEqual([], opened)
+
 if __name__ == "__main__":
     unittest.main()
