@@ -8,9 +8,25 @@ npx engelbart-cli
 ```
 
 The installer takes no required options. It installs the `hc` runtime, the
-Claude Code hooks, and the `/bart` command, then opens the browser to connect
-the machine to an existing Engelbart account. Use `--local-only` to skip the
-account connection and keep the installation local.
+Claude Code hooks, the `/bart` command, and the `bart` terminal command. It
+then opens the browser to connect the machine to an existing Engelbart account
+and configures Claude Code to use that member's metered virtual key. Use
+`--local-only` to skip the account connection and keep the installation local.
+
+The same connection can be made or repaired after installation:
+
+```bash
+bart auth
+bart status
+```
+
+`bart auth` stores the member's virtual key in the owner-only
+`~/.claude-vault/engelbart-credentials.json` file and gives Claude Code an
+`apiKeyHelper`; the key is not written to `~/.claude/settings.json` or a shell
+profile. `bart logout` removes the local Engelbart/Supabase tokens and restores
+the Claude settings that preceded the connection. `bart token` exists for the
+credential helper and prints the key, so its output should not be logged or
+shared.
 
 From then on the hooks record each chat's own prompts and events to a local,
 owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
@@ -78,9 +94,14 @@ See [`STASHED.md`](../STASHED.md) for the full inventory.
 - Claude Code 2.1.175+
 
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
-runtimes live under `~/.human-compact/runtimes/`; and the stable backend
-launcher is `~/.human-compact/bin/hc`. Re-running the same npm version repairs
-the Claude integration and reuses a verified runtime.
+runtimes live under `~/.human-compact/runtimes/`; and the stable launchers are
+`~/.human-compact/bin/hc` and `~/.human-compact/bin/bart`. Re-running the same
+npm version repairs the Claude integration and reuses a verified runtime.
+
+If `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is already exported in the
+shell, unset it before launching Claude Code: shell variables take precedence
+over the credential helper. Engelbart preserves static credentials found in
+Claude's settings file and restores them on `bart logout`.
 
 The installer uses an existing compatible Python when available. Otherwise it
 downloads pinned `uv` 0.11.32 release assets, verifies their published SHA-256,

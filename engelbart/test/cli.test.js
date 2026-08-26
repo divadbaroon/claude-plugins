@@ -9,9 +9,7 @@ const test = require('node:test');
 
 const {
   UsageError,
-  accountConfigPath,
   connectEngelbartAccount,
-  fetchEngelbartConfig,
   parseArgs,
   resolveChoices,
   run,
@@ -180,14 +178,14 @@ test('a default install connects the account and local-only never does', async (
       arch: 'arm64',
       output: capture().stream,
       errorOutput: capture().stream,
-      install: async () => ({ launcher: '/managed/hc' }),
+      install: async () => ({ launcher: '/managed/hc', bartLauncher: '/managed/bart' }),
       ensureLauncherOnPath: () => ({ onPath: true }),
-      connectAccount: async (options) => { connected.push(options.launcher); },
+      connectAccount: async (options) => { connected.push(options.bartLauncher); },
     };
     assert.equal(await run({ ...common, argv: [] }), 0);
-    assert.deepEqual(connected, ['/managed/hc']);
+    assert.deepEqual(connected, ['/managed/bart']);
     assert.equal(await run({ ...common, argv: ['--local-only'] }), 0);
-    assert.deepEqual(connected, ['/managed/hc']);
+    assert.deepEqual(connected, ['/managed/bart']);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -208,7 +206,10 @@ async function installOutput({ onPath, added, present, linked }) {
       arch: 'arm64',
       output: output.stream,
       errorOutput: capture().stream,
-      install: async () => ({ launcher: '/home/u/.human-compact/bin/hc' }),
+      install: async () => ({
+        launcher: '/home/u/.human-compact/bin/hc',
+        bartLauncher: '/home/u/.human-compact/bin/bart',
+      }),
       ensureLauncherOnPath: () => ({
         onPath, added, present, linked, profile: '/home/u/.zshrc',
         line: 'export PATH="$HOME/.human-compact/bin:$PATH"',
@@ -226,74 +227,23 @@ test('help does not document a prompt the installer never shows', () => {
   assert.match(text, /^ {2}--non-interactive {5}install locally without opening a browser$/m);
 });
 
-test('the account configuration is fetched, validated, and normalized', async () => {
-  const got = await fetchEngelbartConfig(async () => ({
-    ok: true,
-    status: 200,
-    headers: { get() { return null; } },
-    async text() {
-      return JSON.stringify({
-        supabaseUrl: 'https://project.supabase.co/',
-        supabaseAnonKey: 'public-anon-key-with-enough-characters',
-      });
+test('account connection delegates the complete flow to bart auth', async () => {
+  const calls = [];
+  const output = capture();
+  await connectEngelbartAccount({
+    bartLauncher: '/managed/bart',
+    env: { TEST_ENV: 'yes' },
+    output: output.stream,
+    runner(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0 };
     },
-  }));
-  assert.deepEqual(got, {
-    url: 'https://project.supabase.co',
-    anon_key: 'public-anon-key-with-enough-characters',
   });
-});
-
-test('first account connection writes private config and opens browser login', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-account-'));
-  try {
-    const calls = [];
-    await connectEngelbartAccount({
-      launcher: '/managed/hc',
-      env: {},
-      homedir: home,
-      output: capture().stream,
-      fetchConfig: async () => ({
-        url: 'https://project.supabase.co', anon_key: 'public-key',
-      }),
-      runner(command, args) {
-        calls.push([command, args]);
-        return { status: args[1] === 'whoami' ? 1 : 0, stdout: '' };
-      },
-    });
-    const config = accountConfigPath({}, home);
-    assert.deepEqual(JSON.parse(fs.readFileSync(config)), {
-      url: 'https://project.supabase.co', anon_key: 'public-key',
-    });
-    assert.equal(fs.statSync(config).mode & 0o077, 0);
-    assert.deepEqual(calls.map((call) => call[1]), [
-      ['supabase', 'whoami'], ['supabase', 'login'],
-    ]);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-});
-
-test('an existing account config is preserved and an existing session skips login', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-account-'));
-  try {
-    const config = accountConfigPath({}, home);
-    fs.mkdirSync(path.dirname(config), { recursive: true });
-    fs.writeFileSync(config, '{"mine":true}\n');
-    const calls = [];
-    await connectEngelbartAccount({
-      launcher: '/managed/hc', env: {}, homedir: home, output: capture().stream,
-      fetchConfig: async () => { throw new Error('must not fetch'); },
-      runner(command, args) {
-        calls.push([command, args]);
-        return { status: 0, stdout: 'reader@example.com\n' };
-      },
-    });
-    assert.equal(fs.readFileSync(config, 'utf8'), '{"mine":true}\n');
-    assert.deepEqual(calls.map((call) => call[1]), [['supabase', 'whoami']]);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
+  assert.equal(calls[0].command, '/managed/bart');
+  assert.deepEqual(calls[0].args, ['auth']);
+  assert.equal(calls[0].options.env.TEST_ENV, 'yes');
+  assert.equal(calls[0].options.stdio, 'inherit');
+  assert.match(output.read(), /credits configured/);
 });
 
 test('the closing line says what is recorded and what waits for /bart', async () => {
@@ -316,7 +266,7 @@ test('the closing line says what is recorded and what waits for /bart', async ()
 
 test('a reachable launcher gets no PATH advice', async () => {
   const text = await installOutput({ onPath: true, added: false });
-  assert.match(text, /hc {11}ready in this terminal/);
+  assert.match(text, /hc \+ bart {4}ready in this terminal/);
   assert.match(text, /Next: Open any Claude Code chat and type \/bart\./);
   assert.doesNotMatch(text, /export PATH/);
   assert.doesNotMatch(text, /Then:/);
@@ -353,6 +303,6 @@ test('a profile that is already correct says the shell is stale, not the config'
 
 test('a linked launcher says it works right now', async () => {
   const text = await installOutput({ onPath: true, linked: '/home/u/.local/bin/hc' });
-  assert.match(text, /hc {11}ready in this terminal/);
+  assert.match(text, /hc \+ bart {4}ready in this terminal/);
   assert.doesNotMatch(text, /needs one more step/);
 });

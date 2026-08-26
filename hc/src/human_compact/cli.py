@@ -1958,6 +1958,50 @@ def hc_main():
         print(f"unknown command: {cmd}"); sys.exit(2)
 
 
+def bart_main(argv=None):
+    """Authenticate Claude Code against the Engelbart metered gateway."""
+    from . import engelbart_auth as EA
+
+    ap = argparse.ArgumentParser(
+        prog="bart",
+        description="Connect Claude Code to an Engelbart account and credit key.")
+    ap.add_argument("action", nargs="?", default="status",
+                    choices=("auth", "status", "token", "logout"))
+    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        if args.action == "token":
+            print(EA.token())
+            return 0
+        if args.action == "logout":
+            EA.logout()
+            print("Engelbart credentials removed; prior Claude settings restored.")
+            return 0
+        if args.action == "status":
+            state = EA.status()
+            print("account   " + ((state["email"] or "signed in")
+                                  if state["signedIn"] else "signed out"))
+            print("credits   " + (f"${state['spendUsd']:.2f} used of "
+                                   f"${state['budgetUsd']:.2f}"
+                                   if state["connected"] else "not connected"))
+            if state["connected"]:
+                print("models    " + ", ".join(state["models"]))
+            return 0
+
+        record = EA.authenticate(announce=print)
+        print(f"Connected {record['email'] or 'account'} to Engelbart.")
+        print(f"Claude Code budget: ${record['budgetUsd']:.2f}; "
+              "models: " + ", ".join(record["models"]))
+        conflicts = EA.shell_credential_conflicts()
+        if conflicts:
+            print("Warning: unset " + ", ".join(conflicts)
+                  + " in this shell before starting Claude Code; shell variables "
+                    "override bart's credential helper.", file=sys.stderr)
+        return 0
+    except (EA.EngelbartAuthError, OSError, ValueError) as exc:
+        print(f"bart: {exc}", file=sys.stderr)
+        return 1
+
+
 def main():   # keep hc-backup entry point working
     backup_main()
 

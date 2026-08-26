@@ -323,13 +323,15 @@ function runtimeExecutables(runtime) {
   return {
     python: path.join(runtime, 'bin', 'python'),
     hc: path.join(runtime, 'bin', 'hc'),
+    bart: path.join(runtime, 'bin', 'bart'),
   };
 }
 
 function validateRuntime(runner, runtime, version) {
-  const { python, hc } = runtimeExecutables(runtime);
+  const { python, hc, bart } = runtimeExecutables(runtime);
   if (!fs.statSync(python, { throwIfNoEntry: false })?.isFile()
-      || !fs.statSync(hc, { throwIfNoEntry: false })?.isFile()) return false;
+      || !fs.statSync(hc, { throwIfNoEntry: false })?.isFile()
+      || !fs.statSync(bart, { throwIfNoEntry: false })?.isFile()) return false;
   try {
     const result = runner(python, [
       '-c',
@@ -520,40 +522,78 @@ function lstatIfPresent(file) {
   }
 }
 
-function switchLauncher(root, targetHc, previousInstall) {
+function switchLauncher(root, targetHc, previousInstall, targetBart = null) {
   const bin = ensureManagedDirectory(root, 'bin');
   const launcher = path.join(bin, 'hc');
+  const bartLauncher = path.join(bin, 'bart');
+  const targets = {
+    [launcher]: targetHc,
+    [bartLauncher]: targetBart || path.join(path.dirname(targetHc), 'bart'),
+  };
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 });
-  let previousTarget = null;
-  const launcherStat = lstatIfPresent(launcher);
-  if (launcherStat) {
-    if (!previousInstall) throw new Error(`refusing to overwrite unmanaged launcher: ${launcher}`);
-    if (previousInstall.launcher !== launcher
+  const previousTargets = new Map();
+  for (const [stable, target] of Object.entries(targets)) {
+    const launcherStat = lstatIfPresent(stable);
+    if (!launcherStat) {
+      previousTargets.set(stable, null);
+      continue;
+    }
+    if (!previousInstall) throw new Error(`refusing to overwrite unmanaged launcher: ${stable}`);
+    const manifestField = stable === launcher ? 'launcher' : 'bartLauncher';
+    if (previousInstall[manifestField] !== stable
         || typeof previousInstall.runtime !== 'string') {
       throw new Error('owned install manifest does not match its stable launcher');
     }
-    if (!launcherStat.isSymbolicLink()) throw new Error(`owned launcher is not a symlink: ${launcher}`);
-    previousTarget = fs.readlinkSync(launcher);
+    if (!launcherStat.isSymbolicLink()) throw new Error(`owned launcher is not a symlink: ${stable}`);
+    const previousTarget = fs.readlinkSync(stable);
     const previousRuntime = safeChild(root, previousInstall.runtime);
-    const expectedTarget = path.join(previousRuntime, 'bin', 'hc');
+    const expectedTarget = path.join(previousRuntime, 'bin', path.basename(target));
     if (!path.isAbsolute(previousTarget)
         || path.resolve(previousTarget) !== path.resolve(expectedTarget)) {
       throw new Error('owned stable launcher target does not match the install manifest');
     }
+    previousTargets.set(stable, previousTarget);
   }
-  const temporary = path.join(bin, `.hc.tmp-${process.pid}-${crypto.randomBytes(5).toString('hex')}`);
-  fs.symlinkSync(targetHc, temporary);
-  fs.renameSync(temporary, launcher);
+
+  const temporaries = new Map();
+  const switched = [];
+  const restore = (stable) => {
+    const previous = previousTargets.get(stable);
+    if (previous === null) {
+      fs.rmSync(stable, { force: true });
+      return;
+    }
+    const rollback = path.join(
+      bin,
+      `.${path.basename(stable)}.rollback-${process.pid}-${crypto.randomBytes(5).toString('hex')}`,
+    );
+    fs.symlinkSync(previous, rollback);
+    fs.renameSync(rollback, stable);
+  };
+  try {
+    for (const [stable, target] of Object.entries(targets)) {
+      const temporary = path.join(
+        bin,
+        `.${path.basename(stable)}.tmp-${process.pid}-${crypto.randomBytes(5).toString('hex')}`,
+      );
+      fs.symlinkSync(target, temporary);
+      temporaries.set(stable, temporary);
+    }
+    for (const stable of Object.keys(targets)) {
+      fs.renameSync(temporaries.get(stable), stable);
+      switched.push(stable);
+    }
+  } catch (error) {
+    for (const temporary of temporaries.values()) fs.rmSync(temporary, { force: true });
+    for (const stable of switched.reverse()) restore(stable);
+    throw error;
+  }
   return {
     launcher,
+    bartLauncher,
     rollback() {
-      const restore = path.join(bin, `.hc.rollback-${process.pid}-${crypto.randomBytes(5).toString('hex')}`);
-      if (previousTarget !== null) {
-        fs.symlinkSync(previousTarget, restore);
-        fs.renameSync(restore, launcher);
-      } else {
-        fs.rmSync(launcher, { force: true });
-      }
+      restore(bartLauncher);
+      restore(launcher);
     },
   };
 }
@@ -616,7 +656,8 @@ async function install(options) {
 
     let switched;
     try {
-      switched = switchLauncher(root, runtimeExecutables(runtime).hc, previousInstall);
+      const executables = runtimeExecutables(runtime);
+      switched = switchLauncher(root, executables.hc, previousInstall, executables.bart);
     } catch (error) {
       if (createdRuntime) removeManaged(root, runtime);
       throw error;
@@ -636,6 +677,7 @@ async function install(options) {
       wheelSha256: vendor.sha256,
       runtime,
       launcher: switched.launcher,
+      bartLauncher: switched.bartLauncher,
       globalVault: options.choices.globalVault === '1',
       goalsRequested: options.choices.goals === '1',
       setupStatus: 'pending',
@@ -677,7 +719,11 @@ async function install(options) {
       throw error;
     }
     output.write(`  runtime      ${vendor.version}\n  Claude Code  plugin and /bart installed\n`);
-    return { runtime, launcher: switched.launcher };
+    return {
+      runtime,
+      launcher: switched.launcher,
+      bartLauncher: switched.bartLauncher,
+    };
   } finally {
     if (staging) removeManaged(root, staging);
     releaseLock();
@@ -707,25 +753,50 @@ function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
   // A child process cannot change its parent shell's PATH, so editing a
   // profile always costs the user a new terminal. Linking into a directory
   // the shell already searches costs them nothing: `hc` works immediately.
-  const source = path.join(launcherDir, 'hc');
+  const launcherNames = ['hc', 'bart'];
   for (const entry of entries) {
     const dir = path.resolve(entry);
     if (dir !== path.resolve(homedir, '.local', 'bin')
         && dir !== path.resolve(homedir, 'bin')) continue;
-    const link = path.join(dir, 'hc');
-    try {
-      const existing = files.lstatSync(link);
-      // Something is already called hc here. Ours to update, or not ours to touch.
-      if (!existing.isSymbolicLink()) continue;
-      if (path.resolve(files.readlinkSync(link)) !== path.resolve(source)) continue;
-      return { onPath: true, profile: null, added: false, linked: link, line: null };
-    } catch (error) {
-      if (error.code !== 'ENOENT') continue;
+    const states = [];
+    let usable = true;
+    for (const name of launcherNames) {
+      const source = path.join(launcherDir, name);
+      const link = path.join(dir, name);
+      try {
+        const existing = files.lstatSync(link);
+        if (!existing.isSymbolicLink()
+            || path.resolve(files.readlinkSync(link)) !== path.resolve(source)) {
+          usable = false;
+          break;
+        }
+        states.push({ source, link, missing: false });
+      } catch (error) {
+        if (error.code !== 'ENOENT') {
+          usable = false;
+          break;
+        }
+        states.push({ source, link, missing: true });
+      }
     }
+    if (!usable) continue;
+    const created = [];
     try {
-      files.symlinkSync(source, link);
-      return { onPath: true, profile: null, added: false, linked: link, line: null };
+      for (const state of states.filter((item) => item.missing)) {
+        files.symlinkSync(state.source, state.link);
+        created.push(state.link);
+      }
+      return {
+        onPath: true,
+        profile: null,
+        added: false,
+        linked: states.map((state) => state.link),
+        line: null,
+      };
     } catch (error) {
+      for (const link of created) {
+        try { files.rmSync(link, { force: true }); } catch {}
+      }
       // Unwritable or racing another install: fall through to the profile.
     }
   }

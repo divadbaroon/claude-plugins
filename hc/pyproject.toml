@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "human-compact"
-version = "0.19.2"
+version = "0.19.3"
 description = "Session-scoped goal workspaces and persistent context for Claude Code."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -14,6 +14,7 @@ license = { text = "MIT" }
 [project.scripts]
 hc-backup = "human_compact.cli:main"
 hc = "human_compact.cli:hc_main"
+bart = "human_compact.cli:bart_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
