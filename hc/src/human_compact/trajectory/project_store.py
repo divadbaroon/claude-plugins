@@ -16,7 +16,8 @@ halves of what is known about it:
 The shape, in one glance::
 
     {"schema_version", "generated_at",
-     "project": {"cwd", "name", "objective", "description", "sources"},
+     "project": {"cwd", "name", "objective", "description", "sources",
+                 "saved"},
      "chats": [{"session_id", "created_at", "updated_at",
                 "prompt_count", "goal_count"}],
      "goals": [{"key": "<session>:<goal id>", "id", "session_id",
@@ -60,6 +61,64 @@ SCHEMA_VERSION = 1
 PROJECT_OBJECTIVE_LIMIT = 2000
 PROJECT_DESCRIPTION_LIMIT = 8000
 PROJECT_NAME_LIMIT = 80
+SAVED_LIMIT = 200
+
+
+# --- what the reader keeps here, without giving it to anybody ----------------
+#
+# A source is context: it is attached so the chats of this project can be
+# told about it. The saved list is the other thing a reader wants a project
+# to hold -- the paper they mean to read, the thread they want to find
+# again -- and it is deliberately NOT context. Nothing assembled for a
+# model reads this key, which is why it is its own list rather than a flag
+# on a source: a shelf and a briefing are different objects, and one that
+# was both would eventually be handed over by mistake.
+
+SAVED_KINDS = ("file", "link")
+
+
+def _saved_label(kind: str, ref: str) -> str:
+    """What a saved thing is called when the reader did not name it."""
+    text = str(ref or "").strip()
+    if kind == "link":
+        # The host is what a bare URL is recognised by; the path after it is
+        # usually a hash. Both are in the reference, which is the title.
+        body = text.split("://", 1)[-1]
+        return (body.split("/", 1)[0] or text)[:200]
+    return (Path(text).name or text)[:200]
+
+
+def normalize_saved(value) -> List[Dict[str, str]]:
+    """Accept plain strings or rows; always store ``{id, kind, label, ref}``.
+
+    ``ref`` is the one place the thing itself lives: an absolute path when it
+    is a file on this machine, a URL when it is not. Which of the two it is
+    is not guessed from the caller's word for it but from the reference, so a
+    row cannot claim to be a link and hold a path.
+    """
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for entry in (value if isinstance(value, list) else [])[:SAVED_LIMIT]:
+        if isinstance(entry, str):
+            entry = {"ref": entry}
+        if not isinstance(entry, dict):
+            continue
+        ref = str(entry.get("ref") or entry.get("url")
+                  or entry.get("path") or "").strip()[:1000]
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        kind = "link" if "://" in ref else "file"
+        if kind == "file":
+            try:
+                ref = str(Path(ref).expanduser())
+            except (OSError, RuntimeError, ValueError):
+                pass
+        label = str(entry.get("label") or "").strip()[:200]
+        out.append({"id": str(entry.get("id") or f"v{len(out) + 1}")[:40],
+                    "kind": kind, "label": label or _saved_label(kind, ref),
+                    "ref": ref})
+    return out
 
 
 def _now() -> str:
@@ -274,6 +333,9 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     sources = GM.normalize_sources(section.get("sources"))
     if sources:
         out["sources"] = sources
+    kept = normalize_saved(section.get("saved"))
+    if kept:
+        out["saved"] = kept
     identity = section.get("id")
     if isinstance(identity, str) and identity:
         out["id"] = identity[:64]
@@ -325,7 +387,10 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     section = {"cwd": str(cwd), "name": named or Path(str(cwd)).name,
                "objective": objective,
                "description": description or objective,
-               "sources": GM.normalize_sources(authored.get("sources"))}
+               "sources": GM.normalize_sources(authored.get("sources")),
+               # The shelf. Written here and read by the Saved page alone --
+               # see normalize_saved for why it is not a source.
+               "saved": normalize_saved(authored.get("saved"))}
     # The project's own identity, when one has been minted: a directory is
     # where a project sits today, not what it is, so anything keyed on the
     # path alone calls the same repository on two machines two projects.
