@@ -813,6 +813,40 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_the_terminal_sits_under_the_watch_line_and_not_across_it(self):
+        # The state line is where the build says how long it has been going
+        # and what it has spent; a button beside it took the width those
+        # numbers needed. Terminal opens from the foot of the panel instead,
+        # and Log -- which is about the panel itself -- stays on the line.
+        os.environ["STUB_HOLD"] = "8"
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                head = page.locator(".hc-todo-watch-head")
+                expect(head).to_be_visible(timeout=10_000)
+                expect(head.locator("[data-hc-todo-log]")).to_have_count(1)
+                expect(head.locator("[data-hc-todo-term]")).to_have_count(0)
+                foot = page.locator(".hc-todo-watch-foot")
+                expect(foot.locator("[data-hc-todo-term]")).to_have_text(
+                    "Terminal", timeout=10_000)
+                # The panel's foot is below its line, not beside it.
+                line = page.locator(".hc-todo-watch-meta").bounding_box()
+                under = foot.bounding_box()
+                self.assertGreater(under["y"], line["y"] + line["height"] - 1)
+                # And the line the terminal made room for says the tokens.
+                expect(page.locator(".hc-todo-watch-meta")).to_contain_text("tok")
+            finally:
+                browser.close()
+
     def test_enter_on_a_building_row_opens_a_note_pane_and_the_build_is_told(self):
         # Enter on a row the build is on is not a new row: it opens the pane
         # under the row, and what is typed there goes to the build's session
@@ -1262,6 +1296,11 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         self.skipTest("headless-only")
 
     def test_a_build_pressed_mid_save_still_carries_the_row_it_names(self):
+        self.skipTest("headless-only")
+
+    def test_the_terminal_sits_under_the_watch_line_and_not_across_it(self):
+        # The panel being placed is a headless build's; a queued row has no
+        # run to watch, so there is no line and no terminal to sit under it.
         self.skipTest("headless-only")
 
     def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):

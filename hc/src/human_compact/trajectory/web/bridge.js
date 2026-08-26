@@ -4061,6 +4061,35 @@
     return homeShown() ? !closeHome() : openHome();
   }
 
+  // A card names a project, not a goal, so the screen behind it is that
+  // project's overview -- what it is for, where it lives, which chats are in
+  // it -- and not the goal tree, which is one chat's working surface. The
+  // window that answers is a different one, so the ask rides in the URL.
+  var OVERVIEW_HASH = "overview";
+
+  function overviewURL(url) {
+    var base = str(url);
+    if (!base) return base;
+    var cut = base.indexOf("#");
+    return (cut < 0 ? base : base.slice(0, cut)) + "#" + OVERVIEW_HASH;
+  }
+
+  // Read on every sweep rather than once at load: the window a card opens is
+  // sometimes the one already on screen, where setting the hash changes the
+  // address without reloading anything. Cleared as it is taken, so a reader
+  // who leaves the overview is not put back on it a moment later.
+  function takeOverviewHash() {
+    if (typeof location === "undefined" || !location) return false;
+    if (str(location.hash).replace(/^#/, "") !== OVERVIEW_HASH) return false;
+    if (!openOverview()) return false;
+    try {
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch (e) {
+      location.hash = "";
+    }
+    return true;
+  }
+
   function homeOpen(where) {
     if (homeBusy) return;
     homeBusy = true;
@@ -4073,10 +4102,11 @@
       }
       if (typeof location !== "undefined"
           && str(res.url) !== str(location.href)) {
-        location.href = str(res.url);
+        location.href = overviewURL(res.url);
         return;
       }
       closeHome();
+      openOverview();
     });
   }
 
@@ -7376,6 +7406,10 @@
       "[data-hc-launch] .hc-todo-watch-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
       "[data-hc-launch] .hc-todo-watch-row{display:flex;gap:8px;font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-watch-at{flex:none;color:var(--bd2)}",
+      // The terminal's own row, at the foot of the panel, so the state line
+      // above keeps its full width for the elapsed time and the tokens.
+      "[data-hc-launch] .hc-todo-watch-foot{display:flex;align-items:center;margin-top:7px}",
+      "[data-hc-launch][data-hc-readonly] .hc-todo-watch-foot{display:none!important}",
       // The restart check, under the watch line: the model the session
       // moved to and a spinner while it asks; the reason and the prompt to
       // paste, boxed with its own copy button, when the answer is yes.
@@ -8471,16 +8505,6 @@
     log.title = "everything this build has done so far";
     log.setAttribute("data-hc-todo-log", str(todoGoalId));
     head.appendChild(log);
-    if (line.running || line.canOpen) {
-      var term = document.createElement("span");
-      term.className = "hc-todo-watch-btn";
-      term.textContent = "Terminal";
-      term.title = line.running
-        ? "open a terminal following this build as it works"
-        : "open a terminal on this build's session, where you can carry on";
-      term.setAttribute("data-hc-todo-term", str(todoGoalId));
-      head.appendChild(term);
-    }
     box.appendChild(head);
     var last = document.createElement("div");
     last.className = "hc-todo-watch-last";
@@ -8489,7 +8513,10 @@
     last.style.display = last.textContent ? "" : "none";
     box.appendChild(last);
     todoRestartPaint(box, line.restart, todoGoalId);
-    if (!open) return true;
+    if (!open) {
+      todoWatchFoot(box, line);
+      return true;
+    }
     var body = document.createElement("div");
     body.className = "hc-todo-watch-log";
     var lines = array(logged);
@@ -8515,7 +8542,28 @@
     box.appendChild(body);
     // Scrolled to the newest line, which is where the reader is looking.
     if (typeof body.scrollHeight === "number") body.scrollTop = body.scrollHeight;
+    todoWatchFoot(box, line);
     return true;
+  }
+
+  function todoWatchFoot(box, line) {
+    // The terminal opens from the foot of the panel, not from the state line.
+    // Beside the line it took the width the line needed to say how long the
+    // build has been going and what it has spent, and the numbers -- which
+    // are the thing being watched -- were the half that got the ellipsis.
+    if (!line || !(line.running || line.canOpen)) return null;
+    var foot = document.createElement("div");
+    foot.className = "hc-todo-watch-foot";
+    var term = document.createElement("span");
+    term.className = "hc-todo-watch-btn";
+    term.textContent = "Terminal";
+    term.title = line.running
+      ? "open a terminal following this build as it works"
+      : "open a terminal on this build's session, where you can carry on";
+    term.setAttribute("data-hc-todo-term", str(todoGoalId));
+    foot.appendChild(term);
+    box.appendChild(foot);
+    return foot;
   }
 
   // --- the rows on screen ---------------------------------------------------
@@ -12487,6 +12535,7 @@
       renderAnalyzer();
       renderProjectChip();
       armBrand();
+      takeOverviewHash();
       renderHome();
       renderOverview();
       renderHandoff();

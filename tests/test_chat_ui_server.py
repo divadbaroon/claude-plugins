@@ -3158,6 +3158,61 @@ class ProjectsHomeBrowserTests(unittest.TestCase):
             self.assertTrue(PS.project_path(self.a.parent, self.other).exists())
             b.close()
 
+    def test_a_card_opens_the_project_overview_not_its_goals(self):
+        """A card names a project, so it lands on the project's own screen.
+
+        The window a card opens is often another one, so the ask travels in
+        the URL; here the project clicked is the one already on screen, which
+        is the same answer arriving without a reload.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            # open_project answers with the window this page already is, so
+            # no second workspace is started for a click meant to change
+            # which screen of it is showing.
+            page.evaluate(
+                "() => { const real = window.fetch;"
+                " window.fetch = (u, o) => {"
+                "  if (String(u).indexOf('/api/op') === 0"
+                "      && o && String(o.body).indexOf('open_project') >= 0) {"
+                "   return Promise.resolve(new Response(JSON.stringify("
+                "    {ok: true, url: location.href}),"
+                "    {headers: {'Content-Type': 'application/json'}}));"
+                "  }"
+                "  return real(u, o); }; }")
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            page.click('[data-hc-home-open="' + self.home + '"]')
+            page.wait_for_selector("html[data-hc-overview]", timeout=10_000)
+            self.assertIn(self.home, page.inner_text(".hc-overview"))
+            # And the list it was clicked from is gone, not left underneath.
+            self.assertFalse(page.is_visible(".hc-home-card"))
+            b.close()
+
+    def test_a_url_asking_for_the_overview_lands_on_it(self):
+        """What a card hands the window it opens.
+
+        Another project's workspace is a different page, so the only way to
+        say "show the overview" across that hop is the address itself.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url + "#overview")
+            page.wait_for_selector("html[data-hc-overview]", timeout=10_000)
+            # Taken as it is read: a reader who closes the overview and
+            # reloads is not put back on it.
+            page.wait_for_function("() => location.hash === ''", timeout=10_000)
+            b.close()
+
     def test_a_new_project_can_be_added_without_leaving_the_page(self):
         try:
             from playwright.sync_api import sync_playwright

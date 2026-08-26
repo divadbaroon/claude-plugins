@@ -1111,6 +1111,10 @@ class BuildWatchTests(BridgeTestCase):
         # A guest reading someone else's workspace may see the log; opening a
         # window on their machine is not theirs to do.
         self.assertIn("[data-hc-readonly] [data-hc-todo-term]", css)
+        # The terminal has a row of its own under the line, and a guest sees
+        # neither the button nor the space it would have taken.
+        self.assertIn(".hc-todo-watch-foot{", css)
+        self.assertIn("[data-hc-readonly] .hc-todo-watch-foot", css)
 
     # --- the restart check, under the line ----------------------------------
 
