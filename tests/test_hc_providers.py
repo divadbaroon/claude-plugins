@@ -74,6 +74,89 @@ class ClaudeCLIProviderTests(unittest.TestCase):
         self.assertEqual("said once", Only("m").generate_plain("ask"))
 
     @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_an_answer_from_files_may_open_the_ones_it_is_pointed_at(self, run):
+        # The opposite call: a scenario written from screenshots is written
+        # from files the prompt names, so the subprocess is given Read and
+        # the directories those files are in -- and nothing else.
+        run.return_value = Mock(returncode=0, stdout="two people, one tree",
+                                stderr="")
+
+        said = providers.ClaudeCLI("sonnet").generate_reading(
+            "describe /shots/a.png", read_dirs=["/shots"])
+
+        self.assertEqual("two people, one tree", said)
+        command = run.call_args.args[0]
+        self.assertEqual("Read", command[command.index("--tools") + 1])
+        # Available is not the same as permitted, and nobody is sitting in
+        # front of this one to permit it.
+        self.assertEqual("Read", command[command.index("--allowed-tools") + 1])
+        self.assertEqual("/shots", command[command.index("--add-dir") + 1])
+
+    def test_a_provider_that_cannot_open_a_file_still_answers(self):
+        class Only(providers.Base):
+            def generate(self, prompt):
+                return "said once"
+
+        self.assertEqual("said once",
+                         Only("m").generate_reading("ask", ["/shots"]))
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_an_answer_that_is_in_the_code_may_go_and_look_for_it(self, run):
+        # A question about how the project behaves is answered out of the
+        # project, so the subprocess is started in it and given the tools
+        # that find things and read them -- and nothing that writes or runs.
+        run.return_value = Mock(returncode=0, stdout="GIVEN a build is running",
+                                stderr="")
+
+        said = providers.ClaudeCLI("sonnet").generate_searching(
+            "what happens to the second build?", str(ROOT))
+
+        self.assertEqual("GIVEN a build is running", said)
+        command = run.call_args.args[0]
+        self.assertEqual("Read,Grep,Glob", command[command.index("--tools") + 1])
+        # Available is not the same as permitted, and nobody is sitting in
+        # front of this one to permit it.
+        self.assertEqual("Read,Grep,Glob",
+                         command[command.index("--allowed-tools") + 1])
+        self.assertEqual(str(ROOT), command[command.index("--add-dir") + 1])
+        # Started in the project too: a grep rooted wherever this server
+        # happened to be launched is a grep of the wrong repository.
+        self.assertEqual(str(ROOT), run.call_args.kwargs["cwd"])
+        # Finding the answer, opening what was found and then writing it are
+        # three rounds where a quoted-prompt question is one.
+        self.assertEqual(providers.CLAUDE_SEARCH_TIMEOUT_SECONDS,
+                         run.call_args.kwargs["timeout"])
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_a_search_that_times_out_reports_its_own_deadline(self, run):
+        run.side_effect = subprocess.TimeoutExpired(
+            ["claude"], providers.CLAUDE_SEARCH_TIMEOUT_SECONDS)
+
+        with self.assertRaisesRegex(
+            providers.ProviderError,
+            "timed out after %ds" % providers.CLAUDE_SEARCH_TIMEOUT_SECONDS
+        ):
+            providers.ClaudeCLI("sonnet").generate_searching("ask", str(ROOT))
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_a_directory_that_is_not_there_is_not_a_missing_cli(self, run):
+        # Two things can be missing once a call names a directory to run in,
+        # and "install the CLI" is the wrong thing to say about the other.
+        run.side_effect = FileNotFoundError()
+
+        with self.assertRaisesRegex(providers.ProviderError,
+                                    "not a directory to look in"):
+            providers.ClaudeCLI("sonnet").generate_searching(
+                "ask", str(ROOT / "no-such-project"))
+
+    def test_a_provider_with_nothing_to_search_with_still_answers(self):
+        class Only(providers.Base):
+            def generate(self, prompt):
+                return "said once"
+
+        self.assertEqual("said once", Only("m").generate_searching("ask", "/p"))
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
     def test_timeout_reports_the_enforced_deadline(self, run):
         run.side_effect = subprocess.TimeoutExpired(["claude"], 180)
 

@@ -7289,6 +7289,60 @@
       "[data-hc-launch] .hc-rail-select{margin-left:auto;font:500 10px 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-select:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
+      // Three tabs now, and the widest of them is a word: the row they sit in
+      // is only as wide as the rail. They keep their whole names and the save
+      // stamp beside them gives way instead -- it is the one thing in that
+      // row that says nothing the reader has to be able to read in full.
+      "[data-hc-launch] .hc-rail-tabs{flex:none;gap:11px}",
+      "[data-hc-launch] .hc-rail-saved{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      // The Understanding tab: the scenario the goal's work is for, and the
+      // questions asked about it. Boxes to type in, unlike the Prompt tab
+      // beside it, so it is laid out as the goal document is -- a heading,
+      // then the field under it. The headings say what the fields are and the
+      // boxes say it again in their placeholders; a third line saying it a
+      // third time was only ever in the way of the writing.
+      "[data-hc-launch] .hc-rail-understand{flex:1 1 auto;min-height:0;overflow-y:auto;display:none;flex-direction:column;gap:16px;padding:13px 16px 16px}",
+      "[data-hc-launch] .hc-understand-sec{display:flex;flex-direction:column;gap:7px}",
+      "[data-hc-launch] .hc-understand-head{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-understand-scenario,[data-hc-launch] .hc-understand-ask,[data-hc-launch] .hc-understand-follow{display:block;width:100%;box-sizing:border-box;resize:none;overflow:hidden;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:8px 10px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none}",
+      "[data-hc-launch] .hc-understand-scenario{min-height:92px}",
+      "[data-hc-launch] .hc-understand-scenario:focus,[data-hc-launch] .hc-understand-ask:focus,[data-hc-launch] .hc-understand-follow:focus{border-color:var(--acc)}",
+      "[data-hc-launch] .hc-understand-q{display:flex;align-items:flex-start;gap:6px}",
+      "[data-hc-launch] .hc-understand-drop{flex:none;width:16px;padding-top:7px;text-align:center;font:12px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-understand-drop:hover{color:var(--del)}",
+      "[data-hc-launch] .hc-understand-add{align-self:flex-start;font:11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-understand-add:hover{color:var(--acc)}",
+      "[data-hc-launch] .hc-understand-saved{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
+      // The foot of the tab, and the one control on it that sends the whole
+      // thing: the scenario and every question still waiting on an answer.
+      // It stays on the bottom edge while the column scrolls -- the reader
+      // types their way down a growing list of questions, and the thing they
+      // do next has to be where they can see it.
+      "[data-hc-launch] .hc-understand-foot{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;gap:10px;margin-top:auto;padding:10px 0 0;background:var(--panel);border-top:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-understand-send{flex:none;margin-left:auto;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      "[data-hc-launch] .hc-understand-send:hover{filter:brightness(1.08)}",
+      "[data-hc-launch] .hc-understand-send[data-hc-busy]{cursor:default;filter:none;opacity:.55}",
+      // A question's own thread. It hangs off the question box on a rule down
+      // the left, the way a reply hangs off what it replies to -- the tab is
+      // read down the questions, and an answer has to read as part of the
+      // question above it rather than as the next thing in the column.
+      "[data-hc-launch] .hc-understand-thread{display:flex;flex-direction:column;gap:9px;margin:2px 0 0 3px;padding-left:10px;border-left:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-understand-followq{font:11px/1.55 'Source Code Pro',monospace;color:var(--mut)}",
+      // GIVEN / WHEN / THEN, line for line as the model wrote them: the shape
+      // is the answer, so it is never reflowed into a paragraph.
+      "[data-hc-launch] .hc-understand-answer{white-space:pre-wrap;font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-understand-kw{color:var(--acc);font-weight:600}",
+      "[data-hc-launch] .hc-understand-go{align-self:flex-start;font:11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-understand-go:hover{color:var(--acc)}",
+      "[data-hc-launch] .hc-understand-go[data-hc-busy]{color:var(--mut);cursor:default}",
+      "[data-hc-launch] .hc-understand-err{font:10.5px/1.5 'Source Code Pro',monospace;color:var(--del)}",
+      // The screenshots a scenario is being written from, as a strip of
+      // chips: what was pasted, and the way to take one back out.
+      "[data-hc-launch] .hc-understand-shots{display:flex;flex-wrap:wrap;gap:6px}",
+      "[data-hc-launch] .hc-understand-shot{display:inline-flex;align-items:center;gap:5px;max-width:100%;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:3px 6px;font:10.5px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-understand-shot-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-understand-shot-rm{flex:none;cursor:pointer;user-select:none;color:var(--fnt)}",
+      "[data-hc-launch] .hc-understand-shot-rm:hover{color:var(--del)}",
       "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
       // The search bar sits directly under GOALS, with no rule between the
       // two: the heading's line moves down to under the input. The rail's
@@ -7340,13 +7394,18 @@
       // It is the whole of the tab now, so it takes the whole of the column --
       // it used to be capped at 38vh to leave room for a field under it, and
       // that field is gone. Only Copy sits below it.
+      //
+      // It reads as a code field rather than as running text: the same inset
+      // surface every other field on the rail sits in -- a border, the panel2
+      // fill, its own padding -- so what is on screen looks like the literal
+      // string a build is handed, which is what it is. Printed, not typed in.
       "[data-hc-launch] .hc-rail-ctx{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--bd)}",
-      "[data-hc-launch] .hc-rail-ctx-head{flex:none;display:flex;align-items:baseline;gap:7px;padding:9px 16px 7px;cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-ctx-head{flex:none;display:flex;align-items:baseline;gap:7px;padding:9px 13px 7px;cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-ctx-title{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
       "[data-hc-launch] .hc-rail-ctx-note{flex:1;min-width:0;font:10px 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-rail-ctx-fold{flex:none;font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-ctx-head:hover .hc-rail-ctx-fold{color:var(--ink)}",
-      "[data-hc-launch] .hc-rail-ctx-body{flex:1 1 auto;min-height:0;overflow:auto;margin:0;padding:0 16px 11px;font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word;user-select:text}",
+      "[data-hc-launch] .hc-rail-ctx-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0 12px 12px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:10px 12px;font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;tab-size:2;color:var(--dtxt);white-space:pre-wrap;word-break:break-word;user-select:text}",
       "[data-hc-launch] .hc-rail-ctx[data-hc-fold] .hc-rail-ctx-body{display:none}",
       "[data-hc-launch] .hc-rail-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-rail-copy{display:block;flex:1;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
@@ -8699,11 +8758,14 @@
   // Answers whether it handed anything over, which is what a test can check
   // without unloading a page.
   function todoFlushOnExit() {
-    // Only the rows: the Prompt tab is read, not typed into, since the
-    // prompt became the assembled string itself -- so there is no second
-    // field with a timer of its own to flush. (There was; a call to its
-    // old flush from here threw on every unload, and the rows it was
-    // meant to carry out went with the page.)
+    // The scenario tab has a window of its own and leaves by its own route
+    // -- an op, not the tree -- so it is flushed here beside the rows rather
+    // than folded into the beacon below.
+    understandFlushOnExit();
+    // What follows is the rows and nothing else: the Prompt tab is read, not
+    // typed into, since the prompt became the assembled string itself. (It
+    // was a field once; a call to its old flush from here threw on every
+    // unload, and the rows it was meant to carry out went with the page.)
     if (!todoSaveTimer) return false;
     // A read-only workspace refuses every write, and leaving one is not the
     // exception -- post() stops the ordinary path here and this is the same
@@ -9501,6 +9563,11 @@
     document.addEventListener("input", function (event) {
       var typed = event.target;
       if (typed && typed.getAttribute
+          && typed.getAttribute("data-hc-understand") !== null) {
+        understandTyped(typed);
+        return;
+      }
+      if (typed && typed.getAttribute
           && (typed.getAttribute("data-hc-todo-answer") !== null
               || typed.getAttribute("data-hc-todo-reopen") !== null
               || typed.getAttribute("data-hc-todo-note") !== null)) {
@@ -9518,6 +9585,20 @@
       if (todoSelection()) todoCopyEvent(event);
     }, true);
     document.addEventListener("paste", function (event) {
+      // A screenshot pasted into the scenario box: taken here, kept as a
+      // file, and cited by the scenario rather than dropped into the text as
+      // whatever the browser would have made of it. Text pastes into that
+      // box are ordinary typing and are left alone.
+      var into = event.target;
+      if (into && into.getAttribute
+          && into.getAttribute("data-hc-understand") === "scenario") {
+        var pasted = todoClipboardImages(event.clipboardData);
+        if (!pasted.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        understandPasteImages(pasted);
+        return;
+      }
       // An image on the clipboard, pasted into the list: ours, before the
       // browser gets to turn it into nothing (or, in a rich host, an <img>
       // the model has no place for). Text pastes pass through untouched to
@@ -9531,6 +9612,15 @@
     }, true);
     document.addEventListener("blur", function (event) {
       if (event.target === todoHost()) todoSaveNow();
+      // A field left is a field finished with: the scenario reaches the
+      // server on the way out of it, not 600ms later wherever the reader
+      // has gone.
+      var left = event.target;
+      if (left && left.getAttribute
+          && left.getAttribute("data-hc-understand") !== null
+          && understandSaveTimer) {
+        understandSaveNow();
+      }
     }, true);
     // Both, because they fail differently: beforeunload is what a reload and
     // a closed tab fire, and pagehide is what a page put away for the back
@@ -9555,6 +9645,31 @@
     document.addEventListener("click", function (event) {
       var node = event.target;
       if (!node || !node.getAttribute) return;
+      // The Understanding tab's controls, first: they sit in another column
+      // and none of the row reasoning below applies to them.
+      if (node.getAttribute("data-hc-understand-add") !== null) {
+        understandAdd();
+        return;
+      }
+      var dropAsk = node.getAttribute("data-hc-understand-drop");
+      if (dropAsk !== null) {
+        understandDrop(dropAsk);
+        return;
+      }
+      var askQid = node.getAttribute("data-hc-understand-ask");
+      if (askQid !== null) {
+        understandAsk(askQid);
+        return;
+      }
+      if (node.getAttribute("data-hc-understand-send") !== null) {
+        understandSend();
+        return;
+      }
+      var dropShot = node.getAttribute("data-hc-understand-shot-rm");
+      if (dropShot !== null) {
+        understandShotDrop(dropShot);
+        return;
+      }
       // A finished row, clicked: the reader wants another go at it. No
       // hover-only affordance -- the row itself is the control, and the
       // pane it opens is the same thread Claude's own questions use.
@@ -9636,7 +9751,7 @@
         return;
       }
       var name = node.getAttribute("data-hc-rail-tab");
-      if (name !== "todos" && name !== "prompt") return;
+      if (name !== "todos" && name !== "prompt" && name !== "understand") return;
       railTab = name;
       renderTodoRail(true);
     }, true);
@@ -10147,6 +10262,7 @@
     var stamp = document.querySelector(".hc-rail-saved");
     var select = document.querySelector(".hc-rail-select");
     var promptBox = document.querySelector(".hc-rail-prompt");
+    var understandBox = document.querySelector(".hc-rail-understand");
     if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
@@ -10195,10 +10311,11 @@
       }
     }
 
-    if (tabs.children.length !== 2 || force) {
+    if (tabs.children.length !== 3 || force) {
       while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
       tabs.appendChild(todoTabSpan("todos", "TODOs"));
       tabs.appendChild(todoTabSpan("prompt", "Prompt"));
+      tabs.appendChild(todoTabSpan("understand", "Understanding"));
     }
     if (stamp) stamp.textContent = todoSavedLabel;
     host.style.display = railTab === "todos" ? "flex" : "none";
@@ -10211,6 +10328,11 @@
       // the invitation to select one is the whole of the tab.
       if (!goal) promptCtxDrop(promptBox);
     }
+    if (understandBox) {
+      // "flex" for the same reason the prompt column is: the stylesheet's
+      // display is the one this overrules, and the sections stack in it.
+      understandBox.style.display = railTab === "understand" ? "flex" : "none";
+    }
     if (select) {
       var pickable = goal && railTab === "todos" ? todoPickable() : [];
       select.style.display = pickable.length ? "" : "none";
@@ -10219,6 +10341,7 @@
       });
       select.textContent = every ? "Deselect all" : "Select all";
     }
+    if (railTab === "understand") renderUnderstandTab(goal);
     if (goal && railTab === "prompt") renderPromptTab(goal);
     // The rows are priced off the same preview the Prompt tab prints, so the
     // TODO tab asks for it too -- once per goal; it wants the size, not the
@@ -10499,6 +10622,715 @@
     // reply from prompt_preview is dropped unless this still names its goal.
     promptGoalId = goal.id;
     renderPromptCtx(goal);
+  }
+
+  // --- the scenario the work is for -----------------------------------------
+  //
+  // The rail's middle tab. A goal's rows say what to do and its notes say
+  // whatever the reader felt like writing; neither says what situation the
+  // work is FOR, and a build reading the rows alone has to guess it. This is
+  // the place to say it, and the questions the reader has about it, and both
+  // go out with every build of the goal's rows -- see build.compose_prompt.
+  //
+  // It does not travel with the goal tree. The artifact posts that tree back
+  // whole on every edit and rebuilds each goal from a fixed field list, so a
+  // field it does not know about is not merely unsaved but erased; this has
+  // its own op instead, and the import carries it across untouched.
+
+  var MAX_QUESTIONS = 12;
+  var MAX_SHOTS = 8;
+
+  var understandGoalId = null;
+  // {scenario, shots:[{path, name}],
+  //  questions:[{id, text, thread:[{q, a}]}]}
+  var understandData = null;
+  var understandSaveTimer = null;
+  var understandSaving = false;
+  var understandSentAt = 0;
+  var understandSavedLabel = "";
+  // Per question, and only for as long as the tab stays open on this goal:
+  // what is typed in its follow-up box, whether its answer is still out, and
+  // the last thing that went wrong asking it. None of the three is the
+  // goal's -- a half-typed follow-up is not something to write onto a
+  // document somebody else may be reading.
+  var understandFollow = {};
+  var understandAsking = {};
+  var understandError = {};
+  // Why a pasted screenshot never became a chip. About the scenario box as a
+  // whole rather than any one question, and shown under it.
+  var understandShotError = "";
+  // Why the button at the foot of the tab sent nothing. Not a question's --
+  // it is about the tab as a whole, and it is what is shown beside the
+  // button that earned it.
+  var understandSendError = "";
+
+  function understandQid() {
+    // Matched against goals._QUESTION_ID on the way in, so the server keeps
+    // the id the browser minted and a redraw does not re-key every box.
+    var out = "q";
+    while (out.length < 9) out += Math.floor(Math.random() * 16).toString(16);
+    return out;
+  }
+
+  function understandFromServer(goalId) {
+    // Read from the state the server sent, not from the local tree: this
+    // field never rides in that tree (see above), so the store's copy of a
+    // goal has nothing to say about it.
+    var found = null;
+    array(serverState.goals).forEach(function (goal) {
+      if (goal && goal.id === goalId) found = goal;
+    });
+    var held = (found && found.understanding
+                && typeof found.understanding === "object")
+      ? found.understanding : {};
+    var out = { scenario: str(held.scenario), shots: [], questions: [] };
+    array(held.shots).forEach(function (shot) {
+      if (!shot || typeof shot !== "object" || !str(shot.path)) return;
+      if (out.shots.length >= MAX_SHOTS) return;
+      out.shots.push({ path: str(shot.path), name: str(shot.name) });
+    });
+    array(held.questions).forEach(function (row) {
+      if (!row || typeof row !== "object") return;
+      if (out.questions.length >= MAX_QUESTIONS) return;
+      out.questions.push({ id: str(row.id) || understandQid(),
+                           text: str(row.text),
+                           thread: understandThread(row.thread) });
+    });
+    return out;
+  }
+
+  function understandThread(value) {
+    // One question's answers, as they are kept: what was asked, what came
+    // back. A turn with no answer in it never existed -- a question whose
+    // answer failed is still just the question.
+    var out = [];
+    array(value).forEach(function (turn) {
+      if (!turn || typeof turn !== "object" || !str(turn.a)) return;
+      out.push({ q: str(turn.q), a: str(turn.a) });
+    });
+    return out;
+  }
+
+  function understandClean(data) {
+    // What the server keeps: the questions with words in them, their answers,
+    // and the screenshots the scenario was made from. The tab always holds
+    // one empty box to type in, and comparing that box against a store that
+    // never keeps it would redraw forever.
+    var out = { scenario: str(data && data.scenario), shots: [],
+                questions: [] };
+    array(data && data.shots).forEach(function (shot) {
+      if (shot && str(shot.path)) {
+        out.shots.push({ path: str(shot.path), name: str(shot.name) });
+      }
+    });
+    array(data && data.questions).forEach(function (row) {
+      var text = str(row && row.text).replace(/\s+/g, " ")
+        .replace(/^ | $/g, "");
+      if (text) {
+        out.questions.push({ id: str(row.id), text: text,
+                             thread: understandThread(row && row.thread) });
+      }
+    });
+    return out;
+  }
+
+  function understandTyping() {
+    var node = document.activeElement;
+    return !!(node && node.getAttribute
+              && node.getAttribute("data-hc-understand") !== null);
+  }
+
+  function understandPad() {
+    // One empty question is always on offer: a tab with a scenario and no box
+    // under it reads as a tab that cannot take a question at all.
+    if (understandData && !understandData.questions.length) {
+      understandData.questions.push({ id: understandQid(), text: "",
+                                      thread: [] });
+    }
+  }
+
+  function understandLoad(goalId) {
+    understandGoalId = goalId;
+    understandData = understandFromServer(goalId);
+    understandPad();
+    // The scratch belongs to the goal that was open, not to the tab: a
+    // follow-up half-typed about one scenario is not a follow-up about the
+    // next one, and neither is the refusal it earned.
+    understandFollow = {};
+    understandAsking = {};
+    understandError = {};
+    understandShotError = "";
+    understandSendError = "";
+  }
+
+  function understandSaveNow() {
+    if (understandSaveTimer) {
+      clearTimeout(understandSaveTimer);
+      understandSaveTimer = null;
+    }
+    if (!understandGoalId || !understandData) return false;
+    var goalId = understandGoalId;
+    var clean = understandClean(understandData);
+    // Every goal the tab is left is flushed on the way out, whether or not
+    // anything was typed into it. A write that says what the server already
+    // holds is not a write: it would stamp the goal as touched for the crime
+    // of having been looked at.
+    if (same(clean, understandClean(understandFromServer(goalId)))) {
+      return false;
+    }
+    understandSaving = true;
+    post({ op: "set_understanding", goal_id: goalId,
+           scenario: clean.scenario, shots: clean.shots,
+           questions: clean.questions })
+      .then(function (res) {
+        understandSaving = false;
+        if (!res || !res.ok) return;
+        understandSentAt = Date.now();
+        if (understandGoalId !== goalId) return;
+        understandSavedLabel = todoStamp();
+        // The state this page holds still says what it said before the write.
+        // Ask for the one that has it, so nothing here is comparing its own
+        // words against a copy that predates them.
+        refreshState();
+        renderTodoRail(false);
+      });
+    return true;
+  }
+
+  function understandSaveSoon() {
+    if (understandSaveTimer) clearTimeout(understandSaveTimer);
+    understandSaveTimer = setTimeout(understandSaveNow, 600);
+  }
+
+  function understandFlushOnExit() {
+    // A page dismissed with a save still in its window, and the same answer
+    // the rows have: a beacon. fetch is cancelled with the page, and
+    // synchronous XHR has been refused from an unload handler since 2020.
+    if (!understandSaveTimer || !understandGoalId || !understandData) {
+      return false;
+    }
+    clearTimeout(understandSaveTimer);
+    understandSaveTimer = null;
+    if (document.documentElement
+        && document.documentElement.getAttribute("data-hc-readonly") !== null) {
+      return false;
+    }
+    var clean = understandClean(understandData);
+    var body = JSON.stringify({ op: "set_understanding",
+                                goal_id: understandGoalId,
+                                scenario: clean.scenario,
+                                shots: clean.shots,
+                                questions: clean.questions });
+    try {
+      if (navigator && typeof navigator.sendBeacon === "function") {
+        // The type is the request's Content-Type, and /api/op refuses
+        // anything that is not JSON.
+        return navigator.sendBeacon(
+          "/api/op", new Blob([body], { type: "application/json" }));
+      }
+    } catch (e) { /* nothing else can be sent from here */ }
+    return false;
+  }
+
+  function understandTyped(node) {
+    if (!understandData) return;
+    var key = node.getAttribute("data-hc-understand");
+    var qid = node.getAttribute("data-hc-question");
+    if (key === "follow") {
+      // Not the goal's: it is a question not yet asked, and nothing is
+      // written down until there is an answer to write down with it.
+      understandFollow[qid] = node.value;
+      understandGrow(node);
+      return;
+    }
+    if (key === "scenario") {
+      understandData.scenario = node.value;
+    } else {
+      understandData.questions.forEach(function (row) {
+        if (row.id === qid) row.text = node.value;
+      });
+    }
+    understandGrow(node);
+    understandSaveSoon();
+  }
+
+  function understandAdd() {
+    if (!understandData || understandData.questions.length >= MAX_QUESTIONS) {
+      return;
+    }
+    understandData.questions.push({ id: understandQid(), text: "",
+                                    thread: [] });
+    renderTodoRail(true);
+    // The box just made is the one to type in.
+    var boxes = document.querySelectorAll(".hc-understand-ask");
+    if (boxes.length) boxes[boxes.length - 1].focus();
+  }
+
+  function understandQuestion(qid) {
+    var found = null;
+    array(understandData && understandData.questions).forEach(function (row) {
+      if (row.id === qid) found = row;
+    });
+    return found;
+  }
+
+  function understandPending(row) {
+    // What this question would ask if it were sent now: itself, until it has
+    // been answered, and after that whatever is typed in its follow-up box.
+    // A question with nothing pending is a question already answered and not
+    // followed up -- there is nothing left to put to Claude.
+    return str(understandThread(row && row.thread).length
+               ? understandFollow[row.id] : row && row.text)
+      .replace(/\s+/g, " ").replace(/^ | $/g, "");
+  }
+
+  function understandAsk(qid) {
+    // The question as it stands, put to Claude, and the answer kept under it.
+    // A question already answered asks its follow-up box instead: the thread
+    // travels with it, so "and if they are both offline?" is a question.
+    var question = understandQuestion(qid);
+    if (!question || understandAsking[qid]) return;
+    var thread = understandThread(question.thread);
+    var words = understandPending(question);
+    var scenario = str(understandData.scenario).replace(/^\s+|\s+$/g, "");
+    understandError[qid] = "";
+    if (!words) {
+      understandError[qid] = thread.length
+        ? "write the follow-up first" : "write the question first";
+    } else if (!scenario) {
+      understandError[qid] = "describe the scenario first";
+    }
+    if (understandError[qid]) {
+      renderTodoRail(true);
+      return;
+    }
+    // What is in the boxes is what the answer is about, so it goes first --
+    // otherwise an answer can be written about a scenario the server has not
+    // been told about yet.
+    understandSaveNow();
+    understandAsking[qid] = true;
+    var goalId = understandGoalId;
+    renderTodoRail(true);
+    fetch("/api/ask_scenario", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal: goalId, scenario: scenario,
+                             question: words, turns: thread })
+    }).then(function (r) { return r.json(); })
+      .catch(function () { return null; })
+      .then(function (res) {
+        delete understandAsking[qid];
+        if (understandGoalId !== goalId) return;
+        if (!res || !res.ok) {
+          understandError[qid] = str(res && res.error)
+            || "the answer could not be generated";
+          renderTodoRail(true);
+          return;
+        }
+        var row = understandQuestion(qid);
+        if (!row) return;
+        row.thread = understandThread(row.thread).concat(
+          [{ q: str(res.asked) || words, a: str(res.answer) }]);
+        understandFollow[qid] = "";
+        understandError[qid] = "";
+        // An answer is the goal's now, not the panel's: it is what the tab
+        // was for, and every build of these rows opens on it.
+        understandSaveNow();
+        renderTodoRail(true);
+      });
+  }
+
+  function understandSend() {
+    // The button at the foot of the tab: the scenario and every question
+    // still waiting on an answer, put to Claude in one go. The reader writes
+    // the situation and what they want to know about it, then asks once --
+    // each question is still answered on its own, under itself.
+    if (!understandData) return;
+    var scenario = str(understandData.scenario).replace(/^\s+|\s+$/g, "");
+    var pending = array(understandData.questions).filter(function (row) {
+      return !understandAsking[row.id] && understandPending(row);
+    });
+    understandSendError = !scenario ? "describe the scenario first"
+      : !pending.length ? "write a question first" : "";
+    if (understandSendError) {
+      renderTodoRail(true);
+      return;
+    }
+    pending.forEach(function (row) { understandAsk(row.id); });
+  }
+
+  function understandShotAdd(shot) {
+    if (!understandData || !shot || !str(shot.path)) return;
+    if (array(understandData.shots).length >= MAX_SHOTS) return;
+    understandData.shots = array(understandData.shots).concat(
+      [{ path: str(shot.path), name: str(shot.name) }]);
+    // A chip appearing redraws the column, and the reader is standing in the
+    // scenario box that the paste went into: they are put back where they
+    // were, at the character they were at, rather than at the end of it.
+    var at = document.activeElement;
+    var back = !!(at && at.getAttribute
+                  && at.getAttribute("data-hc-understand") === "scenario")
+      && [at.selectionStart, at.selectionEnd];
+    understandSaveNow();
+    renderTodoRail(true);
+    var box = back && document.querySelector(".hc-understand-scenario");
+    if (box) {
+      box.focus();
+      try { box.setSelectionRange(back[0], back[1]); } catch (e) { /* gone */ }
+    }
+  }
+
+  function understandShotDrop(path) {
+    if (!understandData) return;
+    understandData.shots = array(understandData.shots).filter(
+      function (shot) { return shot.path !== path; });
+    understandSaveNow();
+    renderTodoRail(true);
+  }
+
+  function understandPasteImages(files) {
+    // Screenshots pasted into the scenario box. Uploaded the way a row's are,
+    // to the workspace's own store, and then cited by path -- the bytes never
+    // go through an op, and what is kept is where they landed.
+    if (!understandData || !files.length) return;
+    var goalId = understandGoalId;
+    understandShotError = "";
+    var step = function (i) {
+      if (i >= files.length || understandGoalId !== goalId) {
+        renderTodoRail(true);
+        return;
+      }
+      todoUpload(files[i]).then(function (res) {
+        if (understandGoalId !== goalId) return;
+        if (res && res.ok && str(res.path)) {
+          understandShotAdd({ path: str(res.path), name: str(res.name) });
+        } else {
+          understandShotError = str(res && res.error)
+            || "that image could not be attached";
+        }
+        step(i + 1);
+      });
+    };
+    step(0);
+  }
+
+  function understandDrop(qid) {
+    if (!understandData) return;
+    understandData.questions = understandData.questions.filter(
+      function (row) { return row.id !== qid; });
+    understandPad();
+    // Dropping is not typing: it goes now rather than in 600ms, so a page
+    // closed straight after does not bring the question back.
+    understandSaveNow();
+    renderTodoRail(true);
+  }
+
+  function understandGrow(node) {
+    // The box is as tall as its text, from one line up. A field in a hidden
+    // column measures zero, so this only ever runs on the open tab.
+    node.style.height = "auto";
+    node.style.height = node.scrollHeight + "px";
+  }
+
+  function understandArea(key, qid, value, placeholder) {
+    var area = document.createElement("textarea");
+    area.className = key === "scenario" ? "hc-understand-scenario"
+      : key === "follow" ? "hc-understand-follow" : "hc-understand-ask";
+    area.rows = 1;
+    area.setAttribute("rows", "1");
+    area.spellcheck = false;
+    area.placeholder = placeholder;
+    area.value = str(value);
+    // Named by attribute and handled on the document, for the same reason
+    // the rows are: the artifact re-creating this column would take every
+    // listener bound to a node inside it.
+    area.setAttribute("data-hc-understand", key);
+    if (key !== "scenario") area.setAttribute("data-hc-question", qid);
+    return area;
+  }
+
+  function understandSection(title, kids) {
+    var sec = document.createElement("div");
+    sec.className = "hc-understand-sec";
+    var head = document.createElement("div");
+    head.className = "hc-understand-head";
+    head.textContent = title;
+    sec.appendChild(head);
+    kids.forEach(function (kid) { sec.appendChild(kid); });
+    return sec;
+  }
+
+  // The words an answer is built out of. They open a line and the rest of
+  // the line belongs to them, so the line is never reflowed and the word is
+  // never hidden inside a sentence.
+  var UNDERSTAND_KEYWORD = /^(GIVEN|WHEN|THEN|AND|UNCLEAR)\b/;
+
+  function understandAnswerBlock(text) {
+    // GIVEN / WHEN / THEN, line for line as Claude wrote them. The shape is
+    // what makes two answers about one scenario comparable, so it survives
+    // into the tab rather than being flattened into a paragraph.
+    var box = document.createElement("div");
+    box.className = "hc-understand-answer";
+    str(text).split("\n").forEach(function (line, n) {
+      if (n) box.appendChild(document.createTextNode("\n"));
+      var word = UNDERSTAND_KEYWORD.exec(line);
+      if (!word) {
+        box.appendChild(document.createTextNode(line));
+        return;
+      }
+      var lead = document.createElement("span");
+      lead.className = "hc-understand-kw";
+      lead.textContent = word[1];
+      box.appendChild(lead);
+      box.appendChild(document.createTextNode(line.slice(word[1].length)));
+    });
+    return box;
+  }
+
+  function understandBusy() {
+    // What a question waiting on Claude says it is doing. When the project
+    // is on this machine the answer is looked for in the code, which is a
+    // minutes-long wait rather than a moment's -- so the label says what is
+    // taking the time instead of leaving the reader watching "asking…".
+    return (!sharedWorkspace() && serverState && serverState.project
+            && str(serverState.project.cwd))
+      ? "reading the code…" : "asking…";
+  }
+
+  function understandGo(label, attr, value, busy) {
+    var go = document.createElement("span");
+    go.className = "hc-understand-go";
+    go.setAttribute(attr, value);
+    // Named as busy rather than removed: a control that vanishes while it
+    // works takes the place it was in with it.
+    if (busy) go.setAttribute("data-hc-busy", "");
+    go.textContent = label;
+    return go;
+  }
+
+  function understandSaid(words) {
+    var line = document.createElement("div");
+    line.className = "hc-understand-err";
+    line.textContent = words;
+    return line;
+  }
+
+  function understandShotChip(shot) {
+    var chip = document.createElement("span");
+    chip.className = "hc-understand-shot";
+    var name = document.createElement("span");
+    name.className = "hc-understand-shot-name";
+    name.textContent = str(shot.name) || "screenshot";
+    chip.appendChild(name);
+    var rm = document.createElement("span");
+    rm.className = "hc-understand-shot-rm";
+    rm.title = "remove this screenshot";
+    rm.setAttribute("data-hc-understand-shot-rm", shot.path);
+    rm.textContent = "×";
+    chip.appendChild(rm);
+    return chip;
+  }
+
+  function understandQuestionRow(question) {
+    // The question, and under it the thread it has been answered in: each
+    // answer in GIVEN/WHEN/THEN, and a box to follow up in. A question with
+    // no answer yet is only a box -- the foot of the tab is what sends it.
+    var block = document.createElement("div");
+    block.className = "hc-understand-sec";
+    var row = document.createElement("div");
+    row.className = "hc-understand-q";
+    row.appendChild(understandArea("question", question.id, question.text,
+                                   "Ask something about the scenario…"));
+    var drop = document.createElement("span");
+    drop.className = "hc-understand-drop";
+    drop.title = "remove this question";
+    drop.setAttribute("data-hc-understand-drop", question.id);
+    drop.textContent = "×";
+    row.appendChild(drop);
+    block.appendChild(row);
+    var thread = understandThread(question.thread);
+    var under = block;
+    if (thread.length) {
+      under = document.createElement("div");
+      under.className = "hc-understand-thread";
+      thread.forEach(function (turn, n) {
+        // The first turn is the question itself, already in the box above.
+        // Everything after it was asked in the follow-up box and would be
+        // lost otherwise.
+        if (n && turn.q) {
+          var asked = document.createElement("div");
+          asked.className = "hc-understand-followq";
+          asked.textContent = "↳ " + turn.q;
+          under.appendChild(asked);
+        }
+        under.appendChild(understandAnswerBlock(turn.a));
+      });
+      under.appendChild(understandArea("follow", question.id,
+                                       str(understandFollow[question.id]),
+                                       "Follow up on this answer…"));
+      // A follow-up is about one answer, so it is sent from beside that
+      // answer. An unanswered question has no control of its own: the button
+      // at the foot of the tab sends the scenario and every question with it.
+      under.appendChild(understandGo(
+        understandAsking[question.id] ? understandBusy() : "Follow up",
+        "data-hc-understand-ask", question.id,
+        !!understandAsking[question.id]));
+      block.appendChild(under);
+    }
+    if (understandError[question.id]) {
+      under.appendChild(understandSaid(str(understandError[question.id])));
+    }
+    return block;
+  }
+
+  function understandFoot(data) {
+    // The bottom of the tab: what was last saved, whatever the send refused
+    // to do, and the one control that puts the whole thing to Claude.
+    var foot = document.createElement("div");
+    foot.className = "hc-understand-foot";
+    var stamp = document.createElement("div");
+    stamp.className = "hc-understand-saved";
+    stamp.textContent = understandSavedLabel;
+    foot.appendChild(stamp);
+    if (understandSendError) {
+      foot.appendChild(understandSaid(str(understandSendError)));
+    }
+    var busy = array(data.questions).some(function (row) {
+      return !!understandAsking[row.id];
+    });
+    var send = document.createElement("span");
+    send.className = "hc-understand-send";
+    send.setAttribute("data-hc-understand-send", "");
+    if (busy) send.setAttribute("data-hc-busy", "");
+    send.textContent = busy ? understandBusy() : "Ask Claude";
+    foot.appendChild(send);
+    return foot;
+  }
+
+  function understandTextOf(data, qid) {
+    var found = "";
+    array(data && data.questions).forEach(function (row) {
+      if (row && row.id === qid) found = str(row.text);
+    });
+    return found;
+  }
+
+  function understandSync(box, data) {
+    // The drawn column, brought up to what is held without replacing it: the
+    // reader is very likely typing in one of these boxes, and a redraw would
+    // take the caret with it. The box they are in is never written to.
+    var stamp = box.querySelector(".hc-understand-saved");
+    if (stamp && stamp.textContent !== understandSavedLabel) {
+      stamp.textContent = understandSavedLabel;
+    }
+    if (!data) return;
+    var fields = box.querySelectorAll("[data-hc-understand]");
+    for (var i = 0; i < fields.length; i += 1) {
+      var node = fields[i];
+      if (node === document.activeElement) continue;
+      var key = node.getAttribute("data-hc-understand");
+      var want = key === "scenario" ? str(data.scenario)
+        : key === "follow"
+          ? str(understandFollow[node.getAttribute("data-hc-question")])
+          : understandTextOf(data, node.getAttribute("data-hc-question"));
+      if (node.value !== want) {
+        node.value = want;
+        understandGrow(node);
+      }
+    }
+  }
+
+  function understandDraw(box, data) {
+    // Redrawn only when the boxes themselves change -- another goal, a
+    // question added or dropped. Everything else is laid over the drawn
+    // column by understandSync.
+    var shape = data
+      ? JSON.stringify([understandGoalId,
+                        array(data.shots).map(function (shot) {
+                          return shot.path;
+                        }),
+                        str(understandShotError),
+                        str(understandSendError),
+                        data.questions.map(function (row) {
+                          // The thread by its length: turns are only ever
+                          // appended, so a longer one is a new answer and a
+                          // same-length one is the answers already drawn.
+                          return [row.id, understandThread(row.thread).length,
+                                  !!understandAsking[row.id],
+                                  str(understandError[row.id])];
+                        })])
+      : "none";
+    if (box.getAttribute("data-hc-understand-shape") === shape
+        && box.children.length) {
+      understandSync(box, data);
+      return;
+    }
+    box.setAttribute("data-hc-understand-shape", shape);
+    while (box.firstChild) box.removeChild(box.firstChild);
+    if (!data) {
+      var none = document.createElement("div");
+      none.className = "hc-rail-none";
+      none.textContent = "Select a goal to describe the scenario it is for.";
+      box.appendChild(none);
+      return;
+    }
+    var scene = [understandArea("scenario", "", data.scenario,
+                                "Describe the scenario this work happens in,"
+                                  + " or paste screenshots of it…")];
+    var shots = array(data.shots);
+    if (shots.length) {
+      var strip = document.createElement("div");
+      strip.className = "hc-understand-shots";
+      shots.forEach(function (shot) {
+        strip.appendChild(understandShotChip(shot));
+      });
+      scene.push(strip);
+    }
+    if (understandShotError) {
+      scene.push(understandSaid(str(understandShotError)));
+    }
+    box.appendChild(understandSection("SCENARIO", scene));
+    var rows = data.questions.map(understandQuestionRow);
+    var add = document.createElement("span");
+    add.className = "hc-understand-add";
+    add.setAttribute("data-hc-understand-add", "");
+    add.textContent = "+ Add question";
+    rows.push(add);
+    box.appendChild(understandSection("QUESTIONS", rows));
+    box.appendChild(understandFoot(data));
+    var fields = box.querySelectorAll("[data-hc-understand]");
+    for (var i = 0; i < fields.length; i += 1) understandGrow(fields[i]);
+  }
+
+  function renderUnderstandTab(goal) {
+    var box = document.querySelector(".hc-rail-understand");
+    if (!box) return;
+    if (!goal) {
+      // Leaving a goal for no goal is still leaving it: what was typed goes
+      // before the tab forgets which goal it was for.
+      if (understandGoalId) understandSaveNow();
+      understandGoalId = null;
+      understandData = null;
+      understandDraw(box, null);
+      return;
+    }
+    if (goal.id !== understandGoalId) {
+      if (understandGoalId) understandSaveNow();
+      understandLoad(goal.id);
+    } else if (!understandSaveTimer && !understandSaving && !understandTyping()
+               && Date.now() - understandSentAt > 2000) {
+      // Nothing of ours is outstanding, so the server's copy is the newer of
+      // the two -- a build, another tab, the other person in a shared
+      // workspace. The window after our own write is left alone: state
+      // fetched before it landed still says what it said before.
+      var incoming = understandFromServer(goal.id);
+      if (JSON.stringify(understandClean(incoming))
+          !== JSON.stringify(understandClean(understandData))) {
+        understandData = incoming;
+        understandPad();
+      }
+    }
+    understandDraw(box, understandData);
   }
 
   // Kept in step with ui.CHAT_GROUND, which paints the same colour into the
@@ -12217,7 +13049,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's
@@ -13021,6 +13853,14 @@
                picked: Object.keys(todoPicked),
                saving: !!todoSaveTimer, held: todoHeld };
     },
+    understandState: function () {
+      return { goalId: understandGoalId,
+               data: understandData && understandClean(understandData),
+               saving: !!understandSaveTimer,
+               asking: Object.keys(understandAsking),
+               error: understandShotError };
+    },
+    understandFlushOnExit: understandFlushOnExit,
     todoList: {
       serialize: todoSerialize,
       serializeStates: todoSerializeStates,

@@ -313,6 +313,131 @@ def todo_id() -> str:
     return "t" + secrets.token_hex(4)
 
 
+# What the goal's work is actually for: the situation the reader is in, in
+# their own words, and what they want answered about it. Its own field rather
+# than a section of the notes, because every build of the goal's rows opens on
+# it -- the document is theirs to shape, and a heading a build depended on
+# would be a heading they could not rename.
+MAX_QUESTIONS = 12
+MAX_SCENARIO = 4000
+# A question is a thread, not a line: Claude answers it in GIVEN/WHEN/THEN and
+# the reader follows up in the same place. The answers are kept because they
+# are the understanding -- a build reading the questions alone would be reading
+# what was not known yet.
+MAX_TURNS = 8
+MAX_ANSWER = 4000
+# The screenshots a scenario was written from. Bounded like a row's
+# attachments and for the same reason: what is cited is opened.
+MAX_SHOTS = 8
+_QUESTION_ID = re.compile(r"^q[0-9a-z]{4,24}$")
+
+
+def question_id() -> str:
+    """A fresh id for a question: like a row's, and never shown either."""
+    import secrets
+    return "q" + secrets.token_hex(4)
+
+
+def normalize_thread(value) -> list:
+    """One question's conversation: what was asked, what came back.
+
+    A turn with no answer in it is dropped -- a question whose answer never
+    arrived is still just the question, and quoting it back with an empty
+    answer reads as an answer of nothing.
+    """
+    out = []
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        said = str(row.get("a") or "").strip()[:MAX_ANSWER]
+        if not said:
+            continue
+        out.append({"q": " ".join(str(row.get("q") or "").split())[:400],
+                    "a": said})
+        if len(out) >= MAX_TURNS:
+            break
+    return out
+
+
+def normalize_shots(value) -> list:
+    """The screenshots a scenario was made from: a path each, named once."""
+    out, seen = [], set()
+    for row in value if isinstance(value, list) else []:
+        typed = isinstance(row, dict)
+        path = str((row.get("path") if typed else row) or "")[:1000]
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        name = str(row.get("name") or "")[:200] if typed else ""
+        out.append({"path": path, "name": name or Path(path).name})
+        if len(out) >= MAX_SHOTS:
+            break
+    return out
+
+
+def normalize_understanding(value) -> dict:
+    """Coerce whatever was stored or posted into the tab's whole shape.
+
+    ``{scenario, shots, questions}``, where a question carries the thread it
+    has been answered in. Questions with nothing in them are dropped: the tab
+    always keeps one empty box on offer and that box is the browser's, not
+    something to store.
+    """
+    value = value if isinstance(value, dict) else {}
+    raw = value.get("questions")
+    out, seen = [], set()
+    for row in raw if isinstance(raw, list) else []:
+        text = row.get("text") if isinstance(row, dict) else row
+        text = " ".join(str(text or "").split())[:400]
+        if not text:
+            continue
+        qid = str(row.get("id") or "") if isinstance(row, dict) else ""
+        if not _QUESTION_ID.match(qid) or qid in seen:
+            qid = question_id()
+        seen.add(qid)
+        out.append({"id": qid, "text": text,
+                    "thread": normalize_thread(
+                        row.get("thread") if isinstance(row, dict) else None)})
+        if len(out) >= MAX_QUESTIONS:
+            break
+    return {"scenario": str(value.get("scenario") or "")[:MAX_SCENARIO],
+            "shots": normalize_shots(value.get("shots")),
+            "questions": out}
+
+
+def render_understanding(goal) -> list:
+    """The scenario and its questions as prompt lines; [] when unwritten.
+
+    Read by ``build.compose_prompt``, so what the reader wrote in the
+    Understanding tab is what every build of this goal's rows opens on --
+    including the screenshots the scenario was made from and the answers the
+    tab has already given, indented under the question each one settled.
+    """
+    held = normalize_understanding((goal or {}).get("understanding"))
+    scenario = held["scenario"].strip()
+    if not scenario and not held["questions"] and not held["shots"]:
+        return []
+    lines = ["# The scenario this goal is for", ""]
+    lines.append(scenario or "(not described)")
+    if held["shots"]:
+        lines += ["", "Screenshots of it. Open each one -- they are part of"
+                  " the description, not decoration.", ""]
+        lines += ["- " + s["path"] for s in held["shots"]]
+    if held["questions"]:
+        lines += ["", "Questions the user wants answered about it. Answer each"
+                  " one in your reply; where a question decides the work, let"
+                  " the answer decide it. Some already carry an answer given"
+                  " in the tab, indented under them in GIVEN/WHEN/THEN: take"
+                  " it as settled unless the work shows otherwise.", ""]
+        for question in held["questions"]:
+            lines.append("- " + question["text"])
+            for turn in question["thread"]:
+                if turn["q"] and turn["q"] != question["text"]:
+                    lines.append("  - and then: " + turn["q"])
+                lines += ["    " + line for line in turn["a"].splitlines()]
+    return lines
+
+
 def parse_todos(text) -> list:
     """Markdown bullets -> rows. Every non-blank line is a row; a line that
     is not a bullet is one all the same, so nothing a person typed is lost.
@@ -580,6 +705,10 @@ def new_goal(gid, title, parent_id=None, **fields):
             "description": "", "priority": "normal", "notes": "",
             "todos_md": "", "todo_items": [], "prompt_md": "",
             "sources": [], "opening": "",
+            # The situation this goal's work happens in, and what the reader
+            # wants answered about it. Written in the rail's Understanding
+            # tab; carried into every build of this goal's rows.
+            "understanding": {"scenario": "", "shots": [], "questions": []},
             # How this goal stands to the project's objective, and the
             # objective it was judged against -- kept together, because a
             # verdict outlives the sentence that produced it and a stale one
@@ -743,6 +872,9 @@ def sanitize(goals):
         g["todos_md"] = render_todos(items)
         g.setdefault("description", "")
         g.setdefault("opening", "")
+        # The scenario the goal's work is for. Always present and always this
+        # shape, so a build can read it without asking whether it is there.
+        g["understanding"] = normalize_understanding(g.get("understanding"))
         # Extra context the user chose to attach. Never inferred — a local
         # path here widens what a launched session may read.
         g["sources"] = normalize_sources(g.get("sources"))

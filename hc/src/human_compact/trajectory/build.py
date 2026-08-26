@@ -192,6 +192,12 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
     own = str(goal.get("prompt_md") or "").strip()
     if own:
         lines += ["", "# The user's own prompt for this goal", "", own]
+    # What the reader wrote in the rail's Understanding tab: the situation the
+    # rows below are for, and the questions they have about it. Above the work
+    # because it is what the work is for.
+    scene = GM.render_understanding(goal)
+    if scene:
+        lines += [""] + scene
     lines += ["", "# The work", ""]
     for row in rows:
         indent = "  " * int(row.get("depth") or 0)

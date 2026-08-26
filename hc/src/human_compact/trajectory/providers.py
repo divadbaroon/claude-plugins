@@ -13,6 +13,16 @@ from .secure_io import open_private_append
 OLLAMA_URL = os.environ.get("HC_OLLAMA_URL", "http://localhost:11434")
 CLAUDE_TIMEOUT_SECONDS = 180
 
+# A call that has to find its answer in the project gets longer than one that
+# has the answer quoted to it: grepping a repository, opening what the grep
+# found and then writing the answer is three rounds where the others are one.
+CLAUDE_SEARCH_TIMEOUT_SECONDS = 420
+
+# What such a call may do: find files, find lines in them, read them. Nothing
+# that writes, and nothing that runs -- the question was "what does the code
+# do", and answering it never needs the code to be changed or executed.
+SEARCH_TOOLS = "Read,Grep,Glob"
+
 
 class ProviderError(RuntimeError):
     pass
@@ -61,6 +71,24 @@ class Base:
         for it is spending a deadline on work nobody asked for.
         """
         return self.generate(prompt)
+    def generate_reading(self, prompt: str, read_dirs=()) -> str:
+        """One answer that may open the files the prompt names.
+
+        The opposite of ``generate_plain``: a screenshot is not text, and the
+        only way one reaches an answer is for the provider to open it. A
+        provider that cannot open anything answers from the prompt's words
+        alone, which is the same answer with the pictures missing.
+        """
+        return self.generate(prompt)
+    def generate_searching(self, prompt: str, where="") -> str:
+        """One answer that may go looking through the project for itself.
+
+        For the question whose answer is in the code and nowhere else: the
+        provider is pointed at a directory and left to find it. A provider
+        with nothing to look with answers from the prompt alone, which is the
+        same answer with the code missing.
+        """
+        return self.generate(prompt)
     def generate_json(self, prompt: str):
         for attempt in (1, 2):
             raw = self.generate(prompt if attempt == 1 else
@@ -94,10 +122,32 @@ def subscription_env(base=None):
 
 class ClaudeCLI(Base):
     kind = "claude"
-    def _run(self, prompt, *, structured=False, plain=False):
+    def _run(self, prompt, *, structured=False, plain=False, read=None,
+             search=""):
         command = ["claude", "-p", "--safe-mode", "--model", self.model,
                    "--no-session-persistence"]
-        if structured or plain:
+        deadline = CLAUDE_TIMEOUT_SECONDS
+        if search:
+            # The answer is somewhere in that directory and the call has to
+            # find it, so the tools are the ones that find things and read
+            # them. The subprocess is started in the directory as well as
+            # given it: a search rooted anywhere else is a search of the
+            # wrong project.
+            command += ["--tools", SEARCH_TOOLS,
+                        "--allowed-tools", SEARCH_TOOLS,
+                        "--add-dir", str(search)]
+            deadline = CLAUDE_SEARCH_TIMEOUT_SECONDS
+        elif read is not None:
+            # Opening the named files is the whole of this call, so the tool
+            # set is Read and nothing else -- allowed as well as available,
+            # since a prompt nobody is sitting in front of cannot answer for
+            # one. The directories holding the files are named too, because
+            # the workspace keeps its screenshots outside whatever directory
+            # this server happened to be started in.
+            command += ["--tools", "Read", "--allowed-tools", "Read"]
+            for folder in read:
+                command += ["--add-dir", str(folder)]
+        elif structured or plain:
             # Neither of these is a coding-agent turn: the prompt carries the
             # text the answer comes from, so a subprocess that starts reading
             # the project instead spends the deadline and comes back with
@@ -117,12 +167,19 @@ class ClaudeCLI(Base):
             child_env.pop("CLAUDE_VAULT", None)
             r = subprocess.run(
                 command, input=prompt, capture_output=True, text=True,
-                timeout=CLAUDE_TIMEOUT_SECONDS, env=child_env)
+                timeout=deadline, env=child_env,
+                cwd=str(search) if search else None)
         except FileNotFoundError:
+            # Two things can be missing here once a call names a directory to
+            # run in, and "install the CLI" is the wrong thing to say about
+            # the other one.
+            if search and not Path(search).is_dir():
+                raise ProviderError(f"{search} is not a directory to look in")
             raise ProviderError("claude CLI not found on PATH")
+        except NotADirectoryError:
+            raise ProviderError(f"{search} is not a directory to look in")
         except subprocess.TimeoutExpired:
-            raise ProviderError(
-                f"claude CLI timed out after {CLAUDE_TIMEOUT_SECONDS}s")
+            raise ProviderError(f"claude CLI timed out after {deadline}s")
         if r.returncode != 0:
             raise ProviderError(f"claude CLI failed: {r.stderr.strip()[:200]}")
         return r.stdout
@@ -132,6 +189,12 @@ class ClaudeCLI(Base):
 
     def generate_plain(self, prompt):
         return self._run(prompt, plain=True)
+
+    def generate_reading(self, prompt, read_dirs=()):
+        return self._run(prompt, read=list(read_dirs or ()))
+
+    def generate_searching(self, prompt, where=""):
+        return self._run(prompt, search=str(where or ""))
 
     def generate_json(self, prompt):
         # Avoid a second full model call when a large rebuild response includes
