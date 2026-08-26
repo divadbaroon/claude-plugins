@@ -172,11 +172,58 @@ def create_named(root: Optional[Path], name) -> Optional[str]:
     return cwd
 
 
+_REPO_HOME_CACHE: Dict[str, str] = {}
+
+
+def repo_home(cwd) -> str:
+    """The directory that IS this project, for a path inside a checkout.
+
+    A git worktree is a second directory of the same repository, opened to
+    hold another branch. Keyed by its own path it became a second project
+    with a second goal tree -- so the reader working one repo from two
+    checkouts saw two sets of goals and no way to say they were one thing.
+    The repository's main worktree is the answer for every checkout of it.
+
+    Anything that is not a checkout is its own project, which is every
+    directory git has never heard of and every path that no longer exists.
+    Cached: this is asked on the way in to a bind and a launch, and spawning
+    git for an answer that cannot change within a run is a cost for nothing.
+    """
+    import subprocess
+    here = _resolved(cwd)
+    cached = _REPO_HOME_CACHE.get(here)
+    if cached is not None:
+        return cached
+    answer = here
+    try:
+        common = subprocess.run(
+            ("git", "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            cwd=here, capture_output=True, text=True, timeout=5, check=False)
+        found = (common.stdout or "").strip()
+        if common.returncode == 0 and found:
+            # The common dir is the repository's own .git; the project is the
+            # directory holding it. A bare repository has no working tree to
+            # be a project, so it is left as the path that was asked about.
+            parent = Path(found)
+            if parent.name == ".git" and parent.parent.is_dir():
+                found_home = _resolved(parent.parent)
+                # A home directory kept under version control -- dotfiles --
+                # would otherwise swallow every project inside it into one.
+                # A repository that IS the reader's home is not the project
+                # every directory under it belongs to.
+                if found_home != _resolved(Path.home()):
+                    answer = found_home
+    except (OSError, ValueError, subprocess.SubprocessError):
+        answer = here
+    _REPO_HOME_CACHE[here] = answer
+    return answer
+
+
 def project_path(root: Optional[Path], cwd) -> Path:
     """Where the project's file lives: beside the chat sessions, keyed by the
     digest of the resolved directory -- never by the path itself, which is
     not a safe file name."""
-    digest = hashlib.sha256(_resolved(cwd).encode("utf-8")).hexdigest()[:16]
+    digest = hashlib.sha256(repo_home(cwd).encode("utf-8")).hexdigest()[:16]
     return CS._state_base(root) / "projects" / f"{digest}.json"
 
 
@@ -273,6 +320,13 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     identity = authored.get("id")
     if isinstance(identity, str) and identity:
         section["id"] = identity[:64]
+    # Which store holds the project's goals. Carried through explicitly: this
+    # section is rebuilt from a whitelist on every write, so a key merely
+    # present in the record it was read from would be dropped by the next
+    # unrelated edit -- and the project would forget where its tree is.
+    held = authored.get("tree_session")
+    if isinstance(held, str) and held:
+        section["tree_session"] = held[:200]
     return section
 
 
@@ -302,9 +356,16 @@ def list_projects(root: Optional[Path]) -> List[Dict[str, Any]]:
         cwd = section.get("cwd") or value.get("cwd")
         if not isinstance(cwd, str) or not cwd:
             continue
-        key = _resolved(cwd)
+        # Folded by repository, not by path: a vault written before worktrees
+        # were understood holds a file per checkout, and the switcher listing
+        # the same repository three times is the confusion this removes. The
+        # record actually keyed by the repository wins, whatever else is
+        # lying around beside it.
+        key = repo_home(cwd)
+        if key in out and entry != project_path(root, key):
+            continue
         out[key] = {
-            "cwd": cwd,
+            "cwd": key,
             "name": str(section.get("name") or Path(key).name or key),
             "objective": str(section.get("objective") or ""),
             "description": str(section.get("description") or ""),
@@ -326,6 +387,103 @@ def touch(root: Optional[Path], cwd) -> Dict[str, Any]:
     return load_project(root, cwd)
 
 
+def tree_session(root: Optional[Path], cwd) -> str:
+    """Which chat's store holds this project's goals, as the project says.
+
+    Kept on the project rather than worked out per chat: two chats scanning
+    for it independently can disagree, and did -- session directories are
+    UUIDs, so any ordering of them is arbitrary.
+    """
+    section = read_file(root, cwd).get("project")
+    held = (section or {}).get("tree_session") if isinstance(section, dict) else ""
+    return str(held or "")
+
+
+def set_tree_session(root: Optional[Path], cwd, session_id: str) -> str:
+    """Name the store, once. Never moved by a later chat: the project's goals
+    do not change address because somebody new opened it."""
+    said = str(session_id or "").strip()
+    if not said:
+        return ""
+    held = tree_session(root, cwd)
+    if held:
+        return held
+    save_project(root, cwd, {"tree_session": said})
+    return said
+
+
+def server_path(root: Optional[Path], cwd) -> Path:
+    """Where a project notes the workspace it has running.
+
+    Beside the project's record and keyed the same way, so every checkout of
+    a repository and every chat bound to it asks one file. Its own file
+    rather than a key in the record: the record's project section is rebuilt
+    from a whitelist on every save, and a server that comes and goes many
+    times an hour has no business rewriting the reader's objective.
+    """
+    target = project_path(root, cwd)
+    return target.with_name(target.stem + ".server.json")
+
+
+def server_record(root: Optional[Path], cwd) -> Optional[Dict[str, Any]]:
+    """The workspace this project has running, as last recorded.
+
+    A record here is a claim, not a promise -- the process it names may be
+    gone. Whoever reads it probes before believing it.
+    """
+    if not cwd:
+        return None
+    try:
+        value = json.loads(server_path(root, cwd).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def set_server_record(root: Optional[Path], cwd,
+                      value: Dict[str, Any]) -> Optional[Path]:
+    """Note which workspace is this project's, for the next chat to find."""
+    if not cwd or not isinstance(value, dict):
+        return None
+    target = server_path(root, cwd)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(target, dict(value, cwd=repo_home(cwd)),
+                      root=target.parent)
+    return target
+
+
+def clear_server_record(root: Optional[Path], cwd) -> None:
+    """Forget the workspace: it has been stopped, or it was never there."""
+    if not cwd:
+        return
+    try:
+        server_path(root, cwd).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def forget_project(root: Optional[Path], cwd) -> bool:
+    """Drop the project's record and the window it was pointing at.
+
+    What goes is the project: the name, the objective, the description, the
+    sources -- the half the reader wrote -- and the derived snapshot beside
+    them. What stays is every goal of every chat, which lives in the chats
+    and was only ever mirrored here. A chat bound to it is cut loose by the
+    caller, so it is asked where it belongs rather than left pointing at a
+    project that is not there.
+    """
+    target = project_path(root, cwd)
+    gone = False
+    try:
+        if target.is_file():
+            target.unlink()
+            gone = True
+    except OSError:
+        return False
+    clear_server_record(root, cwd)
+    return gone
+
+
 def project_sessions(root: Optional[Path], cwd) -> List[str]:
     """Every chat started in this directory, oldest state first.
 
@@ -335,7 +493,7 @@ def project_sessions(root: Optional[Path], cwd) -> List[str]:
     started in is still the directory it was started in.
     """
     base = CS._state_base(root)
-    target = _resolved(cwd)
+    target = repo_home(cwd)
     out = []
     try:
         entries = sorted(base.iterdir(), key=lambda entry: entry.name)
@@ -353,7 +511,7 @@ def project_sessions(root: Optional[Path], cwd) -> List[str]:
         except (OSError, ValueError):
             continue
         here = value.get("cwd") if isinstance(value, dict) else None
-        if isinstance(here, str) and here and _resolved(here) == target:
+        if isinstance(here, str) and here and repo_home(here) == target:
             out.append(entry.name)
     return out
 

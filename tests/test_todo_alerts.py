@@ -377,6 +377,80 @@ class TodoAlertTests(BridgeTestCase):
             scope="chat")
         self.assertTrue(out)
 
+    # --- the restart check's verdict -------------------------------------------
+    #
+    # A finished build is asked whether what it changed is what is running;
+    # a yes carries a prompt for the local chat, and the page says so once
+    # per verdict, with a banner that stays until it is read.
+
+    RUNS = (
+        "var runs = function (status, at) { return { g1: { status: 'idle',"
+        "  running: false, restart: status && { status: status, model: 'sonnet',"
+        "  effort: 'high', from_model: 'opus', why: 'the server caches the module',"
+        "  prompt: 'kill it, run `serve --dev`', at: at || 't1' } } }; };"
+        "var acceptRuns = function (gs, r) { return window.__hcPromptUI.acceptState("
+        "  { goals: gs, prompts: [], scope: 'chat', session_id: %s, build_runs: r }); };"
+    )
+
+    def runs(self, tail, **kw):
+        return self.alerts((self.RUNS % json.dumps(self.SID)) + tail, **kw)
+
+    def test_a_yes_from_the_check_is_a_banner_once_the_first_state_being_a_baseline(self):
+        g = json.dumps(goals({"g1": [("t1", "wire it", "done")]}))
+        out = self.runs(
+            "acceptRuns(%s, runs('yes')); var first = drawn().length;"
+            "acceptRuns(%s, runs('yes', 't2')); acceptRuns(%s, runs('yes', 't2'));"
+            "[first, drawn(), A.log().length];" % (g, g, g))
+        self.assertEqual(
+            [0, [["restart",
+                  "Restart needed — the prompt for your local Claude Code is on the rail",
+                  "the server caches the module", "Goal g1"]], 1],
+            out)
+
+    def test_checking_and_no_say_nothing(self):
+        g = json.dumps(goals({"g1": [("t1", "wire it", "done")]}))
+        out = self.runs(
+            "acceptRuns(%s, runs(null)); acceptRuns(%s, runs('checking'));"
+            "acceptRuns(%s, runs('no', 't2')); acceptRuns(%s, runs('unknown', 't3'));"
+            "[drawn(), A.log().length];" % (g, g, g, g))
+        self.assertEqual([[], 0], out)
+
+    def test_the_restart_banner_has_no_clock_and_comes_back_on_a_reload(self):
+        g = json.dumps(goals({"g1": [("t1", "wire it", "done")]}))
+        out = self.runs(
+            "var delays = [];"
+            "var real = setTimeout;"
+            "setTimeout = function (f, ms) { delays.push(ms); return real(f, ms); };"
+            "acceptRuns(%s, runs(null)); acceptRuns(%s, runs('yes'));"
+            "var before = stack().length; fireTimers();"
+            "[before, stack().length, delays, A.sticky('restart'), A.sticky('done')];"
+            % (g, g))
+        self.assertEqual([1, 1, [], True, False], out)
+        # An hour later, unread: still up after a reload, where a done
+        # banner would have run out of time long since.
+        out = self.alerts(
+            "var now = Date.now();"
+            "store['hc-alerts-log-v1'] = JSON.stringify(["
+            "  {id: 'a1', kind: 'restart', goalId: 'g1', goalTitle: 'Goal g1', rowId: '',"
+            "   text: 'the server caches the module', question: '', at: now - 3600000,"
+            "   read: false},"
+            "  {id: 'a2', kind: 'done', goalId: 'g1', goalTitle: 'Goal g1', rowId: 't1',"
+            "   text: 'old', question: '', at: now - 3600000, read: false}]);"
+            "accept([]); bell(); bell();"
+            "drawn().map(function (d) { return d[0]; });")
+        self.assertEqual(["restart"], out)
+
+    def test_clicking_the_restart_banner_goes_to_the_goal_s_rail(self):
+        g = json.dumps(goals({"g1": [("t1", "wire it", "done")]}))
+        out = self.runs(
+            "var went = [];"
+            "window.__hcSelectGoal = function (id) { went.push(id); };"
+            "acceptRuns(%s, runs(null)); acceptRuns(%s, runs('yes'));"
+            "fire('click', stack()[0].querySelector('.hc-alert-detail'));"
+            "[went, stack().length, A.log()[0].read, window.__hcPromptUI.todoState().tab];"
+            % (g, g))
+        self.assertEqual([["g1"], 0, True, "todos"], out)
+
 
 if __name__ == "__main__":
     unittest.main()

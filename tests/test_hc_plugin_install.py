@@ -48,7 +48,7 @@ class HcPluginInstallTests(unittest.TestCase):
         return out.getvalue()
 
     def _write_legacy_hc_ui(self, cli, skill_md, marker_asset=None):
-        legacy = cli.LEGACY_HC_UI_SKILL_DIR
+        legacy = cli.LEGACY_SKILL_DIRS[0][0]
         legacy.mkdir(parents=True)
         (legacy / "SKILL.md").write_text(skill_md)
         if marker_asset is not None:
@@ -82,7 +82,7 @@ class HcPluginInstallTests(unittest.TestCase):
                 self._install(cli)
 
             self.assertEqual("unrelated plugin", sentinel.read_text())
-            self.assertFalse(cli.GOALS_UI_SKILL_DIR.exists())
+            self.assertFalse(cli.BART_SKILL_DIR.exists())
             self.assertEqual([], self._leftovers(cli))
 
     def test_exact_unmarked_legacy_assets_are_migrated_to_owned_installs(self):
@@ -91,13 +91,13 @@ class HcPluginInstallTests(unittest.TestCase):
             cli = self._cli(home)
             cli.SKILLS_DIR.parent.mkdir(parents=True)
             shutil.copytree(cli.asset_root() / "plugin", cli.SKILLS_DIR)
-            shutil.copytree(cli.asset_root() / "goals-ui-skill",
-                            cli.GOALS_UI_SKILL_DIR)
+            shutil.copytree(cli.asset_root() / "bart-skill",
+                            cli.BART_SKILL_DIR)
 
             self._install(cli)
 
             for destination, asset in ((cli.SKILLS_DIR, "vault"),
-                                       (cli.GOALS_UI_SKILL_DIR, "goals-ui")):
+                                       (cli.BART_SKILL_DIR, "bart")):
                 marker = json.loads(
                     (destination / cli.MANAGED_MARKER).read_text())
                 self.assertEqual("human-compact", marker["owner"])
@@ -110,7 +110,7 @@ class HcPluginInstallTests(unittest.TestCase):
             self._install(cli)
             stale_file = cli.SKILLS_DIR / "scripts" / "removed-old-hook.sh"
             stale_file.write_text("stale")
-            stale_dir = cli.GOALS_UI_SKILL_DIR / "removed-assets"
+            stale_dir = cli.BART_SKILL_DIR / "removed-assets"
             stale_dir.mkdir()
             (stale_dir / "old.txt").write_text("stale")
 
@@ -127,13 +127,13 @@ class HcPluginInstallTests(unittest.TestCase):
             # Marker ownership permits managed state to contain stale files;
             # rollback must restore them byte-for-byte if the upgrade fails.
             (cli.SKILLS_DIR / "owned-state.txt").write_text("keep on rollback")
-            (cli.GOALS_UI_SKILL_DIR / "owned-state.txt").write_text("keep too")
+            (cli.BART_SKILL_DIR / "owned-state.txt").write_text("keep too")
             before_vault = self._snapshot(cli.SKILLS_DIR)
-            before_skill = self._snapshot(cli.GOALS_UI_SKILL_DIR)
+            before_skill = self._snapshot(cli.BART_SKILL_DIR)
             real_replace = os.replace
 
             def fail_skill_promotion(source, destination):
-                if ".goals-ui.hc-stage-" in Path(source).name:
+                if ".bart.hc-stage-" in Path(source).name:
                     raise OSError("simulated rename failure")
                 return real_replace(source, destination)
 
@@ -144,7 +144,7 @@ class HcPluginInstallTests(unittest.TestCase):
                     self._install(cli)
 
             self.assertEqual(before_vault, self._snapshot(cli.SKILLS_DIR))
-            self.assertEqual(before_skill, self._snapshot(cli.GOALS_UI_SKILL_DIR))
+            self.assertEqual(before_skill, self._snapshot(cli.BART_SKILL_DIR))
             self.assertEqual([], self._leftovers(cli))
 
     def test_install_removes_owned_legacy_hc_ui_skill(self):
@@ -157,8 +157,8 @@ class HcPluginInstallTests(unittest.TestCase):
 
             self.assertFalse(legacy.exists())
             self.assertIn(
-                "name: goals-ui",
-                (cli.GOALS_UI_SKILL_DIR / "SKILL.md").read_text())
+                "name: bart",
+                (cli.BART_SKILL_DIR / "SKILL.md").read_text())
             self.assertEqual([], self._leftovers(cli))
 
     def test_install_removes_exact_unmarked_legacy_hc_ui_skill(self):
@@ -169,7 +169,7 @@ class HcPluginInstallTests(unittest.TestCase):
             self._install(cli)
 
             self.assertFalse(legacy.exists())
-            self.assertTrue((cli.GOALS_UI_SKILL_DIR / "SKILL.md").is_file())
+            self.assertTrue((cli.BART_SKILL_DIR / "SKILL.md").is_file())
             self.assertEqual([], self._leftovers(cli))
 
     def test_install_leaves_unmanaged_legacy_hc_ui_dir_alone(self):
@@ -184,9 +184,9 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertTrue(legacy.is_dir())
             self.assertEqual(before, self._snapshot(legacy))
             self.assertIn(f"left unmanaged {legacy} in place", output)
-            self.assertTrue((cli.GOALS_UI_SKILL_DIR / "SKILL.md").is_file())
+            self.assertTrue((cli.BART_SKILL_DIR / "SKILL.md").is_file())
 
-    # Every event the chat layer must stay registered on for /goals-ui to work.
+    # Every event the chat layer must stay registered on for /bart to work.
     CHAT_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolBatch",
                         "Stop", "TaskCreated", "TaskCompleted", "PostCompact",
                         "SessionEnd")
@@ -207,7 +207,7 @@ class HcPluginInstallTests(unittest.TestCase):
 
             expansion = installed["hooks"]["UserPromptExpansion"]
             self.assertEqual(1, len(expansion))
-            self.assertEqual("goals-ui", expansion[0]["matcher"])
+            self.assertEqual("bart", expansion[0]["matcher"])
             self.assertEqual(1, len(expansion[0]["hooks"]))
             self.assertIn("chat-hook.sh", expansion[0]["hooks"][0]["command"])
             self.assertEqual(45, expansion[0]["hooks"][0]["timeout"])
@@ -290,14 +290,14 @@ class HcPluginInstallTests(unittest.TestCase):
 
             self.assertEqual(0o700, stat.S_IMODE(cli.SKILLS_DIR.stat().st_mode))
             self.assertEqual(0o700, stat.S_IMODE(
-                cli.GOALS_UI_SKILL_DIR.stat().st_mode))
+                cli.BART_SKILL_DIR.stat().st_mode))
             self.assertEqual(0o700, stat.S_IMODE(
                 (cli.SKILLS_DIR / "scripts" / "chat-hook.sh").stat().st_mode))
             for path in (
                 cli.SKILLS_DIR / cli.MANAGED_MARKER,
                 cli.SKILLS_DIR / "README.md",
-                cli.GOALS_UI_SKILL_DIR / cli.MANAGED_MARKER,
-                cli.GOALS_UI_SKILL_DIR / "SKILL.md",
+                cli.BART_SKILL_DIR / cli.MANAGED_MARKER,
+                cli.BART_SKILL_DIR / "SKILL.md",
             ):
                 self.assertEqual(0o600, stat.S_IMODE(path.stat().st_mode), path)
 
@@ -328,7 +328,7 @@ class InstallBannerTests(unittest.TestCase):
                 cli.install_main([])
             text = out.getvalue()
             first = next(line for line in text.splitlines() if line.strip())
-            self.assertEqual("hc \u00b7 /goals-ui", first)
+            self.assertEqual("hc \u00b7 /bart", first)
             self.assertNotIn("human-compact \u00b7", text)
 
 

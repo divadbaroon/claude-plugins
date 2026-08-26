@@ -16,8 +16,7 @@
   // and compares the two.
   var DEFAULT_DOC = "";
   var serverState = { goals: [], prompts: [], runs: {}, claim: null,
-                      scope: "global", sessionId: "", buildSession: null,
-                      buildCost: null };
+                      scope: "global", sessionId: "", buildSession: null };
   var stateFingerprint = null;
   var lastObservedGoals = null;
   var refreshPending = false;
@@ -808,13 +807,8 @@
       // builds wait for its next turn.
       buildSession: (st.build_session && typeof st.build_session === "object")
         ? st.build_session : null,
-      // What a build costs here: the context every one of them opens on, and
-      // what a row of work has spent in this chat so far. The TODO rail
-      // prices its rows from it.
-      buildCost: (st.build_cost && typeof st.build_cost === "object")
-        ? st.build_cost : null,
       // What each goal's build is doing right now, by goal id: how far in it
-      // is, roughly how much longer it has, and the last thing it did. The
+      // is, how much longer it says it has, and the last thing it did. The
       // rail draws it under the rows, so "building" is not all the reader
       // gets to know.
       buildRuns: (st.build_runs && typeof st.build_runs === "object")
@@ -823,6 +817,10 @@
       // the manifest recorded it: name, branch, origin, and the objective
       // written for it. Empty when the manifest never said.
       project: (st.project && typeof st.project === "object") ? st.project : null,
+      // Tri-state on purpose: undefined until a payload has arrived, so
+      // the wizard never flashes over a workspace it has not heard about.
+      projectBound: (typeof st.project_bound === "boolean")
+        ? st.project_bound : undefined,
       // Present only in a shared workspace: whose goals these are, what
       // this reader may change, and who else is here. Absent everywhere
       // else, which is how the page tells the two apart.
@@ -842,6 +840,7 @@
     // Row status is not in the fingerprint -- the tree does not redraw for
     // it -- so the builder's transitions are read before the early return.
     trackTodoAlerts(st);
+    trackRestartAlerts(st);
     if (fingerprint === stateFingerprint) return true;
     stateFingerprint = fingerprint;
     return true;
@@ -1818,6 +1817,7 @@
     // with the banner that prefixes it.
     return (hideLabelsIn(headerNav(), ["Conversations"])
             + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
+            + (renderOnboarding(false) ? 1 : 0)
             + (renderTodoRail(false) ? 1 : 0)
             + (applyPageTitle() ? 1 : 0)) > 0;
   }
@@ -1980,7 +1980,7 @@
     if (staleSaid) return false;
     staleSaid = true;
     serverNotice("server_stale",
-                 "Restart it (/goals-ui) — anything added since it started"
+                 "Restart it (/bart) — anything added since it started"
                  + " will not work here.");
     return true;
   }
@@ -2039,6 +2039,10 @@
   ALERT_SAYS.done = "TODO finished";
   ALERT_SAYS.failed = "TODO failed";
   ALERT_SAYS.asking = "Claude has a question";
+  // The build's own answer to whether the program needs a local restart:
+  // yes, and the prompt for the local chat is on the rail. Action needed,
+  // so the banner stays up until it is read (see alertSticky).
+  ALERT_SAYS.restart = "Restart needed — the prompt for your local Claude Code is on the rail";
   // What a synced chat did, said in the same three lines a build gets.
   ALERT_SAYS.session_stopped = "Claude finished responding";
   ALERT_SAYS.subagent_returned = "A subagent returned";
@@ -2052,6 +2056,7 @@
       ".hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:var(--hc-ok,#1a7f37)}",
       ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
+      ".hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:var(--hc-warn,#9a6700)}",
       ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
       ".hc-alert-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -2086,6 +2091,7 @@
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:#3fb950}",
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:#f85149}",
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:#d29922}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:#d29922}",
       "[data-hc-theme=\"dark\"] .hc-alert-title,[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:#e6edf3}",
       "[data-hc-theme=\"dark\"] .hc-alert-detail,[data-hc-theme=\"dark\"] .hc-alert-close,[data-hc-theme=\"dark\"] .hc-alert-center-act,[data-hc-theme=\"dark\"] .hc-alert-center-empty,[data-hc-theme=\"dark\"] .hc-alert-row .hc-alert-title{color:#8b949e}",
       "[data-hc-theme=\"dark\"] .hc-alert-goal,[data-hc-theme=\"dark\"] .hc-alert-when{color:#6e7681}",
@@ -2115,6 +2121,8 @@
       ".hc-settings-sec input[type=number]{width:56px;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:4px 6px}",
       ".hc-settings-sec input[type=text],.hc-settings-sec input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:7px 9px}",
       ".hc-settings-sec input:focus{outline:none;border-color:var(--acc,#a5492a)}",
+      ".hc-settings-sec select{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:6px 8px}",
+      ".hc-settings-sec select:focus{outline:none;border-color:var(--acc,#a5492a)}",
       ".hc-settings-field{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;cursor:default;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
       ".hc-settings-field>input{align-self:stretch;box-sizing:border-box}",
       ".hc-settings-hint{color:var(--fnt,#9b9b9b);font-size:10.5px;line-height:1.6;overflow-wrap:anywhere;margin-top:-3px}",
@@ -2125,7 +2133,9 @@
       ".hc-settings-btn[data-hc-busy]{opacity:.55;cursor:default}",
       ".hc-settings-say{font-size:10.5px;line-height:1.6;color:var(--mut,#575757);overflow-wrap:anywhere}",
       ".hc-settings-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
-      ".hc-settings-record{margin:0;white-space:pre;overflow:auto;max-height:46vh;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--dtxt,#333);font:11px/1.6 'Source Code Pro',monospace;padding:9px 11px}",
+      ".hc-record-said{display:none}",
+      ".hc-record-btn[data-hc-record-copy] .hc-record-said{display:inline;margin-left:6px;opacity:.85}",
+      ".hc-record-btn[data-hc-record-copy=\"busy\"]{opacity:.55;cursor:progress}",
       ".hc-settings-role{cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
       ".hc-settings-role:hover{color:var(--ink,#111)}",
       ".hc-settings-code{display:none;flex-direction:column;gap:6px}",
@@ -2163,6 +2173,7 @@
   var GEAR_ICON = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"></circle><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"></path></svg>";
 
   var alertPrev = null;            // row id -> status, from the last state
+  var restartPrev = null;          // goal id -> its restart verdict's stamp
   var alertLog = null;             // newest first; loaded on first use
   var alertSettingsCache = null;
   var alertStackBox = null;
@@ -2360,7 +2371,8 @@
     var window_ms = alertSettings().seconds * 1000;
     var now = Date.now();
     var back = loadAlertLog().filter(function (entry) {
-      return !entry.read && now - entry.at < window_ms && !alertBannerFor(entry.id);
+      return !entry.read && (alertSticky(entry.kind) || now - entry.at < window_ms)
+        && !alertBannerFor(entry.id);
     }).slice(0, NOTICE_MAX).reverse();
     back.forEach(function (entry) {
       showAlertBanner(entry, window_ms - (now - entry.at));
@@ -2372,9 +2384,47 @@
     if (!st || serverState.scope !== "chat" || !Array.isArray(st.goals)) return [];
     var diff = todoAlertsFrom(st.goals, alertPrev);
     alertPrev = diff.next;
-    if (!diff.fresh.length) return [];
+    return raiseAlerts(diff.fresh);
+  }
+
+  // The build's last word on itself: whether what it changed is what is
+  // running. A verdict of yes -- once per verdict, told apart by its stamp --
+  // is news that needs a hand: the prompt on the rail has to reach the local
+  // chat. The first state seen is the baseline, as for the rows: a page
+  // opening on an old verdict finds it on the rail, not in a banner.
+  function restartAlertsFrom(runs, goals, prev) {
+    var next = Object.create(null), fresh = [];
+    var titles = Object.create(null);
+    array(goals).forEach(function (goal) {
+      if (goal && typeof goal.id === "string") {
+        titles[goal.id] = str(goal.title).trim() || "Untitled";
+      }
+    });
+    Object.keys(runs && typeof runs === "object" ? runs : {}).forEach(function (goalId) {
+      var verdict = runs[goalId] && runs[goalId].restart;
+      if (!verdict || typeof verdict !== "object" || !str(verdict.status)) return;
+      var stamp = str(verdict.status) + "@" + str(verdict.at);
+      next[goalId] = stamp;
+      if (!prev) return;
+      if (str(verdict.status) !== "yes" || prev[goalId] === stamp) return;
+      fresh.push({ kind: "restart", goalId: goalId,
+                   goalTitle: titles[goalId] || "Untitled", rowId: "",
+                   text: str(verdict.why).trim(), question: "" });
+    });
+    return { next: next, fresh: fresh };
+  }
+
+  function trackRestartAlerts(st) {
+    if (!st || serverState.scope !== "chat") return [];
+    var diff = restartAlertsFrom(st.build_runs, st.goals, restartPrev);
+    restartPrev = diff.next;
+    return raiseAlerts(diff.fresh);
+  }
+
+  function raiseAlerts(fresh) {
+    if (!fresh || !fresh.length) return [];
     var log = reloadAlertLog();
-    var made = diff.fresh.map(function (row) {
+    var made = fresh.map(function (row) {
       alertSeq += 1;
       var entry = { id: "a" + Date.now().toString(36) + "-" + alertSeq,
                     kind: row.kind, goalId: row.goalId, goalTitle: row.goalTitle,
@@ -2420,6 +2470,7 @@
 
   function alertDetailOf(entry) {
     if (entry.kind === "asking" && entry.question) return entry.question;
+    if (entry.kind === "restart") return entry.text || RESTART_WHY;
     // A hook that carried nothing to quote gets a headline and no blank
     // line pretending there was something to say. A TODO always has a row
     // to name, so an empty one there is a bug worth seeing.
@@ -2483,10 +2534,20 @@
     delete alertTimers[id];
   }
 
+  // A banner that asks for a hand -- the restart prompt to carry over --
+  // has no clock: it stays until it is read or dismissed, and comes back
+  // on a reload for as long as it is unread.
+  function alertSticky(kindOrBox) {
+    var kind = (kindOrBox && kindOrBox.getAttribute)
+      ? str(kindOrBox.getAttribute("data-hc-alert-kind")) : str(kindOrBox);
+    return kind === "restart";
+  }
+
   function armAlert(box, ms) {
     var id = alertIdOf(box);
     if (!id) return;
     holdAlert(box);
+    if (alertSticky(box)) return;
     var wait = (typeof ms === "number" && isFinite(ms) && ms > 0)
       ? ms : alertSettings().seconds * 1000;
     alertTimers[id] = setTimeout(function () { dropAlertBanner(box); }, wait);
@@ -2569,6 +2630,11 @@
         copyHandoff();
         return;
       }
+      if (closestByClass(target, "hc-record-btn")) {
+        stop();
+        copyProjectRecord();
+        return;
+      }
       // One of the two is up at a time.
       if (closestByClass(target, "hc-bell")) {
         stop();
@@ -2647,6 +2713,11 @@
     }, true);
     document.addEventListener("change", function (event) {
       var target = event && event.target;
+      var build = (target && target.getAttribute) ? str(target.getAttribute("data-hc-build-set")) : "";
+      if (build) {
+        settingsBuildSet(build, build === "check" ? !!target.checked : target.value);
+        return;
+      }
       var key = (target && target.getAttribute) ? str(target.getAttribute("data-hc-alert-set")) : "";
       if (!key) return;
       if (key === "banners") setAlertSettings({ banners: !!target.checked });
@@ -3630,6 +3701,399 @@
     return projectMenuShown() ? !closeProjectMenu() : openProjectMenu();
   }
 
+  // --- home: every project, and the way between them -----------------------
+  //
+  // The brand is the way back. A workspace is one project's screen, and
+  // until now the only way to another was a dropdown hidden behind the
+  // project's name -- so "where else am I working?" had no answer you could
+  // see. Home is that answer: every project the vault holds, what each one
+  // is for, how much is in it, and which one this chat belongs to.
+  //
+  // Drawn over the whole window like the overview, and for the same reason:
+  // it is not a pane of the goal tree, it is the level above it. Opening a
+  // project asks the server for that project's workspace, which now answers
+  // with the one already running rather than starting a rival.
+
+  var HOME_CSS = [
+      ".hc-home{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:19;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 24px 40px;box-sizing:border-box}",
+      "[data-hc-home] .hc-home{display:block}",
+      ".hc-home-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:26px 0 6px}",
+      ".hc-home-title{font:600 15px 'Source Code Pro',monospace;color:var(--ink,#111);letter-spacing:.2px}",
+      ".hc-home-note{font-size:11px;color:var(--fnt,#9b9b9b)}",
+      ".hc-home-sub{font-size:11px;color:var(--mut,#575757);padding-bottom:18px;max-width:70ch;line-height:1.7}",
+      ".hc-home-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}",
+      ".hc-home-card{position:relative;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:16px 18px 14px;cursor:pointer;user-select:none;display:flex;flex-direction:column;gap:7px;min-height:118px}",
+      ".hc-home-card:hover{border-color:var(--acc,#a5492a)}",
+      ".hc-home-card[data-hc-active]{border-color:var(--acc,#a5492a);box-shadow:inset 3px 0 0 var(--acc,#a5492a)}",
+      ".hc-home-name{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:22px}",
+      ".hc-home-card[data-hc-active] .hc-home-name{color:var(--acc,#a5492a)}",
+      ".hc-home-why{flex:1 1 auto;font-size:11px;color:var(--mut,#575757);line-height:1.6;overflow:hidden}",
+      ".hc-home-why[data-hc-empty]{color:var(--fnt,#9b9b9b);font-style:italic}",
+      ".hc-home-where{font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
+      ".hc-home-facts{display:flex;gap:12px;font:10px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
+      ".hc-home-here{color:var(--acc,#a5492a)}",
+      ".hc-home-x{position:absolute;top:10px;right:11px;width:18px;height:18px;line-height:17px;text-align:center;border-radius:3px;color:var(--fnt,#9b9b9b);font-size:13px;cursor:pointer;opacity:0}",
+      ".hc-home-card:hover .hc-home-x{opacity:1}",
+      ".hc-home-x:hover{background:var(--hov,#f2f2f2);color:var(--bad,#a12d2d)}",
+      ".hc-home-card[data-hc-confirm] .hc-home-why,.hc-home-card[data-hc-confirm] .hc-home-facts,.hc-home-card[data-hc-confirm] .hc-home-where{display:none}",
+      ".hc-home-gone{display:none;flex-direction:column;gap:9px;font-size:11px;color:var(--mut,#575757);line-height:1.6}",
+      ".hc-home-card[data-hc-confirm] .hc-home-gone{display:flex}",
+      ".hc-home-gone-row{display:flex;gap:10px;align-items:center}",
+      ".hc-home-btn{cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:5px 9px;background:none}",
+      ".hc-home-btn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-home-btn[data-hc-bad]:hover{color:var(--bad,#a12d2d);border-color:var(--bad,#a12d2d)}",
+      ".hc-home-add{border:1px dashed var(--bd2,#d5d5d5);border-radius:10px;padding:16px 18px;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:118px}",
+      ".hc-home-add:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-home-form{display:none;flex-direction:column;gap:8px;border:1px solid var(--acc,#a5492a);border-radius:10px;background:var(--panel,#fff);padding:16px 18px;min-height:118px}",
+      "[data-hc-home-adding] .hc-home-form{display:flex}",
+      "[data-hc-home-adding] .hc-home-add{display:none}",
+      ".hc-home-field{width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:6px 8px;resize:vertical}",
+      ".hc-home-field::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-home-say{padding:14px 0 0;font-size:11px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
+      ".hc-home-say:empty{display:none}",
+      ".hc-home-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
+      ".hc-home-empty{padding:30px 0;color:var(--fnt,#9b9b9b);font-size:12px}"
+    ].join("\n");
+
+  var homeStyled = false;
+  var homeRows = null;      // the projects, once asked for
+  var homeHere = "";        // the one this chat is in
+  var homeSaid = "";
+  var homeBusy = false;
+  var homeGoing = "";       // a card the reader is being asked to confirm
+
+  function ensureHomeStyles() {
+    if (document.getElementById("hc-home-style")) return false;
+    var style = document.createElement("style");
+    style.id = "hc-home-style";
+    style.textContent = HOME_CSS;
+    (document.head || document.documentElement).appendChild(style);
+    homeStyled = true;
+    return true;
+  }
+
+  function homeShown() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute
+              && root.getAttribute("data-hc-home") !== null);
+  }
+
+  function homeSay(words, bad) {
+    homeSaid = str(words);
+    var node = document.querySelector("[data-hc-home-say]");
+    if (!node) return false;
+    node.textContent = homeSaid;
+    if (bad) node.setAttribute("data-hc-bad", "");
+    else node.removeAttribute("data-hc-bad");
+    return true;
+  }
+
+  function homeCard(row) {
+    var here = str(row.cwd) === homeHere;
+    var card = el("div", "hc-home-card");
+    card.setAttribute("role", "button");
+    card.setAttribute("data-hc-home-open", str(row.cwd));
+    card.setAttribute("title", str(row.cwd));
+    if (here) card.setAttribute("data-hc-active", "");
+    if (homeGoing === str(row.cwd)) card.setAttribute("data-hc-confirm", "");
+    var x = el("span", "hc-home-x", "×");
+    x.setAttribute("role", "button");
+    x.setAttribute("data-hc-home-forget", str(row.cwd));
+    x.setAttribute("title", "Forget this project");
+    card.appendChild(x);
+    card.appendChild(el("div", "hc-home-name", str(row.name || row.cwd)));
+    var why = str(row.objective || row.description || "").replace(/\s+/g, " ").trim();
+    var line = el("div", "hc-home-why", why || "no purpose written yet");
+    if (!why) line.setAttribute("data-hc-empty", "");
+    card.appendChild(line);
+    card.appendChild(el("div", "hc-home-where", str(row.cwd)));
+    var facts = el("div", "hc-home-facts");
+    facts.appendChild(el("span", "", Number(row.goals || 0) + " goals"));
+    facts.appendChild(el("span", "", Number(row.chats || 0)
+                         + (Number(row.chats) === 1 ? " chat" : " chats")));
+    if (here) facts.appendChild(el("span", "hc-home-here", "this chat"));
+    card.appendChild(facts);
+    // Saying what goes and what stays, where the decision is made: forget
+    // reads like delete, and the goals are the thing a reader is afraid of
+    // losing. They are not in the project -- they are in the chats.
+    //
+    // Drawn only on the card being asked about. Drawn on all of them and
+    // hidden by CSS, every card carried a live Forget button, which is a
+    // row of armed controls one stray click from doing the wrong thing.
+    if (homeGoing !== str(row.cwd)) return card;
+    var gone = el("div", "hc-home-gone");
+    gone.appendChild(el("div", "",
+      "Forget " + str(row.name || row.cwd) + "? Its name, purpose and "
+      + "sources go. The goals stay in their chats, and every chat in it is "
+      + "asked which project it belongs to next time."));
+    var row2 = el("div", "hc-home-gone-row");
+    var yes = el("span", "hc-home-btn", "Forget");
+    yes.setAttribute("role", "button");
+    yes.setAttribute("data-hc-bad", "");
+    yes.setAttribute("data-hc-home-forget-yes", str(row.cwd));
+    var no = el("span", "hc-home-btn", "Keep");
+    no.setAttribute("role", "button");
+    no.setAttribute("data-hc-home-forget-no", "");
+    row2.appendChild(yes);
+    row2.appendChild(no);
+    gone.appendChild(row2);
+    card.appendChild(gone);
+    return card;
+  }
+
+  function renderHome(force) {
+    var standing = document.querySelector(".hc-home");
+    if (!homeShown()) {
+      if (standing && standing.parentNode) {
+        standing.parentNode.removeChild(standing);
+      }
+      return false;
+    }
+    ensureHomeStyles();
+    // Already drawn and nothing has changed: rebuilding on every sweep would
+    // take the caret out of the name field between keystrokes.
+    if (standing && inLiveDocument(standing) && !force) {
+      syncProjectTheme(standing);
+      return true;
+    }
+    var host = standing;
+    if (!host || !inLiveDocument(host)) {
+      host = el("div", "hc-home");
+      (document.body || document.documentElement).appendChild(host);
+    }
+    syncProjectTheme(host);
+    var typed = host.querySelector("[data-hc-home-name]");
+    typed = typed ? typed.value : null;
+    var typedWhy = host.querySelector("[data-hc-home-why]");
+    typedWhy = typedWhy ? typedWhy.value : null;
+    wipe(host);
+    var head = el("div", "hc-home-head");
+    head.appendChild(el("div", "hc-home-title", "Projects"));
+    head.appendChild(el("div", "hc-home-note",
+      homeRows ? (homeRows.length + (homeRows.length === 1
+                                     ? " project" : " projects")) : ""));
+    host.appendChild(head);
+    host.appendChild(el("div", "hc-home-sub",
+      "Every project this vault knows. Goals belong to a project, chats "
+      + "belong to a project, and one workspace is open per project — "
+      + "opening one here joins the window it already has."));
+    if (!homeRows) {
+      host.appendChild(el("div", "hc-home-empty", "looking…"));
+      return true;
+    }
+    var grid = el("div", "hc-home-grid");
+    homeRows.filter(function (r) { return str(r.cwd) === homeHere; })
+      .concat(homeRows.filter(function (r) { return str(r.cwd) !== homeHere; }))
+      .forEach(function (r) { grid.appendChild(homeCard(r)); });
+    var add = el("div", "hc-home-add", "+  New project");
+    add.setAttribute("role", "button");
+    add.setAttribute("data-hc-home-add", "");
+    grid.appendChild(add);
+    var form = el("div", "hc-home-form");
+    var name = el("input", "hc-home-field");
+    name.setAttribute("data-hc-home-name", "");
+    name.setAttribute("placeholder", "Project name, or a path to a folder");
+    name.setAttribute("spellcheck", "false");
+    form.appendChild(name);
+    var why = el("textarea", "hc-home-field");
+    why.setAttribute("data-hc-home-why", "");
+    why.setAttribute("rows", "2");
+    why.setAttribute("placeholder", "What is it for?");
+    why.setAttribute("spellcheck", "false");
+    form.appendChild(why);
+    var row = el("div", "hc-home-gone-row");
+    var make = el("span", "hc-home-btn", homeBusy ? "Working…" : "Create");
+    make.setAttribute("role", "button");
+    make.setAttribute("data-hc-home-make", "");
+    var stop = el("span", "hc-home-btn", "Cancel");
+    stop.setAttribute("role", "button");
+    stop.setAttribute("data-hc-home-cancel", "");
+    row.appendChild(make);
+    row.appendChild(stop);
+    form.appendChild(row);
+    grid.appendChild(form);
+    host.appendChild(grid);
+    var say = el("div", "hc-home-say", homeSaid);
+    say.setAttribute("data-hc-home-say", "");
+    host.appendChild(say);
+    if (typed !== null) {
+      var back = host.querySelector("[data-hc-home-name]");
+      if (back) back.value = typed;
+    }
+    if (typedWhy !== null) {
+      var backWhy = host.querySelector("[data-hc-home-why]");
+      if (backWhy) backWhy.value = typedWhy;
+    }
+    return true;
+  }
+
+  function loadHome() {
+    return fetchJSON("/api/projects").then(function (res) {
+      homeRows = (res && res.ok && array(res.projects)) || [];
+      homeHere = str(res && res.active);
+      renderHome(true);
+      return res;
+    });
+  }
+
+  function openHome() {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute) return false;
+    closeProjectMenu();
+    closeOverview();
+    homeGoing = "";
+    homeSaid = "";
+    root.setAttribute("data-hc-home", "");
+    renderHome(true);
+    loadHome();
+    return true;
+  }
+
+  function closeHome() {
+    var root = document.documentElement;
+    if (!root || !root.removeAttribute) return false;
+    var was = homeShown();
+    root.removeAttribute("data-hc-home");
+    root.removeAttribute("data-hc-home-adding");
+    homeGoing = "";
+    return was;
+  }
+
+  function toggleHome() {
+    return homeShown() ? !closeHome() : openHome();
+  }
+
+  function homeOpen(where) {
+    if (homeBusy) return;
+    homeBusy = true;
+    homeSay("opening…");
+    post({ op: "open_project", cwd: where }).then(function (res) {
+      homeBusy = false;
+      if (!res || !res.ok || !res.url) {
+        homeSay((res && res.error) || "that project could not be opened", true);
+        return;
+      }
+      if (typeof location !== "undefined"
+          && str(res.url) !== str(location.href)) {
+        location.href = str(res.url);
+        return;
+      }
+      closeHome();
+    });
+  }
+
+  function homeForget(where) {
+    if (homeBusy) return;
+    homeBusy = true;
+    post({ op: "forget_project", cwd: where }).then(function (res) {
+      homeBusy = false;
+      homeGoing = "";
+      if (!res || !res.ok) {
+        homeSay((res && res.error) || "that project could not be forgotten",
+                true);
+        return;
+      }
+      homeSay(Number(res.freed) > 0
+              ? ("forgotten — " + Number(res.freed)
+                 + (Number(res.freed) === 1 ? " chat is" : " chats are")
+                 + " free to be put somewhere else")
+              : "forgotten");
+      loadHome();
+    });
+  }
+
+  function homeMake() {
+    if (homeBusy) return;
+    var host = document.querySelector(".hc-home");
+    if (!host) return;
+    var name = str((host.querySelector("[data-hc-home-name]") || {}).value).trim();
+    var why = str((host.querySelector("[data-hc-home-why]") || {}).value).trim();
+    if (!name) { homeSay("give the project a name", true); return; }
+    homeBusy = true;
+    homeSay("");
+    post({ op: "new_project", name: name }).then(function (res) {
+      if (!res || !res.ok || !res.cwd) {
+        homeBusy = false;
+        homeSay((res && res.error) || "the project could not be made", true);
+        return null;
+      }
+      var made = res.cwd;
+      return post({ op: "project_setup", cwd: made, objective: why })
+        .then(function () {
+          homeBusy = false;
+          var root = document.documentElement;
+          if (root && root.removeAttribute) {
+            root.removeAttribute("data-hc-home-adding");
+          }
+          homeSay("made " + name);
+          loadHome();
+        });
+    });
+  }
+
+  var homeBound = false;
+
+  function bindHome() {
+    if (homeBound || !document.addEventListener) return false;
+    homeBound = true;
+    document.addEventListener("click", function (event) {
+      var node = event.target;
+      var act = "", where = "";
+      while (node && node !== document) {
+        if (node.getAttribute) {
+          var keys = ["data-hc-home-forget-yes", "data-hc-home-forget-no",
+                      "data-hc-home-forget", "data-hc-home-add",
+                      "data-hc-home-cancel", "data-hc-home-make",
+                      "data-hc-home-open", "data-hc-brand"];
+          for (var i = 0; i < keys.length; i++) {
+            var found = node.getAttribute(keys[i]);
+            if (found !== null) { act = keys[i]; where = str(found); break; }
+          }
+          if (act) break;
+        }
+        node = node.parentNode;
+      }
+      if (!act) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var root = document.documentElement;
+      if (act === "data-hc-brand") { toggleHome(); return; }
+      if (act === "data-hc-home-open") { homeOpen(where); return; }
+      if (act === "data-hc-home-forget") { homeGoing = where; renderHome(true); return; }
+      if (act === "data-hc-home-forget-no") { homeGoing = ""; renderHome(true); return; }
+      if (act === "data-hc-home-forget-yes") { homeForget(where); return; }
+      if (act === "data-hc-home-add") {
+        if (root && root.setAttribute) root.setAttribute("data-hc-home-adding", "");
+        renderHome(true);
+        var field = document.querySelector("[data-hc-home-name]");
+        if (field && field.focus) field.focus();
+        return;
+      }
+      if (act === "data-hc-home-cancel") {
+        if (root && root.removeAttribute) root.removeAttribute("data-hc-home-adding");
+        homeSay("");
+        renderHome(true);
+        return;
+      }
+      if (act === "data-hc-home-make") { homeMake(); }
+    }, true);
+    return true;
+  }
+
+  // The brand is a control, not a label: it is how a reader gets back to
+  // every project from inside one.
+  function armBrand() {
+    var brand = document.querySelector(".hc-brand");
+    if (!brand || !brand.setAttribute) return false;
+    bindHome();
+    if (brand.getAttribute("data-hc-brand") !== null) return false;
+    brand.setAttribute("data-hc-brand", "");
+    brand.setAttribute("role", "button");
+    brand.setAttribute("title", "All projects");
+    brand.style.cursor = "pointer";
+    return true;
+  }
+
   // --- the overview screen -------------------------------------------------
 
   function overviewShown() {
@@ -4560,14 +5024,13 @@
     return box;
   }
 
-  // The project's own file: every chat's goals of this directory, with
-  // where each sits in its tree, its notes, its TODO rows and their
-  // statuses, its prompt and the prompts marked related to it. Shown as the
-  // file reads -- this is the record a collaborator would be handed, and a
-  // reader checking what is kept should see exactly what is in it.
   // The project's own record, under the gear: one file per directory,
   // holding every goal of every chat started there. It is what this
   // machine keeps, which is a settings question rather than a project one.
+  // Named and copied, not shown: a real project's file runs to hundreds of
+  // kilobytes, and a pane that read the first quarter of it and then said
+  // it had stopped was a scroll to nowhere. The pane says where the file
+  // is and puts it on the clipboard whole, as the hand-off above it does.
   function renderProjectJson(result) {
     if (!settingsPanelBox) return;
     var pane = settingsPanelBox.querySelector("[data-hc-record]");
@@ -4585,11 +5048,15 @@
         " · not written yet; this is what it would hold"));
     }
     pane.appendChild(where);
-    pane.appendChild(el("pre", "hc-settings-record", str(result.text)));
-    if (result.truncated) {
-      pane.appendChild(el("div", "hc-settings-hint",
-        "… truncated; the record is longer than this pane reads"));
-    }
+    var row = el("div", "hc-settings-row");
+    var btn = el("span", "hc-settings-btn hc-record-btn", "Copy project record");
+    btn.setAttribute("role", "button");
+    btn.setAttribute("aria-label", "Copy the project record");
+    btn.title = RECORD_TITLE;
+    btn.appendChild(el("span", "hc-record-said", ""));
+    row.appendChild(btn);
+    pane.appendChild(row);
+    dressRecord(btn);
   }
 
   // The record is rewritten on every goal save, so an overview being opened
@@ -4959,6 +5426,7 @@
     var root = document.documentElement;
     if (!who || !root || !root.setAttribute) return false;
     closeProjectMenu();
+    closeHome();
     root.setAttribute("data-hc-overview", "");
     renderOverview();
     // A reopened overview keeps the box it drew before, whose record is as
@@ -5304,6 +5772,7 @@
           if (typeof target.blur === "function") target.blur();
           return;
         }
+        if (homeShown()) { closeHome(); return; }
         if (overviewShown()) closeOverview();
         return;
       }
@@ -5376,7 +5845,7 @@
     var tabs = document.createElement("div");
     tabs.className = "hc-settings-tabs";
     [["account", "Account"], ["alerts", "Alerts"], ["sharing", "Sharing"],
-     ["cloud", "Cloud"], ["data", "Data"]].forEach(function (spec) {
+     ["cloud", "Cloud"], ["data", "Data"], ["builds", "Builds"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -5420,6 +5889,57 @@
     l2.appendChild(text("seconds"));
     sec.appendChild(l2);
     box.appendChild(sec);
+
+    // Builds: which model a TODO build runs on, and at what effort. The
+    // choices are read off the installed Claude Code binary when the panel
+    // opens -- it names every model it knows, so a CLI update is what adds
+    // the new ones -- and a change is kept by the server for every build
+    // after it. Nothing chosen is the CLI's own default, as before.
+    var builds = document.createElement("div");
+    builds.className = "hc-settings-sec";
+    builds.setAttribute("data-hc-settings-sec", "builds");
+    builds.setAttribute("data-hc-tab", "builds");
+    var bh = document.createElement("div");
+    bh.className = "hc-settings-sec-head";
+    bh.textContent = "TODO builds";
+    builds.appendChild(bh);
+    [["model", "Model"], ["effort", "Effort"]].forEach(function (spec) {
+      var field = document.createElement("label");
+      field.className = "hc-settings-field";
+      field.appendChild(text(spec[1]));
+      var pick = document.createElement("select");
+      pick.setAttribute("data-hc-build-set", spec[0]);
+      pick.setAttribute("aria-label", spec[1] + " for TODO builds");
+      field.appendChild(pick);
+      builds.appendChild(field);
+    });
+    // And the check that follows a finished build: whether to run it, and
+    // what it runs on -- a cheaper model at high effort unless chosen
+    // otherwise (the server names the defaults with the models).
+    var ch3 = document.createElement("label");
+    var c3 = document.createElement("input");
+    c3.type = "checkbox";
+    c3.setAttribute("type", "checkbox");
+    c3.setAttribute("data-hc-build-set", "check");
+    ch3.appendChild(c3);
+    ch3.appendChild(text("After a build, ask whether the program needs a local restart"));
+    builds.appendChild(ch3);
+    [["check_model", "Check model"], ["check_effort", "Check effort"]].forEach(function (spec) {
+      var field = document.createElement("label");
+      field.className = "hc-settings-field";
+      field.appendChild(text(spec[1]));
+      var pick = document.createElement("select");
+      pick.setAttribute("data-hc-build-set", spec[0]);
+      pick.setAttribute("aria-label", spec[1] + " for the restart check");
+      field.appendChild(pick);
+      builds.appendChild(field);
+    });
+    var bsay = document.createElement("div");
+    bsay.className = "hc-settings-hint";
+    bsay.setAttribute("data-hc-build-say", "");
+    bsay.textContent = "reading the installed Claude Code…";
+    builds.appendChild(bsay);
+    box.appendChild(builds);
 
     // Supabase: where this workspace's projects are sent. The URL and the
     // anon key are typed and kept; the password is typed and is not -- it
@@ -5637,6 +6157,10 @@
     dh.className = "hc-settings-sec-head";
     dh.textContent = "Project record";
     data.appendChild(dh);
+    data.appendChild(el("div", "hc-settings-hint",
+      "Every goal of every chat started in this directory, as the JSON"
+      + " file this machine keeps. Copied whole — it is too long to"
+      + " read here."));
     var record = document.createElement("div");
     record.setAttribute("data-hc-record", "");
     record.appendChild(el("div", "hc-settings-hint", "reading\u2026"));
@@ -5876,6 +6400,125 @@
     return true;
   }
 
+  // --- the Builds tab: model and effort -------------------------------------
+
+  function settingsFillSelect(pick, pairs, chosen) {
+    // The options, redrawn; a chosen value the list does not carry (a
+    // model typed into the settings file by hand, an id the CLI no longer
+    // names) is kept as an option rather than silently reset.
+    while (pick.firstChild) pick.removeChild(pick.firstChild);
+    var seen = false;
+    pairs.forEach(function (pair) {
+      var option = document.createElement("option");
+      option.value = pair[0];
+      option.setAttribute("value", pair[0]);
+      option.textContent = pair[1];
+      if (pair[0] === chosen) seen = true;
+      pick.appendChild(option);
+    });
+    if (chosen && !seen) {
+      var extra = document.createElement("option");
+      extra.value = chosen;
+      extra.setAttribute("value", chosen);
+      extra.textContent = chosen;
+      pick.appendChild(extra);
+    }
+    pick.value = chosen;
+  }
+
+  function settingsBuildFill(state) {
+    if (!settingsPanelBox) return false;
+    var model = settingsPanelBox.querySelector('[data-hc-build-set="model"]');
+    var effort = settingsPanelBox.querySelector('[data-hc-build-set="effort"]');
+    var say = settingsPanelBox.querySelector("[data-hc-build-say]");
+    if (!model || !effort) return false;
+    var ok = !!(state && state.ok);
+    var chosen = (ok && state.settings && typeof state.settings === "object")
+      ? state.settings : {};
+    var pairs = [["", "CLI default"]];
+    array(ok && state.aliases).forEach(function (name) {
+      pairs.push([str(name), str(name) + " · latest"]);
+    });
+    array(ok && state.models).forEach(function (name) {
+      pairs.push([str(name), str(name)]);
+    });
+    settingsFillSelect(model, pairs, str(chosen.model));
+    var levels = [["", "CLI default"]];
+    array(ok && state.efforts).forEach(function (name) {
+      levels.push([str(name), str(name)]);
+    });
+    settingsFillSelect(effort, levels, str(chosen.effort));
+    // The restart check's own pair, and whether it runs at all. The blank
+    // choice is the check's default, which the server names.
+    var defaults = (ok && state.check_defaults && typeof state.check_defaults === "object")
+      ? state.check_defaults : {};
+    var checkModel = settingsPanelBox.querySelector('[data-hc-build-set="check_model"]');
+    var checkEffort = settingsPanelBox.querySelector('[data-hc-build-set="check_effort"]');
+    var check = settingsPanelBox.querySelector('[data-hc-build-set="check"]');
+    if (checkModel) {
+      settingsFillSelect(checkModel,
+        [["", "default · " + (str(defaults.model) || "sonnet")]].concat(pairs.slice(1)),
+        str(chosen.check_model));
+    }
+    if (checkEffort) {
+      settingsFillSelect(checkEffort,
+        [["", "default · " + (str(defaults.effort) || "high")]].concat(levels.slice(1)),
+        str(chosen.check_effort));
+    }
+    if (check) check.checked = ok ? chosen.check !== false : true;
+    if (say) {
+      say.removeAttribute("data-hc-bad");
+      if (!ok) {
+        say.setAttribute("data-hc-bad", "");
+        say.textContent = (state && state.error) || "could not read the models";
+      } else if (state.source && typeof state.source === "object") {
+        say.textContent = "models read from Claude Code"
+          + (state.source.version ? " " + str(state.source.version) : "")
+          + "; new ones appear when the CLI updates";
+      } else {
+        say.textContent = "the Claude Code binary was not found;"
+          + " the aliases still work";
+      }
+    }
+    return true;
+  }
+
+  function settingsBuildLoad() {
+    return fetchJSON("/api/models").then(settingsBuildFill);
+  }
+
+  var BUILD_SETTING_KEYS = { model: true, effort: true, check: true,
+                             check_model: true, check_effort: true };
+
+  function settingsBuildSet(key, value) {
+    if (!settingsPanelBox || !BUILD_SETTING_KEYS[key]) return false;
+    var patch = { op: "set_build_settings" };
+    patch[key] = key === "check" ? !!value : str(value);
+    var say = settingsPanelBox.querySelector("[data-hc-build-say]");
+    if (say) { say.removeAttribute("data-hc-bad"); say.textContent = "saving…"; }
+    post(patch).then(function (res) {
+      if (!say) return;
+      if (!res || !res.ok) {
+        say.setAttribute("data-hc-bad", "");
+        say.textContent = (res && res.error) || "the setting could not be saved";
+        return;
+      }
+      var now = res.settings || {};
+      if (key === "model" || key === "effort") {
+        say.textContent = "saved · builds run on "
+          + (str(now.model) || "the CLI's default model") + " at "
+          + (str(now.effort) ? str(now.effort) + " effort" : "the CLI's default effort");
+      } else if (now.check === false) {
+        say.textContent = "saved · no restart check after a build";
+      } else {
+        say.textContent = "saved · after a build, the restart check runs on "
+          + (str(now.check_model) || "sonnet") + " at "
+          + (str(now.check_effort) || "high") + " effort";
+      }
+    });
+    return true;
+  }
+
   function renderSettingsPanel() {
     if (!settingsPanelShown()) return false;
     var cur = alertSettings();
@@ -5924,6 +6567,8 @@
     // Whether it is connected, and as whom: read when the panel opens, not
     // held from the last time it did.
     settingsSupabaseLoad();
+    // And which models the installed CLI names, the same way.
+    settingsBuildLoad();
     renderGear();
     return settingsPanelBox;
   }
@@ -6051,40 +6696,108 @@
       });
   }
 
-  function copyHandoff() {
-    if (handoffState === "busy") return null;
-    handoffSay("busy");
-    var onClipboard;
-    var fetched = fetchHandoff();
+  // A copy whose text arrives by fetch: *pick* reads the text out of the
+  // fetched body. Started inside the click and resolved by the fetch where
+  // the browser allows that (Safari wants the write in the gesture); the
+  // plain path otherwise, or when the browser refuses. Answers with a
+  // promise of whether the text is on the clipboard.
+  function clipboardFromFetch(fetched, pick) {
     if (typeof ClipboardItem === "function" && navigator.clipboard
         && navigator.clipboard.write) {
-      // Started inside the click, resolved by the fetch.
       var textPromise = fetched.then(function (body) {
-        return new Blob([body.markdown], { type: "text/plain" });
+        return new Blob([pick(body)], { type: "text/plain" });
       });
       var item;
       try { item = new ClipboardItem({ "text/plain": textPromise }); } catch (e) { item = null; }
-      onClipboard = item
+      var wrote = item
         ? navigator.clipboard.write([item]).then(function () { return true; },
                                                 function () { return false; })
         : Promise.resolve(false);
-      onClipboard = onClipboard.then(function (ok) {
+      return wrote.then(function (ok) {
         return ok ? fetched.then(function () { return true; })
-                  : fetched.then(function (body) { return handoffToClipboard(body.markdown); });
+                  : fetched.then(function (body) { return handoffToClipboard(pick(body)); });
       });
-    } else {
-      onClipboard = fetched.then(function (body) { return handoffToClipboard(body.markdown); });
     }
-    return onClipboard.then(function (ok) {
-      if (ok) { handoffSay("copied"); return true; }
-      var body = handoffLast;
-      if (body) handoffDownload(body.markdown, body.filename);
-      handoffSay("failed");
-      return false;
-    }, function () {
-      handoffSay("failed");
-      return false;
-    });
+    return fetched.then(function (body) { return handoffToClipboard(pick(body)); });
+  }
+
+  function copyHandoff() {
+    if (handoffState === "busy") return null;
+    handoffSay("busy");
+    var fetched = fetchHandoff();
+    return clipboardFromFetch(fetched, function (body) { return body.markdown; })
+      .then(function (ok) {
+        if (ok) { handoffSay("copied"); return true; }
+        var body = handoffLast;
+        if (body) handoffDownload(body.markdown, body.filename);
+        handoffSay("failed");
+        return false;
+      }, function () {
+        handoffSay("failed");
+        return false;
+      });
+  }
+
+  // --- the project record, under the hand-off -------------------------------
+  // The same shape as the hand-off: one click fetches the project's file
+  // whole -- not the pane-sized read the panel used to show, which cut a
+  // real project's record at a quarter -- and puts it on the clipboard.
+  // "cut" is a server older than this page answering the bounded read to
+  // the request for the whole: copied, but said so.
+  var recordState = "";            // "", busy, copied, cut, failed
+  var recordTimer = null;
+  var recordLast = null;           // the last body fetched, for tests
+  var RECORD_SAYS = { busy: "reading…", copied: "copied ✓",
+                      cut: "copied · cut short", failed: "copy failed" };
+  var RECORD_TITLE = "Copy the project record — every goal of every chat in this directory — as JSON";
+
+  function recordSay(state) {
+    recordState = state;
+    clearTimeout(recordTimer);
+    if (state === "copied" || state === "cut" || state === "failed") {
+      recordTimer = setTimeout(function () {
+        recordState = "";
+        renderRecordButton();
+      }, 1800);
+    }
+    renderRecordButton();
+  }
+
+  function renderRecordButton() {
+    if (!settingsPanelShown()) return false;
+    var btn = settingsPanelBox.querySelector(".hc-record-btn");
+    return btn ? dressRecord(btn) : false;
+  }
+
+  function fetchProjectRecord() {
+    return fetch("/api/project.json?full=1", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (!(body && body.ok && typeof body.text === "string")) {
+          throw new Error((body && body.error) || "no record");
+        }
+        recordLast = body;
+        return body;
+      });
+  }
+
+  function copyProjectRecord() {
+    if (recordState === "busy") return null;
+    recordSay("busy");
+    var fetched = fetchProjectRecord();
+    return clipboardFromFetch(fetched, function (body) { return body.text; })
+      .then(function (ok) {
+        var body = recordLast;
+        if (ok) { recordSay(body && body.truncated ? "cut" : "copied"); return true; }
+        if (body) {
+          handoffDownload(body.text, str(body.path).split("/").pop() || "project.json");
+        }
+        recordSay("failed");
+        return false;
+      }, function () {
+        recordSay("failed");
+        return false;
+      });
   }
 
   // The hand-off button copied the whole workspace to the clipboard from
@@ -6101,20 +6814,27 @@
     return btn ? dressHandoff(btn) : false;
   }
 
-  // The button's state -- busy, copied, failed -- written onto it, and the
-  // words for it into its own label. Answers whether anything changed.
-  function dressHandoff(btn) {
+  // A copy button's state -- busy, copied, failed -- written onto it as
+  // *attr*, and the words for it into its own label. Answers whether
+  // anything changed.
+  function dressCopy(btn, attr, saidClass, state, says) {
     var changed = false;
-    var was = btn.getAttribute("data-hc-handoff");
-    if (handoffState && was !== handoffState) {
-      btn.setAttribute("data-hc-handoff", handoffState); changed = true;
-    } else if (!handoffState && was !== null) {
-      btn.removeAttribute("data-hc-handoff"); changed = true;
+    var was = btn.getAttribute(attr);
+    if (state && was !== state) {
+      btn.setAttribute(attr, state); changed = true;
+    } else if (!state && was !== null) {
+      btn.removeAttribute(attr); changed = true;
     }
-    var label = btn.querySelector(".hc-handoff-said");
-    var words = handoffState ? (HANDOFF_SAYS[handoffState] || "") : "";
+    var label = btn.querySelector("." + saidClass);
+    var words = state ? (says[state] || "") : "";
     if (label && label.textContent !== words) { label.textContent = words; changed = true; }
     return changed;
+  }
+  function dressHandoff(btn) {
+    return dressCopy(btn, "data-hc-handoff", "hc-handoff-said", handoffState, HANDOFF_SAYS);
+  }
+  function dressRecord(btn) {
+    return dressCopy(btn, "data-hc-record-copy", "hc-record-said", recordState, RECORD_SAYS);
   }
 
   function watchRunFeed() {
@@ -6434,6 +7154,31 @@
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
       // Two tabs and a save stamp, in place of the old single label.
+      // The onboarding, over everything: until a chat says which project it
+      // is for, there is nothing behind it worth reading. Styled from the
+      // workspace's own project-setup idiom -- bordered uppercase buttons on
+      // a 2px radius, the rust accent, no filled green anywhere -- because a
+      // panel that asks the same question should not look like another app.
+      "[data-hc-launch] .hc-onb-shade{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;background:rgba(1,4,9,.72)}",
+      "[data-hc-launch] .hc-onb{width:min(500px,92vw);max-height:86vh;overflow:auto;background:var(--panel,#fff);border:1px solid var(--bd,#e3e3e3);border-radius:3px;padding:18px 20px 16px;box-shadow:0 18px 60px rgba(0,0,0,.45)}",
+      "[data-hc-launch] .hc-onb-title{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      "[data-hc-launch] .hc-onb-note{margin-top:7px;font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b);max-width:58ch}",
+      "[data-hc-launch] .hc-onb-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:15px;align-items:center}",
+      "[data-hc-launch] .hc-onb-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:6px 10px}",
+      "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
+      "[data-hc-launch] .hc-onb-btn-on{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
+      "[data-hc-launch] .hc-onb-quiet{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:10.5px 'Source Code Pro',monospace;padding:0 4px}",
+      "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:9px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:6px 8px;outline:none}",
+      "[data-hc-launch] .hc-onb-field:focus{border-color:var(--acc,#a5492a)}",
+      "[data-hc-launch] .hc-onb-list{margin-top:11px;max-height:44vh;overflow:auto;border:1px solid var(--bd,#e3e3e3);border-radius:2px;background:var(--panel2,#f6f6f6)}",
+      "[data-hc-launch] .hc-onb-item{display:block;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);cursor:pointer}",
+      "[data-hc-launch] .hc-onb-item:last-child{border-bottom:none}",
+      "[data-hc-launch] .hc-onb-item:hover{background:var(--hov,#f2f2f2)}",
+      "[data-hc-launch] .hc-onb-item-name{display:block;font:600 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:10px/1.5 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:2px;font:9.5px 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      "[data-hc-launch] .hc-onb-empty{padding:11px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      "[data-hc-launch] .hc-onb-said{margin-top:10px;font:10.5px 'Source Code Pro',monospace;color:var(--hc-warn,#a12d2d)}",
       "[data-hc-launch] .hc-rail-tabs{display:inline-flex;gap:14px;align-items:baseline}",
       "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
@@ -6482,12 +7227,12 @@
       // the builder, rows that came back done.
       "[data-hc-launch] .hc-todo-sep{border-top:1px solid var(--bd);margin:7px 6px;user-select:none}",
       "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
-      // What the row will cost to build, in its lower right. `flex-end`, not
+      // What the row's build spent, in its lower right. `flex-end`, not
       // the row's baseline: a row whose text wraps is two or three lines
       // tall, and the number belongs at the bottom of it, beside the last
       // line -- which is what "in the corner" means on a row that wrapped.
-      // Faint, because it is an estimate the reader is free to ignore; the
-      // measured number a finished build leaves is not faint.
+      // Empty until the row has been built: what a build WILL cost is the
+      // build's own word, on the watch panel below the rows.
       "[data-hc-launch] .hc-todo-cost{flex:none;align-self:flex-end;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--fnt);opacity:.7;user-select:none;white-space:nowrap;cursor:default}",
       "[data-hc-launch] .hc-todo-row:hover .hc-todo-cost{opacity:1}",
       "[data-hc-launch] .hc-todo-cost[data-hc-todo-spent]{color:var(--mut);opacity:1}",
@@ -6516,6 +7261,23 @@
       "[data-hc-launch] .hc-todo-watch-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
       "[data-hc-launch] .hc-todo-watch-row{display:flex;gap:8px;font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-watch-at{flex:none;color:var(--bd2)}",
+      // The restart check, under the watch line: the model the session
+      // moved to and a spinner while it asks; the reason and the prompt to
+      // paste, boxed with its own copy button, when the answer is yes.
+      "[data-hc-launch] .hc-todo-restart{margin-top:8px;padding-top:8px;border-top:1px solid var(--bd);user-select:none}",
+      "[data-hc-launch] .hc-todo-restart-model{display:flex;align-items:center;gap:7px;font:11px/1.7 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-from{text-decoration:line-through;color:var(--mut)}",
+      "[data-hc-launch] .hc-todo-restart-to{padding:0 8px;border:1px solid var(--bd2);border-radius:5px;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-todo-restart-busy{display:flex;align-items:flex-start;gap:8px;margin-top:6px;font:11.5px/1.5 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-spin{flex:none;width:11px;height:11px;margin-top:3px;box-sizing:border-box;border:1.5px solid var(--bd2);border-top-color:var(--hc-blue, #58a6ff);border-radius:50%;animation:hc-todo-spin 1s linear infinite}",
+      "@keyframes hc-todo-spin{to{transform:rotate(360deg)}}",
+      "[data-hc-launch] .hc-todo-restart-why{display:flex;align-items:flex-start;gap:8px;font:11.5px/1.5 'Source Code Pro',monospace;color:var(--dtxt);user-select:text}",
+      "[data-hc-launch] .hc-todo-restart-warn{flex:none;color:var(--hc-warn)}",
+      "[data-hc-launch] .hc-todo-restart-send{margin-top:8px;border:1px solid var(--bd);border-radius:6px;background:var(--panel);overflow:hidden}",
+      "[data-hc-launch] .hc-todo-restart-send-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;border-bottom:1px solid var(--bd);font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-copy{flex:none;font-weight:600;color:var(--hc-blue, #58a6ff);cursor:pointer}",
+      "[data-hc-launch] .hc-todo-restart-copy:hover{text-decoration:underline}",
+      "[data-hc-launch] .hc-todo-restart-prompt{margin:0;padding:8px 10px;font:11.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-copy:hover{color:var(--ink);border-color:var(--ink)}",
@@ -6737,6 +7499,11 @@
   var railTab = "todos";
   var todoItems = null;
   var todoGoalId = null;
+  // What the rail last took from the store, by row id: the text and depth
+  // of each row as of that reading. It is how the rail tells, when the
+  // store has changed under it, whether a difference is its own edit or
+  // someone else's -- see todoReconcile.
+  var todoBase = null;
   var todoPicked = {};
   var todoSavedLabel = "";
   var todoSaveTimer = null;
@@ -7127,81 +7894,17 @@
     return out.join("\n");
   }
 
-  // --- what a row will cost to build ---------------------------------------
+  // --- what a row's build spent --------------------------------------------
   //
-  // Every row that has not been built yet prints a number in its lower right.
-  // What its build will spend is two parts, and the tooltip says which is
-  // which, because only one of them is knowable in advance:
-  //
-  // * the context the build opens on -- the project, the goal tree this plugin
-  //   keeps for the chat, this goal's own prompt, the protocol, plus the row
-  //   itself. That is the string the Prompt tab prints, and it is counted
-  //   here the way the tab counts it: prompt_preview composes it and says how
-  //   many tokens it is with no rows in it, so the number beside a row and
-  //   the number in the tab can never disagree. (The state's
-  //   own context_tokens measures the goal-context file alone, which is a
-  //   part of that string and reads low beside it; it stands in only until
-  //   the preview has answered for this goal.) Characters over four, the
-  //   usual rule of thumb, since no browser holds the model's tokenizer;
-  // * the work -- what Claude reads, writes and re-reads to do the row. Not
-  //   knowable, so it is measured instead: the server keeps what this chat's
-  //   own finished builds spent, per row, and the median of those is what a
-  //   row is priced at. Before this chat has built anything there is nothing
-  //   to measure and the server's default stands in, which the tooltip says.
-  //
-  // A row longer than the ones already built is scaled up from that median,
-  // and a shorter one down, within a factor either way -- length is a weak
-  // signal about work, so it is allowed to nudge the number, not set it.
-  //
-  // The corner prints the context, since that is the half a number can be
-  // told about honestly; the work is in the tooltip, where it can be labelled
-  // as the guess it is.
-  //
-  // Once a row HAS been built, and built on its own, the run's own usage is
-  // on the row and the estimate is not printed: a measured number replaces a
-  // guess about the same thing.
-
-  var TODO_COST_SPAN = [0.5, 2.5];
-
-  function todoCostContext() {
-    // The context the row on screen opens on. The Prompt tab's measurement
-    // for this goal where it has one -- see promptCtxCost -- and the state's
-    // coarser figure until then.
-    if (todoGoalId && promptCtxCost && promptCtxCost.goal === todoGoalId
-        && promptCtxCost.context > 0) {
-      return promptCtxCost.context;
-    }
-    var cost = serverState.buildCost;
-    return (cost && typeof cost === "object")
-      ? Math.max(0, +cost.context_tokens || 0) : 0;
-  }
-
-  function todoCostBasis() {
-    var cost = serverState.buildCost;
-    var work = (cost && typeof cost === "object")
-      ? Math.max(0, +cost.row_tokens || 0) : 0;
-    if (!work) return null;
-    return { context: todoCostContext(), work: work,
-             chars: Math.max(1, +cost.row_chars || 1),
-             samples: Math.max(0, +cost.samples || 0) };
-  }
-
-  function todoCostOf(row) {
-    // The estimate for one row, or null when there is nothing to say: an
-    // empty row is no work, a row already out with the builder is past being
-    // estimated, and a chat the server has measured nothing for would rather
-    // print no number than one nothing stands behind.
-    var text = str(row && row.text).trim();
-    if (!text) return null;
-    var basis = todoCostBasis();
-    if (!basis) return null;
-    var own = Math.ceil(text.length / 4);
-    var scale = Math.min(TODO_COST_SPAN[1],
-                         Math.max(TODO_COST_SPAN[0], text.length / basis.chars));
-    var work = Math.round(basis.work * scale);
-    return { total: basis.context + own + work, context: basis.context + own,
-             work: work, samples: basis.samples };
-  }
+  // A row that has been built, and built on its own, prints in its lower
+  // right what its build actually spent: the run's own usage, banked onto the
+  // row when the run ended. A row that has not been built yet prints nothing
+  // there. The corner used to carry a guess at what the build would cost --
+  // the context it opens on, plus a median of this chat's earlier builds --
+  // and a number nothing stood behind was the wrong thing to put beside a
+  // row the reader was still writing. What a build WILL cost is now the
+  // build's own word: asked for as its first protocol line and shown on the
+  // watch panel below the rows, see todoWatchLine.
 
   function todoTokenLabel(n) {
     // Three significant figures at most: an estimate that reads "31.7k" is
@@ -7213,31 +7916,13 @@
   }
 
   function todoCostText(row) {
-    // What the corner of one row says, and what it says when hovered. A
-    // measured number where there is one; an estimate where there is not;
-    // nothing at all for a row that is neither.
+    // What the corner of one row says, and what it says when hovered: a
+    // measured number where there is one, nothing at all otherwise.
     var spent = +(row && row.tokens);
-    if (spent > 0) {
-      return { label: todoTokenLabel(spent) + " tok",
-               title: "this row's build spent " + spent.toLocaleString()
-                 + " tokens", measured: true };
-    }
-    if (row && row.status && row.status !== "failed") return null;
-    var cost = todoCostOf(row);
-    if (!cost) return null;
-    var source = cost.samples
-      ? "a typical build here, over your last " + cost.samples
-        + (cost.samples === 1 ? " build" : " builds")
-      : "a typical build, until this chat has built something to measure";
-    return {
-      label: "~" + todoTokenLabel(cost.context) + " tok",
-      title: "about " + todoTokenLabel(cost.context)
-        + " of context this row's build opens on — the string the Prompt tab"
-        + " prints, plus this row. Doing the work then costs roughly "
-        + todoTokenLabel(cost.work) + " more: " + source
-        + ". Rows built together share the context.",
-      measured: false
-    };
+    if (!(spent > 0)) return null;
+    return { label: todoTokenLabel(spent) + " tok",
+             title: "this row's build spent " + spent.toLocaleString()
+               + " tokens", measured: true };
   }
 
   function todoCostPaint(row, line) {
@@ -7269,16 +7954,22 @@
   //
   // A row handed to the builder used to say "building" and stop there, for as
   // long as it took. What the rail says now is the run's own account of
-  // itself: how long it has been at it, roughly how much longer it has -- from
-  // what a row has taken in this chat before, so the number gets truer as the
-  // chat builds -- and the last thing the agent actually did. The whole log is
-  // one click away, and so is a terminal window on the run: following its log
-  // while it runs, and resuming its session once it has stopped.
+  // itself: how long it has been at it, how much longer it has and what it
+  // will spend -- the build's own estimate, which the protocol asks it to
+  // print before it starts on the rows, so the panel says "calculating" until
+  // that line lands and counts down from it after; a number the build gave
+  // rather than one worked out from the chat's earlier builds -- and the last
+  // thing the agent actually did. The whole log is one click away, and so is
+  // a terminal window on the run: following its log while it runs, and
+  // resuming its session once it has stopped.
 
   var WATCH_HEAD = {
     running: "building", retrying: "retrying after an API error",
     waiting: "waiting on your answer", cancelled: "stopped",
-    failed: "failed", idle: "finished"
+    failed: "failed", idle: "finished",
+    // The rows are done; what is up is the restart check (see
+    // todoRestartPaint), which is not a build and has nothing to count down.
+    checking: "finished"
   };
 
   function buildDuration(seconds) {
@@ -7290,34 +7981,219 @@
     return mins ? (hours + "h " + mins + "m") : (hours + "h");
   }
 
+  function todoWatchEstimate(run) {
+    // The build's own word on what it will cost, or null until it has
+    // given one -- an older server sends none, and reads the same way.
+    var est = run && run.estimate;
+    if (!est || typeof est !== "object") return null;
+    var tokens = Math.max(0, +est.tokens || 0);
+    var minutes = Math.max(0, +est.minutes || 0);
+    // Whose number it is: the build's own ("build"), or -- while the build
+    // has said nothing -- a stand-in from this chat's earlier builds
+    // ("measured") or the defaults ("default"). An older server says
+    // nothing about it, and its number was always the build's.
+    var source = str(est.source) || "build";
+    return (tokens || minutes)
+      ? { tokens: tokens, minutes: minutes, source: source, own: source === "build" }
+      : null;
+  }
+
+  function todoWatchEstimateTitle(est, rows, spent) {
+    var size = "about " + buildDuration(est.minutes * 60) + " and "
+      + est.tokens.toLocaleString() + " tokens for " + rows
+      + (rows === 1 ? " row" : " rows")
+      + (spent > 0 ? "; it spent " + spent.toLocaleString() : "");
+    if (est.own) {
+      return "the build's own estimate, printed before it started on the"
+        + " rows: " + size;
+    }
+    return (est.source === "measured"
+            ? "a stand-in from this chat's earlier builds"
+            : "a stand-in (nothing measured in this chat yet)")
+      + ", until the build prints its own estimate: " + size;
+  }
+
   function todoWatchLine(run) {
     // The panel's one line, or null when this goal has no build to watch.
     if (!run || typeof run !== "object" || !str(run.status)) return null;
     var head = WATCH_HEAD[str(run.status)] || str(run.status);
+    var est = todoWatchEstimate(run);
+    var spent = Math.max(0, +run.tokens || 0);
+    var checking = str(run.status) === "checking";
     var parts = [head];
     if (typeof run.elapsed_s === "number") {
       parts.push(buildDuration(run.elapsed_s) + " in");
     }
-    if (run.running && typeof run.eta_s === "number") {
+    if (run.running && !checking) {
+      // How much longer, by the build's own reckoning -- and "calculating"
+      // until it has reckoned, rather than a number nothing stands behind.
       // An estimate that has run out says so rather than sliding forward: a
       // number that keeps moving away is worse than none.
-      parts.push(run.eta_s > 0 ? "about " + buildDuration(run.eta_s) + " left"
-                 : "longer than usual");
+      if (!est || !est.minutes || typeof run.eta_s !== "number") {
+        parts.push("calculating…");
+      } else if (run.eta_s > 0) {
+        // The build's own word reads as "about"; a stand-in reads as "~",
+        // the way a guessed number does everywhere else on the rail.
+        parts.push((est.own ? "about " : "~") + buildDuration(run.eta_s) + " left");
+      } else {
+        parts.push(est.own ? "longer than it estimated" : "longer than expected");
+      }
     }
-    var per = buildDuration(run.per_row_s);
+    // Tokens: what it expects to spend while it runs, "~" because it is its
+    // guess; what it actually spent once it has stopped and said.
+    if ((!run.running || checking) && spent > 0) {
+      parts.push(todoTokenLabel(spent) + " tok");
+    } else if (est && est.tokens > 0) {
+      parts.push("~" + todoTokenLabel(est.tokens) + " tok");
+    }
+    var rows = Math.max(1, +run.rows || 1);
     return {
       head: head,
       running: !!run.running,
+      checking: checking,
       meta: parts.join(" · "),
       last: (run.last && typeof run.last === "object") ? str(run.last.text) : "",
       lines: +run.lines || 0,
       canOpen: !!run.can_open,
       error: str(run.error),
-      title: run.measured
-        ? "about " + per + " a row, from this chat's own finished builds"
-        : "about " + per + " a row — a default, until this chat has built"
-          + " something to measure"
+      // Where the restart check stands, drawn under the line by
+      // todoRestartPaint; null until a finished build has been asked.
+      restart: todoRestartOf(run),
+      title: est
+        ? todoWatchEstimateTitle(est, rows, spent)
+        : "the build prints its own estimate — how long, and how many tokens"
+          + " — as its first line, before it starts on the rows; a stand-in"
+          + " from this chat's earlier builds takes its place if it has not"
+          + " within a few seconds"
     };
+  }
+
+  // --- does the program need restarting ------------------------------------
+  //
+  // The rows are done and the code is on disk; whether the code that is
+  // running is that code is the build's last question to itself, asked of
+  // the same session on a cheaper model at high effort (build.RESTART_CHECK).
+  // The state carries where that stands as run.restart: "checking" while the
+  // question is out, then "yes" -- with the reason and the exact prompt to
+  // paste into the local Claude Code chat -- or "no", which draws nothing at
+  // all, since there is nothing to do. The block sits under the watch line,
+  // in the panel that already belongs to the build.
+
+  function todoRestartOf(run) {
+    var held = run && run.restart;
+    if (!held || typeof held !== "object" || !str(held.status)) return null;
+    return { status: str(held.status),
+             model: str(held.model) || "sonnet",
+             effort: str(held.effort) || "high",
+             fromModel: str(held.from_model),
+             why: str(held.why).trim(),
+             prompt: str(held.prompt).trim(),
+             at: str(held.at), error: str(held.error) };
+  }
+
+  var RESTART_CHECKING = "checking whether these changes go stale without a local restart…";
+  var RESTART_WHY = "the running instance keeps the old code until restarted.";
+  var todoRestartCopied = "";   // the goal whose prompt was just copied
+
+  function todoRestartPaint(box, restart, goalId) {
+    // Nothing until a finished build has been asked, and nothing on a no.
+    if (!restart || (restart.status !== "checking" && restart.status !== "yes")) {
+      return null;
+    }
+    var span = function (cls, words) {
+      var s = document.createElement("span");
+      s.className = cls;
+      s.textContent = words;
+      return s;
+    };
+    var wrap = document.createElement("div");
+    wrap.className = "hc-todo-restart";
+    wrap.setAttribute("data-hc-todo-restart", restart.status);
+    wrap.setAttribute("contenteditable", "false");
+    if (restart.status === "checking") {
+      // Which model the session moved to for the question -- struck
+      // through, what the build ran on -- and that it is at it.
+      var model = document.createElement("div");
+      model.className = "hc-todo-restart-model";
+      model.appendChild(span("hc-todo-restart-label", "model"));
+      if (restart.fromModel) {
+        model.appendChild(span("hc-todo-restart-from", restart.fromModel));
+      }
+      model.appendChild(span("hc-todo-restart-arrow", "→"));
+      model.appendChild(span("hc-todo-restart-to",
+                             restart.model + " · effort " + restart.effort));
+      wrap.appendChild(model);
+      var busy = document.createElement("div");
+      busy.className = "hc-todo-restart-busy";
+      busy.appendChild(span("hc-todo-restart-spin", ""));
+      busy.appendChild(span("hc-todo-restart-busy-text", RESTART_CHECKING));
+      wrap.appendChild(busy);
+      return box.appendChild(wrap);
+    }
+    var why = document.createElement("div");
+    why.className = "hc-todo-restart-why";
+    why.appendChild(span("hc-todo-restart-warn", "⚠"));
+    why.appendChild(span("hc-todo-restart-why-text", restart.why || RESTART_WHY));
+    wrap.appendChild(why);
+    // The prompt, boxed and labelled for where it goes, with a copy button
+    // in the box's own corner: the whole point of the check is this text
+    // reaching the other chat unchanged.
+    var send = document.createElement("div");
+    send.className = "hc-todo-restart-send";
+    var head = document.createElement("div");
+    head.className = "hc-todo-restart-send-head";
+    head.appendChild(span("hc-todo-restart-send-label", "send to local claude code"));
+    var copy = span("hc-todo-restart-copy",
+                    todoRestartCopied === str(goalId) ? "copied ✓" : "copy");
+    copy.setAttribute("data-hc-todo-restart-copy", str(goalId));
+    copy.setAttribute("role", "button");
+    copy.title = "copy the prompt for the Claude Code chat that runs this program";
+    head.appendChild(copy);
+    send.appendChild(head);
+    var text = document.createElement("pre");
+    text.className = "hc-todo-restart-prompt";
+    text.textContent = restart.prompt;
+    send.appendChild(text);
+    wrap.appendChild(send);
+    return box.appendChild(wrap);
+  }
+
+  var todoRestartCopiedTimer = null;
+
+  function todoRestartCopy(goalId) {
+    var runs = serverState.buildRuns || {};
+    var restart = todoRestartOf(runs[goalId]);
+    if (!restart || !restart.prompt) return false;
+    var text = restart.prompt;
+    var done = function () {
+      todoRestartCopied = str(goalId);
+      clearTimeout(todoRestartCopiedTimer);
+      todoRestartCopiedTimer = setTimeout(function () {
+        todoRestartCopied = "";
+        renderTodoRail(true);
+      }, 1600);
+      renderTodoRail(true);
+    };
+    var fallback = function () {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      (document.body || document.documentElement).appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy") === true; } catch (e) { ok = false; }
+      if (ta.parentNode) ta.parentNode.removeChild(ta);
+      return ok;
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        if (fallback()) done();
+      });
+    } else if (fallback()) {
+      done();
+    }
+    return true;
   }
 
   var watchOpen = {};        // goal id -> the log is unfolded
@@ -7362,8 +8238,13 @@
     // Redrawn only when it would say something different. A poll lands every
     // second and a half; a log rebuilt under the reader would take their
     // scroll position and any line they were selecting with it.
+    var restart = line && line.restart;
     var key = JSON.stringify([todoGoalId, open, line && line.meta,
-                              line && line.last, logged.length]);
+                              line && line.last, logged.length,
+                              restart && [restart.status, restart.why,
+                                          restart.prompt, restart.model,
+                                          restart.effort, restart.fromModel],
+                              todoRestartCopied === str(todoGoalId)]);
     if (box.getAttribute("data-hc-watch-key") !== key) {
       box.setAttribute("data-hc-watch-key", key);
       todoWatchPaint(box, line, open, logged);
@@ -7418,6 +8299,7 @@
       || (line.running ? "starting…" : "");
     last.style.display = last.textContent ? "" : "none";
     box.appendChild(last);
+    todoRestartPaint(box, line.restart, todoGoalId);
     if (!open) return true;
     var body = document.createElement("div");
     body.className = "hc-todo-watch-log";
@@ -7582,9 +8464,107 @@
     return changed;
   }
 
+  // --- the rail's rows against the store's, three ways --------------------
+  //
+  // While the reader types, the rail holds its own list and writes it whole;
+  // the server reads a row it is not sent as deleted. But the store can
+  // change under the rail meanwhile -- a sync landing rows another window
+  // typed, a recovery, a build marking rows -- and a list written whole over
+  // that erased whatever the rail had never seen, and blanked a row it had
+  // loaded empty before someone else filled it. Two lists cannot tell "I
+  // deleted this" from "I never saw this". A third can: the base, what the
+  // rail last took from the store. A stored row in neither the rail nor the
+  // base was added elsewhere and joins, after the stored row before it. A
+  // row in the base the rail no longer has was deleted here and stays gone.
+  // A row whose text (or depth) the rail has not changed since the base
+  // takes the store's. Status and question are not this function's: they
+  // are laid by todoLayState. Answers the rows and whether any changed; the
+  // rail's own rows are the objects given, as todoSectioned keeps them.
+
+  function todoBaseOf(rows) {
+    var out = Object.create(null);
+    array(rows).forEach(function (row) {
+      if (row && typeof row.id === "string") {
+        out[row.id] = { text: str(row.text), depth: row.depth | 0 };
+      }
+    });
+    return out;
+  }
+
+  function todoBaseMap(base) {
+    if (Array.isArray(base)) return todoBaseOf(base);
+    return base && typeof base === "object" ? base : Object.create(null);
+  }
+
+  function todoReconcile(items, stored, base) {
+    var rows = array(items).slice();
+    var known = todoBaseMap(base);
+    var have = Object.create(null);
+    rows.forEach(function (row) {
+      if (row && typeof row.id === "string") have[row.id] = row;
+    });
+    var changed = false;
+    var prev = null;
+    array(stored).forEach(function (row) {
+      if (!row || typeof row.id !== "string") return;
+      var mine = have[row.id], was = known[row.id];
+      if (mine) {
+        if (was) {
+          if (str(mine.text) === was.text && str(row.text) !== was.text) {
+            mine.text = str(row.text);
+            changed = true;
+          }
+          if ((mine.depth | 0) === was.depth && (row.depth | 0) !== was.depth) {
+            mine.depth = row.depth | 0;
+            changed = true;
+          }
+        }
+        prev = row.id;
+        return;
+      }
+      if (was) return; // deleted here, since the base
+      var fresh = todoCopyRows([row])[0];
+      var at = prev ? rows.indexOf(have[prev]) + 1 : 0;
+      rows.splice(at, 0, fresh);
+      have[fresh.id] = fresh;
+      prev = fresh.id;
+      changed = true;
+    });
+    return { items: rows, changed: changed };
+  }
+
+  function todoAbsorb(stored) {
+    // The store's rows into the rail's, by the rule above; the rows the two
+    // now agree on become the base. Answers whether the rail's rows changed.
+    if (!todoItems) return false;
+    var out = todoReconcile(todoItems, stored, todoBase);
+    var mine = Object.create(null);
+    out.items.forEach(function (row) { mine[row.id] = row; });
+    var base = todoBaseMap(todoBase);
+    array(stored).forEach(function (row) {
+      var held = row && mine[row.id];
+      if (held && str(held.text) === str(row.text)
+          && (held.depth | 0) === (row.depth | 0)) {
+        base[row.id] = { text: str(row.text), depth: row.depth | 0 };
+      }
+    });
+    todoBase = base;
+    if (!out.changed) return false;
+    // A row that joined above the caret's row would move the caret's index;
+    // the caret follows its row.
+    var at = todoFocusAt && todoItems[todoFocusAt.index];
+    todoItems = todoSectioned(out.items);
+    if (at) {
+      var where = todoItems.indexOf(at);
+      if (where >= 0) todoFocusAt.index = where;
+    }
+    return true;
+  }
+
   function todoLoad(goal) {
     todoGoalId = goal.id;
     todoItems = goal.items.length ? todoSectioned(goal.items) : [todoRow("", 0)];
+    todoBase = todoBaseOf(goal.items);
     todoPicked = {};
     todoBuildError = "";
     todoReopening = null;
@@ -7674,8 +8654,13 @@
     var goals = readLocalGoals();
     var node = todoFind(goals, todoGoalId);
     if (!node) return false;
+    // What the store gained since the rail last read it goes in first, or
+    // this write would carry the rail's older list over it and the server
+    // would read every row the rail never saw as deleted.
+    var stored = todoNormalize(node.todo_items);
+    todoAbsorb(stored);
     var next = todoCopyRows(todoItems);
-    if (same(todoNormalize(node.todo_items), next)) return false;
+    if (same(stored, next)) return false;
     // Its own field, written through the same tree import the notes editor
     // uses -- and never the notes: the list and the document are two things.
     // The server lays its own build state back over these rows by id.
@@ -7683,7 +8668,10 @@
     node.todos_md = todoSerialize(next);
     // The import's own promise, not merely "yes": a build pressed on a row
     // typed a moment ago must wait for that row's text to reach the server.
-    return writeGoalsLocal(goals);
+    var written = writeGoalsLocal(goals);
+    // Written, the rail's rows are the store's: the base is them now.
+    todoBase = todoBaseOf(next);
+    return written;
   }
 
   function todoSaveSoon() {
@@ -7853,6 +8841,16 @@
     } else if (mod || event.altKey) {
       // Cmd+C, Cmd+V, Cmd+Z and the rest are the browser's (copy is
       // answered on the copy event, where the rows leave as markdown).
+      return;
+    } else if (event.key === "Enter" && !event.shiftKey
+               && str(todoItems[index].status) === "building") {
+      // Enter on a row the build is working on does not split it into two:
+      // it opens the pane under the row where the reader adds to what the
+      // build was told -- the same thread Claude's own questions use. Not
+      // a new row, and not a reopen: a word to the session about this one.
+      event.preventDefault();
+      event.stopPropagation();
+      todoNoteOpen(todoItems[index].id);
       return;
     } else if (!where.collapsed && where.a !== where.b) {
       // A selection across rows: the browser will not edit across editing
@@ -8241,6 +9239,39 @@
       });
   }
 
+  // The pane under a building row: a word to the session about that row,
+  // sent where an answer to one of its questions goes. Nothing on the list
+  // changes -- the row stays out, the note is not a row -- so the rail has
+  // nothing to hold; the watch line's log says what was sent.
+  var todoNoting = null;
+
+  function todoNoteOpen(id) {
+    todoNoting = id;
+    todoReopening = null;
+    todoBuildError = "";
+    renderTodoRail(true);
+    var box = document.querySelector("[data-hc-todo-note=\"" + id + "\"]");
+    if (box) box.focus();
+  }
+
+  function todoNote(id, text) {
+    var note = str(text).trim();
+    if (!todoGoalId || !note) return;
+    var goalId = todoGoalId;
+    todoNoting = null;
+    todoBuildError = "";
+    renderTodoRail(true);
+    post({ op: "note_todo", goal_id: goalId, id: id, note: note })
+      .then(function (res) {
+        if ((!res || !res.ok) && todoGoalId === goalId) {
+          todoBuildError = (res && res.error) || "the note could not be sent";
+        }
+        // The log is re-read on the next poll: it carries what was sent.
+        delete watchFetched[goalId];
+        todoSettle();
+      });
+  }
+
   function todoReopen(id, text) {
     // "No, you did a bad job": the row goes back out on its next run, told
     // what was wrong with the last one. The run that ended is kept, note and
@@ -8434,6 +9465,20 @@
         }
         return;
       }
+      if (node && node.getAttribute
+          && node.getAttribute("data-hc-todo-note") !== null) {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          todoNote(node.getAttribute("data-hc-todo-note"), node.value);
+        } else if (event.key === "Escape") {
+          // Nothing sent; the build carries on as it was.
+          event.preventDefault();
+          event.stopPropagation();
+          todoNoting = null;
+          renderTodoRail(true);
+        }
+        return;
+      }
       // Cmd+Enter from anywhere that is not a place to type -- the Build
       // control just clicked, Select all, the tree -- is the build, the
       // same as from the list. Once: the reader should not have to click
@@ -8457,7 +9502,8 @@
       var typed = event.target;
       if (typed && typed.getAttribute
           && (typed.getAttribute("data-hc-todo-answer") !== null
-              || typed.getAttribute("data-hc-todo-reopen") !== null)) {
+              || typed.getAttribute("data-hc-todo-reopen") !== null
+              || typed.getAttribute("data-hc-todo-note") !== null)) {
         // The box grows with its text: one line until it needs two.
         typed.style.height = "auto";
         typed.style.height = typed.scrollHeight + "px";
@@ -8517,6 +9563,7 @@
       var clicked = at >= 0 && todoItems ? todoItems[at] : null;
       if (clicked && clicked.status === "done") {
         todoReopening = clicked.id;
+        todoNoting = null;
         renderTodoRail(true);
         var box = document.querySelector("[data-hc-todo-reopen]");
         if (box) box.focus();
@@ -8526,6 +9573,10 @@
       // pane away. Not inside it: the note is being typed there.
       if (todoReopening && !todoInReopenPane(node)) {
         todoReopening = null;
+        renderTodoRail(true);
+      }
+      if (todoNoting && !todoInNotePane(node)) {
+        todoNoting = null;
         renderTodoRail(true);
       }
       var dash = node.getAttribute("data-hc-todo-dash");
@@ -8547,6 +9598,12 @@
         watchOpen[logFor] = !watchOpen[logFor];
         if (watchOpen[logFor] && !watchLines[logFor]) todoLoadLog(logFor);
         renderTodoRail(true);
+        return;
+      }
+      var copyFor = node.getAttribute("data-hc-todo-restart-copy");
+      if (copyFor !== null) {
+        event.preventDefault();
+        todoRestartCopy(copyFor);
         return;
       }
       var termFor = node.getAttribute("data-hc-todo-term");
@@ -8588,6 +9645,14 @@
   function todoInReopenPane(node) {
     while (node && node !== document) {
       if (node.className === "hc-todo-ask hc-todo-reopen-pane") return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
+  function todoInNotePane(node) {
+    while (node && node !== document) {
+      if (node.className === "hc-todo-ask hc-todo-note-pane") return true;
       node = node.parentNode;
     }
     return false;
@@ -8743,7 +9808,39 @@
       // one place in the rail where the two of them talk about a row.
       wrap.appendChild(todoReopenNode(row));
     }
+    if (row.status === "building" && todoNoting === row.id) {
+      // And the reader adding to what the build was told, while it is on
+      // the row: the same thread again, opened by Enter on the row.
+      wrap.appendChild(todoNoteNode(row));
+    }
     return wrap;
+  }
+
+  function todoNoteNode(row) {
+    var pane = document.createElement("div");
+    pane.className = "hc-todo-ask hc-todo-note-pane";
+    pane.setAttribute("contenteditable", "false");
+    pane.style.marginLeft = (row.depth * 20 + 22) + "px";
+    var q = document.createElement("div");
+    q.className = "hc-todo-question";
+    q.textContent = "Anything to add while it builds this?";
+    pane.appendChild(q);
+    var reply = document.createElement("div");
+    reply.className = "hc-todo-reply";
+    var arrow = document.createElement("span");
+    arrow.className = "hc-todo-arrow";
+    arrow.textContent = "↳";
+    reply.appendChild(arrow);
+    var note = document.createElement("textarea");
+    note.className = "hc-todo-answer";
+    note.rows = 1;
+    note.setAttribute("rows", "1");
+    note.placeholder = "tell the build, then enter";
+    note.spellcheck = false;
+    note.setAttribute("data-hc-todo-note", row.id);
+    reply.appendChild(note);
+    pane.appendChild(reply);
+    return pane;
   }
 
   function todoReopenNode(row) {
@@ -8773,6 +9870,274 @@
     return pane;
   }
 
+  // --- onboarding: which project is this chat for? -------------------------
+  //
+  // A chat used to belong to the directory it was started in, which made
+  // every chat in a folder the same project, forever, with nothing to choose.
+  // Now the chat says: until it has been bound, the workspace opens on this
+  // instead of on an empty tree, because an empty tree is indistinguishable
+  // from a project with nothing in it yet.
+  //
+  // Drawn on documentElement rather than inside the artifact's own DOM, for
+  // the reason everything else here is: the artifact re-creates what it owns
+  // and a panel inside it loses its listeners the first time it redraws.
+
+  var onbBox = null;
+  var onbStep = "start";      // start · used · make · pick
+  var onbProjects = null;     // the reader's projects, once asked for
+  var onbBusy = false;
+  var onbSaid = "";
+
+  function onbNeeded() {
+    return serverState.scope === "chat"
+      && serverState.projectBound === false;
+  }
+
+  function onbClose() {
+    if (onbBox && onbBox.parentNode) onbBox.parentNode.removeChild(onbBox);
+    onbBox = null;
+  }
+
+  function onbSay(words) {
+    onbSaid = str(words);
+    renderOnboarding(true);
+  }
+
+  function onbBtn(label, act, primary) {
+    var quiet = act === "back";
+    var b = el("span", quiet ? "hc-onb-quiet"
+               : "hc-onb-btn" + (primary ? " hc-onb-btn-on" : ""), label);
+    b.setAttribute("role", "button");
+    b.setAttribute("data-hc-onb", act);
+    return b;
+  }
+
+  function onbHead(box, title, note) {
+    box.appendChild(el("div", "hc-onb-title", title));
+    if (note) box.appendChild(el("div", "hc-onb-note", note));
+  }
+
+  // Every project this vault knows, newest first, for the "which one is it?"
+  // step. Asked for once and kept: the list does not change while a wizard
+  // is open, and a spinner per redraw would flicker.
+  function onbLoadProjects() {
+    if (onbProjects) return;
+    onbProjects = [];
+    fetchJSON("/api/projects").then(function (res) {
+      onbProjects = (res && res.ok && array(res.projects)) || [];
+      if (onbStep === "pick") renderOnboarding(true);
+    });
+  }
+
+  function onbBind(where, then) {
+    if (onbBusy) return;
+    onbBusy = true;
+    onbSay("");
+    post({ op: "bind_project", cwd: where }).then(function (res) {
+      onbBusy = false;
+      if (!res || !res.ok) {
+        onbSay((res && res.error) || "that project could not be opened");
+        return;
+      }
+      // The project already had a window open. This page was only ever
+      // somewhere to be asked which project the chat is for; the goals are
+      // over there, and so is everyone else working on them.
+      if (res.open && typeof location !== "undefined"
+          && str(res.open) !== str(location.href)) {
+        onbClose();
+        location.href = str(res.open);
+        return;
+      }
+      // Bound: the gate is answered locally too, so the wizard closes on this
+      // turn rather than on whenever the next poll happens to land.
+      serverState.projectBound = true;
+      if (serverState.project && res.project) serverState.project = res.project;
+      onbClose();
+      if (typeof then === "function") then();
+      refreshState();
+    });
+  }
+
+  // New project, or an existing one Engelbart has never seen: named, given a
+  // purpose, minted, bound, and then the canvas -- blank, but a blank that
+  // knows what it is for.
+  function onbMake() {
+    if (onbBusy) return;
+    var name = str((onbBox.querySelector("[data-hc-onb-name]") || {}).value).trim();
+    var why = str((onbBox.querySelector("[data-hc-onb-why]") || {}).value).trim();
+    if (!name) { onbSay("give the project a name"); return; }
+    onbBusy = true;
+    onbSay("");
+    post({ op: "new_project", name: name }).then(function (res) {
+      if (!res || !res.ok || !res.cwd) {
+        onbBusy = false;
+        onbSay((res && res.error) || "the project could not be made");
+        return null;
+      }
+      var home = res.cwd;
+      // The purpose is written against the project that was just made, which
+      // has no chat of its own yet -- so it is written here or not at all.
+      return post({ op: "project_setup", cwd: home, objective: why })
+        .then(function () { onbBusy = false; onbBind(home); });
+    });
+  }
+
+  function onbBody(box) {
+    if (onbStep === "start") {
+      onbHead(box, "Which project is this chat for?",
+              "Engelbart keeps goals per project. Say which one this "
+              + "conversation belongs to and it stays bound to it.");
+      var row = el("div", "hc-onb-row");
+      row.appendChild(onbBtn("Start a new project", "new", true));
+      row.appendChild(onbBtn("Resume an existing project", "existing"));
+      box.appendChild(row);
+      return;
+    }
+    if (onbStep === "used") {
+      onbHead(box, "Have you used Engelbart for this project before?",
+              "If you have, this chat joins the goals already there. If not, "
+              + "it starts them.");
+      var r2 = el("div", "hc-onb-row");
+      r2.appendChild(onbBtn("Yes — find it", "pick", true));
+      r2.appendChild(onbBtn("No — set it up", "make"));
+      r2.appendChild(onbBtn("Back", "back"));
+      box.appendChild(r2);
+      return;
+    }
+    if (onbStep === "make") {
+      onbHead(box, "Name the project",
+              "What it is called, and what it is for. The purpose is read "
+              + "beside every goal afterwards.");
+      var name = el("input", "hc-onb-field");
+      name.setAttribute("data-hc-onb-name", "");
+      name.setAttribute("placeholder", "Project name");
+      name.setAttribute("spellcheck", "false");
+      box.appendChild(name);
+      var why = el("textarea", "hc-onb-field hc-onb-area");
+      why.setAttribute("data-hc-onb-why", "");
+      why.setAttribute("placeholder", "What are you trying to accomplish?");
+      why.setAttribute("rows", "3");
+      why.setAttribute("spellcheck", "false");
+      box.appendChild(why);
+      var r3 = el("div", "hc-onb-row");
+      r3.appendChild(onbBtn(onbBusy ? "Working…" : "Continue", "continue", true));
+      r3.appendChild(onbBtn("Back", "back"));
+      box.appendChild(r3);
+      return;
+    }
+    // pick
+    onbHead(box, "Which one is it?",
+            "This chat is bound to the project you choose, and stays bound "
+            + "to it across resumes.");
+    onbLoadProjects();
+    var list = el("div", "hc-onb-list");
+    if (!onbProjects || !onbProjects.length) {
+      list.appendChild(el("div", "hc-onb-empty",
+        onbProjects ? "no projects yet — set this one up instead"
+                    : "looking…"));
+    } else {
+      onbProjects.forEach(function (row) {
+        var item = el("div", "hc-onb-item");
+        item.setAttribute("role", "button");
+        item.setAttribute("data-hc-onb", "bind");
+        item.setAttribute("data-hc-onb-cwd", str(row.cwd));
+        item.appendChild(el("span", "hc-onb-item-name",
+                            str(row.name || row.cwd)));
+        var why = str(row.objective || "").replace(/\s+/g, " ").trim();
+        if (why) item.appendChild(el("span", "hc-onb-item-why", why.slice(0, 90)));
+        item.appendChild(el("span", "hc-onb-item-where", str(row.cwd)));
+        list.appendChild(item);
+      });
+    }
+    box.appendChild(list);
+    var r4 = el("div", "hc-onb-row");
+    r4.appendChild(onbBtn("Back", "back"));
+    box.appendChild(r4);
+  }
+
+  var onbBound = false;
+
+  function onbDelegate() {
+    if (onbBound || !document.addEventListener) return;
+    onbBound = true;
+    document.addEventListener("click", function (event) {
+      var node = event.target;
+      while (node && node !== document && !(node.getAttribute
+             && node.getAttribute("data-hc-onb"))) {
+        node = node.parentNode;
+      }
+      if (!node || node === document || !node.getAttribute) return;
+      var act = node.getAttribute("data-hc-onb");
+      event.preventDefault();
+      event.stopPropagation();
+      if (act === "new") { onbStep = "make"; renderOnboarding(true); }
+      else if (act === "existing") { onbStep = "used"; renderOnboarding(true); }
+      else if (act === "pick") { onbStep = "pick"; renderOnboarding(true); }
+      else if (act === "make") { onbStep = "make"; renderOnboarding(true); }
+      else if (act === "back") {
+        onbStep = onbStep === "used" ? "start"
+                : (onbStep === "pick" ? "used" : "start");
+        renderOnboarding(true);
+      } else if (act === "continue") { onbMake(); }
+      else if (act === "bind") {
+        onbBind(node.getAttribute("data-hc-onb-cwd"));
+      }
+    }, true);
+  }
+
+  var ONB_VARS = ["--panel", "--panel2", "--ink", "--dtxt", "--fnt", "--mut",
+                  "--bd", "--bd2", "--hov", "--hc-ok", "--hc-warn", "--acc"];
+
+  function onbCarryTheme(node) {
+    var shell = document.querySelector(".hc");
+    if (!shell || typeof getComputedStyle !== "function") return;
+    var from = getComputedStyle(shell);
+    ONB_VARS.forEach(function (name) {
+      var value = from.getPropertyValue(name);
+      if (value && value.trim()) node.style.setProperty(name, value.trim());
+    });
+  }
+
+  function renderOnboarding(force) {
+    onbDelegate();
+    if (!onbNeeded()) { if (onbBox) onbClose(); return false; }
+    // Already up and unchanged: rebuilding on every sweep would take the
+    // caret out of the name field between keystrokes. The theme is re-read
+    // anyway -- the artifact applies dark after its first paint, and a panel
+    // that copied the palette once would stay light in front of a dark
+    // workspace forever.
+    if (onbBox && onbBox.parentNode && !force) {
+      onbCarryTheme(onbBox);
+      return true;
+    }
+    var at = onbBox && onbBox.querySelector("[data-hc-onb-name]");
+    var typed = at ? at.value : null;
+    var area = onbBox && onbBox.querySelector("[data-hc-onb-why]");
+    var typedWhy = area ? area.value : null;
+    onbClose();
+    var shade = el("div", "hc-onb-shade");
+    // The theme's variables are declared on the artifact's own shell, and this
+    // panel deliberately lives outside it -- on documentElement, where nothing
+    // the artifact redraws can take its listeners away. So they are carried
+    // across by hand; without this the panel has no background and its text is
+    // the browser's black, on a dark shade.
+    onbCarryTheme(shade);
+    var box = el("div", "hc-onb");
+    onbBody(box);
+    if (onbSaid) box.appendChild(el("div", "hc-onb-said", onbSaid));
+    shade.appendChild(box);
+    (document.documentElement || document.body).appendChild(shade);
+    onbBox = shade;
+    var name = shade.querySelector("[data-hc-onb-name]");
+    if (name) {
+      if (typed !== null) name.value = typed;
+      name.focus();
+    }
+    var why2 = shade.querySelector("[data-hc-onb-why]");
+    if (why2 && typedWhy !== null) why2.value = typedWhy;
+    return true;
+  }
+
   function renderTodoRail(force) {
     if (serverState.scope !== "chat") return false;
     todoDelegate();
@@ -8794,6 +10159,7 @@
     if (!goal) {
       todoGoalId = null;
       todoItems = null;
+      todoBase = null;
     } else if (goal.id !== todoGoalId) {
       todoLoad(goal);
       force = true;
@@ -8809,14 +10175,20 @@
           todoItems = incoming || [todoRow("", 0)];
           force = true;
         }
+        todoBase = todoBaseOf(goal.items);
       } else if (incoming && todoItems && document.activeElement === todoHost()) {
         // Mid-edit, the rows are the reader's: nothing replaces the one
         // they are typing in. The server's word on a row's STATE still
         // lands, though -- laid over the rows by id, text untouched -- or a
         // build finishing while they type the next TODO would never show.
-        // The caret is put back where it was, by row id, since the rows
-        // may re-band.
-        if (todoLayState(todoItems, incoming)) {
+        // And what the store GAINED lands too -- rows another window or a
+        // sync added, text typed into a row this one had loaded empty --
+        // by the base (todoReconcile), or the rail's next save would write
+        // its older list over them and the server would read them as
+        // deleted. The caret is put back where it was, by row id, since
+        // the rows may re-band.
+        var laid = todoLayState(todoItems, incoming);
+        if (todoAbsorb(goal.items) || laid) {
           todoItems = todoSectioned(todoItems);
           force = true;
         }
@@ -8911,9 +10283,8 @@
     });
     var drawn = list.getAttribute("data-hc-todo-shape");
     if (!force && drawn === JSON.stringify(shape) && list.children.length) {
-      // The rows stand, but what a build costs here may have moved under
-      // them -- a finished build is a new sample, and the goal tree every
-      // build carries grows as the reader writes. The corners follow it.
+      // The rows stand, but a finished build may have written what it spent
+      // onto one of them since. The corners follow it.
       todoCostSweep(list);
       return true;
     }
@@ -8929,12 +10300,15 @@
       }
     }
     var reply = null;
-    if (active && active.getAttribute
-        && active.getAttribute("data-hc-todo-answer") !== null) {
-      reply = { id: active.getAttribute("data-hc-todo-answer"),
+    ["data-hc-todo-answer", "data-hc-todo-reopen", "data-hc-todo-note"].forEach(function (attr) {
+      if (reply || !active || !active.getAttribute
+          || active.getAttribute(attr) === null) return;
+      // Whichever box of the thread is being typed in -- an answer, a
+      // reopen note, a note to a running build -- comes back as it was.
+      reply = { attr: attr, id: active.getAttribute(attr),
                 value: str(active.value),
                 at: typeof active.selectionStart === "number" ? active.selectionStart : null };
-    }
+    });
     list.setAttribute("data-hc-todo-shape", JSON.stringify(shape));
     list.setAttribute("contenteditable", TODO_EDITABLE);
     list.setAttribute("spellcheck", "false");
@@ -8965,7 +10339,7 @@
       }
     }
     if (reply) {
-      var box = list.querySelector("[data-hc-todo-answer=\"" + reply.id + "\"]");
+      var box = list.querySelector("[" + reply.attr + "=\"" + reply.id + "\"]");
       if (box) {
         box.value = reply.value;
         try {
@@ -9001,11 +10375,6 @@
   var promptCtxText = "";
   var promptCtxBusy = false;
   var promptCtxFold = false;
-  // What that same string costs with no rows in it, as the server counted it,
-  // and the goal it was counted for. This is what a TODO row's corner prices
-  // itself against -- see todoCostBasis -- so the number beside a row and the
-  // number above the field are one measurement of one string.
-  var promptCtxCost = { goal: "", context: 0 };
 
   function promptCtxSignature(goal) {
     // Anything in the tree can move the context, so the tree is the key --
@@ -9047,13 +10416,7 @@
         promptCtxText = (res && res.ok && typeof res.prompt === "string")
           ? res.prompt : "";
         window.__hcPromptContext = promptCtxText;
-        promptCtxCost = (res && res.ok && +res.context_tokens > 0)
-          ? { goal: goalId, context: Math.round(+res.context_tokens) }
-          : { goal: "", context: 0 };
-        // The corners are repriced in place rather than redrawn: the reader
-        // is very likely typing in one of those rows.
         if (railTab === "prompt") renderTodoRail(true);
-        else todoCostSweep(todoHost());
       });
   }
 
@@ -9478,8 +10841,8 @@
     var reads = array(state.reads).map(str).filter(Boolean);
     if (reads.length) rows.push(["", "reads: " + reads.join(" · ")]);
     rows.push([state.active ? "on" : "off",
-               state.active ? "on · /goals-ui disable turns it off"
-                            : "off · /goals-ui turns it back on"]);
+               state.active ? "on · /bart disable turns it off"
+                            : "off · /bart turns it back on"]);
     return rows;
   }
 
@@ -10206,6 +11569,8 @@
       renderInheritedSources();
       renderAnalyzer();
       renderProjectChip();
+      armBrand();
+      renderHome();
       renderOverview();
       renderHandoff();
       renderBell();
@@ -11661,6 +13026,7 @@
       serializeStates: todoSerializeStates,
       copyText: todoCopyText,
       normalize: todoNormalize,
+      reconcile: todoReconcile,
       enter: todoEnter,
       indent: todoIndent,
       outdent: todoOutdent,
@@ -11687,6 +13053,9 @@
       duration: buildDuration,
       watchLine: todoWatchLine,
       renderWatch: renderTodoWatch,
+      restartOf: todoRestartOf,
+      renderRestart: todoRestartPaint,
+      copyRestart: todoRestartCopy,
       openLog: function (goalId) {
         watchOpen[goalId] = true;
         todoLoadLog(goalId);
@@ -11847,9 +13216,19 @@
       state: function () { return handoffState; },
       last: function () { return handoffLast; },
     },
+    record: {
+      render: renderRecordButton,
+      copy: copyProjectRecord,
+      fetch: fetchProjectRecord,
+      state: function () { return recordState; },
+      last: function () { return recordLast; },
+    },
     alerts: {
       track: trackTodoAlerts,
       diff: todoAlertsFrom,
+      trackRestart: trackRestartAlerts,
+      restartDiff: restartAlertsFrom,
+      sticky: alertSticky,
       noteOut: alertNoteOut,
       stack: alertStack,
       log: function () { return loadAlertLog().slice(); },

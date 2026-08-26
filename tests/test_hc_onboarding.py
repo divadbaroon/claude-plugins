@@ -57,7 +57,7 @@ class HcOnboardingTests(unittest.TestCase):
             import human_compact.cli as cli
             return importlib.reload(cli)
 
-    def test_install_adds_bare_goals_ui_without_enabling_global_vault(self):
+    def test_install_adds_bare_bart_without_enabling_global_vault(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
             (home / ".claude").mkdir()
@@ -65,13 +65,13 @@ class HcOnboardingTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 cli.install_main([])
 
-            skill = home / ".claude" / "skills" / "goals-ui" / "SKILL.md"
+            skill = home / ".claude" / "skills" / "bart" / "SKILL.md"
             hooks = home / ".claude" / "skills" / "vault" / "hooks" / "hooks.json"
             self.assertTrue(skill.is_file())
             body = skill.read_text()
             self.assertNotIn('!`', body)
             self.assertIn('disable-model-invocation: true', body)
-            # When the hook runs, /goals-ui is silent and this body never
+            # When the hook runs, /bart is silent and this body never
             # reaches Claude. The one case where it does reach Claude is the
             # one that used to be silent for the wrong reason: a session that
             # loaded its hooks before the plugin was installed. So the body
@@ -86,29 +86,29 @@ class HcOnboardingTests(unittest.TestCase):
                           '--session ${CLAUDE_SESSION_ID}', body)
             self.assertNotIn("Tell the user to restart", body)
             self.assertIn("injected as context on session\nstart, later messages, subagents and tool batches", body)
-            self.assertIn("`/goals-ui disable` turns\nthat off for this chat", body)
+            self.assertIn("`/bart disable` turns\nthat off for this chat", body)
             self.assertTrue(hooks.is_file())
             self.assertFalse((home / ".claude-vault" / "bin" / "claude").exists())
             self.assertFalse((home / ".zshrc").exists())
 
     def test_one_name_binds_the_matcher_the_installed_skill_and_frontmatter(self):
-        # `/goals-ui` only reaches the hook when all three agree. Renaming any
+        # `/bart` only reaches the hook when all three agree. Renaming any
         # one of them alone degrades the command into an ordinary prompt
         # instead of failing loudly, so bind them here.
         hooks = json.loads((PLUGIN_HOOKS / "hooks.json").read_text())["hooks"]
         matchers = {group.get("matcher")
                     for group in hooks["UserPromptExpansion"]}
-        source = (HC_SRC / "human_compact" / "assets" / "goals-ui-skill" /
+        source = (HC_SRC / "human_compact" / "assets" / "bart-skill" /
                   "SKILL.md").read_text()
         frontmatter = re.search(r"^name:[ \t]*(\S+)[ \t]*$", source, re.M)
         if str(HC_SRC) not in sys.path:
             sys.path.insert(0, str(HC_SRC))
         import human_compact.cli as cli
 
-        self.assertEqual({"goals-ui"}, matchers)
+        self.assertEqual({"bart"}, matchers)
         self.assertIsNotNone(frontmatter)
-        self.assertEqual("goals-ui", frontmatter.group(1))
-        self.assertEqual("goals-ui", cli.GOALS_UI_SKILL_DIR.name)
+        self.assertEqual("bart", frontmatter.group(1))
+        self.assertEqual("bart", cli.BART_SKILL_DIR.name)
 
     def test_chat_hooks_are_always_on_and_global_hook_remains_opt_in(self):
         default = (PLUGIN_HOOKS / "hooks.json").read_text()

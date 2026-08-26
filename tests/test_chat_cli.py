@@ -20,7 +20,9 @@ HC_SRC = ROOT / "hc" / "src"
 if str(HC_SRC) not in sys.path:
     sys.path.insert(0, str(HC_SRC))
 
+from human_compact import cli  # noqa: E402
 from human_compact.trajectory import chat_state as CS  # noqa: E402
+from human_compact.trajectory import project_store as PS  # noqa: E402
 from human_compact.trajectory.ui import ThreadingHTTPServer  # noqa: E402
 
 
@@ -232,7 +234,7 @@ class ChatCliTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual("", output.getvalue())
         spawn.assert_not_called()
-        # History must still accumulate, or /goals-ui would open onto nothing.
+        # History must still accumulate, or /bart would open onto nothing.
         self.assertEqual(
             "The rebuild fix is tested.", CS.load_events(SID)[0]["text"]
         )
@@ -254,7 +256,7 @@ class ChatCliTests(unittest.TestCase):
         spawn.assert_called_once_with(SID)
 
     def test_prompt_hook_injects_even_though_the_workspace_is_closed(self):
-        # /goals-ui is a one-time opt-in, not a window that has to stay open:
+        # /bart is a one-time opt-in, not a window that has to stay open:
         # the user who closed the tab still owns the goals they wrote in it.
         CS.save_goals(SID, one_goal_tree(), {"items": []})
         CS.mark_goals_ui_invoked(SID)
@@ -448,7 +450,7 @@ class ChatCliTests(unittest.TestCase):
 
         with mock.patch.object(self.cli, "chat_ui_main") as launch:
             raw = self._hook("UserPromptExpansion", command_args="disable",
-                             command_name="goals-ui")
+                             command_name="bart")
 
         launch.assert_not_called()
         response = json.loads(raw)
@@ -543,9 +545,9 @@ class ChatCliTests(unittest.TestCase):
             )
         self.assertEqual(0, code)
         # `decision: block` ends the turn with no model call and shows `reason`
-        # to the user; that line is the whole of what /goals-ui says.
+        # to the user; that line is the whole of what /bart says.
         self.assertEqual(
-            {"decision": "block", "reason": "goals-ui: http://127.0.0.1:9012/"},
+            {"decision": "block", "reason": "bart: http://127.0.0.1:9012/"},
             json.loads(output.getvalue()),
         )
         opened.assert_called_once_with("http://127.0.0.1:9012/")
@@ -738,7 +740,7 @@ class ChatCliTests(unittest.TestCase):
 
         stopped.assert_not_called()
         reason = json.loads(output.getvalue())["reason"]
-        self.assertTrue(reason.startswith("goals-ui: http://127.0.0.1:9012/"))
+        self.assertTrue(reason.startswith("bart: http://127.0.0.1:9012/"))
         self.assertIn("a build is in flight", reason)
 
     def test_refresh_worker_hands_off_remaining_bounded_evidence(self):
@@ -825,3 +827,166 @@ class ChatCliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OneServerPerProjectTests(unittest.TestCase):
+    """A project has many chats and one workspace between them.
+
+    The registry used to live in the chat's own directory, so every chat
+    started a server of its own -- three chats in one project meant three
+    ports, three windows, and three different trees.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        os.environ["HC_CHAT_STATE_DIR"] = str(self.root)
+        self.addCleanup(os.environ.pop, "HC_CHAT_STATE_DIR", None)
+        self.home = str(self.root / "acme")
+        self.og = "aaaaaaaa-1111-4ccc-8ddd-eeeeeeeeeeee"
+        self.other = "bbbbbbbb-2222-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.other):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "the project's work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+
+    def test_chats_in_one_project_resolve_to_one_store(self):
+        for sid in (self.og, self.other):
+            CS.bind_project(sid, self.home, root=self.root)
+        self.assertEqual(CS.tree_session(self.og, self.root),
+                         CS.tree_session(self.other, self.root))
+
+    def test_the_registry_a_second_chat_reads_is_the_first_chat_s(self):
+        # The launcher looks for a running server where the project's store
+        # is, so a second chat finds the first one's registration.
+        for sid in (self.og, self.other):
+            CS.bind_project(sid, self.home, root=self.root)
+        shared = CS.tree_session(self.other, self.root)
+        cli._write_server_registry(CS.paths(shared, self.root).session_dir, {
+            "schema_version": 1, "session_id": shared, "pid": os.getpid(),
+            "url": "http://127.0.0.1:9/", "started_at": 0})
+        seen = cli._read_server_registry(
+            CS.paths(CS.tree_session(self.og, self.root), self.root).session_dir)
+        self.assertEqual("http://127.0.0.1:9/", (seen or {}).get("url"),
+                         "the second chat must find the first chat's server")
+
+    def test_an_unbound_chat_still_gets_a_workspace_of_its_own(self):
+        # It has no project yet -- it is about to be asked which -- so it
+        # cannot join one.
+        lone = "cccccccc-3333-4ccc-8ddd-eeeeeeeeeeee"
+        CS.ingest_hook({"session_id": lone, "hook_event_name": "SessionStart",
+                        "cwd": str(self.root / "elsewhere")}, root=self.root)
+        self.assertEqual(lone, CS.tree_session(lone, self.root))
+
+
+class ProjectOwnsItsServerTests(unittest.TestCase):
+    """Opening a workspace for a chat that has one open joins it.
+
+    The registry used to live in the chat's own directory, so the question
+    asked at launch was "is a server running for ME?" -- which every chat in
+    a project answered no to, and three chats meant three ports showing
+    three trees. The question is now asked of the project.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        os.environ["HC_CHAT_STATE_DIR"] = str(self.root)
+        self.addCleanup(os.environ.pop, "HC_CHAT_STATE_DIR", None)
+        self.home = str(self.root / "acme")
+        Path(self.home).mkdir(parents=True, exist_ok=True)
+        self.og = "aaaaaaaa-4444-4ccc-8ddd-eeeeeeeeeeee"
+        self.other = "bbbbbbbb-5555-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.other):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "the work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        for sid in (self.og, self.other):
+            CS.bind_project(sid, self.home, root=self.root)
+
+    def _open(self, sid):
+        buf = io.StringIO()
+        with (mock.patch.object(cli, "_request_chat_refresh"),
+              contextlib.redirect_stdout(buf)):
+            cli.chat_ui_main(["--session", sid, "--cwd", self.home, "--no-open"])
+        return buf.getvalue().strip().splitlines()[-1]
+
+    def test_a_second_chat_opens_the_workspace_the_first_one_started(self):
+        running = {"schema_version": 1, "session_id": CS.tree_session(self.og, self.root),
+                   "pid": os.getpid(), "url": "http://127.0.0.1:9/", "started_at": 0}
+        PS.set_server_record(self.root, self.home, running)
+        with (mock.patch.object(cli, "_healthy_chat_server", return_value=True),
+              mock.patch.object(cli, "subprocess") as spawned):
+            self.assertEqual("http://127.0.0.1:9/", self._open(self.other))
+        spawned.Popen.assert_not_called()
+
+    def test_a_project_with_nothing_running_starts_one_and_records_it(self):
+        def stood_up(*a, **k):
+            PS.set_server_record(self.root, self.home, {
+                "schema_version": 1,
+                "session_id": CS.tree_session(self.og, self.root),
+                "pid": os.getpid(), "url": "http://127.0.0.1:11/",
+                "started_at": 0})
+            return mock.DEFAULT
+        healthy = iter([False, True, True, True, True])
+        with (mock.patch.object(cli, "_healthy_chat_server",
+                                side_effect=lambda *a, **k: next(healthy, True)),
+              mock.patch.object(cli, "_request_chat_refresh"),
+              mock.patch.object(cli.subprocess, "Popen",
+                                side_effect=stood_up) as spawn):
+            spawn.return_value.poll.return_value = None
+            url = self._open(self.og)
+        self.assertEqual("http://127.0.0.1:11/", url)
+        self.assertEqual("http://127.0.0.1:11/",
+                         PS.server_record(self.root, self.home)["url"])
+
+    def test_the_workspace_a_project_starts_serves_the_project_s_store(self):
+        # Not the chat that happened to ask for it: a chat bound into a
+        # project must be handed that project's goals, not its own blank tree.
+        seen = {}
+
+        def stood_up(command, *a, **k):
+            seen["command"] = list(command)
+            PS.set_server_record(self.root, self.home, {
+                "schema_version": 1,
+                "session_id": CS.tree_session(self.other, self.root),
+                "pid": os.getpid(), "url": "http://127.0.0.1:12/",
+                "started_at": 0})
+            return mock.DEFAULT
+        healthy = iter([False])
+        with (mock.patch.object(cli, "_healthy_chat_server",
+                                side_effect=lambda *a, **k: next(healthy, True)),
+              mock.patch.object(cli, "_request_chat_refresh"),
+              mock.patch.object(cli.subprocess, "Popen",
+                                side_effect=stood_up) as spawn):
+            spawn.return_value.poll.return_value = None
+            self._open(self.other)
+        self.assertIn(self.og, seen["command"],
+                      "the server must be told to serve the project's store")
+
+    def test_a_stale_record_is_replaced_rather_than_opened(self):
+        PS.set_server_record(self.root, self.home, {
+            "schema_version": 1, "session_id": self.og, "pid": 999999,
+            "url": "http://127.0.0.1:13/", "started_at": 0})
+
+        def stood_up(*a, **k):
+            PS.set_server_record(self.root, self.home, {
+                "schema_version": 1,
+                "session_id": CS.tree_session(self.og, self.root),
+                "pid": os.getpid(), "url": "http://127.0.0.1:14/",
+                "started_at": 0})
+            return mock.DEFAULT
+        healthy = iter([False])
+        with (mock.patch.object(cli, "_healthy_chat_server",
+                                side_effect=lambda *a, **k: next(healthy, True)),
+              mock.patch.object(cli, "_request_chat_refresh"),
+              mock.patch.object(cli.subprocess, "Popen",
+                                side_effect=stood_up) as spawn):
+            spawn.return_value.poll.return_value = None
+            self.assertEqual("http://127.0.0.1:14/", self._open(self.og))

@@ -14,9 +14,13 @@ from pathlib import Path
 
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
-GOALS_UI_SKILL_DIR = HOME / ".claude" / "skills" / "goals-ui"
-# Pre-rename install path. Retired by install_plugin() when it is ours.
-LEGACY_HC_UI_SKILL_DIR = HOME / ".claude" / "skills" / "hc-ui"
+BART_SKILL_DIR = HOME / ".claude" / "skills" / "bart"
+# Pre-rename install paths, oldest first. Each is retired by install_plugin()
+# when it is one we put there; a skill someone else owns is left alone.
+LEGACY_SKILL_DIRS = (
+    (HOME / ".claude" / "skills" / "hc-ui", "hc-ui"),
+    (HOME / ".claude" / "skills" / "goals-ui", "goals-ui"),
+)
 VAULT_BIN = HOME / ".claude-vault" / "bin"
 ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
@@ -31,7 +35,7 @@ _ASSET_FILES = {
         "hooks/hooks.experimental.json", "scripts/chat-hook.sh",
         "scripts/vault-backfill.sh", "scripts/vault-hook.sh",
     },
-    "goals-ui": {"SKILL.md"},
+    "bart": {"SKILL.md"},
 }
 # This release ships the chat-scoped goal UI. The global Vault layer and the
 # analysis commands built on it stay in the tree, but nothing reaches them
@@ -39,7 +43,7 @@ _ASSET_FILES = {
 EXPERIMENTAL_COMMANDS = ("ui", "backup", "trajectory", "lens", "goals", "work",
                          "mark", "status", "refresh", "analyze", "worker")
 _LAUNCH_COMMAND_HELP = (
-    ("install", "install /goals-ui for Claude Code"),
+    ("install", "install /bart for Claude Code"),
     ("setup", "noninteractive npm onboarding"),
     ("chat-ui", "goal tree for one Claude chat"),
     ("supabase", "connect this workspace to your own Supabase"),
@@ -256,14 +260,19 @@ def _remove_asset(path: Path):
         shutil.rmtree(path)
 
 
-def _retire_legacy_hc_ui():
-    """Remove the pre-rename /hc-ui skill, but only when we installed it."""
-    path = LEGACY_HC_UI_SKILL_DIR
+def _retire_legacy_skills():
+    """Remove skills this command used to be called, when we installed them."""
+    for path, name in LEGACY_SKILL_DIRS:
+        _retire_one_legacy_skill(path, name)
+
+
+def _retire_one_legacy_skill(path, name):
     if not _path_exists(path):
         return
     ours = (not path.is_symlink() and path.is_dir()
-            and (_owned_asset(path, "hc-ui")
-                 or _asset_digest(path, "goals-ui") in _LEGACY_DIGESTS["goals-ui"]))
+            and (_owned_asset(path, name)
+                 or _owned_asset(path, "goals-ui")
+                 or _asset_digest(path, "bart") in _LEGACY_DIGESTS["goals-ui"]))
     if not ours:
         say(f"left unmanaged {path} in place")
         return
@@ -281,8 +290,8 @@ def install_plugin():
     specs = [
         {"asset": "vault", "source": asset_root() / "plugin",
          "destination": SKILLS_DIR},
-        {"asset": "goals-ui", "source": asset_root() / "goals-ui-skill",
-         "destination": GOALS_UI_SKILL_DIR},
+        {"asset": "bart", "source": asset_root() / "bart-skill",
+         "destination": BART_SKILL_DIR},
     ]
     for spec in specs:
         spec["ownership"] = _preflight_asset(
@@ -337,25 +346,25 @@ def install_plugin():
         if experimental_enabled() else
         "hooks: chat-scoped only (set HC_EXPERIMENTAL=1 at install to wire "
         "global Vault hooks)")
-    say(f"/goals-ui installed -> {GOALS_UI_SKILL_DIR}")
-    # Only after promotion: a stale /hc-ui skill would otherwise still claim a
-    # workspace URL that nothing supplies.
-    _retire_legacy_hc_ui()
+    say(f"/bart installed -> {BART_SKILL_DIR}")
+    # Only after promotion: a stale /hc-ui or /bart skill would otherwise
+    # still claim a workspace URL that nothing supplies.
+    _retire_legacy_skills()
 
 
 def install_main(argv=None):
     """Install the chat-scoped UI without enabling the global Vault layer."""
     ap = argparse.ArgumentParser(
         prog="hc install",
-        description="Install /goals-ui for Claude Code (no global context layer).")
+        description="Install /bart for Claude Code (no global context layer).")
     ap.parse_args(argv or [])
-    print("\nhc · /goals-ui\n")
+    print("\nhc · /bart\n")
     if not (HOME / ".claude").exists():
         say("WARNING: ~/.claude not found — install Claude Code first")
     install_plugin()
     print()
     say("Done. Start a new Claude Code session (or run /reload-plugins),")
-    say("then type /goals-ui in any chat.")
+    say("then type /bart in any chat.")
     print()
 
 
@@ -485,7 +494,7 @@ def setup_main(argv=None):
     """One noninteractive orchestration seam for the npm installer."""
     ap = argparse.ArgumentParser(
         prog="hc setup",
-        description="Install /goals-ui and optionally initialize global Vault state.")
+        description="Install /bart and optionally initialize global Vault state.")
     ap.add_argument("--global-vault", required=True,
                     choices=["yes", "no", "keep"])
     ap.add_argument("--goals", required=True, choices=["yes", "no"])
@@ -496,7 +505,7 @@ def setup_main(argv=None):
         ap.error("--global-vault yes is experimental in this release; "
                  "set HC_EXPERIMENTAL=1")
 
-    # This is deliberately first: /goals-ui remains installed even when optional
+    # This is deliberately first: /bart remains installed even when optional
     # global-history setup fails later and the user retries the installer.
     install_main([])
     if args.global_vault in ("keep", "no"):
@@ -1130,7 +1139,7 @@ def _chat_context_active(session_id):
     """True when this chat opted in to goal context and has not turned it off.
 
     Goal context is this chat's own state, so it is injected only into the
-    chat that asked for it -- but one /goals-ui is the whole ask.  The
+    chat that asked for it -- but one /bart is the whole ask.  The
     workspace server does not have to still be running: goals outlive the
     browser tab that wrote them, and a chat that silently stopped honouring
     them the moment a window closed would read as broken.
@@ -1178,7 +1187,7 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
         if event == "UserPromptExpansion":
             json.dump({
                 "decision": "block",
-                "reason": f"goals-ui could not initialize chat state: {exc}",
+                "reason": f"bart could not initialize chat state: {exc}",
             }, stdout)
             stdout.write("\n")
         return 0
@@ -1218,19 +1227,19 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             except (OSError, ValueError, TypeError, TimeoutError) as exc:
                 json.dump({
                     "decision": "block",
-                    "reason": f"goals-ui could not be disabled: {exc}",
+                    "reason": f"bart could not be disabled: {exc}",
                 }, stdout)
                 stdout.write("\n")
                 return 0
             json.dump({
                 "decision": "block",
-                "reason": "goals-ui: disabled for this chat — run /goals-ui "
+                "reason": "bart: disabled for this chat — run /bart "
                           "to turn it back on",
             }, stdout)
             stdout.write("\n")
             return 0
         # Launch from the hook rather than a skill `!` shell expansion. This
-        # keeps /goals-ui functional under disableSkillShellExecution policies.
+        # keeps /bart functional under disableSkillShellExecution policies.
         import contextlib
         import io
         launch_args = ["--session", session_id,
@@ -1261,21 +1270,21 @@ def chat_hook_main(argv=None, stdin=None, stdout=None):
             # additionalContext instead would buy a whole turn to say a URL
             # the user can already see.
             json.dump({"decision": "block",
-                       "reason": f"goals-ui: {url}"
+                       "reason": f"bart: {url}"
                                  + (f" — {aside}" if aside else "")},
                       stdout)
             stdout.write("\n")
         except (OSError, RuntimeError, SystemExit, TimeoutError, ValueError) as exc:
             json.dump({
                 "decision": "block",
-                "reason": f"goals-ui could not open: {exc}",
+                "reason": f"bart could not open: {exc}",
             }, stdout)
             stdout.write("\n")
         return 0
     if event in ("Stop", "TaskCompleted", "PostCompact", "SessionEnd"):
         try:
             # Ingestion above is unconditional so history exists whenever the
-            # user opens /goals-ui; paying for inference is not.
+            # user opens /bart; paying for inference is not.
             if CS.goals_ui_active(session_id):
                 _request_chat_refresh(session_id)
                 # Keep the user-readable copy current with what inference
@@ -1626,14 +1635,33 @@ def chat_serve_main(argv=None):
     from .trajectory import chat_state as CS, ui
     p = CS.paths(args.session)
 
+    from .trajectory import project_store as PS
+    # Only an explicit binding: recording this window against the directory
+    # the store happens to name would hand an unbound chat's workspace to a
+    # project it has never joined.
+    home = ""
+    try:
+        home = CS.bound_project(args.session)
+    except Exception:  # noqa: BLE001 - a store with no manifest has no project
+        home = ""
+
     def ready(url, _server):
-        _write_server_registry(p.session_dir, {
+        record = {
             "schema_version": 1,
             "session_id": args.session,
             "pid": os.getpid(),
             "url": url,
             "started_at": time.time(),
-        })
+        }
+        _write_server_registry(p.session_dir, record)
+        # And on the project, which is what every other chat of it reads:
+        # a workspace nobody else can find is a second window waiting to
+        # happen.
+        if home:
+            try:
+                PS.set_server_record(None, home, record)
+            except Exception:  # noqa: BLE001 - never fail to serve over this
+                pass
 
     try:
         ui.run(port=args.port, open_browser=False, trajdir=p.session_dir,
@@ -1642,6 +1670,13 @@ def chat_serve_main(argv=None):
         current = _read_server_registry(p.session_dir)
         if current and current.get("pid") == os.getpid():
             _server_registry(p.session_dir).unlink(missing_ok=True)
+        if home:
+            try:
+                noted = PS.server_record(None, home)
+                if noted and noted.get("pid") == os.getpid():
+                    PS.clear_server_record(None, home)
+            except Exception:  # noqa: BLE001 - shutdown must still finish
+                pass
     return 0
 
 
@@ -1700,7 +1735,7 @@ def chat_ui_main(argv=None):
             "session_id": args.session,
             "hook_event_name": "SessionStart",
             # Do not overwrite the stable project root already captured by
-            # SessionStart merely because the user invoked /goals-ui after `cd`.
+            # SessionStart merely because the user invoked /bart after `cd`.
             "cwd": CS.load_manifest(args.session).get("cwd") or session_cwd,
         })
         # Opening the workspace is the opt-in: from here this chat may be
@@ -1716,8 +1751,47 @@ def chat_ui_main(argv=None):
                            CS.load_manifest(args.session).get("transcript_path"),
                            session_cwd)
 
-    with CS.session_lock(args.session, wait_s=8):
-        record = _read_server_registry(p.session_dir)
+    # A workspace belongs to a project, not to a chat. A project has many
+    # chats, and one window between them: the question asked here used to be
+    # "is a server running for ME?", which every chat but the first answered
+    # no to -- three chats in a project meant three ports, three windows and
+    # three trees. It is asked of the project now, and the project is the one
+    # that remembers, so a chat that has never run a server of its own still
+    # finds the one that is up.
+    from .trajectory import project_store as PS
+    serve = args.session
+    try:
+        serve = CS.tree_session(args.session) or args.session
+    except Exception:  # noqa: BLE001 - an unresolvable project serves itself
+        serve = args.session
+    home = ""
+    try:
+        home = CS.bound_project(args.session)
+    except Exception:  # noqa: BLE001 - an unbound chat has only itself
+        home = ""
+    sp = CS.paths(serve)
+    sp.session_dir.mkdir(parents=True, exist_ok=True)
+
+    def _known():
+        """What is running for this project, as the project and the store
+        that serves it each remember it. The project is asked first: it is
+        the answer that holds when the chat asking has never served."""
+        if home:
+            noted = PS.server_record(None, home)
+            if isinstance(noted, dict) and noted.get("url"):
+                return noted
+        return _read_server_registry(sp.session_dir)
+
+    def _note(value):
+        if home and isinstance(value, dict):
+            PS.set_server_record(None, home, value)
+
+    def _forget():
+        if home:
+            PS.clear_server_record(None, home)
+
+    with CS.session_lock(serve, wait_s=8):
+        record = _known()
         note = ""
         # Reopening a workspace whose code has moved on is a restart, not a
         # reuse: otherwise the reader is handed back the same old server that
@@ -1726,19 +1800,28 @@ def chat_ui_main(argv=None):
         # Staleness first: it is a handful of stat calls, and the health probe
         # below is a request the common path should only pay for once.
         if (_server_outran_its_code(record)
-                and _healthy_chat_server(record, args.session)):
-            if _chat_server_is_building(p.session_dir):
+                and _healthy_chat_server(record, serve)):
+            if _chat_server_is_building(sp.session_dir):
                 note = ("kept the running workspace: a build is in flight."
                         " Reopen it when the build lands to pick up the"
                         " newer code.")
             elif _stop_chat_server(record):
                 record = None
-        if not _healthy_chat_server(record, args.session):
-            log_path = p.session_dir / "server.log"
+                _forget()
+        # Whose store the running workspace serves, as it says itself: a
+        # record made before this chat joined the project names the store it
+        # was started on, which is the store this chat now reads too.
+        running = str((record or {}).get("session_id") or serve)
+        if _healthy_chat_server(record, running):
+            _note(record)
+        else:
+            _forget()
+            record = None
+            log_path = sp.session_dir / "server.log"
             log_path.touch(mode=0o600, exist_ok=True)
             log_path.chmod(0o600)
             command = [sys.executable, "-m", "human_compact.cli", "chat-serve",
-                       "--session", args.session, "--port", str(args.port)]
+                       "--session", serve, "--port", str(args.port)]
             child_env = os.environ.copy()
             child_env.pop("HC_CHAT_INFERENCE", None)
             with log_path.open("ab", buffering=0) as log:
@@ -1761,9 +1844,13 @@ def chat_ui_main(argv=None):
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     break
-                candidate = _read_server_registry(p.session_dir)
-                if _healthy_chat_server(candidate, args.session):
+                # Either place the new server registers itself: its own
+                # store, which is what it writes, or the project's note,
+                # which is what the next chat will read.
+                candidate = _known()
+                if _healthy_chat_server(candidate, serve):
                     record = candidate
+                    _note(record)
                     break
                 time.sleep(0.05)
             if record is None:

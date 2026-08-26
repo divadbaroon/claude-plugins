@@ -48,7 +48,11 @@ class GoalSearchBrowserTests(unittest.TestCase):
         p.goals.write_text(json.dumps(goals))
         p.important.write_text(json.dumps({"items": []}))
         p.prompts.write_text(json.dumps({"prompts": []}))
-        p.manifest.write_text(json.dumps({"cwd": str(self.root)}))
+        p.manifest.write_text(json.dumps(
+            # A chat already in use: bound, so the workspace opens on
+            # the tree rather than on "which project is this for?".
+            {"cwd": str(self.root),
+             "project_bound_at": "2026-01-01T00:00:00+00:00"}))
         self.trajdir = p.session_dir
 
     def open(self, playwright):

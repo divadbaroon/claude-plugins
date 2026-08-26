@@ -305,9 +305,9 @@ class ChatStateTests(unittest.TestCase):
         write_jsonl(
             self.transcript,
             [
-                user_record("/goals-ui", uuid="launcher", prompt_id="launcher"),
+                user_record("/bart", uuid="launcher", prompt_id="launcher"),
                 user_record(
-                    "<command-name>/goals-ui</command-name>\n"
+                    "<command-name>/bart</command-name>\n"
                     "<command-message>goals-ui</command-message>",
                     uuid="wrapped-launcher",
                     prompt_id="wrapped-launcher",
@@ -349,7 +349,7 @@ class ChatStateTests(unittest.TestCase):
         self.assertIn("task_notification", kinds)
         launchers = [
             event for event in CS.load_events(SID, self.base)
-            if "goals-ui" in event.get("text", "")
+            if "bart" in event.get("text", "")
         ]
         self.assertEqual(2, len(launchers))
         self.assertTrue(all(not event["usable_for_goals"] for event in launchers))
@@ -654,12 +654,12 @@ class ChatStateTests(unittest.TestCase):
         self.assertEqual([first], goal["auto_prompt_ids"])
 
     def test_ui_launcher_detection_spans_current_and_legacy_spellings(self):
-        for text in ("/goals-ui", "/goals-ui now", "\\goals-ui", "goals-ui",
-                     "<command-name>/goals-ui</command-name>",
+        for text in ("/bart", "/bart now", "\\goals-ui", "bart",
+                     "<command-name>/bart</command-name>",
                      "/hc-ui", "<command-name>/hc-ui</command-name>"):
             with self.subTest(launcher=text):
                 self.assertTrue(CS._is_goals_ui_launcher(text))
-        for text in ("goal", "open the goal ui please", "/goals-ui-ish", ""):
+        for text in ("goal", "open the goal ui please", "/bart-ish", ""):
             with self.subTest(other=text):
                 self.assertFalse(CS._is_goals_ui_launcher(text))
 
@@ -1097,3 +1097,263 @@ class ChatStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectBindingTests(unittest.TestCase):
+    """A chat belongs to the project it was bound to, not to a directory.
+
+    Binding by directory made every chat started in one folder the same
+    project, forever, with nothing to choose and nothing to change. An
+    explicit binding is what "connect this chat to an existing project"
+    can mean at all -- so it is recorded on the chat, and the directory
+    it happened to start in is only a suggestion until then.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        CS.ingest_hook({"session_id": self.sid, "hook_event_name": "SessionStart",
+                        "cwd": str(self.root / "somewhere")}, root=self.root)
+
+    def test_a_new_chat_is_not_bound_to_any_project(self):
+        self.assertFalse(CS.project_bound(self.sid, root=self.root))
+        self.assertEqual("", CS.bound_project(self.sid, root=self.root))
+
+    def test_binding_records_the_project_and_survives_a_reread(self):
+        home = str(self.root / "projects" / "acme")
+        CS.bind_project(self.sid, home, root=self.root)
+        self.assertTrue(CS.project_bound(self.sid, root=self.root))
+        self.assertEqual(CS._project_home(home),
+                         CS.bound_project(self.sid, root=self.root))
+
+    def test_binding_again_moves_the_chat_rather_than_refusing(self):
+        first = str(self.root / "projects" / "one")
+        second = str(self.root / "projects" / "two")
+        CS.bind_project(self.sid, first, root=self.root)
+        CS.bind_project(self.sid, second, root=self.root)
+        self.assertEqual(CS._project_home(second),
+                         CS.bound_project(self.sid, root=self.root))
+
+    def test_an_empty_binding_is_refused_rather_than_stored(self):
+        with self.assertRaises(ValueError):
+            CS.bind_project(self.sid, "   ", root=self.root)
+        self.assertFalse(CS.project_bound(self.sid, root=self.root))
+
+    def test_binding_does_not_disturb_the_goals_ui_opt_in(self):
+        CS.mark_goals_ui_invoked(self.sid, root=self.root)
+        CS.bind_project(self.sid, str(self.root / "p"), root=self.root)
+        self.assertTrue(CS.goals_ui_active(self.sid, root=self.root))
+
+
+class ProjectTreeSharingTests(unittest.TestCase):
+    """A chat bound to a project reads and writes that project's tree.
+
+    Binding used to change only what a chat called itself. The workspace
+    still read the chat's own store, so joining a project you had been
+    working in for weeks opened on nothing -- the project's name in the
+    header, and an empty tree under it.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        self.og = "aaaaaaaa-1111-4ccc-8ddd-eeeeeeeeeeee"
+        self.new = "bbbbbbbb-2222-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.new):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "work already under way", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+
+    def test_a_bound_chat_sees_the_project_tree_not_its_own_empty_one(self):
+        empty, _ = CS.load_goals(self.new, root=self.root)
+        self.assertEqual([], empty["goals"], "it starts with nothing of its own")
+        CS.bind_project(self.new, self.home, root=self.root)
+        seen, _ = CS.load_goals(self.new, root=self.root)
+        self.assertEqual(["work already under way"],
+                         [g["title"] for g in seen["goals"]])
+
+    def test_what_a_bound_chat_writes_reaches_the_project(self):
+        CS.bind_project(self.new, self.home, root=self.root)
+        goals, important = CS.load_goals(self.new, root=self.root)
+        goals["goals"].append({"id": "g2", "title": "added from the new chat",
+                               "status": "active", "parent_goal_id": None})
+        self.assertTrue(CS.save_goals(self.new, goals, important, root=self.root))
+        # The other chat is looking at the same tree, not a copy of it.
+        theirs, _ = CS.load_goals(self.og, root=self.root)
+        self.assertIn("added from the new chat",
+                      [g["title"] for g in theirs["goals"]])
+
+    def test_the_first_chat_in_a_new_project_keeps_its_own_tree(self):
+        lone = "cccccccc-3333-4ccc-8ddd-eeeeeeeeeeee"
+        CS.ingest_hook({"session_id": lone, "hook_event_name": "SessionStart",
+                        "cwd": str(self.root / "brand-new")}, root=self.root)
+        CS.bind_project(lone, str(self.root / "brand-new"), root=self.root)
+        CS.save_goals(lone, {"version": 1, "goals": [
+            {"id": "g1", "title": "mine", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        seen, _ = CS.load_goals(lone, root=self.root)
+        self.assertEqual(["mine"], [g["title"] for g in seen["goals"]])
+
+
+class BoundChatInjectionTests(unittest.TestCase):
+    """What a bound chat shows and what it tells Claude are the same tree.
+
+    Redirecting the store alone left the workspace reading the project's
+    goals while the injection read the chat's own document -- which did not
+    exist. The reader saw a full tree and the model was told nothing, which
+    is a worse failure than the blank page it replaced, because it is quiet.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        self.og = "aaaaaaaa-1111-4ccc-8ddd-eeeeeeeeeeee"
+        self.new = "bbbbbbbb-2222-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.new):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "the project's work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        CS.bind_project(self.new, self.home, root=self.root)
+        CS.mark_goals_ui_invoked(self.new, root=self.root)
+
+    def test_a_bound_chat_injects_the_project_tree(self):
+        text = CS.render_context_injection(self.new, "full", root=self.root,
+                                           remember=False)
+        self.assertIn("the project's work", text,
+                      "the model must be told what the reader is looking at")
+
+    def test_the_snapshot_stays_the_chat_s_own(self):
+        # Two chats on one tree have seen different amounts of it, so what
+        # each was last told is its own business.
+        CS.render_context_injection(self.new, "full", root=self.root)
+        self.assertTrue(CS.paths(self.new, self.root).context_snapshot.is_file())
+        self.assertFalse(CS.paths(self.og, self.root).context_snapshot.is_file())
+
+
+class ProjectTreeIsAgreedTests(unittest.TestCase):
+    """Every chat in a project reads the same store, and the project says which.
+
+    Resolving it per chat by scanning let two chats in one project disagree:
+    session directories are UUIDs, so ordering them by name is arbitrary
+    rather than chronological, and the first one holding any goals won --
+    which was a seven-goal store beside a hundred-goal one.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        self.small = "aaaaaaaa-1111-4ccc-8ddd-eeeeeeeeeeee"   # sorts first
+        self.big = "zzzzzzzz-9999-4ccc-8ddd-eeeeeeeeeeee"     # sorts last
+        for sid in (self.small, self.big):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+        CS.save_goals(self.small, {"version": 1, "goals": [
+            {"id": "g1", "title": "a stub", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        CS.save_goals(self.big, {"version": 1, "goals": [
+            {"id": "g%d" % n, "title": "real work %d" % n, "status": "active",
+             "parent_goal_id": None} for n in range(2, 8)]},
+            {"items": []}, root=self.root)
+
+    def test_the_project_s_tree_is_the_store_holding_its_work(self):
+        newcomer = "bbbbbbbb-2222-4ccc-8ddd-eeeeeeeeeeee"
+        CS.ingest_hook({"session_id": newcomer, "hook_event_name": "SessionStart",
+                        "cwd": self.home}, root=self.root)
+        CS.bind_project(newcomer, self.home, root=self.root)
+        seen, _ = CS.load_goals(newcomer, root=self.root)
+        self.assertEqual(6, len(seen["goals"]),
+                         "the store with the project's work is its tree")
+
+    def test_a_migrated_chat_joins_the_same_tree(self):
+        # Migration used to mark a chat bound without saying whose tree it
+        # reads, so it kept its own and never joined the project at all.
+        CS.mark_project_migrated(self.small, root=self.root)
+        seen, _ = CS.load_goals(self.small, root=self.root)
+        self.assertEqual(6, len(seen["goals"]))
+
+    def test_two_chats_in_one_project_agree(self):
+        a = "cccccccc-3333-4ccc-8ddd-eeeeeeeeeeee"
+        b = "dddddddd-4444-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (a, b):
+            CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                            "cwd": self.home}, root=self.root)
+            CS.bind_project(sid, self.home, root=self.root)
+        self.assertEqual(CS.tree_session(a, self.root),
+                         CS.tree_session(b, self.root))
+
+
+class MigratedChatsStillJoinTheirProjectTests(unittest.TestCase):
+    """A chat marked bound before the home was recorded must still join.
+
+    The migration first only wrote the moment of binding, so a chat declared
+    already-in-a-project had no project to be in: it kept reading its own
+    store, and the reader saw one directory serving two trees. Marking again
+    has to fill in what the earlier marking left out.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        Path(self.home).mkdir(parents=True, exist_ok=True)
+
+    def _chat(self, sid, cwd=None):
+        CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                        "cwd": cwd or self.home}, root=self.root)
+
+    def test_a_chat_marked_bound_without_a_home_is_given_one(self):
+        sid = "aaaaaaaa-9999-4ccc-8ddd-eeeeeeeeeeee"
+        self._chat(sid)
+        with CS.session_lock(sid, self.root, wait_s=5) as p:
+            manifest = CS.load_manifest(sid, self.root)
+            manifest["project_bound_at"] = "2020-01-01T00:00:00+00:00"
+            manifest["project_bound_by"] = "migration"
+            CS._atomic_json(p.manifest, manifest)
+        CS.mark_project_migrated(sid, self.root)
+        self.assertEqual(CS._project_home(self.home),
+                         CS.bound_project(sid, self.root))
+
+    def test_filling_the_home_in_does_not_move_the_moment_it_was_bound(self):
+        sid = "bbbbbbbb-9999-4ccc-8ddd-eeeeeeeeeeee"
+        self._chat(sid)
+        with CS.session_lock(sid, self.root, wait_s=5) as p:
+            manifest = CS.load_manifest(sid, self.root)
+            manifest["project_bound_at"] = "2020-01-01T00:00:00+00:00"
+            CS._atomic_json(p.manifest, manifest)
+        CS.mark_project_migrated(sid, self.root)
+        self.assertEqual("2020-01-01T00:00:00+00:00",
+                         CS.load_manifest(sid, self.root)["project_bound_at"])
+
+    def test_a_chat_that_already_names_its_project_is_left_alone(self):
+        sid = "cccccccc-9999-4ccc-8ddd-eeeeeeeeeeee"
+        self._chat(sid)
+        elsewhere = str(self.root / "other")
+        CS.bind_project(sid, elsewhere, root=self.root)
+        CS.mark_project_migrated(sid, self.root)
+        self.assertEqual(CS._project_home(elsewhere),
+                         CS.bound_project(sid, self.root))
+
+    def test_two_migrated_chats_in_one_directory_read_one_tree(self):
+        first = "dddddddd-9999-4ccc-8ddd-eeeeeeeeeeee"
+        second = "eeeeeeee-9999-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (first, second):
+            self._chat(sid)
+        CS.save_goals(first, {"version": 1, "goals": [
+            {"id": "g1", "title": "the work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        for sid in (first, second):
+            CS.mark_project_migrated(sid, self.root)
+        self.assertEqual(first, CS.tree_session(second, self.root))
