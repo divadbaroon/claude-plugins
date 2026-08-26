@@ -462,6 +462,28 @@ def clear_server_record(root: Optional[Path], cwd) -> None:
         pass
 
 
+def forget_project(root: Optional[Path], cwd) -> bool:
+    """Drop the project's record and the window it was pointing at.
+
+    What goes is the project: the name, the objective, the description, the
+    sources -- the half the reader wrote -- and the derived snapshot beside
+    them. What stays is every goal of every chat, which lives in the chats
+    and was only ever mirrored here. A chat bound to it is cut loose by the
+    caller, so it is asked where it belongs rather than left pointing at a
+    project that is not there.
+    """
+    target = project_path(root, cwd)
+    gone = False
+    try:
+        if target.is_file():
+            target.unlink()
+            gone = True
+    except OSError:
+        return False
+    clear_server_record(root, cwd)
+    return gone
+
+
 def project_sessions(root: Optional[Path], cwd) -> List[str]:
     """Every chat started in this directory, oldest state first.
 

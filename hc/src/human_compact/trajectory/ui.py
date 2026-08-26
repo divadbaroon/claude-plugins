@@ -643,30 +643,43 @@ def project_tree(root, depth=3):
     return walk(base, 1)
 
 
-def _adopt_server_for_project(trajdir, session_id, root) -> bool:
-    """Hand this window to the project the chat just joined.
+def _adopt_server_for_project(trajdir, session_id, root) -> str:
+    """Settle which window the chat that just bound should be reading.
 
     A chat stands its workspace up before it has a project -- it is about to
-    be asked which -- so the window is registered under the chat. Left there,
-    the next chat to join the project looks where the project points, finds
-    nothing, and opens a second window on the same tree.
+    be asked which -- so the window is registered under the chat. What
+    happens next depends on whether the project it named already has one:
+
+    * It does: the reader is sent there, and the URL to send them to is what
+      comes back. Taking the project's window over instead pointed every
+      other chat of it at this ad-hoc one, and there were two ports for one
+      tree again.
+    * It does not: this window becomes the project's, so the next chat to
+      join finds it rather than opening another.
+
+    Returns where to send the reader, or "" to leave them where they are.
     """
     try:
         from .. import cli
         from . import project_store as PS
         mine = CS.paths(session_id, root).session_dir
         record = cli._read_server_registry(mine)
-        if not record:
-            return False
         home = CS.bound_project(session_id, root)
         if home:
-            PS.set_server_record(root, home, record)
-        held = CS.tree_session(session_id, root)
-        if held and held != session_id:
-            cli._write_server_registry(CS.paths(held, root).session_dir, record)
-        return bool(home or held)
+            standing = _running_workspace(PS.server_record(root, home))
+            if standing:
+                here = (record or {}).get("url")
+                return "" if here == standing["url"] else str(standing["url"])
+            if record:
+                PS.set_server_record(root, home, record)
+        if record:
+            held = CS.tree_session(session_id, root)
+            if held and held != session_id:
+                cli._write_server_registry(
+                    CS.paths(held, root).session_dir, record)
+        return ""
     except Exception:  # noqa: BLE001 - a binding must not fail over a registry
-        return False
+        return ""
 
 
 def _ask_which_project(trajdir, session_id, root, goals) -> bool:
@@ -674,22 +687,22 @@ def _ask_which_project(trajdir, session_id, root, goals) -> bool:
 
     Binding arrived after every chat that already exists, so "has no binding"
     describes the whole existing world rather than the new chats onboarding
-    is for. A chat is taken to be in its project already when it has a tree
-    of its own, or when the directory it works in is one somebody has already
-    made a project of. That is written down rather than merely returned: a
-    conclusion recomputed on every poll would be reached again after the
-    reader answered, and answering once is the whole point.
+    is for. What separates the two is work: a chat with a tree of its own has
+    been used, and could only have been used before there was anything to
+    ask. That is written down rather than merely returned -- a conclusion
+    recomputed on every poll would be reached again after the reader
+    answered, and answering once is the whole point.
+
+    The directory is deliberately NOT part of this. It was, and it meant that
+    a new chat started anywhere somebody had once made a project of joined
+    that project unasked: a chat opened in a home directory landed in a tree
+    of hundreds of goals belonging to everything else, with no choice offered
+    and no way back. Where a chat sits is the suggestion onboarding opens on,
+    never the answer.
     """
     if not CS.needs_project_onboarding(session_id, root):
         return False
-    working = bool((goals or {}).get("goals"))
-    if not working:
-        try:
-            where = _manifest_cwd(str(session_id), root)
-            working = bool(where and PS.read_file(root, where).get("project"))
-        except Exception:  # noqa: BLE001 - a migration must never break a read
-            working = False
-    if not working:
+    if not (goals or {}).get("goals"):
         return True
     try:
         CS.mark_project_migrated(session_id, root)
@@ -723,6 +736,13 @@ def _project_identity(trajdir, chat_scoped, session_id):
     cwd = CS.bound_project(str(session_id), root) or _manifest_cwd(str(session_id), root)
     if not cwd:
         return empty
+    # One spelling, the same one the project records and the switcher use.
+    # Answering "where am I" in a different spelling from "here is every
+    # project" meant the reader's own project was not marked as theirs.
+    try:
+        cwd = PS.repo_home(cwd)
+    except Exception:  # noqa: BLE001 - a path git cannot read is still a path
+        pass
     path = Path(str(cwd))
     record = _load_project(root, str(path))
     # Named by the reader when they have named it; the directory's own name
@@ -1400,6 +1420,24 @@ def open_shared(project_id, trajdir=None):
 _PROJECT_SERVERS = {}
 
 
+def _running_workspace(record, session_id=None):
+    """The workspace a record names, if it is actually still there.
+
+    A record is a claim: the process it names may be gone, and handing the
+    reader a dead port is worse than opening a new window. Probed through
+    the launcher's own check so every place that asks "is it up?" asks the
+    same question.
+    """
+    if not isinstance(record, dict) or not record.get("url"):
+        return None
+    try:
+        from .. import cli
+    except Exception:  # noqa: BLE001 - without the launcher, believe nothing
+        return None
+    who = str(session_id or record.get("session_id") or "")
+    return record if cli._healthy_chat_server(record, who) else None
+
+
 def open_project(cwd, trajdir=None):
     """Bring up another project's workspace beside this one.
 
@@ -1434,8 +1472,19 @@ def open_project(cwd, trajdir=None):
             return {"ok": False, "cwd": str(cwd),
                     "error": "could not start a workspace there: "
                              + str(exc)[:120]}
-    session_id = sessions[-1]
+    # The project's own tree, not whichever session sorted last: a reader
+    # clicking into a project wants the goals of that project, and sessions
+    # are named with UUIDs, so "last" was arbitrary.
+    session_id = CS.tree_session(sessions[-1], root) or sessions[-1]
     with _SHARED_GUARD:
+        # What the project says is running, before anything this process
+        # remembers: a window opened by another process -- the detached one
+        # /bart starts -- is invisible to a dictionary kept in this one, and
+        # asking only ourselves is how a second port appeared for one tree.
+        noted = _running_workspace(PS.server_record(root, cwd))
+        if noted:
+            return {"ok": True, "url": noted["url"], "already": True,
+                    "session_id": str(noted.get("session_id") or session_id)}
         held = _PROJECT_SERVERS.get(key)
         if held and held.get("thread") and held["thread"].is_alive():
             return {"ok": True, "url": held["url"], "already": True,
@@ -1445,6 +1494,15 @@ def open_project(cwd, trajdir=None):
             return {"ok": False, "error": "no free port for a workspace"}
         started["session_id"] = session_id
         _PROJECT_SERVERS[key] = started
+        # Written where every other chat of the project looks, so the next
+        # one to ask finds this window instead of opening another.
+        try:
+            PS.set_server_record(root, cwd, {
+                "schema_version": 1, "session_id": session_id,
+                "pid": os.getpid(), "url": started["url"],
+                "started_at": time.time()})
+        except Exception:  # noqa: BLE001 - a note is not worth failing over
+            pass
         return {"ok": True, "url": started["url"], "already": False,
                 "session_id": session_id, "fresh": fresh}
 
@@ -2111,11 +2169,37 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 # has one, the registration moves to the project's store --
                 # otherwise the next chat to join looks there, finds nothing,
                 # and opens a second window onto the same tree.
-                _adopt_server_for_project(trajdir, session_id, root)
+                elsewhere = _adopt_server_for_project(
+                    trajdir, session_id, root)
             except (OSError, ValueError, TypeError, TimeoutError) as exc:
                 return {"ok": False, "error": str(exc)[:200]}
-            return {"ok": True, "cwd": home,
-                    "project": _project_identity(trajdir, True, session_id)}
+            out = {"ok": True, "cwd": home,
+                   "project": _project_identity(trajdir, True, session_id)}
+            # The project already had a window: the reader belongs in it, not
+            # on this page, which was only ever somewhere to be asked.
+            if elsewhere:
+                out["open"] = elsewhere
+            return out
+        if kind == "forget_project":
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            where = op.get("cwd")
+            if not isinstance(where, str) or not where:
+                return {"ok": False, "error": "which project?"}
+            try:
+                _, root = _chat_identity(trajdir)
+            except Exception:                                # noqa: BLE001
+                root = None
+            # The chats first: a chat left naming a record that is gone reads
+            # an empty tree and is never asked why. Cut loose, it goes back
+            # through onboarding and the reader says where it belongs.
+            freed = []
+            for sid in CS.chats_in_project(where, root):
+                if CS.unbind_project(sid, root):
+                    freed.append(sid)
+            if not PS.forget_project(root, where):
+                return {"ok": False, "error": "no such project"}
+            return {"ok": True, "cwd": where, "freed": len(freed)}
         if kind == "open_project":
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}

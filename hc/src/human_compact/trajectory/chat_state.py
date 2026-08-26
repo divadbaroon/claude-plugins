@@ -443,6 +443,56 @@ def bind_project(session_id: str, home, root: Optional[Path] = None) -> str:
     return resolved
 
 
+def unbind_project(session_id: str, root: Optional[Path] = None) -> bool:
+    """Cut a chat loose from the project it was in.
+
+    Used when the project itself is forgotten: a chat left naming a record
+    that is gone reads an empty tree and is never asked about it, which is
+    the worst of both. Unbound, it goes through onboarding again and the
+    reader says where it belongs.
+    """
+    try:
+        with session_lock(session_id, root, wait_s=5) as p:
+            manifest = load_manifest(session_id, root)
+            if not any(manifest.get(k) for k in
+                       ("project_home", "project_tree", "project_bound_at")):
+                return False
+            for key in ("project_home", "project_tree", "project_bound_at",
+                        "project_bound_by"):
+                manifest.pop(key, None)
+            manifest["updated_at"] = _now()
+            _atomic_json(p.manifest, manifest)
+        return True
+    except (OSError, ValueError, TypeError, TimeoutError):
+        return False
+
+
+def chats_in_project(home, root: Optional[Path] = None) -> List[str]:
+    """Every chat that says it belongs to this project."""
+    where = _project_home(home)
+    out: List[str] = []
+    if not where:
+        return out
+    try:
+        entries = sorted(_state_base(root).iterdir(), key=lambda e: e.name)
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        try:
+            manifest = json.loads(
+                (entry / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        said = manifest.get("project_home")
+        if isinstance(said, str) and said and _project_home(said) == where:
+            out.append(entry.name)
+    return out
+
+
 def mark_project_migrated(session_id: str, root: Optional[Path] = None) -> None:
     """Record that a chat predating the binding was taken as already bound.
 

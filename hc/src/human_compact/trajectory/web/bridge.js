@@ -3701,6 +3701,399 @@
     return projectMenuShown() ? !closeProjectMenu() : openProjectMenu();
   }
 
+  // --- home: every project, and the way between them -----------------------
+  //
+  // The brand is the way back. A workspace is one project's screen, and
+  // until now the only way to another was a dropdown hidden behind the
+  // project's name -- so "where else am I working?" had no answer you could
+  // see. Home is that answer: every project the vault holds, what each one
+  // is for, how much is in it, and which one this chat belongs to.
+  //
+  // Drawn over the whole window like the overview, and for the same reason:
+  // it is not a pane of the goal tree, it is the level above it. Opening a
+  // project asks the server for that project's workspace, which now answers
+  // with the one already running rather than starting a rival.
+
+  var HOME_CSS = [
+      ".hc-home{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:19;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 24px 40px;box-sizing:border-box}",
+      "[data-hc-home] .hc-home{display:block}",
+      ".hc-home-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:26px 0 6px}",
+      ".hc-home-title{font:600 15px 'Source Code Pro',monospace;color:var(--ink,#111);letter-spacing:.2px}",
+      ".hc-home-note{font-size:11px;color:var(--fnt,#9b9b9b)}",
+      ".hc-home-sub{font-size:11px;color:var(--mut,#575757);padding-bottom:18px;max-width:70ch;line-height:1.7}",
+      ".hc-home-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}",
+      ".hc-home-card{position:relative;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:16px 18px 14px;cursor:pointer;user-select:none;display:flex;flex-direction:column;gap:7px;min-height:118px}",
+      ".hc-home-card:hover{border-color:var(--acc,#a5492a)}",
+      ".hc-home-card[data-hc-active]{border-color:var(--acc,#a5492a);box-shadow:inset 3px 0 0 var(--acc,#a5492a)}",
+      ".hc-home-name{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:22px}",
+      ".hc-home-card[data-hc-active] .hc-home-name{color:var(--acc,#a5492a)}",
+      ".hc-home-why{flex:1 1 auto;font-size:11px;color:var(--mut,#575757);line-height:1.6;overflow:hidden}",
+      ".hc-home-why[data-hc-empty]{color:var(--fnt,#9b9b9b);font-style:italic}",
+      ".hc-home-where{font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
+      ".hc-home-facts{display:flex;gap:12px;font:10px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
+      ".hc-home-here{color:var(--acc,#a5492a)}",
+      ".hc-home-x{position:absolute;top:10px;right:11px;width:18px;height:18px;line-height:17px;text-align:center;border-radius:3px;color:var(--fnt,#9b9b9b);font-size:13px;cursor:pointer;opacity:0}",
+      ".hc-home-card:hover .hc-home-x{opacity:1}",
+      ".hc-home-x:hover{background:var(--hov,#f2f2f2);color:var(--bad,#a12d2d)}",
+      ".hc-home-card[data-hc-confirm] .hc-home-why,.hc-home-card[data-hc-confirm] .hc-home-facts,.hc-home-card[data-hc-confirm] .hc-home-where{display:none}",
+      ".hc-home-gone{display:none;flex-direction:column;gap:9px;font-size:11px;color:var(--mut,#575757);line-height:1.6}",
+      ".hc-home-card[data-hc-confirm] .hc-home-gone{display:flex}",
+      ".hc-home-gone-row{display:flex;gap:10px;align-items:center}",
+      ".hc-home-btn{cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:5px 9px;background:none}",
+      ".hc-home-btn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-home-btn[data-hc-bad]:hover{color:var(--bad,#a12d2d);border-color:var(--bad,#a12d2d)}",
+      ".hc-home-add{border:1px dashed var(--bd2,#d5d5d5);border-radius:10px;padding:16px 18px;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:118px}",
+      ".hc-home-add:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-home-form{display:none;flex-direction:column;gap:8px;border:1px solid var(--acc,#a5492a);border-radius:10px;background:var(--panel,#fff);padding:16px 18px;min-height:118px}",
+      "[data-hc-home-adding] .hc-home-form{display:flex}",
+      "[data-hc-home-adding] .hc-home-add{display:none}",
+      ".hc-home-field{width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:6px 8px;resize:vertical}",
+      ".hc-home-field::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-home-say{padding:14px 0 0;font-size:11px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
+      ".hc-home-say:empty{display:none}",
+      ".hc-home-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
+      ".hc-home-empty{padding:30px 0;color:var(--fnt,#9b9b9b);font-size:12px}"
+    ].join("\n");
+
+  var homeStyled = false;
+  var homeRows = null;      // the projects, once asked for
+  var homeHere = "";        // the one this chat is in
+  var homeSaid = "";
+  var homeBusy = false;
+  var homeGoing = "";       // a card the reader is being asked to confirm
+
+  function ensureHomeStyles() {
+    if (document.getElementById("hc-home-style")) return false;
+    var style = document.createElement("style");
+    style.id = "hc-home-style";
+    style.textContent = HOME_CSS;
+    (document.head || document.documentElement).appendChild(style);
+    homeStyled = true;
+    return true;
+  }
+
+  function homeShown() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute
+              && root.getAttribute("data-hc-home") !== null);
+  }
+
+  function homeSay(words, bad) {
+    homeSaid = str(words);
+    var node = document.querySelector("[data-hc-home-say]");
+    if (!node) return false;
+    node.textContent = homeSaid;
+    if (bad) node.setAttribute("data-hc-bad", "");
+    else node.removeAttribute("data-hc-bad");
+    return true;
+  }
+
+  function homeCard(row) {
+    var here = str(row.cwd) === homeHere;
+    var card = el("div", "hc-home-card");
+    card.setAttribute("role", "button");
+    card.setAttribute("data-hc-home-open", str(row.cwd));
+    card.setAttribute("title", str(row.cwd));
+    if (here) card.setAttribute("data-hc-active", "");
+    if (homeGoing === str(row.cwd)) card.setAttribute("data-hc-confirm", "");
+    var x = el("span", "hc-home-x", "×");
+    x.setAttribute("role", "button");
+    x.setAttribute("data-hc-home-forget", str(row.cwd));
+    x.setAttribute("title", "Forget this project");
+    card.appendChild(x);
+    card.appendChild(el("div", "hc-home-name", str(row.name || row.cwd)));
+    var why = str(row.objective || row.description || "").replace(/\s+/g, " ").trim();
+    var line = el("div", "hc-home-why", why || "no purpose written yet");
+    if (!why) line.setAttribute("data-hc-empty", "");
+    card.appendChild(line);
+    card.appendChild(el("div", "hc-home-where", str(row.cwd)));
+    var facts = el("div", "hc-home-facts");
+    facts.appendChild(el("span", "", Number(row.goals || 0) + " goals"));
+    facts.appendChild(el("span", "", Number(row.chats || 0)
+                         + (Number(row.chats) === 1 ? " chat" : " chats")));
+    if (here) facts.appendChild(el("span", "hc-home-here", "this chat"));
+    card.appendChild(facts);
+    // Saying what goes and what stays, where the decision is made: forget
+    // reads like delete, and the goals are the thing a reader is afraid of
+    // losing. They are not in the project -- they are in the chats.
+    //
+    // Drawn only on the card being asked about. Drawn on all of them and
+    // hidden by CSS, every card carried a live Forget button, which is a
+    // row of armed controls one stray click from doing the wrong thing.
+    if (homeGoing !== str(row.cwd)) return card;
+    var gone = el("div", "hc-home-gone");
+    gone.appendChild(el("div", "",
+      "Forget " + str(row.name || row.cwd) + "? Its name, purpose and "
+      + "sources go. The goals stay in their chats, and every chat in it is "
+      + "asked which project it belongs to next time."));
+    var row2 = el("div", "hc-home-gone-row");
+    var yes = el("span", "hc-home-btn", "Forget");
+    yes.setAttribute("role", "button");
+    yes.setAttribute("data-hc-bad", "");
+    yes.setAttribute("data-hc-home-forget-yes", str(row.cwd));
+    var no = el("span", "hc-home-btn", "Keep");
+    no.setAttribute("role", "button");
+    no.setAttribute("data-hc-home-forget-no", "");
+    row2.appendChild(yes);
+    row2.appendChild(no);
+    gone.appendChild(row2);
+    card.appendChild(gone);
+    return card;
+  }
+
+  function renderHome(force) {
+    var standing = document.querySelector(".hc-home");
+    if (!homeShown()) {
+      if (standing && standing.parentNode) {
+        standing.parentNode.removeChild(standing);
+      }
+      return false;
+    }
+    ensureHomeStyles();
+    // Already drawn and nothing has changed: rebuilding on every sweep would
+    // take the caret out of the name field between keystrokes.
+    if (standing && inLiveDocument(standing) && !force) {
+      syncProjectTheme(standing);
+      return true;
+    }
+    var host = standing;
+    if (!host || !inLiveDocument(host)) {
+      host = el("div", "hc-home");
+      (document.body || document.documentElement).appendChild(host);
+    }
+    syncProjectTheme(host);
+    var typed = host.querySelector("[data-hc-home-name]");
+    typed = typed ? typed.value : null;
+    var typedWhy = host.querySelector("[data-hc-home-why]");
+    typedWhy = typedWhy ? typedWhy.value : null;
+    wipe(host);
+    var head = el("div", "hc-home-head");
+    head.appendChild(el("div", "hc-home-title", "Projects"));
+    head.appendChild(el("div", "hc-home-note",
+      homeRows ? (homeRows.length + (homeRows.length === 1
+                                     ? " project" : " projects")) : ""));
+    host.appendChild(head);
+    host.appendChild(el("div", "hc-home-sub",
+      "Every project this vault knows. Goals belong to a project, chats "
+      + "belong to a project, and one workspace is open per project — "
+      + "opening one here joins the window it already has."));
+    if (!homeRows) {
+      host.appendChild(el("div", "hc-home-empty", "looking…"));
+      return true;
+    }
+    var grid = el("div", "hc-home-grid");
+    homeRows.filter(function (r) { return str(r.cwd) === homeHere; })
+      .concat(homeRows.filter(function (r) { return str(r.cwd) !== homeHere; }))
+      .forEach(function (r) { grid.appendChild(homeCard(r)); });
+    var add = el("div", "hc-home-add", "+  New project");
+    add.setAttribute("role", "button");
+    add.setAttribute("data-hc-home-add", "");
+    grid.appendChild(add);
+    var form = el("div", "hc-home-form");
+    var name = el("input", "hc-home-field");
+    name.setAttribute("data-hc-home-name", "");
+    name.setAttribute("placeholder", "Project name, or a path to a folder");
+    name.setAttribute("spellcheck", "false");
+    form.appendChild(name);
+    var why = el("textarea", "hc-home-field");
+    why.setAttribute("data-hc-home-why", "");
+    why.setAttribute("rows", "2");
+    why.setAttribute("placeholder", "What is it for?");
+    why.setAttribute("spellcheck", "false");
+    form.appendChild(why);
+    var row = el("div", "hc-home-gone-row");
+    var make = el("span", "hc-home-btn", homeBusy ? "Working…" : "Create");
+    make.setAttribute("role", "button");
+    make.setAttribute("data-hc-home-make", "");
+    var stop = el("span", "hc-home-btn", "Cancel");
+    stop.setAttribute("role", "button");
+    stop.setAttribute("data-hc-home-cancel", "");
+    row.appendChild(make);
+    row.appendChild(stop);
+    form.appendChild(row);
+    grid.appendChild(form);
+    host.appendChild(grid);
+    var say = el("div", "hc-home-say", homeSaid);
+    say.setAttribute("data-hc-home-say", "");
+    host.appendChild(say);
+    if (typed !== null) {
+      var back = host.querySelector("[data-hc-home-name]");
+      if (back) back.value = typed;
+    }
+    if (typedWhy !== null) {
+      var backWhy = host.querySelector("[data-hc-home-why]");
+      if (backWhy) backWhy.value = typedWhy;
+    }
+    return true;
+  }
+
+  function loadHome() {
+    return fetchJSON("/api/projects").then(function (res) {
+      homeRows = (res && res.ok && array(res.projects)) || [];
+      homeHere = str(res && res.active);
+      renderHome(true);
+      return res;
+    });
+  }
+
+  function openHome() {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute) return false;
+    closeProjectMenu();
+    closeOverview();
+    homeGoing = "";
+    homeSaid = "";
+    root.setAttribute("data-hc-home", "");
+    renderHome(true);
+    loadHome();
+    return true;
+  }
+
+  function closeHome() {
+    var root = document.documentElement;
+    if (!root || !root.removeAttribute) return false;
+    var was = homeShown();
+    root.removeAttribute("data-hc-home");
+    root.removeAttribute("data-hc-home-adding");
+    homeGoing = "";
+    return was;
+  }
+
+  function toggleHome() {
+    return homeShown() ? !closeHome() : openHome();
+  }
+
+  function homeOpen(where) {
+    if (homeBusy) return;
+    homeBusy = true;
+    homeSay("opening…");
+    post({ op: "open_project", cwd: where }).then(function (res) {
+      homeBusy = false;
+      if (!res || !res.ok || !res.url) {
+        homeSay((res && res.error) || "that project could not be opened", true);
+        return;
+      }
+      if (typeof location !== "undefined"
+          && str(res.url) !== str(location.href)) {
+        location.href = str(res.url);
+        return;
+      }
+      closeHome();
+    });
+  }
+
+  function homeForget(where) {
+    if (homeBusy) return;
+    homeBusy = true;
+    post({ op: "forget_project", cwd: where }).then(function (res) {
+      homeBusy = false;
+      homeGoing = "";
+      if (!res || !res.ok) {
+        homeSay((res && res.error) || "that project could not be forgotten",
+                true);
+        return;
+      }
+      homeSay(Number(res.freed) > 0
+              ? ("forgotten — " + Number(res.freed)
+                 + (Number(res.freed) === 1 ? " chat is" : " chats are")
+                 + " free to be put somewhere else")
+              : "forgotten");
+      loadHome();
+    });
+  }
+
+  function homeMake() {
+    if (homeBusy) return;
+    var host = document.querySelector(".hc-home");
+    if (!host) return;
+    var name = str((host.querySelector("[data-hc-home-name]") || {}).value).trim();
+    var why = str((host.querySelector("[data-hc-home-why]") || {}).value).trim();
+    if (!name) { homeSay("give the project a name", true); return; }
+    homeBusy = true;
+    homeSay("");
+    post({ op: "new_project", name: name }).then(function (res) {
+      if (!res || !res.ok || !res.cwd) {
+        homeBusy = false;
+        homeSay((res && res.error) || "the project could not be made", true);
+        return null;
+      }
+      var made = res.cwd;
+      return post({ op: "project_setup", cwd: made, objective: why })
+        .then(function () {
+          homeBusy = false;
+          var root = document.documentElement;
+          if (root && root.removeAttribute) {
+            root.removeAttribute("data-hc-home-adding");
+          }
+          homeSay("made " + name);
+          loadHome();
+        });
+    });
+  }
+
+  var homeBound = false;
+
+  function bindHome() {
+    if (homeBound || !document.addEventListener) return false;
+    homeBound = true;
+    document.addEventListener("click", function (event) {
+      var node = event.target;
+      var act = "", where = "";
+      while (node && node !== document) {
+        if (node.getAttribute) {
+          var keys = ["data-hc-home-forget-yes", "data-hc-home-forget-no",
+                      "data-hc-home-forget", "data-hc-home-add",
+                      "data-hc-home-cancel", "data-hc-home-make",
+                      "data-hc-home-open", "data-hc-brand"];
+          for (var i = 0; i < keys.length; i++) {
+            var found = node.getAttribute(keys[i]);
+            if (found !== null) { act = keys[i]; where = str(found); break; }
+          }
+          if (act) break;
+        }
+        node = node.parentNode;
+      }
+      if (!act) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var root = document.documentElement;
+      if (act === "data-hc-brand") { toggleHome(); return; }
+      if (act === "data-hc-home-open") { homeOpen(where); return; }
+      if (act === "data-hc-home-forget") { homeGoing = where; renderHome(true); return; }
+      if (act === "data-hc-home-forget-no") { homeGoing = ""; renderHome(true); return; }
+      if (act === "data-hc-home-forget-yes") { homeForget(where); return; }
+      if (act === "data-hc-home-add") {
+        if (root && root.setAttribute) root.setAttribute("data-hc-home-adding", "");
+        renderHome(true);
+        var field = document.querySelector("[data-hc-home-name]");
+        if (field && field.focus) field.focus();
+        return;
+      }
+      if (act === "data-hc-home-cancel") {
+        if (root && root.removeAttribute) root.removeAttribute("data-hc-home-adding");
+        homeSay("");
+        renderHome(true);
+        return;
+      }
+      if (act === "data-hc-home-make") { homeMake(); }
+    }, true);
+    return true;
+  }
+
+  // The brand is a control, not a label: it is how a reader gets back to
+  // every project from inside one.
+  function armBrand() {
+    var brand = document.querySelector(".hc-brand");
+    if (!brand || !brand.setAttribute) return false;
+    bindHome();
+    if (brand.getAttribute("data-hc-brand") !== null) return false;
+    brand.setAttribute("data-hc-brand", "");
+    brand.setAttribute("role", "button");
+    brand.setAttribute("title", "All projects");
+    brand.style.cursor = "pointer";
+    return true;
+  }
+
   // --- the overview screen -------------------------------------------------
 
   function overviewShown() {
@@ -5033,6 +5426,7 @@
     var root = document.documentElement;
     if (!who || !root || !root.setAttribute) return false;
     closeProjectMenu();
+    closeHome();
     root.setAttribute("data-hc-overview", "");
     renderOverview();
     // A reopened overview keeps the box it drew before, whose record is as
@@ -5378,6 +5772,7 @@
           if (typeof target.blur === "function") target.blur();
           return;
         }
+        if (homeShown()) { closeHome(); return; }
         if (overviewShown()) closeOverview();
         return;
       }
@@ -9544,6 +9939,15 @@
         onbSay((res && res.error) || "that project could not be opened");
         return;
       }
+      // The project already had a window open. This page was only ever
+      // somewhere to be asked which project the chat is for; the goals are
+      // over there, and so is everyone else working on them.
+      if (res.open && typeof location !== "undefined"
+          && str(res.open) !== str(location.href)) {
+        onbClose();
+        location.href = str(res.open);
+        return;
+      }
       // Bound: the gate is answered locally too, so the wizard closes on this
       // turn rather than on whenever the next poll happens to land.
       serverState.projectBound = true;
@@ -11165,6 +11569,8 @@
       renderInheritedSources();
       renderAnalyzer();
       renderProjectChip();
+      armBrand();
+      renderHome();
       renderOverview();
       renderHandoff();
       renderBell();

@@ -2882,12 +2882,30 @@ class OnboardingMigrationTests(unittest.TestCase):
         self.assertTrue(state["project_bound"],
                         "a chat with a tree is mid-project; asking is the bug")
 
-    def test_a_chat_whose_directory_is_a_known_project_is_taken_as_bound(self):
+    def test_an_empty_chat_in_a_known_project_directory_is_still_asked(self):
+        # The directory says nothing about whether the reader has been asked.
+        # Taking it as an answer put every new chat started in a directory
+        # somebody had once made a project of straight into that project --
+        # so a chat opened in a home directory landed in a tree of 966 goals
+        # it had nothing to do with, and was never offered the choice.
         write_scope(self.a, [], [], bound=False)
         home = str(Path(self.tmp.name) / "acme")
         (self.a / "manifest.json").write_text(json.dumps(
             {"schema_version": 1, "session_id": self.a.name, "cwd": home}))
-        from human_compact.trajectory import project_store as PS
+        PS.save_project(self.a.parent, home, {"objective": "already a project"})
+        with server_for(self.a) as url:
+            state = get_json(url + "/api/state")
+        self.assertFalse(state["project_bound"],
+                         "a new chat is asked, whatever directory it sits in")
+
+    def test_work_of_its_own_is_what_says_a_chat_predates_the_asking(self):
+        # Not the directory: a tree is something the reader built, and only
+        # a chat that has been used could have been used before binding.
+        home = str(Path(self.tmp.name) / "acme")
+        write_scope(self.a, [goal("g1", "work already done here")], [],
+                    bound=False)
+        (self.a / "manifest.json").write_text(json.dumps(
+            {"schema_version": 1, "session_id": self.a.name, "cwd": home}))
         PS.save_project(self.a.parent, home, {"objective": "already a project"})
         with server_for(self.a) as url:
             state = get_json(url + "/api/state")
@@ -2990,3 +3008,135 @@ class AddRootGoalTests(unittest.TestCase):
             tree = {g["title"]: g.get("parent_goal_id")
                     for g in get_json(url + "/api/state")["goals"]}
         self.assertEqual("g1", tree["under it"])
+
+
+class ProjectsHomeBrowserTests(unittest.TestCase):
+    """The brand is the way back to every project.
+
+    A workspace is one project's screen. Until the brand became a control,
+    the only way to another project was a dropdown hidden behind the current
+    project's name -- so "where else am I working?" had no answer a reader
+    could see, and no way to add or drop one.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [goal("g1", "the work here")], [], bound=True)
+        home = str(Path(self.tmp.name) / "acme")
+        Path(home).mkdir(parents=True, exist_ok=True)
+        manifest = json.loads((self.a / "manifest.json").read_text())
+        manifest["cwd"] = home
+        manifest["project_home"] = home
+        (self.a / "manifest.json").write_text(json.dumps(manifest))
+        PS.save_project(self.a.parent, home, {"objective": "ship the router"})
+        other = str(Path(self.tmp.name) / "widget")
+        Path(other).mkdir(parents=True, exist_ok=True)
+        PS.save_project(self.a.parent, other, {"objective": "a second thing"})
+        self.home, self.other = PS._resolved(home), PS._resolved(other)
+
+    def open(self, page, url):
+        page.goto(url)
+        page.wait_for_selector(".hc", timeout=15000)
+
+    def _page(self, pw):
+        b = pw.chromium.launch(executable_path=browser_executable())
+        return b, b.new_page(viewport={"width": 1400, "height": 900})
+
+    def test_clicking_the_brand_lists_every_project(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            names = page.eval_on_selector_all(
+                ".hc-home-name", "n => n.map(x => x.textContent)")
+            self.assertIn("acme", names)
+            self.assertIn("widget", names)
+            # And which one this chat is in, said on the card rather than
+            # left to be worked out from the header.
+            here = page.eval_on_selector_all(
+                ".hc-home-card[data-hc-active] .hc-home-name",
+                "n => n.map(x => x.textContent)")
+            self.assertEqual(["acme"], here)
+            b.close()
+
+    def test_the_purpose_the_reader_wrote_is_on_the_card(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            self.assertIn("ship the router", page.inner_text(".hc-home"))
+            b.close()
+
+    def test_the_brand_closes_what_it_opened_and_escape_does_too(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", state="detached",
+                                   timeout=10_000)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            page.keyboard.press("Escape")
+            page.wait_for_selector(".hc-home-card", state="detached",
+                                   timeout=10_000)
+            b.close()
+
+    def test_forgetting_a_project_asks_first_and_then_drops_it(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            page.click(".hc-brand")
+            page.wait_for_selector(".hc-home-card", timeout=10_000)
+            page.eval_on_selector(
+                '[data-hc-home-forget="' + self.other + '"]', "n => n.click()")
+            page.wait_for_selector("[data-hc-home-forget-yes]", timeout=10_000)
+            # What goes and what stays, said where the decision is made.
+            self.assertIn("goals stay in their chats",
+                          page.inner_text(".hc-home-card[data-hc-confirm]"))
+            page.click("[data-hc-home-forget-yes]")
+            page.wait_for_function(
+                "() => !document.querySelector('[data-hc-home-open=\""
+                + self.other + "\"]')", timeout=10_000)
+            self.assertFalse(PS.project_path(self.a.parent, self.other).exists())
+            b.close()
+
+    def test_a_new_project_can_be_added_without_leaving_the_page(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b, page = self._page(pw)
+            self.open(page, url)
+            page.click(".hc-brand")
+            page.wait_for_selector("[data-hc-home-add]", timeout=10_000)
+            page.click("[data-hc-home-add]")
+            page.fill("[data-hc-home-name]", "third thing")
+            page.fill("[data-hc-home-why]", "why it exists")
+            page.click("[data-hc-home-make]")
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('.hc-home-name')]"
+                ".some(n => n.textContent === 'third thing')", timeout=10_000)
+            b.close()
