@@ -722,7 +722,7 @@ def _project_identity(trajdir, chat_scoped, session_id):
     is kept once per directory, not once per chat.
     """
     empty = {"cwd": "", "name": "", "branch": "", "remote": "",
-             "objective": "", "description": "", "sources": []}
+             "objective": "", "description": "", "sources": [], "saved": []}
     if not (chat_scoped and session_id):
         return empty
     try:
@@ -758,7 +758,10 @@ def _project_identity(trajdir, chat_scoped, session_id):
             "description": record.get("description", ""),
             # What the reader attached to the project: the overview lists
             # them beside the repository and reads each one on demand.
-            "sources": record.get("sources", [])}
+            "sources": record.get("sources", []),
+            # The shelf beside the context, and never mixed into it: what
+            # the Saved page lists is read by nobody but that page.
+            "saved": record.get("saved", [])}
 
 
 def _all_projects(root, active=""):
@@ -2187,6 +2190,103 @@ def _chooser_command(here):
     return None
 
 
+def _file_chooser_command(here, prompt):
+    """The same question as _chooser_command, asked about files.
+
+    Several of them, because a reader saving what they have been reading
+    saves a stack of papers rather than one, and picking them one dialog at
+    a time is the thing the picker was meant to end. Each platform reports
+    the choice its own way; the caller splits on newlines.
+    """
+    import shutil
+    import sys
+
+    if sys.platform == "darwin":
+        def quoted(text):
+            body = str(text).replace("\\", "\\\\").replace('"', '\\"')
+            return '"' + body + '"'
+
+        ask = ["choose file with prompt " + quoted(prompt),
+               "with multiple selections allowed"]
+        if here:
+            ask.insert(1, "default location POSIX file " + quoted(here))
+        # One POSIX path per line. AppleScript's own list text would be
+        # comma-joined, and a path may hold a comma.
+        return ["osascript", "-e", "try\n\tactivate\nend try",
+                "-e", "set picked to (" + " ".join(ask) + ")",
+                "-e", "set out to \"\"",
+                "-e", "repeat with one in picked\n"
+                      "\tset out to out & POSIX path of one & linefeed\n"
+                      "end repeat",
+                "-e", "return out"]
+    if os.name == "nt":
+        return ["powershell", "-NoProfile", "-STA", "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; "
+                "$d = New-Object System.Windows.Forms.OpenFileDialog; "
+                "$d.Multiselect = $true; "
+                "$d.Title = '" + str(prompt).replace("'", "''") + "'; "
+                + (("$d.InitialDirectory = '%s'; "
+                    % str(here).replace("'", "''")) if here else "")
+                + "if ($d.ShowDialog() -eq 'OK') { $d.FileNames | Write-Output }"]
+    if shutil.which("zenity"):
+        return ["zenity", "--file-selection", "--multiple",
+                "--separator=\n", "--title=" + str(prompt)] + (
+                    ["--filename=" + here.rstrip("/") + "/"] if here else [])
+    if shutil.which("kdialog"):
+        return ["kdialog", "--getopenfilename", "--multiple",
+                "--separate-output", here or os.path.expanduser("~")]
+    return None
+
+
+def pick_files(start=None, prompt="Choose files to save to this project"):
+    """Open this machine's file chooser and report what was picked.
+
+    The folder chooser's twin, and for the same reason: a path is something
+    you can point at long before it is something you can spell. Cancelling
+    is not a failure -- it comes back cancelled and nothing is attached.
+    """
+    import subprocess
+
+    here = ""
+    if start:
+        try:
+            spot = Path(str(start)).expanduser()
+            here = str(spot) if spot.is_dir() else ""
+        except (OSError, RuntimeError, ValueError):
+            here = ""
+    command = _file_chooser_command(here, str(prompt or "Choose files"))
+    if not command:
+        return {"ok": False,
+                "error": "no file chooser on this machine — type a path"}
+    try:
+        done = subprocess.run(command, capture_output=True, text=True,
+                              timeout=15 * 60)
+    except FileNotFoundError:
+        return {"ok": False,
+                "error": "no file chooser on this machine — type a path"}
+    except subprocess.TimeoutExpired:
+        return {"ok": True, "cancelled": True}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)[:200]}
+    lines = [line.strip() for line in str(done.stdout or "").splitlines()]
+    picked = [line for line in lines if line]
+    if not picked:
+        trouble = str(done.stderr or "").strip()
+        if done.returncode and trouble and "-128" not in trouble \
+                and "cancel" not in trouble.lower():
+            return {"ok": False, "error": trouble.splitlines()[-1][:200]}
+        return {"ok": True, "cancelled": True}
+    files = []
+    for line in picked[:40]:
+        where = Path(line).expanduser()
+        if not where.is_file():
+            continue
+        files.append({"path": str(where.resolve()), "name": where.name})
+    if not files:
+        return {"ok": False, "error": "nothing there to read"}
+    return {"ok": True, "files": files}
+
+
 def pick_directory(start=None):
     """Open this machine's folder chooser and report what was picked.
 
@@ -2679,13 +2779,21 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 if not isinstance(op.get("sources"), list):
                     return {"ok": False, "error": "sources must be a list"}
                 record["sources"] = GM.normalize_sources(op["sources"])
+            if "saved" in op:
+                # The Saved page's whole list, posted back the way the
+                # sources are. Kept apart from them on purpose: nothing
+                # that assembles context for a model reads this key.
+                if not isinstance(op.get("saved"), list):
+                    return {"ok": False, "error": "saved must be a list"}
+                record["saved"] = PS.normalize_saved(op["saved"])
             _save_project(root, who["cwd"], record)
             saved = _load_project(root, who["cwd"])
             return {"ok": True, "description": saved.get("description", ""),
                     # The name as it now reads, which is the directory's own
                     # when nothing was written for it.
                     "name": saved.get("name") or Path(who["cwd"]).name,
-                    "sources": saved.get("sources", [])}
+                    "sources": saved.get("sources", []),
+                    "saved": saved.get("saved", [])}
         if kind in ("set_supabase_config", "supabase_login",
                     "supabase_logout"):
             # Connecting the workspace to the reader's own Supabase, from
@@ -3474,6 +3582,18 @@ class H(BaseHTTPRequestHandler):
                                          "error": "chat scope only"})
                         return
                     self._send(200, pick_directory(body.get("start")))
+                    return
+                if body.get("op") == "pick_files":
+                    # Same reasoning as the folder chooser above: it waits on
+                    # a person, reads no goals, and writes none.
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok": False,
+                                         "error": "chat scope only"})
+                        return
+                    self._send(200, pick_files(
+                        body.get("start"),
+                        body.get("prompt")
+                        or "Choose files to save to this project"))
                     return
                 with self.server.state_lock:
                     result = _apply(

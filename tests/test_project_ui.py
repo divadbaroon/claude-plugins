@@ -632,7 +632,8 @@ class OverviewTests(BridgeTestCase):
             " box.querySelector('.hc-overview-src-name').textContent,"
             " box.querySelector('.hc-overview-src-kind').textContent,"
             " deepText(box.querySelector('.hc-overview-repo-meta'))]);")
-        self.assertEqual([True, True, ["OVERVIEW", "GOALS"], "myrepo", "Ship the thing.",
+        self.assertEqual([True, True, ["OVERVIEW", "SAVED", "GOALS"],
+                          "myrepo", "Ship the thing.",
                           "What are you trying to accomplish?", "myrepo", "Repository",
                           "git@github.com:acme/myrepo.git · feat/x"], got)
 
@@ -728,7 +729,9 @@ class OverviewTests(BridgeTestCase):
         got = self.open(
             "var tabs = []; (function walk(n) { (n.children || []).forEach(function (c) {"
             "  if (String(c.className).split(' ').indexOf('hc-overview-tab') >= 0) tabs.push(c); walk(c); }); })(box);"
-            "click(tabs[1]); var a = P.overviewShown();"
+            # GOALS is the last of the three: SAVED sits between it and
+            # OVERVIEW, and swaps the page rather than closing the box.
+            "click(tabs[2]); var a = P.overviewShown();"
             "P.openOverview(); var b = P.overviewShown();"
             "key('Escape', document.body); var c = P.overviewShown();"
             "return JSON.stringify([a, b, c]);")

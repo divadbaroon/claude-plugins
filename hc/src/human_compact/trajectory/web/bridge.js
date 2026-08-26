@@ -3066,8 +3066,27 @@
       ".hc-overview-srcrow{display:flex;gap:9px;align-items:center}",
       ".hc-overview-srcbtn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:4px 9px}",
       ".hc-overview-srcbtn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
+      ".hc-overview-srcbtn-quiet{border-style:dashed}",
       ".hc-overview-srcsay{font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
       ".hc-overview-srcsay[data-hc-bad]{color:var(--bad,#a12d2d)}",
+      // The two pages of the overview box. One is up at a time; which is
+      // written on the box, so a redraw cannot lose the reader's place.
+      ".hc-overview-main,.hc-saved{display:none}",
+      ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on]{display:block}",
+      ".hc-saved-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-saved-acts{display:flex;gap:9px;align-items:center;margin:0 2px 14px}",
+      ".hc-saved-link{flex:1 1 auto;width:auto;max-width:520px}",
+      ".hc-saved-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);overflow:hidden}",
+      ".hc-saved-empty{padding:22px 20px;color:var(--fnt,#9b9b9b);font-size:11.5px}",
+      ".hc-saved-row{display:flex;gap:12px;align-items:baseline;padding:11px 16px;border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-saved-row:last-child{border-bottom:0}",
+      ".hc-saved-tag{flex:none;width:38px;font:600 9px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
+      ".hc-saved-text{flex:1 1 auto;min-width:0}",
+      ".hc-saved-name{font-size:12.5px;color:var(--ink,#111);overflow-wrap:anywhere}",
+      "a.hc-saved-name{color:var(--acc,#a5492a);text-decoration:none}",
+      ".hc-saved-ref{font-size:10.5px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere;margin-top:2px}",
+      ".hc-saved-x{flex:none;cursor:pointer;color:var(--fnt,#9b9b9b);font-size:13px}",
+      ".hc-saved-x:hover{color:var(--bad,#a12d2d)}",
       ".hc-overview-reading{display:none;flex:1 1 auto;min-width:0;padding:16px 20px 20px}",
       ".hc-overview-reading[data-hc-on]{display:block}",
       ".hc-overview-repo[data-hc-off]{display:none}",
@@ -4388,6 +4407,15 @@
     add.setAttribute("role", "button");
     add.setAttribute("data-hc-src-add", "");
     row.appendChild(add);
+    // A document on this machine is pointed at, not spelled. Only for the
+    // document kind: a repository is named and a conversation is picked
+    // from the list above.
+    var browse = el("span", "hc-overview-srcbtn hc-overview-srcbtn-quiet",
+                    "Browse…");
+    browse.setAttribute("role", "button");
+    browse.setAttribute("data-hc-src-browse", "");
+    browse.setAttribute("data-hc-off", "");
+    row.appendChild(browse);
     var say = el("span", "hc-overview-srcsay", "");
     say.setAttribute("data-hc-src-say", "");
     row.appendChild(say);
@@ -4430,6 +4458,11 @@
     if (add) {
       if (kind === "chat") add.setAttribute("data-hc-off", "");
       else add.removeAttribute("data-hc-off");
+    }
+    var browse = form.querySelector("[data-hc-src-browse]");
+    if (browse) {
+      if (kind === "doc") browse.removeAttribute("data-hc-off");
+      else browse.setAttribute("data-hc-off", "");
     }
     if (kind === "chat") loadSourceChats();
     return true;
@@ -4568,6 +4601,45 @@
     return true;
   }
 
+  // The document kind's way in that is not the keyboard: this machine's own
+  // file chooser, and what comes back is attached rather than typed into
+  // the field for the reader to confirm. They already confirmed it -- they
+  // picked it.
+  function browseForSource() {
+    var who = projectInfo();
+    if (!who) return false;
+    sourceSay("choosing…");
+    post({ op: "pick_files", start: str(who.cwd),
+           prompt: "Choose a document for this project" })
+      .then(function (result) {
+        if (!result || !result.ok) {
+          sourceSay((result && result.error) || "could not open the chooser",
+                    true);
+          return;
+        }
+        if (result.cancelled) { sourceSay(""); return; }
+        var rows = sourceRows(projectInfo() || {}).map(function (row) {
+          return { id: str(row.id), type: str(row.type), label: str(row.label) };
+        });
+        var had = {};
+        rows.forEach(function (row) { had[row.label] = true; });
+        var fresh = array(result.files).filter(function (f) {
+          return f && str(f.path) && !had[str(f.path)];
+        });
+        if (!fresh.length) { sourceSay("already attached", true); return; }
+        fresh.forEach(function (f) {
+          rows.push({ id: "s" + (rows.length + 1) + "-" + str(f.path).length,
+                      type: "doc", label: str(f.path) });
+        });
+        sourceSay("saving…");
+        saveSources(rows, "attached").then(function (ok) {
+          if (ok) closeAddSource();
+        });
+      })
+      .catch(function () { sourceSay("could not open the chooser", true); });
+    return true;
+  }
+
   function dropSource(id) {
     var who = projectInfo();
     if (!who) return false;
@@ -4577,6 +4649,200 @@
       .map(function (row) {
         return { id: str(row.id), type: str(row.type), label: str(row.label) };
       }), "removed");
+    return true;
+  }
+
+  // --- the shelf: what the project keeps, and hands to nobody -------------
+  //
+  // A source is context; this is not. The papers a reader means to get back
+  // to belong to the project the same way its objective does, but attaching
+  // them would put them in front of a model -- so the Saved page has its own
+  // list in the project's record, and nothing that assembles context reads
+  // it. That is the whole point of the page: somewhere to put a thing
+  // without thereby saying anything about it.
+
+  function savedRows(who) {
+    return array(who && who.saved).filter(function (row) {
+      return row && str(row.id) && str(row.ref);
+    });
+  }
+
+  function savedPage() {
+    return overviewBox && overviewBox.querySelector("[data-hc-savedlist]");
+  }
+
+  function savedSay(words, bad) {
+    if (!overviewBox) return false;
+    var node = overviewBox.querySelector("[data-hc-saved-say]");
+    if (!node) return false;
+    node.textContent = str(words);
+    if (bad) node.setAttribute("data-hc-bad", "");
+    else node.removeAttribute("data-hc-bad");
+    return true;
+  }
+
+  // A link opens; a file is a path on this machine, which the browser is
+  // not allowed to open for us. Its row says where it is instead, and the
+  // path is the one thing worth being able to copy out of here.
+  function renderSavedList(host, who) {
+    wipe(host);
+    var rows = savedRows(who);
+    if (!rows.length) {
+      host.appendChild(el("div", "hc-saved-empty",
+        "Nothing saved yet. Files and links kept here stay here — no chat"
+        + " is told about them."));
+      return host;
+    }
+    rows.forEach(function (row) {
+      var line = el("div", "hc-saved-row");
+      line.setAttribute("data-hc-saved-row", str(row.id));
+      line.appendChild(el("span", "hc-saved-tag",
+                          str(row.kind) === "link" ? "LINK" : "FILE"));
+      var text = el("div", "hc-saved-text");
+      if (str(row.kind) === "link") {
+        var a = el("a", "hc-saved-name", str(row.label));
+        a.setAttribute("href", str(row.ref));
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noreferrer noopener");
+        text.appendChild(a);
+      } else {
+        text.appendChild(el("div", "hc-saved-name", str(row.label)));
+      }
+      text.appendChild(el("div", "hc-saved-ref", str(row.ref)));
+      line.appendChild(text);
+      var drop = el("span", "hc-saved-x", "×");
+      drop.setAttribute("role", "button");
+      drop.setAttribute("title", "Remove this");
+      drop.setAttribute("data-hc-drop-saved", str(row.id));
+      line.appendChild(drop);
+      host.appendChild(line);
+    });
+    return host;
+  }
+
+  function savedNode(who) {
+    var page = el("div", "hc-saved");
+    page.setAttribute("data-hc-page", "saved");
+    var head = el("div", "hc-overview-ctxhead");
+    head.appendChild(el("div", "hc-overview-label", "saved"));
+    head.appendChild(el("span", "hc-saved-note",
+                        "kept for you · not sent to any chat"));
+    page.appendChild(head);
+    var acts = el("div", "hc-saved-acts");
+    var files = el("span", "hc-overview-srcbtn", "+ Add files");
+    files.setAttribute("role", "button");
+    files.setAttribute("data-hc-saved-files", "");
+    acts.appendChild(files);
+    var link = el("input", "hc-overview-srcpath hc-saved-link");
+    link.setAttribute("type", "text");
+    link.setAttribute("data-hc-saved-link", "");
+    link.setAttribute("placeholder", "paste a link, then Add");
+    link.setAttribute("spellcheck", "false");
+    link.setAttribute("autocomplete", "off");
+    acts.appendChild(link);
+    var add = el("span", "hc-overview-srcbtn", "Add link");
+    add.setAttribute("role", "button");
+    add.setAttribute("data-hc-saved-add", "");
+    acts.appendChild(add);
+    var say = el("span", "hc-overview-srcsay", "");
+    say.setAttribute("data-hc-saved-say", "");
+    acts.appendChild(say);
+    page.appendChild(acts);
+    var list = el("div", "hc-saved-list");
+    list.setAttribute("data-hc-savedlist", "");
+    renderSavedList(list, who);
+    page.appendChild(list);
+    return page;
+  }
+
+  // Posted whole, the way the sources are: one array in the record, so
+  // there is no second place for a saved thing to half-exist.
+  function saveShelf(rows, note) {
+    return post({ op: "set_project_meta", saved: rows }).then(function (result) {
+      if (!result || !result.ok) {
+        savedSay((result && result.error) || "could not save it", true);
+        return false;
+      }
+      if (serverState.project) serverState.project.saved = array(result.saved);
+      var host = savedPage();
+      if (host) renderSavedList(host, projectInfo() || {});
+      savedSay(note || "");
+      return true;
+    });
+  }
+
+  function shelfRows(who) {
+    return savedRows(who).map(function (row) {
+      return { id: str(row.id), kind: str(row.kind), label: str(row.label),
+               ref: str(row.ref) };
+    });
+  }
+
+  // The picker, not a path field: the reason to keep a paper here is that
+  // you have it open somewhere, and nobody knows where their own downloads
+  // live as a string.
+  function addSavedFiles() {
+    var who = projectInfo();
+    if (!who) return false;
+    savedSay("choosing…");
+    post({ op: "pick_files", start: str(who.cwd),
+           prompt: "Choose files to save to this project" })
+      .then(function (result) {
+        if (!result || !result.ok) {
+          savedSay((result && result.error) || "could not open the chooser",
+                   true);
+          return;
+        }
+        if (result.cancelled) { savedSay(""); return; }
+        var rows = shelfRows(projectInfo() || {});
+        var had = {};
+        rows.forEach(function (row) { had[row.ref] = true; });
+        var fresh = array(result.files).filter(function (f) {
+          return f && str(f.path) && !had[str(f.path)];
+        });
+        if (!fresh.length) { savedSay("already saved", true); return; }
+        fresh.forEach(function (f) {
+          rows.push({ id: "v" + (rows.length + 1) + "-" + str(f.path).length,
+                      kind: "file", label: str(f.name), ref: str(f.path) });
+        });
+        savedSay("saving…");
+        saveShelf(rows, fresh.length === 1 ? "saved"
+                  : "saved " + fresh.length + " files");
+      })
+      .catch(function () { savedSay("could not open the chooser", true); });
+    return true;
+  }
+
+  function addSavedLink(text) {
+    var who = projectInfo();
+    if (!who) return false;
+    var field = overviewBox
+      && overviewBox.querySelector("[data-hc-saved-link]");
+    var want = str(text !== undefined && text !== null
+                   ? text : (field ? field.value : "")).trim();
+    if (!want) { savedSay("paste a link first", true); return false; }
+    // A bare host is a link the reader wrote the short way, not a file.
+    if (want.indexOf("://") < 0) want = "https://" + want.replace(/^\/+/, "");
+    var rows = shelfRows(who);
+    if (rows.filter(function (r) { return r.ref === want; }).length) {
+      savedSay("already saved", true);
+      return false;
+    }
+    rows.push({ id: "v" + (rows.length + 1) + "-" + want.length,
+                kind: "link", label: "", ref: want });
+    savedSay("saving…");
+    saveShelf(rows, "saved").then(function (ok) {
+      if (ok && field) field.value = "";
+    });
+    return true;
+  }
+
+  function dropSaved(id) {
+    var who = projectInfo();
+    if (!who) return false;
+    saveShelf(shelfRows(who).filter(function (row) {
+      return row.id !== str(id);
+    }), "removed");
     return true;
   }
 
@@ -4866,12 +5132,26 @@
     var tabs = el("div", "hc-overview-tabs");
     var over = el("span", "hc-overview-tab hc-overview-tab-on", "OVERVIEW");
     over.setAttribute("data-hc-overview-tab", "overview");
+    over.setAttribute("role", "button");
+    // The shelf, beside the two pages that were already here. It is a page
+    // of this box rather than a third view of the workspace because what it
+    // holds belongs to the project, not to any chat in it.
+    var shelf = el("span", "hc-overview-tab", "SAVED");
+    shelf.setAttribute("data-hc-overview-tab", "saved");
+    shelf.setAttribute("role", "button");
     var goals = el("span", "hc-overview-tab", "GOALS");
     goals.setAttribute("data-hc-overview-tab", "goals");
     goals.setAttribute("role", "button");
     tabs.appendChild(over);
+    tabs.appendChild(shelf);
     tabs.appendChild(goals);
     box.appendChild(tabs);
+    // Everything below the tabs that is the overview proper, so the shelf
+    // can take its place without either page knowing about the other.
+    var main = el("div", "hc-overview-main");
+    main.setAttribute("data-hc-page", "overview");
+    main.setAttribute("data-hc-on", "");
+    box.appendChild(main);
 
     // The project card, in the order a reader needs it: what this project
     // is, what it is for, and then the facts that place it. The objective
@@ -4941,7 +5221,7 @@
     objective.value = str(who.objective);
     objSec.appendChild(objective);
     fitObjective(objective);
-    box.appendChild(card);
+    main.appendChild(card);
 
     var ctxHead = el("div", "hc-overview-ctxhead");
     ctxHead.appendChild(el("div", "hc-overview-label", "context"));
@@ -4954,7 +5234,7 @@
         [], { hour: "numeric", minute: "2-digit" });
     } catch (e) { when.textContent = ""; }
     ctxHead.appendChild(when);
-    box.appendChild(ctxHead);
+    main.appendChild(ctxHead);
     var context = el("div", "hc-overview-context");
     var srcs = el("div", "hc-overview-srcs");
     srcs.setAttribute("data-hc-srcs", "");
@@ -4995,7 +5275,8 @@
     repoBody.setAttribute("data-hc-pane-body", "repo");
     repo.appendChild(repoBody);
     context.appendChild(repo);
-    box.appendChild(context);
+    main.appendChild(context);
+    box.appendChild(savedNode(who));
     box.appendChild(addSourceModal());
     return box;
   }
@@ -5516,6 +5797,20 @@
       name.value = str(who.name);
       return true;
     }
+    // The shelf, when it is the page up: what the server holds, in case it
+    // was changed from another window of the same project.
+    var shelf = savedPage();
+    if (shelf && overviewPage() === "saved") {
+      var seen = str(shelf.getAttribute("data-hc-rows"));
+      var now = savedRows(who).map(function (row) {
+        return str(row.id) + "" + str(row.ref);
+      }).join("");
+      if (seen !== now) {
+        shelf.setAttribute("data-hc-rows", now);
+        renderSavedList(shelf, who);
+        return true;
+      }
+    }
     return themed;
   }
 
@@ -5530,6 +5825,40 @@
       var want = Number(node.scrollHeight) || 0;
       node.style.height = (want > 0 ? want : 28) + "px";
     } catch (e) { return false; }
+    return true;
+  }
+
+  // Which page of the overview box is up. Kept on the box rather than in a
+  // variable so a redrawn box opens on the page the reader left, and so the
+  // tabs and the pages cannot disagree about which one that is.
+  function overviewPage() {
+    if (!overviewBox) return "overview";
+    return str(overviewBox.getAttribute("data-hc-page-on")) || "overview";
+  }
+
+  function showOverviewPage(which) {
+    if (!overviewBox) return false;
+    var want = str(which) === "saved" ? "saved" : "overview";
+    overviewBox.setAttribute("data-hc-page-on", want);
+    kids(overviewBox).forEach(function (child) {
+      var page = child.getAttribute && child.getAttribute("data-hc-page");
+      if (!page) return;
+      if (page === want) child.setAttribute("data-hc-on", "");
+      else child.removeAttribute("data-hc-on");
+    });
+    var tabs = overviewBox.querySelector(".hc-overview-tabs");
+    if (tabs) {
+      kids(tabs).forEach(function (tab) {
+        var name = tab.getAttribute && tab.getAttribute("data-hc-overview-tab");
+        if (name === "goals") return;
+        tab.setAttribute("class", "hc-overview-tab"
+          + (name === want ? " hc-overview-tab-on" : ""));
+      });
+    }
+    if (want === "saved") {
+      var host = savedPage();
+      if (host) renderSavedList(host, projectInfo() || {});
+    }
     return true;
   }
 
@@ -5687,7 +6016,30 @@
       var tab = closestByClass(target, "hc-overview-tab");
       if (tab) {
         stop();
-        if (tab.getAttribute("data-hc-overview-tab") === "goals") closeOverview();
+        var page = tab.getAttribute("data-hc-overview-tab");
+        if (page === "goals") closeOverview();
+        else showOverviewPage(page);
+        return;
+      }
+      var dropSave = closestAttr(target, "data-hc-drop-saved");
+      if (dropSave) {
+        stop();
+        dropSaved(dropSave.getAttribute("data-hc-drop-saved"));
+        return;
+      }
+      if (closestAttr(target, "data-hc-saved-files")) {
+        stop();
+        addSavedFiles();
+        return;
+      }
+      if (closestAttr(target, "data-hc-saved-add")) {
+        stop();
+        addSavedLink();
+        return;
+      }
+      if (closestAttr(target, "data-hc-src-browse")) {
+        stop();
+        browseForSource();
         return;
       }
       var revoke = target.getAttribute
@@ -5822,6 +6174,12 @@
         var kind = str(form && form.getAttribute("data-hc-kind-on")) || "github";
         // In the conversation list the field is a filter, not a label.
         if (kind !== "chat") addSource(kind, target.value);
+      }
+      // The shelf's link box: one line, so Enter is the end of it.
+      if (target && target.getAttribute
+          && target.getAttribute("data-hc-saved-link") !== null) {
+        if (event.preventDefault) event.preventDefault();
+        addSavedLink(target.value);
       }
       // A question can run to several lines, so plain Enter stays a newline
       // and the modifier sends it -- the same bargain the objective makes.
@@ -14048,6 +14406,12 @@
     closeOverview: closeOverview,
     renderOverview: renderOverview,
     overviewShown: overviewShown,
+    showOverviewPage: showOverviewPage,
+    overviewPage: overviewPage,
+    addSavedFiles: addSavedFiles,
+    addSavedLink: addSavedLink,
+    dropSaved: dropSaved,
+    browseForSource: browseForSource,
     loadProjectJson: loadProjectJson,
     markdownNode: markdownNode,
     loadProjects: loadProjects,

@@ -122,7 +122,7 @@ class ProjectTests(unittest.TestCase):
                                               "objective": "x"})
         self.assertEqual({"cwd": "", "name": "", "branch": "", "remote": "",
                           "objective": "", "description": "",
-                          "sources": []}, who)
+                          "sources": [], "saved": []}, who)
         self.assertEqual([], tree["tree"])
         self.assertFalse(out["ok"])
 
