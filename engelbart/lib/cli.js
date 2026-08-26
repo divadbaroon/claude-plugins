@@ -1,23 +1,30 @@
 'use strict';
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
+  atomicWrite,
   ensureLauncherOnPath,
   install,
   inspectVendor,
+  runCommand,
   supportedTarget,
 } = require('./installer');
 
 class UsageError extends Error {}
 class InputCancelled extends Error {}
 
+const ACCOUNT_CONFIG_URL = 'https://berkeley.mathetic.com/api/engelbart-config';
+const MAX_ACCOUNT_CONFIG_BYTES = 64 * 1024;
+
 
 function usage() {
   return `Usage: npx engelbart-cli [options]
 
 Options:
-  --non-interactive     accepted for compatibility; the installer never prompts
+  --local-only          install without connecting an Engelbart account
+  --non-interactive     install locally without opening a browser
   --dry-run             verify the bundled release and show the plan only
   -h, --help            show this help
 
@@ -40,6 +47,7 @@ function parseArgs(argv) {
   const result = {
     globalVault: null,
     goals: null,
+    localOnly: false,
     nonInteractive: false,
     dryRun: false,
     help: false,
@@ -47,6 +55,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '-h' || arg === '--help') result.help = true;
+    else if (arg === '--local-only') result.localOnly = true;
     else if (arg === '--non-interactive') result.nonInteractive = true;
     else if (arg === '--dry-run') result.dryRun = true;
     else if (arg === '--global-vault' || arg === '--goals') {
@@ -69,6 +78,109 @@ function parseArgs(argv) {
   }
   if (result.globalVault === '2' && result.goals === null) result.goals = '2';
   return result;
+}
+
+function accountConfigPath(env, homedir) {
+  const vault = path.resolve(env.CLAUDE_VAULT_DIR || path.join(homedir, '.claude-vault'));
+  return path.join(vault, 'supabase.json');
+}
+
+async function fetchEngelbartConfig(fetchImpl = global.fetch) {
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('this Node.js runtime cannot fetch the Engelbart account configuration');
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  let response;
+  try {
+    response = await fetchImpl(ACCOUNT_CONFIG_URL, {
+      headers: { Accept: 'application/json' },
+      redirect: 'error',
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(`could not fetch the Engelbart account configuration: ${error.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response.ok) {
+    throw new Error(`Engelbart account configuration returned HTTP ${response.status}`);
+  }
+  const declared = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_ACCOUNT_CONFIG_BYTES) {
+    throw new Error('Engelbart account configuration was unexpectedly large');
+  }
+  const text = await response.text();
+  if (Buffer.byteLength(text) > MAX_ACCOUNT_CONFIG_BYTES) {
+    throw new Error('Engelbart account configuration was unexpectedly large');
+  }
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error('Engelbart account configuration was not JSON');
+  }
+  let project;
+  try {
+    project = new URL(String(value.supabaseUrl || ''));
+  } catch {
+    throw new Error('Engelbart account configuration has an invalid Supabase URL');
+  }
+  if (project.protocol !== 'https:' || project.username || project.password
+      || project.search || project.hash || !['', '/'].includes(project.pathname)) {
+    throw new Error('Engelbart account configuration has an invalid Supabase URL');
+  }
+  const anonKey = String(value.supabaseAnonKey || '').trim();
+  if (anonKey.length < 20 || /\s/.test(anonKey)) {
+    throw new Error('Engelbart account configuration has an invalid public key');
+  }
+  return { url: project.origin, anon_key: anonKey };
+}
+
+async function connectEngelbartAccount(options) {
+  const env = options.env || process.env;
+  const homedir = options.homedir || os.homedir();
+  const configFile = accountConfigPath(env, homedir);
+  const files = options.fileSystem || fs;
+  let existing = null;
+  try {
+    existing = files.lstatSync(configFile);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (existing && !existing.isFile() && !existing.isSymbolicLink()) {
+    throw new Error(`${configFile} is not a file`);
+  }
+  if (!existing) {
+    const config = await (options.fetchConfig || fetchEngelbartConfig)();
+    (options.writeConfig || atomicWrite)(
+      configFile,
+      `${JSON.stringify(config, null, 2)}\n`,
+      0o600,
+    );
+  }
+
+  const runner = options.runner || runCommand;
+  const who = runner(options.launcher, ['supabase', 'whoami'], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (who.status === 0) {
+    const identity = String(who.stdout || '').trim();
+    options.output.write(`  account      connected${identity ? ` as ${identity}` : ''}\n`);
+    return;
+  }
+  options.output.write('  account      opening browser sign-in\n');
+  const login = runner(options.launcher, ['supabase', 'login'], {
+    env,
+    stdio: 'inherit',
+  });
+  if (login.status !== 0) {
+    throw new Error(
+      'Engelbart account sign-in did not finish; the local install is usable, '
+      + 'or rerun with `hc supabase login`',
+    );
+  }
 }
 
 
@@ -101,14 +213,16 @@ async function run(deps = {}) {
     });
     const packageRoot = deps.packageRoot || path.resolve(__dirname, '..');
     const packageJson = require(path.join(packageRoot, 'package.json'));
+    const env = deps.env || process.env;
+    const homedir = deps.homedir || os.homedir();
     const platform = deps.platform || process.platform;
     const arch = deps.arch || process.arch;
     const target = supportedTarget(platform, arch, deps.processReport);
     const vendor = inspectVendor(packageRoot, packageJson.version);
     const managedRoot = path.resolve(
       deps.managedRoot
-        || process.env.HUMAN_COMPACT_HOME
-        || path.join(os.homedir(), '.human-compact'),
+        || env.HUMAN_COMPACT_HOME
+        || path.join(homedir, '.human-compact'),
     );
 
     let reach = null;
@@ -135,9 +249,19 @@ async function run(deps = {}) {
       if (launcher) {
         reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
           launcherDir: path.dirname(launcher),
-          env: process.env,
-          homedir: os.homedir(),
+          env,
+          homedir,
         });
+        if (options.localOnly || options.nonInteractive) {
+          output.write('  account      local-only (browser sign-in skipped)\n');
+        } else {
+          await (deps.connectAccount || connectEngelbartAccount)({
+            launcher,
+            env,
+            homedir,
+            output,
+          });
+        }
       }
     }
     // One status block, then one instruction. Anything the user must do to
@@ -182,8 +306,12 @@ async function run(deps = {}) {
 }
 
 module.exports = {
+  ACCOUNT_CONFIG_URL,
   InputCancelled,
   UsageError,
+  accountConfigPath,
+  connectEngelbartAccount,
+  fetchEngelbartConfig,
   numericChoice,
   parseArgs,
   resolveChoices,

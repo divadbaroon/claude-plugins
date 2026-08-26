@@ -1,33 +1,35 @@
 # engelbart-cli
 
-Install `/goals-ui` — chat-scoped goal workspaces for Claude Code — with one
+Install `/bart` — chat-scoped goal workspaces for Claude Code — with one
 command:
 
 ```bash
 npx engelbart-cli
 ```
 
-The installer takes no required options and asks no questions. It installs
-the `hc` runtime, the Claude Code hooks, and the `/goals-ui` command.
+The installer takes no required options. It installs the `hc` runtime, the
+Claude Code hooks, and the `/bart` command, then opens the browser to connect
+the machine to an existing Engelbart account. Use `--local-only` to skip the
+account connection and keep the installation local.
 
 From then on the hooks record each chat's own prompts and events to a local,
 owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
 same conversation Claude Code already keeps in `~/.claude/projects/`. Nothing
-is analyzed or injected until you run `/goals-ui` in that chat, and nothing
+is analyzed or injected until you run `/bart` in that chat, and nothing
 leaves your machine except the model calls your own `claude` CLI makes.
 
 Start a new Claude Code session (or run `/reload-plugins`), then run:
 
 ```text
-/goals-ui
+/bart
 ```
 
 That opens the goal workspace for the current chat. From then on that chat's
 goals are inferred with your own authenticated Claude CLI and injected back
 into the chat as context — the whole goals document first, then only what
 changed since your last message. Subagents and tool batches receive it too.
-`/goals-ui disable` turns analysis and injection off again for that chat;
-`/goals-ui` turns them back on.
+`/bart disable` turns analysis and injection off again for that chat;
+`/bart` turns them back on.
 
 The Python backend is an exact wheel bundled in the npm release. It is
 installed into a managed private runtime under `~/.human-compact/`; the npm
@@ -36,13 +38,14 @@ lifecycle scripts.
 
 ## Noninteractive installation
 
-There is nothing to answer, so a scripted install is the same command:
+Scripted or deliberately local installation skips browser authentication:
 
 ```bash
-npx engelbart-cli
+npx engelbart-cli --local-only
 ```
 
-`--non-interactive` is still accepted for compatibility and changes nothing.
+`--non-interactive` is still accepted for compatibility and also skips browser
+authentication.
 `--dry-run` verifies the bundled wheel and prints the plan without installing.
 
 ## Experimental (HC_EXPERIMENTAL=1)

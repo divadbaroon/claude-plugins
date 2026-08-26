@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "human-compact"
-version = "0.19.1"
+version = "0.19.2"
 description = "Session-scoped goal workspaces and persistent context for Claude Code."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,4 +19,4 @@ hc = "human_compact.cli:hc_main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-human_compact = ["assets/**/*", "assets/plugin/.claude-plugin/*", "assets/goals-ui-skill/*", "trajectory/web/*", "trajectory/web/static/*"]
+human_compact = ["assets/**/*", "assets/plugin/.claude-plugin/*", "assets/bart-skill/*", "trajectory/web/*", "trajectory/web/static/*"]
