@@ -1264,7 +1264,13 @@ class TellTheBuildTests(BuildRunTests):
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0003"][0] == "done"))
         self.assertEqual("", self.rows()["taaaa0001"][0])
-        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+        # Consuming the final row directive precedes the reader thread's
+        # terminal-state write.  Observe the state transition itself instead
+        # of assuming the scheduler has run it by the time the row is visible.
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "idle"),
+            BUILD.load_run(self.session, self.root, "g1"))
 
     def test_deleting_everything_still_ends_the_process_without_a_word(self):
         self.hold()
