@@ -1501,11 +1501,11 @@ class RestartCheckTests(BuildRunTests):
         return BUILD._run_for(self.session, self.root, "g1")
 
     def checked(self):
-        # The check has answered, or given up: the record says which, and
-        # no process of the run is left.
+        # The check has answered, or given up, and the reader thread has
+        # committed the terminal run state consumed by the assertions.
         return self.wait_for(
             lambda: self.restart().get("status") in ("yes", "no", "unknown", "skipped")
-            and not self.live()["running"], seconds=12)
+            and self.live()["status"] == "idle", seconds=12)
 
     def test_the_verdict_is_read_off_the_check_s_words_with_a_real_decoder(self):
         self.assertEqual(
