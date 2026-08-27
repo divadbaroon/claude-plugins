@@ -2091,8 +2091,12 @@ def bart_start_main(argv=None):
 
 
 def bart_main(argv=None):
-    """Authenticate Claude Code against the Engelbart metered gateway."""
-    from . import engelbart_auth as EA
+    """Open projects; keep old ``bart token`` helpers on the one auth store.
+
+    Account mutation belongs to the npm device flow.  ``bart`` remains the
+    installed project launcher, and ``token`` reads that flow's record so a
+    pre-merge Claude setting does not break during upgrade.
+    """
 
     said = list(sys.argv[1:] if argv is None else argv)
     # Opening the workspace is not an authentication question, and it carries
@@ -2102,42 +2106,50 @@ def bart_main(argv=None):
 
     ap = argparse.ArgumentParser(
         prog="bart",
-        description="Connect Claude Code to an Engelbart account and credit key.")
+        description="Open Engelbart projects (account commands use engelbart-cli).")
     ap.add_argument("action", nargs="?", default="status",
                     choices=("auth", "status", "token", "logout", "start"))
     args = ap.parse_args(said)
-    try:
-        if args.action == "token":
-            print(EA.token())
-            return 0
-        if args.action == "logout":
-            EA.logout()
-            print("Engelbart credentials removed; prior Claude settings restored.")
-            return 0
-        if args.action == "status":
-            state = EA.status()
-            print("account   " + ((state["email"] or "signed in")
-                                  if state["signedIn"] else "signed out"))
-            print("credits   " + (f"${state['spendUsd']:.2f} used of "
-                                   f"${state['budgetUsd']:.2f}"
-                                   if state["connected"] else "not connected"))
-            if state["connected"]:
-                print("models    " + ", ".join(state["models"]))
-            return 0
 
-        record = EA.authenticate(announce=print)
-        print(f"Connected {record['email'] or 'account'} to Engelbart.")
-        print(f"Claude Code budget: ${record['budgetUsd']:.2f}; "
-              "models: " + ", ".join(record["models"]))
-        conflicts = EA.shell_credential_conflicts()
-        if conflicts:
-            print("Warning: unset " + ", ".join(conflicts)
-                  + " in this shell before starting Claude Code; shell variables "
-                    "override bart's credential helper.", file=sys.stderr)
+    managed = Path(os.environ.get("HUMAN_COMPACT_HOME")
+                   or Path.home() / ".human-compact")
+    try:
+        record = json.loads((managed / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = {}
+    if not isinstance(record, dict):
+        record = {}
+
+    if args.action in ("auth", "logout"):
+        print(f"bart: run `npx engelbart-cli {args.action}`; account changes "
+              "use the device-auth flow", file=sys.stderr)
+        return 2
+    claude = record.get("claude") if isinstance(record.get("claude"), dict) else {}
+    if args.action == "token":
+        key = str(claude.get("apiKey") or "")
+        if not key:
+            print("bart: not connected; run `npx engelbart-cli auth`",
+                  file=sys.stderr)
+            return 1
+        print(key)
         return 0
-    except (EA.EngelbartAuthError, OSError, ValueError) as exc:
-        print(f"bart: {exc}", file=sys.stderr)
-        return 1
+    if args.action == "status":
+        print("account   " + (str(record.get("email") or "connected")
+                              if record.get("token") else "signed out"))
+        if claude.get("apiKey"):
+            spent = float(claude.get("spendUsd") or 0)
+            budget = float(claude.get("budgetUsd") or 0)
+            print(f"credits   ${spent:.2f} used of ${budget:.2f}")
+            models = [str(item) for item in (claude.get("models") or [])
+                      if isinstance(item, str)]
+            if models:
+                print("models    " + ", ".join(models))
+        else:
+            print("credits   not connected")
+        return 0
+
+    # ``start`` is handled above before account parsing.
+    return 2
 
 
 def main():   # keep hc-backup entry point working

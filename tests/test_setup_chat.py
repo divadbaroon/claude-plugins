@@ -12,6 +12,8 @@ every field is bounded and every shape is coerced rather than trusted.
 """
 
 import contextlib
+import json
+import os
 import sys
 import tempfile
 import threading
@@ -288,26 +290,35 @@ class StageTests(unittest.TestCase):
 class AccountTests(unittest.TestCase):
     """Whose Claude answers, and by what name the model is asked for."""
 
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.managed = Path(self.tmp.name)
+        environment = mock.patch.dict(
+            os.environ, {"HUMAN_COMPACT_HOME": str(self.managed)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def write_models(self, models):
+        (self.managed / "auth.json").write_text(json.dumps({
+            "token": "egb_machine", "claude": {"models": models},
+        }), encoding="utf-8")
+
     def test_an_unconnected_reader_is_asked_for_by_the_plain_alias(self):
         # Their own claude.ai login understands "sonnet"; nothing else has
         # told us what else to call it.
-        with mock.patch.object(SC, "SETUP_MODEL", "sonnet"), \
-             mock.patch("human_compact.engelbart_auth.status",
-                        return_value={"models": []}):
+        with mock.patch.object(SC, "SETUP_MODEL", "sonnet"):
             self.assertEqual("sonnet", SC.setup_model())
 
     def test_a_connected_reader_is_asked_for_the_model_their_key_allows(self):
-        # bart auth pins enforceAvailableModels to the list the issued key
-        # may use, so the bare alias is a model the gateway need not answer.
-        with mock.patch("human_compact.engelbart_auth.status",
-                        return_value={"models": ["claude-opus-4-1",
-                                                 "claude-sonnet-4-5"]}):
-            self.assertEqual("claude-sonnet-4-5", SC.setup_model())
+        # The npm device flow records the names the issued key may use, so the
+        # bare alias is not assumed to be one the gateway answers to.
+        self.write_models(["claude-opus-4-1", "claude-sonnet-4-5"])
+        self.assertEqual("claude-sonnet-4-5", SC.setup_model())
 
     def test_an_account_that_cannot_be_read_falls_back_to_the_alias(self):
-        with mock.patch("human_compact.engelbart_auth.status",
-                        side_effect=OSError("no vault")):
-            self.assertEqual("sonnet", SC.setup_model())
+        (self.managed / "auth.json").write_text("not json", encoding="utf-8")
+        self.assertEqual("sonnet", SC.setup_model())
 
     def test_a_provider_that_cannot_be_reached_is_reported_as_itself(self):
         # A setup that silently says nothing is the blank screen this whole

@@ -132,7 +132,11 @@ class PickFilesTests(unittest.TestCase):
 
     def run_with(self, stdout="", stderr="", code=0):
         done = mock.Mock(stdout=stdout, stderr=stderr, returncode=code)
-        with mock.patch("subprocess.run", return_value=done) as ran:
+        # Exercise the result contract, not whether this CI image happens to
+        # ship zenity or kdialog. Platform command selection has its own tests.
+        with mock.patch.object(ui, "_file_chooser_command",
+                               return_value=["test-file-chooser"]), \
+             mock.patch("subprocess.run", return_value=done) as ran:
             out = ui.pick_files(str(self.here))
         return out, ran
 

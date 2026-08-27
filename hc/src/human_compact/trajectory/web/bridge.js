@@ -5642,8 +5642,42 @@
       return;
     }
     nodes.button.removeAttribute("data-hc-off");
-    sayOn(nodes.say, "signed in as " + str(state.email || "you")
-                     + " · sends this project's goals, TODO rows and notes");
+    var said = syncSentence(state);
+    sayOn(nodes.say, said.text, said.bad);
+  }
+
+  function clockAt(seconds) {
+    var when = new Date(Number(seconds || 0) * 1000);
+    var hour = when.getHours(), minute = when.getMinutes();
+    return hour + ":" + (minute < 10 ? "0" : "") + minute;
+  }
+
+  // The send happens on its own now, so this line says what it did rather
+  // than what the button would do if pressed. The button stays: a reader
+  // who wants the project up this second should not wait out the timer.
+  function syncSentence(state) {
+    var who = "signed in as " + str(state.email || "you");
+    var auto = state && state.autosync;
+    if (!auto || !auto.enabled) {
+      return { text: who + " · sends this project's goals, TODO rows and notes",
+               bad: false };
+    }
+    var every = "saves automatically " + Math.round(Number(auto.seconds) || 4)
+      + "s after an edit";
+    if (auto.sending) return { text: who + " · sending…", bad: false };
+    if (auto.pending) {
+      return { text: who + " · " + every + " · saving shortly", bad: false };
+    }
+    var last = auto.last || {};
+    if (last.ok) {
+      return { text: who + " · " + every + " · last saved " + clockAt(last.at),
+               bad: false };
+    }
+    if (last.error && !last.waiting) {
+      return { text: who + " · " + every + " · last save failed: "
+                     + str(last.error), bad: true };
+    }
+    return { text: who + " · " + every, bad: false };
   }
 
   // Sharing needs the same sign-in the send does, so the two buttons turn
@@ -7849,6 +7883,21 @@
       // above keeps its full width for the elapsed time and the tokens.
       "[data-hc-launch] .hc-todo-watch-foot{display:flex;align-items:center;margin-top:7px}",
       "[data-hc-launch][data-hc-readonly] .hc-todo-watch-foot{display:none!important}",
+      "[data-hc-launch] .hc-dev{flex:none;margin:8px 12px 0;padding:8px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);user-select:none}",
+      "[data-hc-launch] .hc-dev-head{display:flex;align-items:center;gap:8px}",
+      "[data-hc-launch] .hc-dev-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--fnt)}",
+      "[data-hc-launch] .hc-dev[data-hc-dev-state=\"running\"] .hc-dev-dot{background:var(--hc-ok)}",
+      "[data-hc-launch] .hc-dev[data-hc-dev-state=\"starting\"] .hc-dev-dot{background:var(--hc-blue, #58a6ff);animation:hc-todo-pulse 1.6s ease-in-out infinite}",
+      "[data-hc-launch] .hc-dev[data-hc-dev-state=\"in_use\"] .hc-dev-dot{background:var(--hc-warn)}",
+      "[data-hc-launch] .hc-dev-meta{flex:1;min-width:0;font:500 10.5px/1.5 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--dtxt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}",
+      "[data-hc-launch] .hc-dev-link{flex:none;max-width:46%;font:500 10.5px/1.5 'Source Code Pro',monospace;color:var(--hc-blue, #58a6ff);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-dev-link:hover{text-decoration:underline}",
+      "[data-hc-launch] .hc-dev-btn{flex:none;padding:2px 7px;border:1px solid var(--bd2);border-radius:4px;font:600 10px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer}",
+      "[data-hc-launch] .hc-dev-btn:hover{color:var(--ink);border-color:var(--ink)}",
+      "[data-hc-launch] .hc-dev-last{margin-top:5px;font:10.5px/1.5 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-dev-last[data-hc-dev-bad]{color:var(--del)}",
+      "[data-hc-launch] .hc-dev-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
+      "[data-hc-launch] .hc-dev-row{font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere;white-space:pre-wrap}",
       // The restart check, under the watch line: the model the session
       // moved to and a spinner while it asks; the reason and the prompt to
       // paste, boxed with its own copy button, when the answer is yes.
@@ -9003,6 +9052,196 @@
     foot.appendChild(term);
     box.appendChild(foot);
     return foot;
+  }
+
+  // --- the project's own dev server ----------------------------------------
+  //
+  // A goal whose work is a web interface has something the rows cannot show:
+  // a page. The project already knows how to serve it, so the strip does
+  // three things and no more -- says whether that server is up, starts it
+  // when it is not, and hands over the address it printed. What the page
+  // looks like belongs in a browser, not in a rail.
+
+  var devStatus = {};        // goal id -> what the server last said
+  var devLines = {};         // goal id -> its log, while the log is open
+  var devOpen = {};          // goal id -> the log is unfolded
+  var devFetched = {};       // goal id -> when the status was last asked for
+  var devLogged = {};        // goal id -> and when the log was
+  var devBusy = {};          // goal id -> a start or a stop is out
+  var DEV_REFRESH_MS = 3000;
+  var DEV_HEAD = { running: "serving", starting: "starting…",
+                   stopped: "not running", in_use: "port busy" };
+
+  function devRefresh(goalId) {
+    if (!goalId) return;
+    devFetched[goalId] = Date.now();
+    post({ op: "dev_status", goal_id: goalId }).then(function (res) {
+      if (res && res.ok) devStatus[goalId] = res;
+      if (todoGoalId === goalId) renderTodoRail(true);
+    });
+  }
+
+  function devLoadLog(goalId) {
+    if (!goalId) return;
+    devLogged[goalId] = Date.now();
+    post({ op: "dev_log", goal_id: goalId }).then(function (res) {
+      devLines[goalId] = (res && res.ok) ? array(res.lines) : [];
+      if (todoGoalId === goalId) renderTodoRail(true);
+    });
+  }
+
+  function devAct(goalId, op, force) {
+    if (!goalId || devBusy[goalId]) return;
+    devBusy[goalId] = true;
+    var body = { op: op, goal_id: goalId };
+    if (force) body.force = true;
+    post(body).then(function (res) {
+      devBusy[goalId] = false;
+      if (res && res.ok) devStatus[goalId] = res;
+      else if (devStatus[goalId]) {
+        devStatus[goalId].error = (res && res.error) || "that did not work";
+      }
+      // A server just told to start is compiling, and the address lands a
+      // second or two later. Ask again on the next render rather than
+      // leaving "starting…" up until the poll comes round.
+      devFetched[goalId] = 0;
+      if (devOpen[goalId]) devLoadLog(goalId);
+      if (todoGoalId === goalId) renderTodoRail(true);
+    });
+  }
+
+  function devSlot(host) {
+    // Above the build panel, below the rows. Made here rather than in the
+    // shell, for the reason the build panel is: a workspace whose page was
+    // served by older code still gets it.
+    var box = host.querySelector(".hc-dev");
+    if (box) return box;
+    box = document.createElement("div");
+    box.className = "hc-dev";
+    box.setAttribute("contenteditable", "false");
+    var before = host.querySelector(".hc-todo-watch")
+      || host.querySelector(".hc-todos-actions");
+    if (before && host.insertBefore) host.insertBefore(box, before);
+    else host.appendChild(box);
+    return box;
+  }
+
+  function devPaint(box, goalId, state, open, lines) {
+    while (box.firstChild) box.removeChild(box.firstChild);
+    var status = state ? str(state.status) : "";
+    // Only where there is something to serve. A goal whose directory has no
+    // dev script gets no strip at all: a dead control that explains itself
+    // on every goal is worse than the absence of one.
+    if (!state || (!state.can_start && status !== "running")) {
+      box.style.display = "none";
+      return false;
+    }
+    box.style.display = "";
+    box.setAttribute("data-hc-dev-state", status);
+    var head = document.createElement("div");
+    head.className = "hc-dev-head";
+    var dot = document.createElement("span");
+    dot.className = "hc-dev-dot";
+    head.appendChild(dot);
+    var meta = document.createElement("span");
+    meta.className = "hc-dev-meta";
+    var label = [];
+    if (state.framework) label.push(str(state.framework));
+    label.push(DEV_HEAD[status] || status);
+    meta.textContent = label.join(" · ");
+    meta.title = str(state.command) + (state.cwd ? " · in " + str(state.cwd) : "");
+    head.appendChild(meta);
+    // The address the process printed, or -- when the port this project
+    // wants is held by something we did not start -- that one, said as what
+    // it is rather than as this project's.
+    var url = str(state.url) || (status === "in_use" ? str(state.other_url) : "");
+    if (url) {
+      var link = document.createElement("a");
+      link.className = "hc-dev-link";
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      link.title = status === "in_use"
+        ? "something is already serving this port — the workspace did not start it"
+        : "open the page this project is serving";
+      head.appendChild(link);
+    }
+    var busy = !!devBusy[goalId];
+    var act = document.createElement("span");
+    act.className = "hc-dev-btn";
+    if (status === "running" || status === "starting") {
+      act.textContent = busy ? "stopping…" : "Stop";
+      act.title = "stop this dev server";
+      act.setAttribute("data-hc-dev-stop", str(goalId));
+    } else if (status === "in_use") {
+      act.textContent = busy ? "starting…" : "Start anyway";
+      act.title = "start it regardless — it will take a free port and say which";
+      act.setAttribute("data-hc-dev-force", str(goalId));
+    } else {
+      act.textContent = busy ? "starting…" : "Start";
+      act.title = "run " + str(state.command) + " here";
+      act.setAttribute("data-hc-dev-start", str(goalId));
+    }
+    head.appendChild(act);
+    var log = document.createElement("span");
+    log.className = "hc-dev-btn";
+    log.textContent = open ? "Hide log" : "Log";
+    log.title = "everything the dev server has printed";
+    log.setAttribute("data-hc-dev-log", str(goalId));
+    head.appendChild(log);
+    box.appendChild(head);
+    var last = document.createElement("div");
+    last.className = "hc-dev-last";
+    var tail = array(state.last);
+    last.textContent = str(state.error) || str(tail[tail.length - 1] || "");
+    if (state.error) last.setAttribute("data-hc-dev-bad", "1");
+    last.style.display = last.textContent ? "" : "none";
+    box.appendChild(last);
+    if (!open) return true;
+    var body = document.createElement("div");
+    body.className = "hc-dev-log";
+    if (!lines.length) {
+      var empty = document.createElement("div");
+      empty.className = "hc-dev-row";
+      empty.textContent = "nothing printed yet";
+      body.appendChild(empty);
+    }
+    lines.forEach(function (entry) {
+      var row = document.createElement("div");
+      row.className = "hc-dev-row";
+      row.textContent = str(entry);
+      body.appendChild(row);
+    });
+    box.appendChild(body);
+    // Newest line, which is the one worth reading.
+    if (typeof body.scrollHeight === "number") body.scrollTop = body.scrollHeight;
+    return true;
+  }
+
+  function renderDev(host, goalId) {
+    if (!host) return false;
+    var box = devSlot(host);
+    var state = goalId ? devStatus[goalId] : null;
+    // Asked for on the rail's own poll, and no faster: a status probes a
+    // socket, and a strip is not worth a request a second.
+    if (goalId && Date.now() - (devFetched[goalId] || 0) > DEV_REFRESH_MS) {
+      devRefresh(goalId);
+    }
+    var open = !!(goalId && devOpen[goalId]);
+    var lines = open ? array(devLines[goalId]) : [];
+    var key = JSON.stringify([goalId, open, lines.length, !!devBusy[goalId],
+                              state && [state.status, state.url, state.error,
+                                        state.command, state.other_url,
+                                        array(state.last).join("|")]]);
+    if (box.getAttribute("data-hc-dev-key") !== key) {
+      box.setAttribute("data-hc-dev-key", key);
+      devPaint(box, goalId, state, open, lines);
+    }
+    if (open && Date.now() - (devLogged[goalId] || 0) > DEV_REFRESH_MS) {
+      devLoadLog(goalId);
+    }
+    return true;
   }
 
   // --- the rows on screen ---------------------------------------------------
@@ -10336,6 +10575,31 @@
         renderTodoRail(true);
         return;
       }
+      var devStart = node.getAttribute("data-hc-dev-start");
+      if (devStart !== null) {
+        devAct(devStart, "dev_start", false);
+        renderTodoRail(true);
+        return;
+      }
+      var devForce = node.getAttribute("data-hc-dev-force");
+      if (devForce !== null) {
+        devAct(devForce, "dev_start", true);
+        renderTodoRail(true);
+        return;
+      }
+      var devStop = node.getAttribute("data-hc-dev-stop");
+      if (devStop !== null) {
+        devAct(devStop, "dev_stop", false);
+        renderTodoRail(true);
+        return;
+      }
+      var devLogFor = node.getAttribute("data-hc-dev-log");
+      if (devLogFor !== null) {
+        devOpen[devLogFor] = !devOpen[devLogFor];
+        if (devOpen[devLogFor]) devLoadLog(devLogFor);
+        renderTodoRail(true);
+        return;
+      }
       var copyFor = node.getAttribute("data-hc-todo-restart-copy");
       if (copyFor !== null) {
         event.preventDefault();
@@ -11017,6 +11281,7 @@
       }
     }
     renderTodoWatch(host);
+    renderDev(host, todoGoalId);
     if (!goal || !todoItems) {
       while (list.firstChild) list.removeChild(list.firstChild);
       return true;
@@ -14478,6 +14743,20 @@
       },
       logShown: function (goalId) { return !!watchOpen[goalId]; },
     },
+    dev: {
+      render: renderDev,
+      paint: devPaint,
+      state: function (goalId) { return devStatus[goalId] || null; },
+      seed: function (goalId, state) {
+        devStatus[goalId] = state;
+        devFetched[goalId] = Date.now();
+      },
+      openLog: function (goalId) {
+        devOpen[goalId] = true;
+        devLoadLog(goalId);
+      },
+      logShown: function (goalId) { return !!devOpen[goalId]; },
+    },
     holdRoot: holdRoot,
     releaseRoot: releaseRoot,
     patchMisses: function () { return patchMisses.slice(); },
@@ -14707,6 +14986,9 @@
     // Postgres across a network. Same poll for both would be a query every
     // second and a half for an answer that rarely changes.
     setInterval(refreshState, sharedWorkspace() ? 5000 : 1500);
+    // The line above the send button is the only sign the automatic send
+    // leaves, so it is kept current -- but only while it is on screen.
+    setInterval(function () { if (syncNodes()) loadSyncStatus(); }, 4000);
     setTimeout(refreshState, 0);
   }
   if (document.readyState === "loading") {

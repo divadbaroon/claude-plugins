@@ -5400,3 +5400,119 @@ class LaunchSkinTests(BridgeTestCase):
         # empty card is a claim about a chat nothing is known about yet.
         self.assertEqual([], self.run_js(
             "window.__hcPromptUI.injectionLines(null);"))
+
+
+class DevServerStripTests(BridgeTestCase):
+    """The strip that says whether this project's dev server is up.
+
+    It is the one control in the rail whose subject is not the goal tree: a
+    goal whose work is a web interface has a page, and the strip's whole job
+    is to say whether that page is being served, start it when it is not, and
+    hand over the address the process itself printed.
+    """
+
+    STOPPED = {"ok": True, "status": "stopped", "can_start": True,
+               "framework": "Next.js", "command": "npm run dev",
+               "cwd": "/Users/x/app", "url": "", "last": []}
+
+    def paint(self, state, open_log=False, lines=None):
+        return self.run_js(
+            "var box = document.createElement('div');"
+            "window.__hcPromptUI.dev.paint(box, 'g1', %s, %s, %s);"
+            "var head = box.children[0] ? box.children[0].children : [];"
+            "out = {display: box.style.display,"
+            "  state: box.getAttribute('data-hc-dev-state'),"
+            "  head: head.map(function (c) { return [c.className, c.textContent,"
+            "     c.title || '', c.href || '',"
+            "     c.getAttribute('data-hc-dev-start') !== null ? 'start'"
+            "     : c.getAttribute('data-hc-dev-force') !== null ? 'force'"
+            "     : c.getAttribute('data-hc-dev-stop') !== null ? 'stop'"
+            "     : c.getAttribute('data-hc-dev-log') !== null ? 'log' : '']; }),"
+            "  last: box.children[1] ? box.children[1].textContent : null,"
+            "  bad: box.children[1]"
+            "    ? box.children[1].getAttribute('data-hc-dev-bad') : null,"
+            "  log: box.children[2]"
+            "    ? box.children[2].children.map(function (c) {"
+            "        return c.textContent; }) : null};"
+            % (json.dumps(state), "true" if open_log else "false",
+               json.dumps(lines or [])))
+
+    def buttons(self, painted):
+        return [[row[1], row[4]] for row in painted["head"] if row[4]]
+
+    def test_a_project_that_is_not_running_offers_to_run_it(self):
+        out = self.paint(self.STOPPED)
+        self.assertEqual("stopped", out["state"])
+        self.assertEqual("Next.js · not running", out["head"][1][1])
+        self.assertEqual([["Start", "start"], ["Log", "log"]],
+                         self.buttons(out))
+        # What it would run, said before it runs it.
+        self.assertEqual("run npm run dev here", out["head"][2][2])
+
+    def test_a_running_one_links_to_the_address_it_printed(self):
+        out = self.paint(dict(self.STOPPED, status="running",
+                              url="http://127.0.0.1:3210/",
+                              last=["  ✓ Ready in 900ms"]))
+        self.assertEqual("running", out["state"])
+        link = out["head"][2]
+        self.assertEqual("hc-dev-link", link[0])
+        self.assertEqual("127.0.0.1:3210", link[1])
+        self.assertEqual("http://127.0.0.1:3210/", link[3])
+        self.assertEqual([["Stop", "stop"], ["Log", "log"]], self.buttons(out))
+        self.assertEqual("  ✓ Ready in 900ms", out["last"])
+
+    def test_a_busy_port_is_named_as_somebody_elses_not_as_this_project(self):
+        out = self.paint(dict(self.STOPPED, status="in_use",
+                              other_url="http://127.0.0.1:3000/"))
+        self.assertEqual("Next.js · port busy", out["head"][1][1])
+        self.assertIn("the workspace did not start it", out["head"][2][2])
+        self.assertEqual([["Start anyway", "force"], ["Log", "log"]],
+                         self.buttons(out))
+
+    def test_a_server_that_failed_says_so_where_the_last_line_goes(self):
+        out = self.paint(dict(self.STOPPED,
+                              error="the dev server exited before it served anything",
+                              last=["Type error: nope"]))
+        self.assertIn("exited before it served", out["last"])
+        self.assertEqual("1", out["bad"])
+
+    def test_a_directory_with_nothing_to_serve_gets_no_strip(self):
+        out = self.paint({"ok": True, "status": "stopped", "can_start": False,
+                          "error": "package.json has no dev or start script"})
+        self.assertEqual("none", out["display"])
+        self.assertEqual([], out["head"])
+
+    def test_the_log_prints_what_the_server_printed(self):
+        out = self.paint(dict(self.STOPPED, status="running",
+                              url="http://127.0.0.1:3210/"),
+                         open_log=True,
+                         lines=["$ npm run dev", "  - Local: http://localhost:3210"])
+        self.assertEqual(["$ npm run dev", "  - Local: http://localhost:3210"],
+                         out["log"])
+        self.assertEqual("Hide log", self.buttons(out)[-1][0])
+
+    def test_an_open_log_with_nothing_in_it_says_that(self):
+        out = self.paint(self.STOPPED, open_log=True)
+        self.assertEqual(["nothing printed yet"], out["log"])
+
+    def test_the_strip_sits_above_the_build_panel(self):
+        out = self.run_js(
+            "var host = document.createElement('div');"
+            "var watch = document.createElement('div');"
+            "watch.className = 'hc-todo-watch';"
+            "var actions = document.createElement('div');"
+            "actions.className = 'hc-todos-actions';"
+            "host.appendChild(watch); host.appendChild(actions);"
+            "window.__hcPromptUI.dev.seed('g1', %s);"
+            "window.__hcPromptUI.dev.render(host, 'g1');"
+            "window.__hcPromptUI.dev.render(host, 'g1');"
+            "out = host.children.map(function (c) { return c.className; });"
+            % json.dumps(self.STOPPED))
+        # Made once, wherever it is rendered from, and in front of the panel
+        # the build writes into rather than after it.
+        self.assertEqual(["hc-dev", "hc-todo-watch", "hc-todos-actions"], out)
+
+    def test_the_stylesheet_carries_the_strip(self):
+        css = self.run_js("out = window.__hcPromptUI.launchCss();")
+        self.assertIn(".hc-dev{flex:none", css)
+        self.assertIn('.hc-dev[data-hc-dev-state="running"] .hc-dev-dot', css)

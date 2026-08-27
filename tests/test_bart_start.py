@@ -13,7 +13,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -200,6 +200,43 @@ class BartStartTests(unittest.TestCase):
                     self.run_start()
         self.assertNotEqual(0, stop.exception.code)
         self.assertEqual([], self.opened)
+
+
+class BartAccountCompatibilityTests(unittest.TestCase):
+    """The installed launcher reads, but never rivals, npm device auth."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.managed = Path(self.tmp.name)
+        environment = mock.patch.dict(
+            os.environ, {"HUMAN_COMPACT_HOME": str(self.managed)})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def call(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = cli.bart_main(list(args))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_token_reads_the_device_flow_record_for_legacy_helpers(self):
+        (self.managed / "auth.json").write_text(json.dumps({
+            "token": "egb_machine",
+            "email": "member@example.com",
+            "claude": {"apiKey": "sk-issued", "budgetUsd": 25,
+                       "spendUsd": 3},
+        }), encoding="utf-8")
+        code, out, err = self.call("token")
+        self.assertEqual(0, code)
+        self.assertEqual("sk-issued", out.strip())
+        self.assertEqual("", err)
+
+    def test_account_mutation_points_to_the_only_auth_flow(self):
+        code, out, err = self.call("auth")
+        self.assertEqual(2, code)
+        self.assertEqual("", out)
+        self.assertIn("npx engelbart-cli auth", err)
 
 
 if __name__ == "__main__":

@@ -13,22 +13,25 @@ installed:
 npx engelbart-cli
 ```
 
-It installs a managed `hc` runtime plus the Claude Code hooks and the
-`/goals-ui` command, and nothing else. The installer takes no required options
-and asks no questions.
+It installs a managed `hc` runtime plus the Claude Code hooks and the `/bart`
+command, then opens a browser device-auth flow. Approval retrieves the
+account's Claude credit, configures Supabase, and opens first-project
+onboarding. The installer takes no required options and never asks for a
+password.
 
 From install, the hooks record each chat's own prompts and events to a local,
 owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
 same conversation Claude Code already keeps in `~/.claude/projects/`. That
-recording is what lets `/goals-ui`, run in the middle of a chat, still see the
+recording is what lets `/bart`, run in the middle of a chat, still see the
 chat from its beginning. Nothing is analyzed or injected until you run
-`/goals-ui` in that chat, and nothing leaves your machine except the model
-calls your own `claude` CLI makes.
+`/bart` in that chat. Model inference uses the authenticated Claude endpoint;
+after workspace edits, a debounced project snapshot is sent to the configured
+Supabase project.
 
 Start a new Claude Code session (or run `/reload-plugins`), then type:
 
 ```text
-/goals-ui
+/bart
 ```
 
 The command opens a localhost page tied to that Claude session, without
@@ -40,7 +43,7 @@ owner-only (`0700` directory, `0600` artifacts).
 
 ## Goal context in the chat
 
-Once `/goals-ui` has run in a chat, that chat's goals document is injected back
+Once `/bart` has run in a chat, that chat's goals document is injected back
 into it as context. The first injection carries the whole document under a
 `# Goals for this Claude chat (full file: …)` header; later messages carry a
 unified diff against what the chat was last shown, and nothing at all when the
@@ -52,15 +55,15 @@ receives the current diff.
 A copy of the document is mirrored to `<claude project dir>/goals-ui/<session
 id>.md`, and the injected header names that file.
 
-`/goals-ui disable` stops the injection and the inference for that chat and
-forgets the diff baseline; running `/goals-ui` again turns both back on and
-re-sends the whole document. A chat that never ran `/goals-ui` — or one that
+`/bart disable` stops the injection and the inference for that chat and
+forgets the diff baseline; running `/bart` again turns both back on and
+re-sends the whole document. A chat that never ran `/bart` — or one that
 disabled it — keeps being recorded, but is never analyzed and never injected
 into.
 
 ## Chat goal model
 
-- Every chat where `/goals-ui` has run gets its own goal tree and cached goal
+- Every chat where `/bart` has run gets its own goal tree and cached goal
   context, independent of every other chat.
 - Human prompts are stored once and linked many-to-many: one prompt can belong
   to several goals, and one goal can reference several prompts.
@@ -75,6 +78,33 @@ into.
   evidence, todos, and statuses.
 - The prompt picker is newest-first, scrollable, and fuzzy-searchable. Prompt
   links are durable across UI imports and later inference.
+
+## The project's dev server
+
+A goal whose work is a web interface has a page, and the project it lives in
+already knows how to serve it. The rail's strip says whether that server is
+up, starts it when it is not, and links to the address the process printed.
+
+It runs one script out of the project's own `package.json` — `dev`, or `start`
+where there is no `dev` — with the package manager the lockfile (or a
+`packageManager` field) names. It installs nothing: a project whose
+`node_modules` is missing is reported rather than repaired, because `npm
+install` runs lifecycle scripts from the whole dependency tree and a preview
+is not a reason to.
+
+The address is read back off the server's own output, never guessed: Next
+moves to 3001 when 3000 is taken, and the strip follows it. When the port the
+project usually takes is already answering and the workspace did not start it,
+nothing is started — the strip says so and offers *Start anyway*, which lets
+the framework pick a free port.
+
+The process is spawned into a session of its own and signalled by process
+group, since `npm run dev` is a wrapper whose real server is its child. It
+outlives the workspace on purpose: closing the page and opening it again finds
+the same server (a recorded pid is confirmed alive, still its own group
+leader, and still running what we spawned before it is believed or signalled)
+and it stops when you stop it. Its log lives under
+`~/.claude-vault/chat-sessions/<session-id>/dev/`.
 
 ## Inference data boundary
 

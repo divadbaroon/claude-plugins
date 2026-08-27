@@ -717,7 +717,9 @@ class CancelTests(BuildRunTests):
             lambda: self.rows()["taaaa0001"][0] == "done", seconds=12))
         # The process still printed DONE for the cancelled row; it is not taken.
         self.assertEqual(("", ""), self.rows()["taaaa0003"])
-        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1") or {}).get("status")
+            == "idle"), BUILD.load_run(self.session, self.root, "g1"))
 
     def test_withdrawing_a_question_resumes_the_run_on_the_rest(self):
         self.assertTrue(BUILD.start(self.session, self.root, "g1",
@@ -1313,7 +1315,12 @@ class TellTheBuildTests(BuildRunTests):
                       self.said())
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0001"][0] == "done"))
-        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+        # The row directive is consumed before the reader thread writes the
+        # run's terminal state. Linux CI exposed that ordering window; wait on
+        # the state this assertion is actually about.
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "idle"))
 
     def test_a_note_needs_a_row_the_build_is_on_and_some_words(self):
         self.assertFalse(BUILD.note(self.session, self.root, "g1",

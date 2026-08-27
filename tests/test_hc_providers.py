@@ -13,6 +13,19 @@ from human_compact.trajectory import goal_synth, providers  # noqa: E402
 
 
 class ClaudeCLIProviderTests(unittest.TestCase):
+    def test_api_keys_are_kept_only_for_an_explicit_issued_key_process(self):
+        base = {"ANTHROPIC_API_KEY": "sk-personal",
+                "ANTHROPIC_AUTH_TOKEN": "sk-issued"}
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("HC_USE_API_KEY", None)
+            ordinary = providers.subscription_env(base)
+        self.assertNotIn("ANTHROPIC_API_KEY", ordinary)
+        self.assertNotIn("ANTHROPIC_AUTH_TOKEN", ordinary)
+
+        with patch.dict(os.environ, {"HC_USE_API_KEY": "1"}, clear=False):
+            issued = providers.subscription_env(base)
+        self.assertEqual("sk-issued", issued["ANTHROPIC_AUTH_TOKEN"])
+
     @patch("human_compact.trajectory.providers.subprocess.run")
     def test_json_calls_are_bounded_low_effort_and_tool_free(self, run):
         run.return_value = Mock(

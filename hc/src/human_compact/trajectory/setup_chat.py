@@ -19,6 +19,8 @@ document, so all of it is bounded and none of it is trusted.
 
 from __future__ import annotations
 
+import json
+import os
 import secrets
 import shutil
 from pathlib import Path
@@ -88,15 +90,17 @@ def setup_model(root=None) -> str:
     that one; otherwise the alias, which is what an unconnected reader's own
     subscription understands.
 
-    Nothing here reaches for a credential: the `claude` CLI already runs on
-    whatever `~/.claude/settings.json` says, which is the issued key once
-    `bart auth` has written it and the reader's own login before that. This
-    only asks the account what it calls the model.
+    Nothing here reads the key itself. The npm device flow keeps the account
+    record under ``~/.human-compact`` and starts setup with the issued key in
+    its environment; this reads only that record's optional model names.
     """
     try:
-        from .. import engelbart_auth as AUTH
-        models = AUTH.status(root).get("models") or []
-    except Exception:                                    # noqa: BLE001
+        managed = Path(os.environ.get("HUMAN_COMPACT_HOME")
+                       or Path.home() / ".human-compact")
+        value = json.loads((managed / "auth.json").read_text(encoding="utf-8"))
+        claude = value.get("claude") if isinstance(value, dict) else {}
+        models = claude.get("models") if isinstance(claude, dict) else []
+    except (OSError, ValueError):
         return SETUP_MODEL
     for name in models:
         if isinstance(name, str) and SETUP_MODEL in name:

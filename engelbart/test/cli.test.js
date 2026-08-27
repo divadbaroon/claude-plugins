@@ -9,7 +9,6 @@ const test = require('node:test');
 
 const {
   UsageError,
-  connectEngelbartAccount,
   parseArgs,
   resolveChoices,
   run,
@@ -80,14 +79,17 @@ function fixturePackage(root) {
 test('parseArgs accepts only numeric choices and enforces goal dependency', () => {
   withExperimental('1', () => {
     assert.deepEqual(parseArgs(['--non-interactive', '--global-vault', '1', '--goals', '2']), {
-      globalVault: '1', goals: '2', localOnly: false,
-      nonInteractive: true, dryRun: false, help: false,
+      command: 'install', globalVault: '1', goals: '2',
+      nonInteractive: true, dryRun: false, localOnly: false, noOpen: false,
+      help: false,
     });
   });
   assert.equal(parseArgs(['--global-vault', '2']).goals, '2');
   assert.throws(() => parseArgs(['--global-vault', 'yes']), UsageError);
   assert.throws(() => parseArgs(['--global-vault', '2', '--goals', '1']), /requires/);
-  assert.throws(() => parseArgs(['surprise']), /unknown option/);
+  assert.throws(() => parseArgs(['surprise']), /unknown command/);
+  assert.throws(() => parseArgs(['--surprise']), /unknown option/);
+  assert.throws(() => parseArgs(['auth', 'extra']), /unknown option/);
 });
 
 test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
@@ -99,8 +101,9 @@ test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
     }
     // The inert choice keeps working, so scripted installs do not break.
     assert.deepEqual(parseArgs(['--global-vault', '2', '--goals', '2']), {
-      globalVault: '2', goals: '2', localOnly: false,
-      nonInteractive: false, dryRun: false, help: false,
+      command: 'install', globalVault: '2', goals: '2',
+      nonInteractive: false, dryRun: false, localOnly: false, noOpen: false,
+      help: false,
     });
   });
   withExperimental('0', () => {
@@ -166,40 +169,16 @@ test('explicit flags are still honoured for scripted installs', async () => {
   assert.equal(parseArgs(['--local-only']).localOnly, true);
 });
 
-test('a default install connects the account and local-only never does', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-account-'));
-  try {
-    fixturePackage(root);
-    const connected = [];
-    const common = {
-      packageRoot: root,
-      managedRoot: path.join(root, 'managed'),
-      platform: 'darwin',
-      arch: 'arm64',
-      output: capture().stream,
-      errorOutput: capture().stream,
-      install: async () => ({ launcher: '/managed/hc', bartLauncher: '/managed/bart' }),
-      ensureLauncherOnPath: () => ({ onPath: true }),
-      connectAccount: async (options) => { connected.push(options.bartLauncher); },
-    };
-    assert.equal(await run({ ...common, argv: [] }), 0);
-    assert.deepEqual(connected, ['/managed/bart']);
-    assert.equal(await run({ ...common, argv: ['--local-only'] }), 0);
-    assert.deepEqual(connected, ['/managed/bart']);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-// The install ends by telling the user to open /bart, and says so only
-// after any step their shell still needs to reach `hc`.
+// Once authentication has yielded a Claude key, install ends on setup -- and
+// says so only after any step the shell still needs to reach `hc`.
 async function installOutput({ onPath, added, present, linked }, extra) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-path-'));
   try {
     fixturePackage(root);
     const output = capture();
+    const options = extra || {};
     await run({
-      argv: ['--non-interactive', '--global-vault', '2'],
+      argv: ['--global-vault', '2'],
       packageRoot: root,
       managedRoot: path.join(root, 'managed'),
       platform: 'darwin',
@@ -214,9 +193,17 @@ async function installOutput({ onPath, added, present, linked }, extra) {
         onPath, added, present, linked, profile: '/home/u/.zshrc',
         line: 'export PATH="$HOME/.human-compact/bin:$PATH"',
       }),
+      interactive: true,
+      readCredentials: () => null,
+      login: async () => ({
+        status: 'ready',
+        email: 'member@example.com',
+        claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      }),
       // Nothing is spawned in a test: the page-opening step is injected,
       // and answers null unless a case says otherwise.
-      openSetup: (extra && extra.openSetup) || (async () => null),
+      openSetup: options.openSetup || (async () => null),
+      ...options,
     });
     return output.read();
   } finally {
@@ -228,25 +215,6 @@ test('help does not document a prompt the installer never shows', () => {
   const text = usage();
   assert.match(text, /^ {2}--local-only {10}install without connecting an Engelbart account$/m);
   assert.match(text, /^ {2}--non-interactive {5}install locally without opening a browser$/m);
-});
-
-test('account connection delegates the complete flow to bart auth', async () => {
-  const calls = [];
-  const output = capture();
-  await connectEngelbartAccount({
-    bartLauncher: '/managed/bart',
-    env: { TEST_ENV: 'yes' },
-    output: output.stream,
-    runner(command, args, options) {
-      calls.push({ command, args, options });
-      return { status: 0 };
-    },
-  });
-  assert.equal(calls[0].command, '/managed/bart');
-  assert.deepEqual(calls[0].args, ['auth']);
-  assert.equal(calls[0].options.env.TEST_ENV, 'yes');
-  assert.equal(calls[0].options.stdio, 'inherit');
-  assert.match(output.read(), /credits configured/);
 });
 
 test('the closing line says what is recorded and what waits for /bart', async () => {
@@ -281,11 +249,56 @@ test('a reachable launcher gets no PATH advice', async () => {
 test('a launcher that opens the page is named instead of the command', async () => {
   // The page is what they should be looking at; the command is the fallback
   // for when it could not be opened for them.
+  let setupEnv;
   const text = await installOutput({ onPath: true, added: false },
-    { openSetup: async () => 'http://127.0.0.1:5321/setup' });
+    { openSetup: async (options) => {
+      setupEnv = options.env;
+      return 'http://127.0.0.1:5321/setup';
+    } });
   assert.match(text, /Next: Setting up your first project: http:\/\/127\.0\.0\.1:5321\/setup/);
+  assert.equal(setupEnv.ANTHROPIC_AUTH_TOKEN, 'sk-issued');
+  assert.equal(setupEnv.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+  assert.equal(setupEnv.HC_USE_API_KEY, '1');
   // And the other half of the fork, for someone whose work already exists.
   assert.match(text, /Already have a project\? Open its chat with `claude -r`/);
+});
+
+test('setup stays closed until authentication returns a Claude key', async () => {
+  let opened = 0;
+  const text = await installOutput({ onPath: true, added: false }, {
+    login: async () => ({ status: 'ready', email: 'member@example.com', claude: null }),
+    openSetup: async () => { opened += 1; return 'http://127.0.0.1:5321/setup'; },
+  });
+  assert.equal(opened, 0);
+  assert.match(text, /Run `npx engelbart-cli auth`/);
+  assert.match(text, /Setup starts after that/);
+  assert.doesNotMatch(text, /Setting up your first project/);
+});
+
+test('setup stays closed when Supabase configuration fails after key issuance', async () => {
+  let opened = 0;
+  const text = await installOutput({ onPath: true, added: false }, {
+    login: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      projectConfigured: false,
+    }),
+    openSetup: async () => { opened += 1; return 'http://127.0.0.1:5321/setup'; },
+  });
+  assert.equal(opened, 0);
+  assert.match(text, /Supabase sync/);
+  assert.doesNotMatch(text, /Setting up your first project/);
+});
+
+test('--no-open authenticates but suppresses the automatic setup launch', async () => {
+  let opened = 0;
+  const text = await installOutput({ onPath: true, added: false }, {
+    argv: ['--no-open', '--global-vault', '2'],
+    openSetup: async () => { opened += 1; return 'http://127.0.0.1:5321/setup'; },
+  });
+  assert.equal(opened, 0);
+  assert.match(text, /Next: Run `hc setup-ui` to set up your first project\./);
 });
 
 test('a page that would not open leaves a command that can be typed', async () => {
@@ -330,4 +343,298 @@ test('a linked launcher says it works right now', async () => {
   const text = await installOutput({ onPath: true, linked: '/home/u/.local/bin/hc' });
   assert.match(text, /hc \+ bart {4}ready in this terminal/);
   assert.doesNotMatch(text, /needs one more step/);
+});
+
+
+test('account commands run without touching the installer at all', async () => {
+  const output = capture();
+  const errors = capture();
+  const seen = [];
+  const code = await run({
+    argv: ['whoami'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    whoami: async (options) => { seen.push(options.managedRoot); return { signedIn: true, email: 'member@example.com' }; },
+    install: async () => { throw new Error('installer must not run'); },
+  });
+  assert.equal(code, 0);
+  assert.equal(seen[0], path.resolve('/nonexistent/managed'));
+  assert.match(output.read(), /Connected as member@example\.com\./);
+});
+
+test('an unconnected machine exits non-zero and says how to connect', async () => {
+  const errors = capture();
+  const code = await run({
+    argv: ['whoami'],
+    output: capture().stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    whoami: async () => ({ signedIn: false }),
+  });
+  assert.equal(code, 1);
+  assert.match(errors.read(), /npx engelbart-cli auth/);
+});
+
+test('login is the same command whichever name it is called by', async () => {
+  for (const name of ['auth', 'login']) {
+    let called = 0;
+    const code = await run({
+      argv: [name],
+      output: capture().stream,
+      errorOutput: capture().stream,
+      managedRoot: '/nonexistent/managed',
+      login: async () => { called += 1; return { status: 'ready', email: 'm@example.com' }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(called, 1);
+  }
+  const refused = await run({
+    argv: ['auth'],
+    output: capture().stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    login: async () => ({ status: 'denied' }),
+  });
+  assert.equal(refused, 1);
+});
+
+test('a repaired authentication starts onboarding with the issued key', async () => {
+  let setup;
+  const output = capture();
+  const code = await run({
+    argv: ['auth'],
+    output: output.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/managed',
+    login: async () => ({
+      status: 'ready',
+      claude: { apiKey: 'sk-repaired', baseUrl: 'https://proxy.example.com' },
+    }),
+    openSetup: async (options) => {
+      setup = options;
+      return 'http://127.0.0.1:4432/setup';
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(setup.launcher, path.resolve('/managed/bin/hc'));
+  assert.equal(setup.env.ANTHROPIC_AUTH_TOKEN, 'sk-repaired');
+  assert.match(output.read(), /Next: Setting up your first project/);
+});
+
+test('logout reports whether the token was actually revoked', async () => {
+  const output = capture();
+  await run({
+    argv: ['logout'],
+    output: output.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    logout: async () => ({ signedOut: true, revoked: false }),
+  });
+  assert.match(output.read(), /Disconnected on this machine/);
+  assert.match(output.read(), /disconnect it there/);
+
+  const clean = capture();
+  await run({
+    argv: ['logout'],
+    output: clean.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    logout: async () => ({ signedOut: true, revoked: true }),
+  });
+  assert.match(clean.read(), /Disconnected\. That token is revoked\./);
+});
+
+function installWith(extra) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-test-'));
+  try {
+    fixturePackage(root);
+    const output = capture();
+    const errors = capture();
+    return run({
+      argv: ['--global-vault', '2'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      output: output.stream,
+      errorOutput: errors.stream,
+      install: async () => ({ launcher: path.join(root, 'managed', 'bin', 'hc') }),
+      ensureLauncherOnPath: () => ({ onPath: true }),
+      readCredentials: () => null,
+      openSetup: async () => null,
+      ...extra,
+    }).then((code) => ({ code, output: output.read(), errors: errors.read() }));
+  } finally {
+    setTimeout(() => fs.rmSync(root, { recursive: true, force: true }), 0).unref?.();
+  }
+}
+
+test('a person at the terminal is offered the account connection once', async () => {
+  let logins = 0;
+  const result = await installWith({
+    interactive: true,
+    login: async () => {
+      logins += 1;
+      return {
+        status: 'ready',
+        email: 'member@example.com',
+        claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      };
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(logins, 1);
+  assert.doesNotMatch(result.output, /Run `npx engelbart-cli auth`/);
+});
+
+// A scripted install must not sit waiting on a browser that will never open.
+test('a scripted install never blocks on a browser', async () => {
+  let logins = 0;
+  const result = await installWith({
+    interactive: false,
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  assert.equal(logins, 0);
+  assert.match(result.output, /Run `npx engelbart-cli auth` to finish connecting your/);
+});
+
+test('--no-login installs without asking about an account', async () => {
+  let logins = 0;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-test-'));
+  fixturePackage(root);
+  const output = capture();
+  const code = await run({
+    argv: ['--no-login', '--non-interactive', '--global-vault', '2'],
+    packageRoot: root,
+    managedRoot: path.join(root, 'managed'),
+    platform: 'darwin',
+    arch: 'arm64',
+    output: output.stream,
+    errorOutput: capture().stream,
+    install: async () => ({ launcher: path.join(root, 'managed', 'bin', 'hc') }),
+    ensureLauncherOnPath: () => ({ onPath: true }),
+    interactive: true,
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+  assert.equal(code, 0);
+  assert.equal(logins, 0);
+  assert.match(output.read(), /Run `npx engelbart-cli auth`/);
+});
+
+// The runtime is installed and working by then; only the credits are missing.
+test('a failed account connection reports itself without failing the install', async () => {
+  const result = await installWith({
+    interactive: true,
+    login: async () => { throw new Error('berkeley.mathetic.com is unreachable'); },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.errors, /Could not connect an Engelbart account: berkeley\.mathetic\.com is unreachable/);
+  assert.match(result.output, /Installed\./);
+  assert.match(result.output, /Run `npx engelbart-cli auth`/);
+});
+
+test('reinstalling on a connected machine leaves the connection alone', async () => {
+  let logins = 0;
+  const result = await installWith({
+    interactive: true,
+    readCredentials: () => ({
+      token: 'egb_t',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+    }),
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  assert.equal(logins, 0);
+  assert.match(result.output, /account {6}member@example\.com/);
+  assert.doesNotMatch(result.output, /Run `npx engelbart-cli auth`/);
+});
+
+test('a stored Supabase configuration failure still withholds setup on reinstall', async () => {
+  let opened = 0;
+  const result = await installWith({
+    interactive: true,
+    readCredentials: () => ({
+      token: 'egb_t',
+      email: 'member@example.com',
+      projectConfigured: false,
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+    }),
+    openSetup: async () => { opened += 1; return 'http://127.0.0.1:5321/setup'; },
+  });
+  assert.equal(opened, 0);
+  assert.match(result.output, /Supabase sync/);
+});
+
+// `eval "$(npx engelbart-cli env)"` runs whatever reaches stdout, so anything that is
+// not a shell export has to leave by the other pipe.
+test('env prints only the exports, and nothing else reaches stdout', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({
+      token: 'egb_token',
+      claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+    }),
+    install: async () => { throw new Error('installer must not run'); },
+  });
+  assert.equal(code, 0);
+  assert.equal(
+    output.read(),
+    'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
+      + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n',
+  );
+  assert.equal(errors.read(), '');
+});
+
+test('env on an unconnected machine fails without printing a broken script', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => null,
+  });
+  assert.equal(code, 1);
+  assert.equal(output.read(), '');
+  assert.match(errors.read(), /npx engelbart-cli auth/);
+});
+
+test('env distinguishes a connected machine whose credit is not ready yet', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({ token: 'egb_token', claude: null }),
+  });
+  assert.equal(code, 1);
+  assert.equal(output.read(), '');
+  assert.match(errors.read(), /no Claude key yet/);
+});
+
+test('a reinstall on an already-connected machine points at the stored key', async () => {
+  const output = capture();
+  const code = await run({
+    argv: ['--dry-run'],
+    output: output.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({
+      email: 'm@example.com',
+      claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+    }),
+  });
+  assert.equal(code, 0);
+  // --dry-run never touches the account, so the reused-key line must not fire.
+  assert.doesNotMatch(output.read(), /engelbart env/);
 });

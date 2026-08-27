@@ -19,6 +19,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
+from . import autosync as AUTOSYNC
 from . import project_store as PS
 from . import secure_io as SIO
 from . import setup_chat as SETUP
@@ -1790,9 +1791,10 @@ def _remember_name(SB, name, root):
         pass
 
 
-def _supabase_status(SB, root):
+def _supabase_status(SB, root, cwd=None):
     """The panel's view of the connection, with the name it signed up as."""
     state = dict(SB.status(root), ok=True)
+    state["autosync"] = AUTOSYNC.state(root, cwd)
     if state.get("signed_in"):
         try:
             state["display_name"] = SB.display_name(root)
@@ -2469,7 +2471,34 @@ def _handoff(trajdir=None, chat_scoped=None):
         return {"ok": False, "error": str(exc)[:200]}
 
 
+# A write has landed on disk. Arming the send here rather than in each
+# branch that saves means an operation added later is covered by naming it
+# in WRITE_OPS, not by remembering a call at the end of its own code path.
+def _arm_autosync(op, result, trajdir, chat_scoped):
+    if str((op or {}).get("op") or "") not in AUTOSYNC.WRITE_OPS:
+        return
+    if not chat_scoped or not isinstance(result, dict) or not result.get("ok"):
+        return
+    try:
+        session_id, root = _chat_identity(_scope(trajdir))
+        who = _project_identity(_scope(trajdir), chat_scoped, session_id)
+        AUTOSYNC.schedule(root, who.get("cwd"))
+    except (OSError, ValueError, KeyError):
+        # A send that cannot be armed is not a failed edit. The edit is
+        # saved; the button in the panel still sends it by hand.
+        pass
+
+
 def _apply(op, trajdir=None, chat_scoped=None):
+    # Armed here rather than inside, so the work that happens outside the
+    # chat's lock -- building TODOs, cancelling a run -- is covered by the
+    # same rule as the edits that happen inside it.
+    result = _apply_dispatch(op, trajdir, chat_scoped)
+    _arm_autosync(op, result, trajdir, chat_scoped)
+    return result
+
+
+def _apply_dispatch(op, trajdir=None, chat_scoped=None):
     result = _apply_locked(op, trajdir, chat_scoped)
     deferred = result.get("__deferred__") if isinstance(result, dict) else None
     if not deferred:
@@ -2497,6 +2526,20 @@ def _apply(op, trajdir=None, chat_scoped=None):
                             op.get("goals"), op.get("chosen"),
                             op.get("todos"), op.get("subgoals") or [],
                             bind=op.get("bind") or "")
+    if kind.startswith("dev_"):
+        # The fourth slot carries the project directory rather than a goal id:
+        # a dev server belongs to the project the work lives in, and two goals
+        # in the same checkout share the one server rather than racing for its
+        # port.
+        from . import dev_server as DEV
+        cwd = goal_id or ""
+        if kind == "dev_start":
+            return DEV.start(session_id, root, cwd, force=bool(op.get("force")))
+        if kind == "dev_stop":
+            return DEV.stop(session_id, root, cwd)
+        if kind == "dev_log":
+            return DEV.log(session_id, root, cwd)
+        return DEV.status(session_id, root, cwd)
     if kind == "reopen_session":
         return BUILD.reopen(session_id, root)
     if kind == "build_log":
@@ -2980,7 +3023,10 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error": "this chat has no project directory"}
             from . import supabase_client as SB
             try:
-                return SB.sync_project(root, who["cwd"])
+                # Holds the project for the length of the send: a timer that
+                # fires mid-flight would prune rows this one is still writing.
+                with AUTOSYNC.hold(root, who["cwd"]):
+                    return SB.sync_project(root, who["cwd"])
             except SB.SupabaseError as exc:
                 return {"ok": False, "error": str(exc)}
             except (OSError, ValueError) as exc:
@@ -3025,6 +3071,19 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 chats = [c for c in chats if not same(c)]
             _save_linked(session_id, root, chats)
             return {"ok": True, "linked": [c["session_id"] for c in chats]}
+        if kind in ("dev_status", "dev_start", "dev_stop", "dev_log"):
+            # Chat scope only, as the build ops are, and handed back to
+            # _apply for the same reason: starting a dev server spawns a
+            # process and asking whether a port answers blocks on a socket,
+            # and neither belongs inside the chat's lock. What this side does
+            # resolve is where -- which needs the goal tree, and so has to
+            # happen here.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            from . import build as BUILD
+            cwd = BUILD._cwd_for(session_id, root, goals, g["id"] if g else "")
+            return {"__deferred__": (kind, session_id, root, cwd, op)}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
                     "reopen_todo", "note_todo", "generate_prompt",
                     "prompt_preview", "reopen_session", "build_log",
@@ -3380,9 +3439,12 @@ class H(BaseHTTPRequestHandler):
             elif self.path == "/api/supabase":
                 from . import supabase_client as SB
                 root = None
+                cwd = None
                 if self.server.chat_scoped:
-                    _, root = _chat_identity(self.server.trajdir)
-                self._send(200, _supabase_status(SB, root))
+                    session_id, root = _chat_identity(self.server.trajdir)
+                    cwd = _project_identity(
+                        self.server.trajdir, True, session_id).get("cwd")
+                self._send(200, _supabase_status(SB, root, cwd))
             elif self.path == "/api/models":
                 # What the Builds tab offers: the models the installed CLI
                 # names, the efforts, and what is chosen. Chat scope, since

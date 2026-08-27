@@ -20,18 +20,23 @@ macOS or Linux, Node 18+, Claude Code 2.1.175+.
 npx engelbart-cli
 ```
 
+That one run installs Engelbart, opens the browser device-auth flow, retrieves
+the account's Claude credit, configures its Supabase connection, and opens the
+first-project onboarding page. Onboarding stays closed until both the Claude
+key and Supabase configuration are ready.
+
 Restart Claude Code (or `/reload-plugins`).
 
 ## Use
 
 ```bash
-/goals-ui
+/bart
 ```
 
 Opens this chat's goal workspace; Claude says nothing.
 
 ```bash
-/goals-ui disable
+/bart disable
 ```
 
 Stops analysis and injection for this chat.
@@ -65,7 +70,7 @@ process in place. `Ctrl-C` stops the console and deletes its active sandbox.
 
 **Workspace** — goal tree, one markdown document per goal, linked prompts, assembled prompt. Per chat, on a local port.
 
-**Injection** — after the first `/goals-ui`, the goals document goes back into the chat: whole file on session start and after compaction, a diff afterwards. Subagents and tool batches read it too.
+**Injection** — after the first `/bart`, the goals document goes back into the chat: whole file on session start and after compaction, a diff afterwards. Subagents and tool batches read it too.
 
 **Persistence** — one invocation holds for the life of the chat.
 
@@ -79,7 +84,7 @@ That’s why we created Engelbart, a free, open-source tool for managing, planni
 
 Engelbart is a browser-based Claude Code plugin that gives you and your agent a shared representation of what you’re trying to accomplish while the agent implements changes in real time.
 
-After installing Engelbart, you can run `/goals-ui` in Claude Code to kick off a local server. Engelbart then analyzes your current session and past conversation turns to infer your goals, plans, and TODOs, which it uses to open a proposed goal tree on a local server that you can inspect and correct before you resume building.
+After installing Engelbart, you can run `/bart` in Claude Code to kick off a local server. Engelbart then analyzes your current session and past conversation turns to infer your goals, plans, and TODOs, which it uses to open a proposed goal tree on a local server that you can inspect and correct before you resume building.
 
 As you work, Engelbart keeps your agent in the loop as you plan new features, draft prompts, write TODOs, modify goals, jot down notes about the current system, and record key decisions.
 
