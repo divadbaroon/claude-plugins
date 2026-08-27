@@ -171,6 +171,9 @@ test('a scripted install is never offered the question it cannot answer', async 
       arch: 'arm64',
       output: capture().stream,
       errorOutput: capture().stream,
+      // Stubbed: the real one reads os.homedir() and would append a PATH line
+      // to the shell profile of whoever ran the suite.
+      ensureLauncherOnPath: () => ({ onPath: true }),
       install: async (options) => {
         seen.push(options.confirmClaudeFix);
         return { launcher: path.join(root, 'managed', 'bin', 'hc') };
@@ -187,6 +190,7 @@ test('a scripted install is never offered the question it cannot answer', async 
       interactive: true,
       output: capture().stream,
       errorOutput: capture().stream,
+      ensureLauncherOnPath: () => ({ onPath: true }),
       install: async (options) => {
         seen.push(options.confirmClaudeFix);
         return { launcher: path.join(root, 'managed', 'bin', 'hc') };
