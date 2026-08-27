@@ -19,6 +19,7 @@ function usage() {
 Options:
   --local-only          install without connecting an Engelbart account
   --non-interactive     install locally without opening a browser
+  --no-open             install without opening the setup page
   --dry-run             verify the bundled release and show the plan only
   -h, --help            show this help
 
@@ -52,6 +53,7 @@ function parseArgs(argv) {
     else if (arg === '--local-only') result.localOnly = true;
     else if (arg === '--non-interactive') result.nonInteractive = true;
     else if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--no-open') result.noOpen = true;
     else if (arg === '--global-vault' || arg === '--goals') {
       if (index + 1 >= argv.length) throw new UsageError(`${arg} requires 1 or 2`);
       const value = numericChoice(arg, argv[index += 1]);
@@ -133,6 +135,8 @@ async function run(deps = {}) {
     );
 
     let reach = null;
+
+    let launcherPath = '';
     output.write(`\nengelbart-cli ${packageJson.version}\n\n`);
     if (options.dryRun) {
       output.write(`Verified bundled backend ${vendor.version} (${vendor.sha256.slice(0, 12)}).\n`);
@@ -153,6 +157,7 @@ async function run(deps = {}) {
       });
       // Only promise `hc` in this terminal once the shell can actually find it.
       const launcher = installed && installed.launcher;
+      launcherPath = launcher || '';
       if (launcher) {
         reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
           launcherDir: path.dirname(launcher),
@@ -196,8 +201,27 @@ async function run(deps = {}) {
         : `\nAdd this to your shell profile, then run it here:\n\n    ${reach.line}\n`);
     }
     const needsPathStep = !!(reach && !reach.onPath);
-    const next = 'Open any Claude Code chat and type /bart.';
+    // The one instruction. Someone who has just installed has no chat and no
+    // project, so "open a chat and type /bart" is an instruction with a blank
+    // screen at the end of it -- the setup page is what asks them which of
+    // those two things they are actually doing. It is only offered where it
+    // can be followed: a launcher that is not yet on PATH cannot be run, and
+    // a step the reader must do first belongs above the instruction, not
+    // after it.
+    const opened = (!needsPathStep && launcherPath && !options.noOpen)
+      ? await (deps.openSetup || openSetup)({ launcher: launcherPath, env,
+                                              output, spawn: deps.spawn })
+      : null;
+    const next = opened
+      ? `Setting up your first project: ${opened}`
+      : needsPathStep
+      ? 'Run the line above, then `hc setup-ui` to set up your first project.'
+      : 'Run `hc setup-ui` to set up your first project.';
     output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
+    if (opened) {
+      output.write('Already have a project? Open its chat with `claude -r`'
+        + ' and type /bart.\n');
+    }
     return 0;
   } catch (error) {
     if (error instanceof InputCancelled) {
@@ -212,11 +236,42 @@ async function run(deps = {}) {
   }
 }
 
+/* Open the setup page for someone who has just installed.
+ *
+ * The launcher does the work -- minting a workspace, starting a server and
+ * printing the URL -- so this only has to run it and report what it said.
+ * Never fatal: a browser that will not open, or a launcher that will not
+ * run, leaves the reader with a command to type rather than a failed
+ * install, so anything that goes wrong here answers null and the caller
+ * prints the instruction instead.
+ */
+async function openSetup({ launcher, env, output, spawn }) {
+  const run = spawn || require('child_process').spawnSync;
+  try {
+    const done = run(launcher, ['setup-ui'], {
+      env,
+      encoding: 'utf8',
+      timeout: 20000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (!done || done.status !== 0) return null;
+    const said = String(done.stdout || '').trim().split('\n');
+    const url = said.reverse().find((line) => line.startsWith('http://127.0.0.1:'));
+    return url || null;
+  } catch (error) {
+    if (output && process.env.HC_DEBUG) {
+      output.write(`  setup        not opened (${error.message})\n`);
+    }
+    return null;
+  }
+}
+
 module.exports = {
   InputCancelled,
   UsageError,
   connectEngelbartAccount,
   numericChoice,
+  openSetup,
   parseArgs,
   resolveChoices,
   run,

@@ -53,7 +53,7 @@ test('packed npm artifact contains and executes the verified wheel', () => {
       env: { ...process.env, HUMAN_COMPACT_HOME: managed },
     });
     assert.match(invocation.stdout, new RegExp(`Verified bundled backend ${metadata.version.replace(/\./g, '\.')}`));
-    assert.match(invocation.stdout, /Open any Claude Code chat and type \/bart\./);
+    assert.match(invocation.stdout, /set up your first project|Setting up your first project/);
     assert.equal(fs.existsSync(managed), false);
   } finally {
     fs.rmSync(fixture, { recursive: true, force: true });

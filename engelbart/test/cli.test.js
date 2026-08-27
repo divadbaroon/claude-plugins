@@ -142,7 +142,7 @@ test('dry-run verifies the package and never invokes installer', async () => {
     assert.equal(code, 0);
     assert.equal(invoked, false);
     assert.match(output.read(), /Verified bundled backend 0\.16\.0/);
-    assert.match(output.read(), /Open any Claude Code chat and type \/bart\./);
+    assert.match(output.read(), /Run `hc setup-ui` to set up your first project\./);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -193,7 +193,7 @@ test('a default install connects the account and local-only never does', async (
 
 // The install ends by telling the user to open /bart, and says so only
 // after any step their shell still needs to reach `hc`.
-async function installOutput({ onPath, added, present, linked }) {
+async function installOutput({ onPath, added, present, linked }, extra) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-path-'));
   try {
     fixturePackage(root);
@@ -214,6 +214,9 @@ async function installOutput({ onPath, added, present, linked }) {
         onPath, added, present, linked, profile: '/home/u/.zshrc',
         line: 'export PATH="$HOME/.human-compact/bin:$PATH"',
       }),
+      // Nothing is spawned in a test: the page-opening step is injected,
+      // and answers null unless a case says otherwise.
+      openSetup: (extra && extra.openSetup) || (async () => null),
     });
     return output.read();
   } finally {
@@ -267,10 +270,30 @@ test('the closing line says what is recorded and what waits for /bart', async ()
 test('a reachable launcher gets no PATH advice', async () => {
   const text = await installOutput({ onPath: true, added: false });
   assert.match(text, /hc \+ bart {4}ready in this terminal/);
-  assert.match(text, /Next: Open any Claude Code chat and type \/bart\./);
+  // Someone who has just installed has no chat and no project, so the one
+  // instruction is the page that asks which of those they are doing.
+  assert.match(text, /Next: Run `hc setup-ui` to set up your first project\./);
   assert.doesNotMatch(text, /export PATH/);
   assert.doesNotMatch(text, /Then:/);
   assert.doesNotMatch(text, /hc ui/);
+});
+
+test('a launcher that opens the page is named instead of the command', async () => {
+  // The page is what they should be looking at; the command is the fallback
+  // for when it could not be opened for them.
+  const text = await installOutput({ onPath: true, added: false },
+    { openSetup: async () => 'http://127.0.0.1:5321/setup' });
+  assert.match(text, /Next: Setting up your first project: http:\/\/127\.0\.0\.1:5321\/setup/);
+  // And the other half of the fork, for someone whose work already exists.
+  assert.match(text, /Already have a project\? Open its chat with `claude -r`/);
+});
+
+test('a page that would not open leaves a command that can be typed', async () => {
+  // Never fatal: a browser that will not open must not read as a failed
+  // install, so the reader is left with something to run.
+  const text = await installOutput({ onPath: true, added: false },
+    { openSetup: async () => null });
+  assert.match(text, /Next: Run `hc setup-ui` to set up your first project\./);
 });
 
 test('an unreachable launcher says what to run now, before the next step', async () => {
@@ -279,12 +302,14 @@ test('an unreachable launcher says what to run now, before the next step', async
   assert.match(text, /new terminals get it from \/home\/u\/\.zshrc/);
   // The order is the point: an instruction the user cannot yet follow must
   // not come before the one that makes it work.
-  assert.match(text, /Then: Open any Claude Code chat and type \/bart\./);
+  // A launcher the shell cannot find cannot open anything, so the page
+  // is not offered -- the line above is what makes the command work.
+  assert.match(text, /Then: Run the line above, then `hc setup-ui`/);
   // The order is what matters, so pin it to the instruction itself: the
   // recording line above also names /bart, and a bare indexOf would find
   // that one and pass no matter where the instruction ended up.
   assert.ok(text.indexOf('export PATH')
-    < text.indexOf('Then: Open any Claude Code chat'));
+    < text.indexOf('Then: Run the line above'));
 });
 
 test('a profile that could not be edited tells the user what to add', async () => {
@@ -292,7 +317,7 @@ test('a profile that could not be edited tells the user what to add', async () =
   assert.match(text, /Add this to your shell profile/);
   assert.match(text, /export PATH="\$HOME\/\.human-compact\/bin:\$PATH"/);
   assert.ok(text.indexOf('export PATH')
-    < text.indexOf('Then: Open any Claude Code chat'));
+    < text.indexOf('Then: Run the line above'));
 });
 
 test('a profile that is already correct says the shell is stale, not the config', async () => {
