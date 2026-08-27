@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "hc" / "src"))
@@ -65,38 +66,62 @@ class CardTests(unittest.TestCase):
     def test_a_card_it_does_not_know_is_none(self):
         self.assertEqual("none", SC.normalize_card({"card": "explode"})["card"])
 
-    def test_questions_keep_their_kind_and_their_options(self):
+    def test_every_kind_of_question_keeps_what_it_needs_to_be_asked(self):
         out = SC.normalize_card({
             "card": "questions",
             "questions": {"eyebrow": "three questions", "items": [
-                {"id": "kind", "type": "radio", "title": "Who for?",
+                {"id": "kind", "type": "mcq", "title": "Who for?",
                  "options": ["me", "a team"]},
-                {"id": "have", "type": "check", "title": "What is there?",
+                {"id": "have", "type": "select_all", "title": "What is there?",
                  "subtitle": "pick any", "options": ["an API"]},
-                {"id": "done", "type": "text", "title": "Done means?",
-                 "placeholder": "uploads never touch the API"}]}})
+                {"id": "done", "type": "free", "title": "Done means?",
+                 "placeholder": "uploads never touch the API"},
+                {"id": "story", "type": "open", "title": "What happened?"},
+                {"id": "which", "type": "best", "title": "Which is right?",
+                 "candidates": [{"label": "signed URLs", "why": "no proxy"},
+                                {"label": "proxy route"}]}]}})
         items = out["questions"]["items"]
-        self.assertEqual(["radio", "check", "text"], [q["type"] for q in items])
+        self.assertEqual(["mcq", "select_all", "free", "open", "best"],
+                         [q["type"] for q in items])
         self.assertEqual(["me", "a team"], items[0]["options"])
         self.assertEqual("pick any", items[1]["subtitle"])
         self.assertEqual("uploads never touch the API", items[2]["placeholder"])
+        # A proposal carries the argument for it; that is what makes "which
+        # is best" a different question from "pick one".
+        self.assertEqual([{"label": "signed URLs", "why": "no proxy"},
+                          {"label": "proxy route", "why": ""}],
+                         items[4]["candidates"])
+        # And the kinds that are not choices carry no options at all.
+        self.assertEqual([], items[3]["options"])
+        self.assertEqual([], items[3]["candidates"])
 
-    def test_a_question_of_no_known_kind_is_asked_as_text(self):
+    def test_best_written_as_plain_options_is_still_askable(self):
+        # A model that names the kind and fills the wrong key still gets a
+        # question the reader can answer.
+        out = SC.normalize_card({"card": "questions", "questions": {
+            "items": [{"id": "w", "type": "best", "title": "Which?",
+                       "options": ["a", "b"]}]}})
+        q = out["questions"]["items"][0]
+        self.assertEqual("best", q["type"])
+        self.assertEqual(["a", "b"], [c["label"] for c in q["candidates"]])
+
+    def test_a_question_of_no_known_kind_is_asked_as_one_line(self):
         # Better a box to type in than a question the reader cannot answer.
         out = SC.normalize_card({"card": "questions", "questions": {
             "items": [{"id": "q", "type": "oracle", "title": "?"}]}})
-        self.assertEqual("text", out["questions"]["items"][0]["type"])
+        self.assertEqual("free", out["questions"]["items"][0]["type"])
 
-    def test_a_choice_with_no_options_becomes_text_as_well(self):
-        out = SC.normalize_card({"card": "questions", "questions": {
-            "items": [{"id": "q", "type": "radio", "title": "?",
-                       "options": []}]}})
-        self.assertEqual("text", out["questions"]["items"][0]["type"])
+    def test_a_choice_with_nothing_to_choose_from_becomes_one_too(self):
+        for kind in ("mcq", "select_all", "best"):
+            out = SC.normalize_card({"card": "questions", "questions": {
+                "items": [{"id": "q", "type": kind, "title": "?",
+                           "options": []}]}})
+            self.assertEqual("free", out["questions"]["items"][0]["type"], kind)
 
     def test_a_question_with_no_title_is_dropped(self):
         out = SC.normalize_card({"card": "questions", "questions": {
-            "items": [{"id": "a", "type": "text", "title": ""},
-                      {"id": "b", "type": "text", "title": "real"}]}})
+            "items": [{"id": "a", "type": "free", "title": ""},
+                      {"id": "b", "type": "free", "title": "real"}]}})
         self.assertEqual(1, len(out["questions"]["items"]))
 
     def test_questions_with_nothing_left_in_them_are_not_a_card(self):
@@ -106,8 +131,8 @@ class CardTests(unittest.TestCase):
 
     def test_every_question_is_given_an_id_it_can_be_answered_by(self):
         out = SC.normalize_card({"card": "questions", "questions": {
-            "items": [{"type": "text", "title": "one"},
-                      {"type": "text", "title": "two"}]}})
+            "items": [{"type": "free", "title": "one"},
+                      {"type": "free", "title": "two"}]}})
         ids = [q["id"] for q in out["questions"]["items"]]
         self.assertEqual(2, len(set(ids)))
         self.assertTrue(all(ids))
@@ -162,14 +187,71 @@ class CardTests(unittest.TestCase):
         self.assertEqual(SC.MAX_TODOS, len(out["todos"]))
 
 
+class AccountTests(unittest.TestCase):
+    """Whose Claude answers, and by what name the model is asked for."""
+
+    def test_an_unconnected_reader_is_asked_for_by_the_plain_alias(self):
+        # Their own claude.ai login understands "sonnet"; nothing else has
+        # told us what else to call it.
+        with mock.patch.object(SC, "SETUP_MODEL", "sonnet"), \
+             mock.patch("human_compact.engelbart_auth.status",
+                        return_value={"models": []}):
+            self.assertEqual("sonnet", SC.setup_model())
+
+    def test_a_connected_reader_is_asked_for_the_model_their_key_allows(self):
+        # bart auth pins enforceAvailableModels to the list the issued key
+        # may use, so the bare alias is a model the gateway need not answer.
+        with mock.patch("human_compact.engelbart_auth.status",
+                        return_value={"models": ["claude-opus-4-1",
+                                                 "claude-sonnet-4-5"]}):
+            self.assertEqual("claude-sonnet-4-5", SC.setup_model())
+
+    def test_an_account_that_cannot_be_read_falls_back_to_the_alias(self):
+        with mock.patch("human_compact.engelbart_auth.status",
+                        side_effect=OSError("no vault")):
+            self.assertEqual("sonnet", SC.setup_model())
+
+    def test_a_provider_that_cannot_be_reached_is_reported_as_itself(self):
+        # A setup that silently says nothing is the blank screen this whole
+        # surface exists to replace.
+        class Dead:
+            def generate_json(self, prompt):
+                raise RuntimeError("no CLI")
+        out = SC.ask([{"role": "you", "text": "hi"}], engine=Dead())
+        self.assertFalse(out["ok"])
+        self.assertIn("Claude", out["error"])
+
+    def test_a_reply_with_neither_words_nor_a_card_is_not_an_answer(self):
+        class Empty:
+            def generate_json(self, prompt):
+                return {}
+        out = SC.ask([{"role": "you", "text": "hi"}], engine=Empty())
+        self.assertFalse(out["ok"])
+
+    def test_what_comes_back_is_the_card_the_model_named(self):
+        class Stub:
+            def generate_json(self, prompt):
+                assert "mcq" in prompt and "best" in prompt
+                return {"say": "Two questions.", "card": "questions",
+                        "questions": {"items": [
+                            {"id": "a", "type": "mcq", "title": "Who for?",
+                             "options": ["me", "a team"]}]}}
+        out = SC.ask([{"role": "you", "text": "uploads are slow"}],
+                     engine=Stub())
+        self.assertTrue(out["ok"])
+        self.assertEqual("questions", out["card"])
+        self.assertEqual("mcq", out["questions"]["items"][0]["type"])
+
+
 class AnswerTests(unittest.TestCase):
     """What the reader picked, on its way back into the conversation."""
 
     def test_answers_read_back_as_the_turn_the_reader_took(self):
         said = SC.answers_as_said(
-            {"items": [{"id": "kind", "type": "radio", "title": "Who for?"},
-                       {"id": "have", "type": "check", "title": "What is there?"},
-                       {"id": "done", "type": "text", "title": "Done means?"}]},
+            {"items": [{"id": "kind", "type": "mcq", "title": "Who for?"},
+                       {"id": "have", "type": "select_all",
+                        "title": "What is there?"},
+                       {"id": "done", "type": "free", "title": "Done means?"}]},
             {"kind": "a team", "have": ["an API", "storage"],
              "done": "uploads never touch the API"})
         self.assertIn("Who for?: a team", said)
@@ -178,8 +260,8 @@ class AnswerTests(unittest.TestCase):
 
     def test_a_question_nobody_answered_is_left_out(self):
         said = SC.answers_as_said(
-            {"items": [{"id": "a", "type": "text", "title": "asked"},
-                       {"id": "b", "type": "text", "title": "skipped"}]},
+            {"items": [{"id": "a", "type": "free", "title": "asked"},
+                       {"id": "b", "type": "free", "title": "skipped"}]},
             {"a": "answered"})
         self.assertIn("asked", said)
         self.assertNotIn("skipped", said)

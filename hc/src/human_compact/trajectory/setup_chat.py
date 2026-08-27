@@ -50,7 +50,52 @@ MAX_GOALS = 8
 MAX_TODOS = 20
 
 CARDS = ("questions", "plan", "goals", "todos", "none")
-KINDS = ("radio", "check", "text")
+
+# The five ways a question can be put. Named for what the reader does, not
+# for the control that does it: "select which is best" is a different act
+# from "pick one", even though both end in one answer -- the options are
+# proposals to judge rather than facts to state, so each carries the reason
+# it is worth choosing and the reader is choosing between arguments.
+MCQ = "mcq"                 # one of several
+SELECT_ALL = "select_all"   # any of several
+FREE = "free"               # one line
+PARA = "open"               # a paragraph
+BEST = "best"               # which of these proposals is the right one
+KINDS = (MCQ, SELECT_ALL, FREE, PARA, BEST)
+CHOICES = (MCQ, SELECT_ALL, BEST)   # kinds that carry options
+WRITTEN = (FREE, PARA)              # kinds the reader types into
+
+# Sonnet, named rather than inherited: the setup conversation is the first
+# thing a new reader sees and the one place a weaker model shows immediately
+# -- it has to hear a half-described project and ask the question that
+# changes what it proposes.
+SETUP_MODEL = "sonnet"
+
+
+def setup_model(root=None) -> str:
+    """Which sonnet to ask for, on whichever account this install runs on.
+
+    A reader Engelbart connected is billed against the key we issued them,
+    and their settings pin `enforceAvailableModels` to the list that key is
+    allowed -- so asking for the bare alias is asking for a model the
+    gateway may not answer to. When the account names its own sonnet, use
+    that one; otherwise the alias, which is what an unconnected reader's own
+    subscription understands.
+
+    Nothing here reaches for a credential: the `claude` CLI already runs on
+    whatever `~/.claude/settings.json` says, which is the issued key once
+    `bart auth` has written it and the reader's own login before that. This
+    only asks the account what it calls the model.
+    """
+    try:
+        from .. import engelbart_auth as AUTH
+        models = AUTH.status(root).get("models") or []
+    except Exception:                                    # noqa: BLE001
+        return SETUP_MODEL
+    for name in models:
+        if isinstance(name, str) and SETUP_MODEL in name:
+            return name
+    return SETUP_MODEL
 
 
 # --- the prompt --------------------------------------------------------------
@@ -72,11 +117,14 @@ FORM = [
     '   "card": "questions" | "plan" | "goals" | "todos" | "none",',
     '   "questions": {"eyebrow": "<two or three words>",',
     '                 "items": [{"id": "<short slug>",',
-    '                            "type": "radio" | "check" | "text",',
+    '                            "type": "mcq" | "select_all" | "free"',
+    '                                    | "open" | "best",',
     '                            "title": "<the question>",',
     '                            "subtitle": "<optional, e.g. pick any>",',
-    '                            "options": ["<for radio and check>"],',
-    '                            "placeholder": "<for text>"}]},',
+    '                            "options": ["<mcq and select_all>"],',
+    '                            "candidates": [{"label": "<best: a proposal>",',
+    '                                            "why": "<what it buys>"}],',
+    '                            "placeholder": "<free and open>"}]},',
     '   "plan": {"head": "<one line: what this project is>",',
     '            "lines": [{"k": "the work", "v": "..."},',
     '                      {"k": "in place", "v": "..."},',
@@ -94,9 +142,21 @@ FORM = [
     "do not ask a third round of questions to avoid writing one.",
     "",
     "Questions are for what changes your proposal, never for what you could",
-    "assume. Offer radio and check options where the answers are known and a",
-    "text box where they are not. Three questions is a lot; two is usually",
-    "enough.",
+    "assume. Pick the kind by what you are actually asking for:",
+    "",
+    "  mcq         one answer out of several you can name",
+    "  select_all  any number of them -- say so in the subtitle",
+    "  free        one line they have to write; give a placeholder",
+    "  open        a paragraph: the story, the constraint nobody wrote down",
+    "  best        several proposals of yours, and which one is right --",
+    "              each candidate carries what it buys them, and they are",
+    "              choosing between arguments rather than stating a fact",
+    "",
+    "How many is your judgement, not a rule. Two or three in a round reads",
+    "as a conversation; six reads as a form and people abandon forms. If one",
+    "question would change everything you propose, ask it alone. If you",
+    "genuinely need another round after this one, take it -- but do not take",
+    "one to put off writing a plan you could already write.",
     "",
     "A goal is an outcome someone could tell you they had reached. A TODO row",
     "is one piece of work, in the imperative, that a coding agent could pick",
@@ -138,6 +198,30 @@ def _question_id(seen) -> str:
             return made
 
 
+def _candidates(value) -> List[Dict[str, str]]:
+    """Options as {label, why}, however they were written.
+
+    A bare string is a label with no argument under it, which is what an
+    ordinary choice is; a dict may say why it is worth choosing, which is
+    what makes "which of these is best" a different question.
+    """
+    out = []
+    for row in value if isinstance(value, list) else []:
+        if isinstance(row, dict):
+            label, why = (_one(row.get("label"), MAX_LABEL),
+                          _one(row.get("why"), MAX_WHY))
+        elif isinstance(row, str):
+            label, why = _one(row, MAX_LABEL), ""
+        else:
+            continue
+        if not label:
+            continue
+        out.append({"label": label, "why": why})
+        if len(out) >= MAX_OPTIONS:
+            break
+    return out
+
+
 def _normalize_questions(value) -> Dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     raw = value.get("items")
@@ -149,21 +233,26 @@ def _normalize_questions(value) -> Dict[str, Any]:
         title = _one(row.get("title"), MAX_TITLE)
         if not title:
             continue
-        options = [_one(o, MAX_LABEL) for o in row.get("options") or []
-                   if isinstance(o, (str, int, float)) and _one(o, MAX_LABEL)]
         kind = str(row.get("type") or "").strip().lower()
+        # "select which is best" is asked of proposals, so its options carry
+        # the reason each one is worth choosing; the other choices are facts
+        # and carry only themselves. Both are read here so a model that
+        # names one and fills the other still gets a drawable question.
+        candidates = _candidates(row.get("candidates") or row.get("options"))
+        options = [c["label"] for c in candidates]
         # A kind nobody can draw, and a choice with nothing to choose from,
         # are both answered the same way: give them a box to type in. A
         # question the reader cannot answer is worse than an open one.
-        if kind not in KINDS or (kind != "text" and not options):
-            kind = "text"
+        if kind not in KINDS or (kind in CHOICES and not options):
+            kind = FREE
         qid = _one(row.get("id"), 40)
         if not qid or qid in seen:
             qid = _question_id(seen)
         seen.add(qid)
         out.append({"id": qid, "type": kind, "title": title,
                     "subtitle": _one(row.get("subtitle"), 80),
-                    "options": options[:MAX_OPTIONS] if kind != "text" else [],
+                    "options": options if kind in (MCQ, SELECT_ALL) else [],
+                    "candidates": candidates if kind == BEST else [],
                     "placeholder": _one(row.get("placeholder"), MAX_TITLE)})
         if len(out) >= MAX_QUESTIONS:
             break
@@ -280,6 +369,10 @@ def answers_as_said(questions, answers) -> str:
         if not isinstance(row, dict):
             continue
         got = answers.get(row.get("id"))
+        # "Which of these is best" is answered with the proposal's label --
+        # the argument under it was for the reader, not for the next call.
+        if isinstance(got, dict):
+            got = got.get("label")
         if isinstance(got, list):
             got = " · ".join(_one(g, MAX_LABEL) for g in got if _one(g, 1))
         got = _one(got, MAX_LINE_VALUE)
@@ -393,3 +486,32 @@ def commit(root, name, plan, offered, chosen, todos) -> Dict[str, Any]:
         CS.save_goals(session_id, goals, {"items": []}, root)
     return {"ok": True, "cwd": cwd, "name": held["name"],
             "tree_session": session_id, "goals": len(made)}
+
+
+# --- asking ------------------------------------------------------------------
+
+def ask(transcript, engine=None, extra=(), root=None) -> Dict[str, Any]:
+    """One round: put the conversation to the model, take back one card.
+
+    The reply is JSON the reader never sees -- what they see is the modal it
+    names. A provider that cannot be reached, or that will not answer in the
+    shape after its own retry, is reported as itself rather than dressed up
+    as an empty card: a setup that silently says nothing is the blank screen
+    this whole surface exists to replace.
+    """
+    from . import providers as PROVIDERS
+    import os
+    try:
+        engine = engine or PROVIDERS.make(
+            os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
+            setup_model(root))
+        raw = engine.generate_json("\n".join(compose(transcript, extra)) + "\n")
+    except PROVIDERS.ProviderError as exc:
+        return {"ok": False, "error": " ".join(str(exc).split())[:200]}
+    except Exception:                                    # noqa: BLE001
+        return {"ok": False,
+                "error": "setup could not reach Claude (is the CLI on PATH?)"}
+    card = normalize_card(raw)
+    if not card["say"] and card["card"] == "none":
+        return {"ok": False, "error": "the model answered with nothing"}
+    return dict(card, ok=True)
