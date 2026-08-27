@@ -26,8 +26,15 @@ class VaultTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.vault = Path(self.tmp.name) / "vault"
         (self.vault / "chat-sessions").mkdir(parents=True)
+        self.connected = Path(self.tmp.name) / "human-compact"
+        self.connected.mkdir(parents=True)
         self.env = mock.patch.dict(os.environ, {
-            "CLAUDE_VAULT_DIR": str(self.vault)}, clear=False)
+            "CLAUDE_VAULT_DIR": str(self.vault),
+            # Never the machine's own. `current_session` falls back to the
+            # credentials `engelbart auth` wrote, and a test that reads the
+            # real ones does not merely leak state -- it spends a live token
+            # on a live endpoint.
+            "HUMAN_COMPACT_HOME": str(self.connected)}, clear=False)
         self.env.start()
         self.addCleanup(self.env.stop)
         for name in ("HC_SUPABASE_URL", "HC_SUPABASE_ANON_KEY"):
