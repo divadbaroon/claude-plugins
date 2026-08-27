@@ -291,6 +291,32 @@ test('a server that says the credit is spent does not get the stored key printed
   }
 });
 
+// Unwiring edits a file Claude Code read at startup. The running session still
+// has the gateway URL loaded, so it goes on 401ing against a proxy it can no
+// longer authenticate to -- and a member reading "back on your own account"
+// while that happens concludes the tool is lying and goes looking for a manual
+// fix. Naming the restart is the difference between a 20-second recovery and
+// hand-editing settings.json.
+test('the refusal names the restart, which is the only thing that recovers the session', async () => {
+  const stub = await stubServer(() => ({
+    status: 402,
+    body: { error: 'your Engelbart Claude credit is used up' },
+  }));
+  try {
+    const machine = wiredMachine(stub.base);
+    const result = await runHelper(machine.helper);
+
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Restart Claude Code/);
+    // The unwire did happen, so the next session is genuinely fine. What the
+    // member must not be told is that this one is.
+    assert.equal(read(machine.settingsFile).apiKeyHelper, undefined);
+    assert.match(result.stderr, /keep failing until you do/);
+  } finally {
+    await stub.close();
+  }
+});
+
 test('a 200 that reports an exhausted status is a refusal too', async () => {
   const stub = await stubServer(() => ({
     status: 200,

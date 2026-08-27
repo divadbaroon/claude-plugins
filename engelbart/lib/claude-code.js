@@ -188,10 +188,19 @@ function refuse(value, reason) {
   // So what is printed is a path, not a command name. There is no \`engelbart\`
   // on PATH to run, npx needs a network, and this file is the one thing that
   // is certainly here and certainly executable: Claude Code just ran it.
+  //
+  // Unwiring edits a file Claude Code read at startup, so it cannot rescue the
+  // session that is running now: that one still has the gateway URL loaded and
+  // every request it makes from here is a 401 from a proxy it can no longer
+  // authenticate to. Saying only "back on your own account" while the screen
+  // fills with proxy errors reads as a lie and sends people hunting for a
+  // manual fix. The restart is the whole remedy, so it is the instruction.
   process.stderr.write(unwired
-    ? 'Claude Code is back on your own account. Reconnect with \`npx engelbart-cli auth\`.\\n'
+    ? 'Restart Claude Code and it will use your own account again.\\n'
+      + 'This session already loaded the gateway, so it will keep failing until you do.\\n'
+      + 'Once your credit is topped up, reconnect with \`npx engelbart-cli auth\`.\\n'
     : 'To put Claude Code back on your own account, run:\\n\\n    '
-      + HELPER + ' --disconnect\\n');
+      + HELPER + ' --disconnect\\n\\nThen restart Claude Code.\\n');
   process.exit(1);
 }
 
