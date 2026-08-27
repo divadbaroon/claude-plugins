@@ -328,7 +328,17 @@
 
     if (st.thinking) col.appendChild(generating());
 
-    if (st.error) col.appendChild(el("div", "err", st.error));
+    if (st.error) {
+      // A round that came back with nothing is a dead end unless there is a
+      // way out of it: the model is occasionally unparseable, and the
+      // reader should not have to reload the page to find that out.
+      var bad = el("div", "");
+      bad.appendChild(el("div", "err", st.error));
+      var again = el("div", "acts");
+      again.appendChild(btn("Try again", "btn-on", function () { round(); }));
+      bad.appendChild(again);
+      col.appendChild(bad);
+    }
 
     var kind = st.card && st.card.card;
     if (!st.thinking && kind === "questions") drawQuestions(col);
