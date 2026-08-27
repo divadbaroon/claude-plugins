@@ -79,13 +79,16 @@ function fixturePackage(root) {
 test('parseArgs accepts only numeric choices and enforces goal dependency', () => {
   withExperimental('1', () => {
     assert.deepEqual(parseArgs(['--non-interactive', '--global-vault', '1', '--goals', '2']), {
-      globalVault: '1', goals: '2', nonInteractive: true, dryRun: false, help: false,
+      command: 'install', globalVault: '1', goals: '2',
+      nonInteractive: true, dryRun: false, noLogin: false, help: false,
     });
   });
   assert.equal(parseArgs(['--global-vault', '2']).goals, '2');
   assert.throws(() => parseArgs(['--global-vault', 'yes']), UsageError);
   assert.throws(() => parseArgs(['--global-vault', '2', '--goals', '1']), /requires/);
-  assert.throws(() => parseArgs(['surprise']), /unknown option/);
+  assert.throws(() => parseArgs(['surprise']), /unknown command/);
+  assert.throws(() => parseArgs(['--surprise']), /unknown option/);
+  assert.throws(() => parseArgs(['auth', 'extra']), /unknown option/);
 });
 
 test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
@@ -97,7 +100,8 @@ test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
     }
     // The inert choice keeps working, so scripted installs do not break.
     assert.deepEqual(parseArgs(['--global-vault', '2', '--goals', '2']), {
-      globalVault: '2', goals: '2', nonInteractive: false, dryRun: false, help: false,
+      command: 'install', globalVault: '2', goals: '2',
+      nonInteractive: false, dryRun: false, noLogin: false, help: false,
     });
   });
   withExperimental('0', () => {
@@ -257,4 +261,175 @@ test('a linked launcher says it works right now', async () => {
   const text = await installOutput({ onPath: true, linked: '/home/u/.local/bin/hc' });
   assert.match(text, /hc {11}ready in this terminal/);
   assert.doesNotMatch(text, /needs one more step/);
+});
+
+
+test('account commands run without touching the installer at all', async () => {
+  const output = capture();
+  const errors = capture();
+  const seen = [];
+  const code = await run({
+    argv: ['whoami'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    whoami: async (options) => { seen.push(options.managedRoot); return { signedIn: true, email: 'member@example.com' }; },
+    install: async () => { throw new Error('installer must not run'); },
+  });
+  assert.equal(code, 0);
+  assert.equal(seen[0], path.resolve('/nonexistent/managed'));
+  assert.match(output.read(), /Connected as member@example\.com\./);
+});
+
+test('an unconnected machine exits non-zero and says how to connect', async () => {
+  const errors = capture();
+  const code = await run({
+    argv: ['whoami'],
+    output: capture().stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    whoami: async () => ({ signedIn: false }),
+  });
+  assert.equal(code, 1);
+  assert.match(errors.read(), /engelbart auth/);
+});
+
+test('login is the same command whichever name it is called by', async () => {
+  for (const name of ['auth', 'login']) {
+    let called = 0;
+    const code = await run({
+      argv: [name],
+      output: capture().stream,
+      errorOutput: capture().stream,
+      managedRoot: '/nonexistent/managed',
+      login: async () => { called += 1; return { status: 'ready', email: 'm@example.com' }; },
+    });
+    assert.equal(code, 0);
+    assert.equal(called, 1);
+  }
+  const refused = await run({
+    argv: ['auth'],
+    output: capture().stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    login: async () => ({ status: 'denied' }),
+  });
+  assert.equal(refused, 1);
+});
+
+test('logout reports whether the token was actually revoked', async () => {
+  const output = capture();
+  await run({
+    argv: ['logout'],
+    output: output.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    logout: async () => ({ signedOut: true, revoked: false }),
+  });
+  assert.match(output.read(), /Disconnected on this machine/);
+  assert.match(output.read(), /disconnect it there/);
+
+  const clean = capture();
+  await run({
+    argv: ['logout'],
+    output: clean.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    logout: async () => ({ signedOut: true, revoked: true }),
+  });
+  assert.match(clean.read(), /Disconnected\. That token is revoked\./);
+});
+
+function installWith(extra) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-test-'));
+  try {
+    fixturePackage(root);
+    const output = capture();
+    const errors = capture();
+    return run({
+      argv: ['--non-interactive', '--global-vault', '2'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      output: output.stream,
+      errorOutput: errors.stream,
+      install: async () => ({ launcher: path.join(root, 'managed', 'bin', 'hc') }),
+      ensureLauncherOnPath: () => ({ onPath: true }),
+      readCredentials: () => null,
+      ...extra,
+    }).then((code) => ({ code, output: output.read(), errors: errors.read() }));
+  } finally {
+    setTimeout(() => fs.rmSync(root, { recursive: true, force: true }), 0).unref?.();
+  }
+}
+
+test('a person at the terminal is offered the account connection once', async () => {
+  let logins = 0;
+  const result = await installWith({
+    interactive: true,
+    login: async () => { logins += 1; return { status: 'ready', email: 'member@example.com' }; },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(logins, 1);
+  assert.doesNotMatch(result.output, /Run `engelbart auth`/);
+});
+
+// A scripted install must not sit waiting on a browser that will never open.
+test('a scripted install never blocks on a browser', async () => {
+  let logins = 0;
+  const result = await installWith({
+    interactive: false,
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  assert.equal(logins, 0);
+  assert.match(result.output, /Run `engelbart auth` to connect your Engelbart account/);
+});
+
+test('--no-login installs without asking about an account', async () => {
+  let logins = 0;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-test-'));
+  fixturePackage(root);
+  const output = capture();
+  const code = await run({
+    argv: ['--no-login', '--non-interactive', '--global-vault', '2'],
+    packageRoot: root,
+    managedRoot: path.join(root, 'managed'),
+    platform: 'darwin',
+    arch: 'arm64',
+    output: output.stream,
+    errorOutput: capture().stream,
+    install: async () => ({ launcher: path.join(root, 'managed', 'bin', 'hc') }),
+    ensureLauncherOnPath: () => ({ onPath: true }),
+    interactive: true,
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+  assert.equal(code, 0);
+  assert.equal(logins, 0);
+  assert.match(output.read(), /Run `engelbart auth`/);
+});
+
+// The runtime is installed and working by then; only the credits are missing.
+test('a failed account connection reports itself without failing the install', async () => {
+  const result = await installWith({
+    interactive: true,
+    login: async () => { throw new Error('berkeley.mathetic.com is unreachable'); },
+  });
+  assert.equal(result.code, 0);
+  assert.match(result.errors, /Could not connect an Engelbart account: berkeley\.mathetic\.com is unreachable/);
+  assert.match(result.output, /Installed\./);
+  assert.match(result.output, /Run `engelbart auth`/);
+});
+
+test('reinstalling on a connected machine leaves the connection alone', async () => {
+  let logins = 0;
+  const result = await installWith({
+    interactive: true,
+    readCredentials: () => ({ token: 'egb_t', email: 'member@example.com' }),
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  assert.equal(logins, 0);
+  assert.match(result.output, /account {6}member@example\.com/);
+  assert.doesNotMatch(result.output, /Run `engelbart auth`/);
 });

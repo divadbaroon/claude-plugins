@@ -8,7 +8,31 @@ npx engelbart-cli
 ```
 
 The installer takes no required options and asks no questions. It installs
-the `hc` runtime, the Claude Code hooks, and the `/goals-ui` command.
+the `hc` runtime, the Claude Code hooks, and the `/goals-ui` command, then
+connects this machine to your Engelbart account.
+
+## Connecting your account
+
+There is no password prompt. The installer prints a short code, opens
+`https://berkeley.mathetic.com/engelbart` in your browser, and waits while you
+sign in and approve that code on screen. Approving it writes a machine-scoped
+token to `~/.human-compact/auth.json`, readable only by you.
+
+Only approve a code your own terminal printed. The installer keeps a second
+secret that never leaves your machine, so a pairing link someone else sends you
+cannot connect their terminal to your account.
+
+```bash
+engelbart auth      # connect this machine (or reconnect it)
+engelbart whoami    # show which account this machine is connected to
+engelbart logout    # disconnect this machine and revoke its token
+```
+
+Connecting is skipped when there is no terminal to answer in -- a scripted or
+CI install never waits on a browser -- and `--no-login` skips it outright. The
+install itself does not depend on it: run `engelbart auth` whenever you are
+ready. Set `ENGELBART_API_BASE` to point at a deployment other than
+`https://berkeley.mathetic.com`.
 
 From then on the hooks record each chat's own prompts and events to a local,
 owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
@@ -44,6 +68,8 @@ npx engelbart-cli
 
 `--non-interactive` is still accepted for compatibility and changes nothing.
 `--dry-run` verifies the bundled wheel and prints the plan without installing.
+Neither form waits on a browser, so a scripted install finishes unattended and
+leaves the account to be connected later with `engelbart auth`.
 
 ## Experimental (HC_EXPERIMENTAL=1)
 
