@@ -187,6 +187,13 @@ function claudeRecord(claude) {
     spendUsd: Number(claude.spendUsd) || 0,
   };
   if (claude.status) record.status = String(claude.status);
+  // Not a secret, and setup needs it: a key issued against a restricted model
+  // list cannot answer to the bare `sonnet` alias, so setup reads these names
+  // to ask for one the gateway will actually serve. Dropping them left setup
+  // asking for a model the account was not allowed.
+  if (Array.isArray(claude.models) && claude.models.length) {
+    record.models = claude.models.map((name) => String(name));
+  }
   return record;
 }
 
