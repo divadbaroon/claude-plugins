@@ -2,6 +2,7 @@
 
 const os = require('os');
 const path = require('path');
+const readline = require('readline/promises');
 const {
   ensureLauncherOnPath,
   install,
@@ -120,6 +121,34 @@ function canPrompt(deps = {}) {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
+// One question, one key. Enter is yes because the member already asked for
+// this install and this is the last thing standing between them and it; the
+// only reason to ask at all is that the fix runs a command of someone else's,
+// which is why the command is on screen above the question and not hidden
+// behind the word "yes".
+async function confirmFix(problem, deps, output) {
+  output.write(problem.kind === 'missing'
+    ? `\nClaude Code is not installed. /bart runs inside it.\n\n    ${problem.fix}\n\n`
+    : `\nClaude Code ${problem.installed} is too old for /bart.\n\n    ${problem.fix}\n\n`);
+  const label = problem.kind === 'missing' ? 'Install it now?' : 'Update it now?';
+  const surface = deps.readline || readline.createInterface({
+    input: deps.input || process.stdin,
+    output,
+  });
+  let answer;
+  try {
+    answer = await surface.question(`${label} [Y/n] `);
+  } catch (error) {
+    return false;                    // EOF or a closed terminal is not a yes
+  } finally {
+    if (!deps.readline) surface.close();
+  }
+  // Silence is the default; anything that is not a plain yes is a no, because
+  // guessing wrong here runs a script the member did not agree to.
+  const said = String(answer || '').trim().toLowerCase();
+  return said === '' || said === 'y' || said === 'yes';
+}
+
 async function runAccountCommand(command, authDeps, deps, errorOutput) {
   const output = authDeps.output;
   if (command === 'auth') {
@@ -218,6 +247,11 @@ async function run(deps = {}) {
         packageRoot,
         packageVersion: packageJson.version,
         managedRoot,
+        // Only where a person can answer. A scripted install is told the
+        // command instead of having it run on its behalf.
+        confirmClaudeFix: options.nonInteractive || !canPrompt(deps)
+          ? null
+          : (problem) => confirmFix(problem, deps, output),
         choices,
         platform,
         arch,
@@ -306,6 +340,7 @@ module.exports = {
   InputCancelled,
   UsageError,
   canPrompt,
+  confirmFix,
   numericChoice,
   parseArgs,
   resolveChoices,

@@ -9,6 +9,7 @@ const test = require('node:test');
 
 const {
   UsageError,
+  confirmFix,
   parseArgs,
   resolveChoices,
   run,
@@ -123,6 +124,79 @@ test('help documents the launch surface, not the experimental flags', () => {
 
 
 
+
+// Hitting y -- or Enter -- is the whole interaction, so what counts as yes is
+// worth stating outright.
+test('one keypress installs Claude Code, and only a yes counts as one', async () => {
+  const missing = { kind: 'missing', fix: 'curl -fsSL https://claude.ai/install.sh | bash' };
+  for (const [answer, agreed] of [['', true], ['y', true], ['Y\n', true], ['yes', true],
+    ['n', false], ['no', false], ['later', false]]) {
+    const output = capture();
+    assert.equal(
+      await confirmFix(missing, { readline: fakeReadline([answer]) }, output.stream),
+      agreed,
+      `answering ${JSON.stringify(answer)}`);
+    // The command is on screen before the question, so a yes is to something
+    // the member has read and not to the word "install".
+    assert.match(output.read(), /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash\n\n$/);
+  }
+});
+
+test('a terminal that cannot answer has not said yes', async () => {
+  const output = capture();
+  assert.equal(
+    await confirmFix({ kind: 'missing', fix: 'x' }, { readline: fakeReadline([]) }, output.stream),
+    false);
+});
+
+test('an outdated Claude Code is offered an update in its own words', async () => {
+  const output = capture();
+  assert.equal(
+    await confirmFix({ kind: 'old', installed: '2.1.150', fix: 'claude update' },
+      { readline: fakeReadline(['']) }, output.stream),
+    true);
+  assert.match(output.read(), /Claude Code 2\.1\.150 is too old for \/bart\./);
+});
+
+test('a scripted install is never offered the question it cannot answer', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-confirm-'));
+  try {
+    fixturePackage(root);
+    const seen = [];
+    await run({
+      argv: ['--non-interactive', '--global-vault', '2'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      output: capture().stream,
+      errorOutput: capture().stream,
+      install: async (options) => {
+        seen.push(options.confirmClaudeFix);
+        return { launcher: path.join(root, 'managed', 'bin', 'hc') };
+      },
+    });
+    assert.equal(seen[0], null);
+    // And where a person is present, the installer is handed a way to ask.
+    await run({
+      argv: ['--local-only', '--global-vault', '2'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      interactive: true,
+      output: capture().stream,
+      errorOutput: capture().stream,
+      install: async (options) => {
+        seen.push(options.confirmClaudeFix);
+        return { launcher: path.join(root, 'managed', 'bin', 'hc') };
+      },
+    });
+    assert.equal(typeof seen[1], 'function');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test('dry-run verifies the package and never invokes installer', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-test-'));

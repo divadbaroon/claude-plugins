@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const https = require('https');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
@@ -19,6 +20,13 @@ function ownedByUs(owner) {
 }
 const MIN_CLAUDE_VERSION = Object.freeze([2, 1, 175]);
 const MIN_CLAUDE_VERSION_TEXT = MIN_CLAUDE_VERSION.join('.');
+// Anthropic's own installer. It needs no npm permissions and no sudo, which
+// makes it the one command that works whatever way the member's Node was
+// installed -- and installing Node's way could fail on exactly the machines
+// where `npx engelbart-cli` was the only thing that did work.
+const CLAUDE_INSTALL_URL = 'https://claude.ai/install.sh';
+const CLAUDE_INSTALL_COMMAND = `curl -fsSL ${CLAUDE_INSTALL_URL} | bash`;
+const CLAUDE_UPDATE_COMMAND = 'claude update';
 const UV_VERSION = '0.11.32';
 const UV_RELEASE = `https://github.com/astral-sh/uv/releases/download/${UV_VERSION}`;
 const MAX_UV_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -287,23 +295,120 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function requireCompatibleClaude(output) {
-  const raw = String(output || '').trim();
+// Whether `claude` answers at all, kept separate from whether the answer is
+// good enough. The two failures have different fixes -- one is an install, the
+// other an update -- and only a caller that can tell them apart can offer the
+// right one.
+function probeClaude(runner, env) {
+  let result;
+  try {
+    result = runner('claude', ['--version'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    // The reason is `spawnSync claude ENOENT`, which says nothing to anyone
+    // who has simply never installed it -- and that is who this is for.
+    return { present: false, reason: null };
+  }
+  if (result.status !== 0) {
+    return { present: false, reason: `\`claude --version\` exited ${result.status}` };
+  }
+  return {
+    present: true,
+    output: String(result.stdout || '').trim() || String(result.stderr || '').trim(),
+  };
+}
+
+// Null when there is nothing to fix. `fix` is the command that would fix it,
+// and its absence means we have no business running anything: something else
+// on this machine is called `claude`, and replacing it is not ours to offer.
+function claudeProblem(probe) {
+  if (!probe.present) {
+    return {
+      kind: 'missing',
+      fix: CLAUDE_INSTALL_COMMAND,
+      message: probe.reason
+        ? `Claude Code is required, but ${probe.reason}`
+        : 'Claude Code is required and is not installed',
+    };
+  }
+  const raw = String(probe.output || '').trim();
   const version = parseClaudeVersion(raw);
   if (!version) {
-    throw new Error(
-      `unsupported Claude Code version output ${JSON.stringify(raw || '(empty)')}; `
-      + `human-compact requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`,
-    );
+    return {
+      kind: 'unusable',
+      fix: null,
+      message: `unsupported Claude Code version output ${JSON.stringify(raw || '(empty)')}; `
+        + `human-compact requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`,
+    };
   }
   const installed = version.join('.');
   if (compareVersions(version, MIN_CLAUDE_VERSION) < 0) {
-    throw new Error(
-      `Claude Code ${installed} is too old; `
-      + `human-compact requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`,
-    );
+    return {
+      kind: 'old',
+      installed,
+      fix: CLAUDE_UPDATE_COMMAND,
+      message: `Claude Code ${installed} is too old; `
+        + `human-compact requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`,
+    };
   }
-  return installed;
+  return null;
+}
+
+function requireCompatibleClaude(output) {
+  const problem = claudeProblem({ present: true, output });
+  if (problem) throw new Error(problem.message);
+  return parseClaudeVersion(String(output || '').trim()).join('.');
+}
+
+// Run on the member's own terminal: the installer has its own progress to
+// show and its own failures to explain, and swallowing those would leave a
+// stalled install with nothing on screen to say why.
+function runClaudeFix(runner, command, env) {
+  // Without pipefail a failed curl is a successful pipeline, and the member
+  // would be told Claude Code was installed by an empty script that ran fine.
+  const result = runner('bash', ['-c', `set -o pipefail; ${command}`], {
+    env,
+    stdio: 'inherit',
+  });
+  if (result.error) throw new Error(`could not run \`${command}\`: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`\`${command}\` failed with exit code ${result.status}`);
+  }
+}
+
+// A child cannot export PATH into the shell that spawned it, so a Claude Code
+// installed a second ago is on the member's PATH in their next terminal and
+// not in this process. It lands in ~/.local/bin; carrying that directory
+// forward is what lets the rest of this install use what we just installed.
+function withClaudeOnPath(env, homedir) {
+  const dir = path.join(homedir, '.local', 'bin');
+  if (!fs.existsSync(path.join(dir, 'claude'))) return env;
+  const entries = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  if (entries.some((entry) => path.resolve(entry) === path.resolve(dir))) return env;
+  return { ...env, PATH: [dir, ...entries].join(path.delimiter) };
+}
+
+// Returns the environment the rest of the install should use, which is the
+// one it was given unless installing Claude Code changed where `claude` lives.
+async function ensureClaudeCode({ runner, env, homedir, confirm }) {
+  const problem = claudeProblem(probeClaude(runner, env));
+  if (!problem) return env;
+  // Offering to run it is not the same as running it. `confirm` exists only
+  // where there is a person at the keyboard to answer, so everywhere else --
+  // CI, a pipe, --non-interactive -- this stays a message about a command the
+  // member can run themselves.
+  const agreed = problem.fix && confirm ? await confirm(problem) : false;
+  if (!agreed) {
+    throw new Error(problem.fix
+      ? `${problem.message}\n\nRun this, then run the installer again:\n\n    ${problem.fix}`
+      : problem.message);
+  }
+  runClaudeFix(runner, problem.fix, env);
+  const next = withClaudeOnPath(env, homedir);
+  const remaining = claudeProblem(probeClaude(runner, next));
+  // Asked, agreed, ran, and still wrong: say what is still wrong rather than
+  // offering the same command a second time.
+  if (remaining) throw new Error(`${remaining.message} (after running \`${problem.fix}\`)`);
+  return next;
 }
 
 function compatiblePython(runner, command) {
@@ -564,21 +669,16 @@ async function install(options) {
   const runner = deps.runCommand || runCommand;
   const output = options.output || process.stdout;
   const errorOutput = options.errorOutput || process.stderr;
-  const env = deps.env || process.env;
   const target = supportedTarget(options.platform, options.arch, options.processReport);
   const vendor = inspectVendor(options.packageRoot, options.packageVersion);
-  let claude;
-  try {
-    claude = runner('claude', ['--version'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (error) {
-    throw new Error(`Claude Code is required and was not found: ${error.message}`);
-  }
-  if (claude.status !== 0) {
-    throw new Error('Claude Code is required; install it and ensure `claude` is on PATH');
-  }
-  const claudeVersionOutput = String(claude.stdout || '').trim()
-    || String(claude.stderr || '').trim();
-  requireCompatibleClaude(claudeVersionOutput);
+  // Before the lock and before the first byte is written, so a member without
+  // Claude Code either gets it or gets told, and either way keeps a clean disk.
+  const env = await ensureClaudeCode({
+    runner,
+    env: deps.env || process.env,
+    homedir: deps.homedir || os.homedir(),
+    confirm: options.confirmClaudeFix,
+  });
   establishOwnership(root);
   const releaseLock = acquireLock(root, deps.now);
   let createdRuntime = false;
@@ -752,6 +852,9 @@ module.exports = {
   INSTALL_SCHEMA,
   ensureLauncherOnPath,
   shellProfileFor,
+  CLAUDE_INSTALL_COMMAND,
+  CLAUDE_INSTALL_URL,
+  CLAUDE_UPDATE_COMMAND,
   MIN_CLAUDE_VERSION,
   MIN_CLAUDE_VERSION_TEXT,
   OWNER,
@@ -770,8 +873,12 @@ module.exports = {
   isMusl,
   loadOwnedInstall,
   pythonCandidates,
+  claudeProblem,
+  ensureClaudeCode,
   parseClaudeVersion,
+  probeClaude,
   requireCompatibleClaude,
+  withClaudeOnPath,
   removeManaged,
   runCommand,
   safeChild,

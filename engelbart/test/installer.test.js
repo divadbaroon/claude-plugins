@@ -9,6 +9,10 @@ const { spawnSync } = require('child_process');
 const test = require('node:test');
 
 const {
+  CLAUDE_INSTALL_COMMAND,
+  CLAUDE_UPDATE_COMMAND,
+  claudeProblem,
+  ensureClaudeCode,
   ensureUv,
   ensureManagedDirectory,
   ensureLauncherOnPath,
@@ -20,6 +24,7 @@ const {
   safeChild,
   supportedTarget,
   switchLauncher,
+  withClaudeOnPath,
 } = require('../lib/installer');
 
 function capture() {
@@ -253,6 +258,131 @@ test('installer creates stable launcher, manifest, and exact setup argv', async 
     repeat.deps.buildRuntime = async () => { rebuilt = true; };
     await install(repeat);
     assert.equal(rebuilt, false);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+// The whole point of the offer is that saying yes is one key, so these state
+// what `claude --version` says before and after the fix runs, and read back
+// which command the member's agreement actually authorised.
+function claudeStage(stages) {
+  const ran = [];
+  return {
+    ran,
+    runner(command, args, options) {
+      if (command === 'claude' && args[0] === '--version') {
+        const answer = stages.shift();
+        if (answer instanceof Error) throw answer;
+        return { status: 0, stdout: `${answer} (Claude Code)\n`, stderr: '' };
+      }
+      ran.push({ command, args, options });
+      return { status: 0, stdout: '', stderr: '' };
+    },
+  };
+}
+
+test('a missing Claude Code is one keypress away from being installed', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-claude-offer-'));
+  try {
+    // The installer puts it here, and finding it here is what lets the rest of
+    // the install use it without the member opening a new terminal first.
+    const homedir = path.join(fixture, 'home');
+    fs.mkdirSync(path.join(homedir, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(homedir, '.local', 'bin', 'claude'), '#!/bin/sh\n');
+    const stage = claudeStage([new Error('spawnSync claude ENOENT'), '2.1.175']);
+    const asked = [];
+    const env = await ensureClaudeCode({
+      runner: stage.runner,
+      env: { PATH: '/usr/bin' },
+      homedir,
+      confirm: (problem) => { asked.push(problem); return true; },
+    });
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0].kind, 'missing');
+    assert.equal(asked[0].fix, CLAUDE_INSTALL_COMMAND);
+    assert.deepEqual(stage.ran.map((call) => call.args[1]),
+      [`set -o pipefail; ${CLAUDE_INSTALL_COMMAND}`]);
+    assert.equal(stage.ran[0].command, 'bash');
+    // Inherited, because the installer's own progress and errors are the
+    // member's to read.
+    assert.equal(stage.ran[0].options.stdio, 'inherit');
+    assert.equal(env.PATH, `${path.join(homedir, '.local', 'bin')}${path.delimiter}/usr/bin`);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('an outdated Claude Code is offered the update, not the installer', async () => {
+  const stage = claudeStage(['2.1.150', '2.1.175']);
+  const asked = [];
+  await ensureClaudeCode({
+    runner: stage.runner,
+    env: { PATH: '/usr/bin' },
+    homedir: path.join(os.tmpdir(), 'hc-absent-home'),
+    confirm: (problem) => { asked.push(problem); return true; },
+  });
+  assert.equal(asked[0].kind, 'old');
+  assert.equal(asked[0].installed, '2.1.150');
+  assert.deepEqual(stage.ran.map((call) => call.args[1]),
+    [`set -o pipefail; ${CLAUDE_UPDATE_COMMAND}`]);
+});
+
+test('declining the offer names the command instead of running one', async () => {
+  const stage = claudeStage([new Error('spawnSync claude ENOENT')]);
+  await assert.rejects(
+    ensureClaudeCode({
+      runner: stage.runner,
+      env: {},
+      homedir: os.tmpdir(),
+      confirm: () => false,
+    }),
+    (error) => error.message.includes(CLAUDE_INSTALL_COMMAND),
+  );
+  assert.deepEqual(stage.ran, []);
+});
+
+test('with nobody to ask, the offer is a message and never a command', async () => {
+  const stage = claudeStage([new Error('spawnSync claude ENOENT')]);
+  await assert.rejects(
+    ensureClaudeCode({ runner: stage.runner, env: {}, homedir: os.tmpdir(), confirm: null }),
+    (error) => error.message.includes(CLAUDE_INSTALL_COMMAND),
+  );
+  assert.deepEqual(stage.ran, []);
+});
+
+// Something else on this machine answering to `claude` is not ours to replace.
+test('an unrecognisable claude is never offered a fix', () => {
+  const problem = claudeProblem({ present: true, output: 'development build' });
+  assert.equal(problem.kind, 'unusable');
+  assert.equal(problem.fix, null);
+});
+
+test('a fix that did not take says so instead of offering itself again', async () => {
+  const stage = claudeStage([new Error('ENOENT'), '2.1.150']);
+  await assert.rejects(
+    ensureClaudeCode({
+      runner: stage.runner,
+      env: {},
+      homedir: os.tmpdir(),
+      confirm: () => true,
+    }),
+    /2\.1\.150 is too old.*after running/s,
+  );
+});
+
+test('the installed path is carried forward only when it holds a claude', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-claude-path-'));
+  try {
+    const env = { PATH: '/usr/bin' };
+    assert.equal(withClaudeOnPath(env, fixture), env);
+    const bin = path.join(fixture, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'claude'), '');
+    assert.equal(withClaudeOnPath(env, fixture).PATH, `${bin}${path.delimiter}/usr/bin`);
+    // Already there: prepending it a second time would be a lie about which
+    // copy the rest of the install is going to run.
+    assert.equal(withClaudeOnPath({ PATH: bin }, fixture).PATH, bin);
   } finally {
     fs.rmSync(fixture, { recursive: true, force: true });
   }

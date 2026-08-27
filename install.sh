@@ -10,4 +10,11 @@ if ! command -v npx >/dev/null 2>&1; then
 fi
 
 printf '%s\n' 'Redirecting to the engelbart-cli npm installer...'
+# `curl … | bash` leaves this script's stdin on the pipe, at EOF, and the
+# installer reads that as nobody being here to answer: it would print the
+# command that installs Claude Code instead of offering to run it, and skip
+# connecting an account. The terminal is still attached; hand it back.
+if [ -r /dev/tty ]; then
+  exec npx --yes engelbart-cli@latest </dev/tty
+fi
 exec npx --yes engelbart-cli@latest

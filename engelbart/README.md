@@ -7,9 +7,12 @@ command:
 npx engelbart-cli
 ```
 
-The installer takes no required options and asks no questions. It installs
-the `hc` runtime, the Claude Code hooks, and the `/bart` command, then
-connects this machine to your Engelbart account.
+The installer takes no required options. It installs the `hc` runtime, the
+Claude Code hooks, and the `/bart` command, then connects this machine to your
+Engelbart account. If Claude Code is missing or too old it says so, shows the
+one command that fixes it, and offers to run it for you — press Enter to
+accept. A scripted install (`--non-interactive`, or a pipe, or CI) is told the
+command instead and exits, so nothing runs unasked.
 
 ## Connecting your account
 
@@ -124,7 +127,7 @@ See [`STASHED.md`](../STASHED.md) for the full inventory.
 
 - macOS or Linux
 - Node.js 18+
-- Claude Code 2.1.175+
+- Claude Code 2.1.175+ (the installer offers to install or update it)
 
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
 runtimes live under `~/.human-compact/runtimes/`; and the stable backend
