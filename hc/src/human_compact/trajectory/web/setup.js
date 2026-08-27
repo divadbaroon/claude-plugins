@@ -45,7 +45,10 @@
     pieces: [],          // ...or the pieces of the chosen goal, with rows
     newTodo: "",
     name: "",            // the project's name, typed while the rest arrives
-    made: null           // what commit gave back
+    made: null,          // what commit gave back
+    opened: {}           // commands a terminal has already been opened for:
+                         // draw() runs on every keystroke somewhere, and a
+                         // window per redraw is not help
   };
 
   var OPEN = "Tell me what you're working on in your own words."
@@ -230,7 +233,7 @@
   // because a command someone retypes is a command someone mistypes.
   function drawResume() {
     var col = column(app);
-    hero(col, "Then it is already yours -- two commands, in your terminal.");
+    hero(col, "Then it is already yours. A terminal is opening for you.");
     var card = el("div", "card rise");
     var head = el("div", "card-head");
     head.appendChild(el("span", "lbl", "resume a project"));
@@ -267,17 +270,31 @@
     parent.appendChild(row);
   }
 
-  function openTerminal(command, said) {
-    // The machine opens a terminal with the command already in it and the
-    // reader presses Return. Where it cannot -- no terminal it knows how to
-    // drive, a permission not granted -- the copy row beside this is still
-    // the answer, so a refusal says so quietly rather than failing.
-    said.textContent = "opening…";
+  function openTerminal(command, said, asked) {
+    // A terminal opens with the command already in it and the reader
+    // presses Return. It happens by itself the first time a screen shows a
+    // command, because "open a terminal" is not a decision anybody came
+    // here to make -- the button beside it is for the second one.
+    //
+    // Where it cannot -- no terminal this knows how to drive, a permission
+    // not granted -- the copy row is still the answer, so a refusal says so
+    // quietly and stays out of the way. Nothing here is fatal.
+    said.textContent = asked ? "opening…" : "";
     post({ op: "setup_open_terminal", command: command }).then(function (out) {
-      said.textContent = (out && out.ok)
-        ? "opened — press Return in it"
-        : "copy it instead";
-      setTimeout(function () { said.textContent = ""; }, 6000);
+      if (out && out.ok) {
+        // Which key depends on how it got the command in there, which the
+        // server is the only one that knows: typed into the window, or put
+        // in the new shell's history because it may not type.
+        said.textContent = out.note === "up"
+          ? "opened a terminal — press Up, then Return"
+          : "opened a terminal — press Return in it";
+        return;
+      }
+      // Only worth saying when they asked. Unasked, the copy button next to
+      // it already says what to do, and an apology for something they did
+      // not request is noise.
+      said.textContent = asked ? "could not open one — copy it instead" : "";
+      if (asked) setTimeout(function () { said.textContent = ""; }, 6000);
     });
   }
 
@@ -286,8 +303,8 @@
     row.appendChild(el("span", "cmd-text", command));
     var said = el("span", "cmd-said", "");
     if (openable) {
-      var open = el("button", "cmd-copy", "open terminal");
-      on(open, "click", function () { openTerminal(command, said); });
+      var open = el("button", "cmd-copy", "open a terminal");
+      on(open, "click", function () { openTerminal(command, said, true); });
       row.appendChild(open);
     }
     var copy = el("button", "cmd-copy", "copy");
@@ -317,6 +334,13 @@
     var wrap = el("div", "");
     wrap.appendChild(row);
     wrap.appendChild(said);
+    // Once per command, not once per drawing of it. Deferred a beat so the
+    // row is on the page before the answer lands on it, and so a screen
+    // that draws twice in a frame asks once.
+    if (openable && !st.opened[command]) {
+      st.opened[command] = true;
+      setTimeout(function () { openTerminal(command, said, false); }, 250);
+    }
     return wrap;
   }
 

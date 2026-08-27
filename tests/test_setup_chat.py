@@ -650,12 +650,57 @@ class TerminalTests(unittest.TestCase):
     def test_a_machine_with_no_terminal_says_so_rather_than_failing(self):
         # The copy row beside the button is still the answer, so this is a
         # quiet no, not an error the reader has to deal with.
-        with mock.patch.object(SC, "__name__", SC.__name__), \
-             mock.patch("sys.platform", "linux"), \
+        with mock.patch("sys.platform", "linux"), \
              mock.patch("shutil.which", return_value=None):
             out = SC.open_terminal("claude")
         self.assertFalse(out["ok"])
         self.assertIn("no terminal", out["error"])
+
+    def test_permission_is_asked_for_before_anything_is_opened(self):
+        # Finding out afterwards is how a reader ends up looking at a blank
+        # terminal being told a command was typed into it.
+        calls = []
+        class Done:
+            returncode = 0
+        def run(args, **kw):
+            calls.append(args)
+            return Done()
+        with mock.patch("sys.platform", "darwin"):
+            out = SC.open_terminal("claude", run=run)
+        self.assertTrue(out["ok"])
+        self.assertIn("System Events", calls[0][-1])
+        self.assertNotIn("Terminal", calls[0][-1])
+        # Permitted, so the command is typed and Return is all that is left.
+        self.assertEqual("return", out["note"])
+        self.assertIn("keystroke", calls[1][-1])
+
+    def test_without_permission_the_window_still_has_the_command_in_it(self):
+        # Accessibility is granted per application and this one is a python
+        # in a managed runtime, so this is the ordinary case, not the edge.
+        calls = []
+        class Done:
+            def __init__(self, code):
+                self.returncode = code
+        def run(args, **kw):
+            calls.append(args)
+            return Done(1 if "System Events" in args[-1] else 0)
+        with mock.patch("sys.platform", "darwin"):
+            out = SC.open_terminal("claude", run=run)
+        self.assertTrue(out["ok"])
+        self.assertEqual("up", out["note"])
+        opened = calls[1][-1]
+        self.assertIn("print -rs", opened)      # zsh
+        self.assertIn("history -s", opened)     # or bash
+        self.assertIn("press Up then Return", opened)
+        # And nothing was typed at a window that would not have taken it.
+        self.assertNotIn("keystroke", opened)
+
+    def test_a_terminal_that_refuses_to_open_is_not_reported_as_open(self):
+        class Done:
+            returncode = 1
+        with mock.patch("sys.platform", "darwin"):
+            out = SC.open_terminal("claude", run=lambda *a, **k: Done())
+        self.assertFalse(out["ok"])
 
 
 class PageTests(unittest.TestCase):
