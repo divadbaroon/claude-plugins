@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 
 const { atomicWrite, establishOwnership, validateManagedRoot } = require('./installer');
 const claudeCode = require('./claude-code');
+const vaultConfig = require('./vault-config');
 
 const DEFAULT_API_BASE = 'https://berkeley.mathetic.com';
 const CREDENTIALS_SCHEMA = 1;
@@ -207,6 +208,21 @@ function wireClaudeCode(managedRoot, stored, options = {}) {
   }
 }
 
+// Never fatal, and never an overwrite: a member who pointed `hc` at their own
+// project keeps it, and one who has not is spared the setup step entirely.
+async function shareProjectConfig(base, stored, options = {}) {
+  const project = await vaultConfig.fetchProjectConfig(base, options);
+  return vaultConfig.write({
+    ...project,
+    email: stored && stored.email,
+    env: options.env,
+    homedir: options.homedir,
+    vaultDir: options.vaultDir,
+    configFile: options.vaultConfigFile,
+    allowRealHome: options.allowRealHome,
+  });
+}
+
 async function login(options = {}) {
   const env = options.env || process.env;
   const base = apiBase(env);
@@ -267,6 +283,14 @@ async function login(options = {}) {
         // Claude Code is the reason the key exists, so it gets told directly
         // rather than being left to inherit a variable the member has to
         // remember to export.
+        // `hc` needs the same project this account lives in. Handing it over
+        // now is the difference between a member typing a password and a
+        // member hunting for an anon key, and a deployment that will not
+        // answer is not a reason to fail a sign-in that already succeeded.
+        try {
+          await (options.shareProjectConfig || shareProjectConfig)(base, stored, options);
+        } catch (error) { /* `hc supabase setup` still works by hand */ }
+
         const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
         if (wired.changed) {
           output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
@@ -357,6 +381,7 @@ module.exports = {
   openBrowser,
   postJson,
   readCredentials,
+  shareProjectConfig,
   whoami,
   wireClaudeCode,
   writeCredentials,

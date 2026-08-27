@@ -428,6 +428,65 @@ test('an apiKeyHelper we did not write sends the member to the exports instead',
   assert.equal(settings.env, undefined);
 });
 
+// Connecting an account is meant to be the only step, so the project `hc`
+// syncs to comes down with it rather than being pasted in by hand.
+test('signing in hands hc the project the account lives in', async () => {
+  const root = temporaryRoot();
+  const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-vault-'));
+
+  const result = await auth.shareProjectConfig('https://berkeley.example.com',
+    { email: 'm@example.com' },
+    {
+      vaultDir: vault,
+      async fetchImpl() {
+        return {
+          ok: true,
+          status: 200,
+          async json() { return { supabaseUrl: 'https://ref.supabase.co', supabaseAnonKey: 'anon-key' }; },
+        };
+      },
+    });
+
+  assert.equal(result.changed, true);
+  const written = JSON.parse(fs.readFileSync(path.join(vault, 'supabase.json'), 'utf8'));
+  assert.equal(written.url, 'https://ref.supabase.co');
+  assert.equal(written.anon_key, 'anon-key');
+  // The address rides along so the sign-in `hc` still needs asks for one thing.
+  assert.equal(written.email, 'm@example.com');
+  assert.equal(root.length > 0, true);
+});
+
+// The member is signed in and holds their key by this point. A deployment that
+// will not answer a second question must not undo the first answer.
+test('a deployment that will not publish its project still signs the member in', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    shareProjectConfig: async () => { throw new Error('berkeley.example.com answered 503'); },
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(auth.readCredentials(root, {}).token, 'egb_token');
+  assert.match(output.text(), /Claude Code is set up to use it/);
+});
+
 // A sourced profile would otherwise keep pointing `claude` at a key this
 // machine no longer holds.
 test('disconnecting takes the shell exports with it', () => {
