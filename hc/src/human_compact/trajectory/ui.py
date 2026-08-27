@@ -2479,10 +2479,24 @@ def _apply(op, trajdir=None, chat_scoped=None):
     if kind == "setup_say":
         return SETUP.ask(op.get("transcript"), root=root,
                          shown=op.get("shown") or [])
+    if kind == "setup_from_chat":
+        # The other cold start: a chat with plenty in it and no project. The
+        # transcript is the description, so nothing is asked of the reader
+        # -- three things worth focusing on are read out of what they have
+        # already said, each with its tree, and choosing is their whole part.
+        said = str(op.get("session") or "").strip()
+        if not said:
+            return {"ok": False, "error": "no chat to read"}
+        try:
+            events = CS.load_events(said, root)
+        except (OSError, ValueError):
+            events = []
+        return SETUP.from_chat(events, root=root)
     if kind == "setup_commit":
         return SETUP.commit(root, op.get("name"), op.get("plan"),
                             op.get("goals"), op.get("chosen"),
-                            op.get("todos"), op.get("subgoals") or [])
+                            op.get("todos"), op.get("subgoals") or [],
+                            bind=op.get("bind") or "")
     if kind == "reopen_session":
         return BUILD.reopen(session_id, root)
     if kind == "build_log":
@@ -2759,7 +2773,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             # what to type. Answered here rather than deferred -- it opens a
             # window and returns, and spawns nothing that outlives it.
             return SETUP.open_terminal(op.get("command"), op.get("cwd"))
-        if kind in ("setup_say", "setup_commit"):
+        if kind in ("setup_say", "setup_commit", "setup_from_chat"):
             # The cold-start conversation. Its whole transcript comes from
             # the browser and goes back to it: setup is not a chat of the
             # vault's, it is a page, and nothing is written down until the
@@ -3401,6 +3415,25 @@ class H(BaseHTTPRequestHandler):
                 page = resources.files("human_compact.trajectory").joinpath(
                     "web/setup.html").read_bytes()
                 self._send(200, page, "text/html; charset=utf-8")
+            elif self.path.split("?")[0] == "/setup.who":
+                # Which chat opened this page, and whether it has anything in
+                # it. The page cannot know either: it is served by whichever
+                # workspace happened to answer, and a chat with a transcript
+                # behind it gets a different first screen from a cold one.
+                session, root = ((_chat_identity(self.server.trajdir))
+                                 if self.server.chat_scoped else ("", None))
+                events = 0
+                bound = True
+                if session:
+                    try:
+                        events = len(CS.load_events(session, root))
+                        bound = CS.project_bound(session, root)
+                    except (OSError, ValueError):
+                        pass
+                self._send(200, json.dumps({
+                    "session": session, "events": events,
+                    "bound": bool(bound)}).encode("utf-8"),
+                    "application/json")
             elif self.path.split("?")[0] == "/setup.js":
                 # The query is ignored rather than matched: a cache-buster
                 # on this URL used to fall through to the 404 body, which

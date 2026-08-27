@@ -46,6 +46,11 @@
     newTodo: "",
     name: "",            // the project's name, typed while the rest arrives
     made: null,          // what commit gave back
+    who: null,           // the chat this page was opened in, if any
+    focus: null,         // the three read out of that chat, trees and all
+    summary: "",         // their one sentence, asked for to fill the wait
+    saidSummary: false,  // ...and whether they have finished with it
+    adopting: false,     // this page opened in a chat, and will bind it
     opened: {}           // commands a terminal has already been opened for:
                          // draw() runs on every keystroke somewhere, and a
                          // window per redraw is not help
@@ -186,6 +191,7 @@
     app.textContent = "";
     if (st.screen === "fork") return drawFork();
     if (st.screen === "resume") return drawResume();
+    if (st.screen === "adopt") return drawAdopt();
     if (st.screen === "done") return drawDone();
     drawTalk();
   }
@@ -342,6 +348,157 @@
       setTimeout(function () { openTerminal(command, said, false); }, 250);
     }
     return wrap;
+  }
+
+  // Screen 2b: a chat with plenty in it and no project. Nothing is asked of
+  // them about the work -- the transcript is the description, and asking
+  // for it again would be asking them to repeat themselves. The reading
+  // starts the moment this opens; the one sentence is what they do while it
+  // happens, and it names the project rather than feeding the goals.
+  function drawAdopt() {
+    var col = column(app);
+    if (!st.focus) hero(col, "Reading this chat.");
+
+    if (!st.saidSummary) {
+      var body = cardBox(col, "while that happens");
+      body.appendChild(el("div", "card-title",
+                          "In one sentence, what is this project?"));
+      body.appendChild(el("div", "card-sub",
+                          "for the project's own page — the goals come from"
+                          + " the conversation, not from this"));
+      var wrap = el("div", "field");
+      var input = el("textarea", "f");
+      input.setAttribute("rows", "2");
+      input.setAttribute("spellcheck", "false");
+      input.setAttribute("placeholder", "a tool for…, a rewrite of…, …");
+      input.value = st.summary;
+      on(input, "input", function () { st.summary = input.value; });
+      wrap.appendChild(input);
+      body.appendChild(wrap);
+      var acts = el("div", "acts");
+      acts.appendChild(btn("Done", st.summary.trim() ? "btn-on" : "",
+                           function () { st.saidSummary = true; draw(); },
+                           !st.summary.trim()));
+      acts.appendChild(btn("Skip", "", function () {
+        st.saidSummary = true;
+        draw();
+      }));
+      body.appendChild(acts);
+    }
+
+    // Still reading. The same nine dots the conversation uses, because it
+    // is the same wait for the same reason.
+    if (st.saidSummary && !st.focus && !st.error) col.appendChild(generating());
+    if (st.error) {
+      var bad = el("div", "");
+      bad.appendChild(el("div", "err", st.error));
+      var again = el("div", "acts");
+      again.appendChild(btn("Try again", "btn-on", readChat));
+      again.appendChild(btn("Start from scratch instead", "", function () {
+        st.screen = "talk";
+        st.error = "";
+        say("engelbart", OPEN);
+        draw();
+      }));
+      bad.appendChild(again);
+      col.appendChild(bad);
+    }
+    if (st.focus && st.saidSummary) drawFocus(col);
+  }
+
+  function readChat() {
+    // Started the moment the screen opens, not when they finish typing:
+    // the sentence is there to cover this, and covering it only works if
+    // it is already running.
+    st.error = "";
+    st.focus = null;
+    draw();
+    post({ op: "setup_from_chat", session: (st.who || {}).session })
+      .then(function (out) {
+        if (!out || !out.ok) {
+          st.error = (out && out.error) || "this chat could not be read";
+          draw();
+          return;
+        }
+        st.focus = out.focus;
+        draw();
+      });
+  }
+
+  // The three, and the tree of whichever is chosen -- already written, so
+  // choosing shows something at once instead of starting a third wait.
+  function drawFocus(col) {
+    var body = cardBox(col, "goal");
+    body.appendChild(el("div", "card-title", "What should we focus on?"));
+    var chosen = null;
+    st.focus.forEach(function (f) {
+      var picked = st.chosen === f.label;
+      if (picked) chosen = f;
+      var row = el("div", "opt");
+      row.setAttribute("data-on", picked ? "1" : "0");
+      row.appendChild(el("span", "mark mark-one", ""));
+      var text = el("span", "opt-text");
+      text.appendChild(el("span", "opt-label", f.label));
+      if (f.why) text.appendChild(el("span", "opt-why", f.why));
+      row.appendChild(text);
+      on(row, "click", function () {
+        st.chosen = picked ? "" : f.label;
+        draw();
+      });
+      body.appendChild(row);
+    });
+
+    if (chosen && chosen.subgoals.length) {
+      var open = el("div", "rise");
+      open.style.marginTop = "16px";
+      open.appendChild(el("div", "lbl", "which breaks into"));
+      var kids = el("div", "kids");
+      chosen.subgoals.forEach(function (kid) {
+        var line = el("div", "row");
+        line.appendChild(el("span", "bullet-dot", "\u00b7"));
+        var name = el("input", "f");
+        name.setAttribute("type", "text");
+        name.setAttribute("spellcheck", "false");
+        name.value = kid.label;
+        on(name, "input", function () { kid.label = name.value; });
+        line.appendChild(name);
+        var x = el("button", "x", "\u00d7");
+        on(x, "click", function () {
+          chosen.subgoals = chosen.subgoals.filter(function (k) {
+            return k !== kid;
+          });
+          draw();
+        });
+        line.appendChild(x);
+        kids.appendChild(line);
+      });
+      open.appendChild(kids);
+      body.appendChild(open);
+    }
+
+    var acts = el("div", "acts");
+    acts.appendChild(btn("Generate TODOs", chosen ? "btn-on" : "", function () {
+      // From here it is the conversation's own last step, so it joins it:
+      // the transcript stands in for everything that was said, and the
+      // pieces already chosen are what the rows go under.
+      st.goals = st.focus.map(function (f) {
+        return { label: f.label, why: f.why };
+      });
+      st.msgs = [
+        { role: "engelbart", text: "Read this chat." },
+        { role: "you", text: st.chosen
+            + (chosen.subgoals.length
+               ? "\n\nIn these pieces:\n"
+                 + chosen.subgoals.map(function (k) {
+                     return "- " + k.label;
+                   }).join("\n")
+               : "") }
+      ];
+      st.shown = ["questions", "plan", "goals"];
+      st.screen = "talk";
+      round();
+    }, !chosen));
+    body.appendChild(acts);
   }
 
   // Screen 3: the conversation.
@@ -751,7 +908,9 @@
     st.error = "";
     draw();
     post({ op: "setup_commit", name: st.name,
-           plan: st.plan, goals: st.goals,
+           bind: st.adopting && st.who ? st.who.session : "",
+           plan: st.plan || { description: st.summary },
+           goals: st.goals,
            chosen: st.chosen === " other" ? st.other : st.chosen,
            todos: st.todos.map(function (t) { return t.text; }),
            subgoals: st.pieces.map(function (g) {
@@ -882,6 +1041,27 @@
     }
   } catch (e) { /* an old browser keeps the theme it opened with */ }
 
-  draw();
-  window.__hcSetup = { state: function () { return st; }, draw: draw };
+  // Which of the two cold starts this is. A page served after an install
+  // has no chat behind it and opens on the fork; one opened by /bart in a
+  // conversation that has been going all afternoon opens on that
+  // conversation, and starts reading it before anything is asked.
+  function boot() {
+    draw();
+    fetch("/setup.who").then(function (r) { return r.json(); })
+      .then(function (who) {
+        st.who = who || null;
+        if (who && who.session && who.events > 0 && !who.bound) {
+          st.adopting = true;
+          st.screen = "adopt";
+          readChat();
+          return;
+        }
+        draw();
+      })
+      .catch(function () { draw(); });
+  }
+
+  boot();
+  window.__hcSetup = { state: function () { return st; }, draw: draw,
+                       boot: boot };
 })();

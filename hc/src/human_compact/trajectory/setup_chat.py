@@ -52,6 +52,9 @@ MAX_UNSURE = 6
 MAX_GOALS = 8
 MAX_TODOS = 20
 MAX_SUBGOALS = 6
+MAX_FOCUS = 3
+MAX_CHAT_TURNS = 60
+MAX_CHAT_TURN = 1200
 
 CARDS = ("questions", "plan", "goals", "todos", "none")
 
@@ -183,6 +186,107 @@ FORM = [
     "Nothing you propose is saved until they approve it, so propose the thing",
     "you actually think rather than the safe version of it.",
 ]
+
+
+# Reading a conversation instead of asking about one.
+#
+# Somebody who runs /bart in a chat they have been working in all afternoon
+# has no project and no goals, but they are not starting from nothing: the
+# transcript IS the description, and asking them to type one would be asking
+# them to repeat themselves. So the questions and the plan are skipped, and
+# what comes back is three things worth focusing on -- each with its tree
+# already written, so choosing costs nothing and shows something at once.
+
+FROM_CHAT = [
+    "Below is a conversation somebody has been having with a coding agent.",
+    "They have just opened Engelbart on it and have no project yet. Read what",
+    "they were actually doing and offer THREE things worth focusing on next.",
+    "",
+    "Reply with ONE JSON object and nothing else:",
+    "",
+    '  {"focus": [{"label": "<an outcome, not a task>",',
+    '              "why": "<why this one, in what they were doing>",',
+    '              "subgoals": ["<a piece of it>"]}]}',
+    "",
+    "Each one carries its own tree, because the reader will see it the",
+    "moment they choose and waiting again would be the third wait. Two to",
+    "four pieces each; a piece is an outcome, smaller.",
+    "",
+    "Read what the conversation was FOR, not what it touched. A file they",
+    "opened once is not a goal. Where they said what they were trying to do,",
+    "use their words -- they will recognise them and know you read it.",
+    "",
+    "Three that differ. Offering one thing three ways is offering one thing.",
+]
+
+
+def compose_chat(events) -> List[str]:
+    """The prompt for the focus options: the form, then the conversation.
+
+    Bounded from the oldest end, like every other read of a transcript
+    here: what they were doing lately is what they are doing.
+    """
+    lines = list(FROM_CHAT) + ["", "# The conversation", ""]
+    rows = [e for e in (events or []) if isinstance(e, dict)]
+    for row in rows[-MAX_CHAT_TURNS:]:
+        who = str(row.get("role") or row.get("kind") or "").strip() or "?"
+        text = " ".join(str(row.get("text") or "").split())[:MAX_CHAT_TURN]
+        if text:
+            lines += ["%s: %s" % (who, text), ""]
+    return lines
+
+
+def normalize_focus(value) -> List[Dict[str, Any]]:
+    """The three, coerced. A tree is what makes choosing cheap, but a focus
+    without one is still a focus -- refusing it would leave the reader two
+    options where the model found three."""
+    if isinstance(value, dict):
+        value = value.get("focus") or value.get("goals") or []
+    out = []
+    for row in value if isinstance(value, list) else []:
+        if isinstance(row, dict):
+            label = _one(row.get("label") or row.get("title"), MAX_LABEL)
+            why = _one(row.get("why"), MAX_WHY)
+            kids = [{"label": _one(k.get("label") if isinstance(k, dict) else k,
+                                   MAX_LABEL)}
+                    for k in row.get("subgoals") or []]
+            kids = [k for k in kids if k["label"]][:MAX_SUBGOALS]
+        elif isinstance(row, str):
+            label, why, kids = _one(row, MAX_LABEL), "", []
+        else:
+            continue
+        if not label:
+            continue
+        out.append({"label": label, "why": why, "subgoals": kids})
+        if len(out) >= MAX_FOCUS:
+            break
+    return out
+
+
+def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
+    """Three things worth focusing on, read out of the conversation."""
+    from . import providers as PROVIDERS
+    import os
+    usable = [e for e in (events or [])
+              if isinstance(e, dict) and str(e.get("text") or "").strip()]
+    if not usable:
+        # A chat with nothing in it is the other cold start, and the page
+        # has a conversation for that one.
+        return {"ok": False, "error": "there is nothing in this chat yet"}
+    try:
+        engine = engine or PROVIDERS.make(
+            os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
+            setup_model(root))
+        raw = engine.generate_json("\n".join(compose_chat(usable)) + "\n")
+    except PROVIDERS.ProviderError as exc:
+        return {"ok": False, "error": " ".join(str(exc).split())[:200]}
+    except Exception:                                    # noqa: BLE001
+        return {"ok": False,
+                "error": "setup could not reach Claude (is the CLI on PATH?)"}
+    focus = normalize_focus(raw)
+    if not focus:
+        return {"ok": False, "error": "nothing came back to choose from"}
+    return {"ok": True, "focus": focus}
 
 
 def compose(transcript, extra=()) -> List[str]:
@@ -577,7 +681,7 @@ def to_project(name, plan) -> Dict[str, Any]:
 # same way it would join any project it did not start.
 
 def commit(root, name, plan, offered, chosen, todos,
-           subgoals=()) -> Dict[str, Any]:
+           subgoals=(), bind="") -> Dict[str, Any]:
     """Make the project, write its tree, attach it to nothing.
 
     Refused before anything is created when there is nothing to save, when
@@ -615,8 +719,24 @@ def commit(root, name, plan, offered, chosen, todos,
         goals = {"goals": made}
         GM.sanitize(goals)
         CS.save_goals(session_id, goals, {"items": []}, root)
-    return {"ok": True, "cwd": cwd, "name": held["name"],
-            "tree_session": session_id, "goals": len(made)}
+    # The chat that asked for this joins it. Only where one asked: the page
+    # opened after an install has no chat behind it, and binding whatever
+    # workspace happened to serve the page would attach the project to a
+    # conversation that had no part in it.
+    bound = False
+    if str(bind or "").strip():
+        try:
+            CS.bind_project(str(bind).strip(), cwd, root)
+            bound = True
+        except Exception:                                # noqa: BLE001
+            # The project was made. Failing to bind it is worth reporting,
+            # not worth throwing the work away over.
+            bound = False
+    # Reported in the spelling the store and the bindings use, so a caller
+    # that asks "which chats are in this?" with what it was handed gets an
+    # answer rather than a miss on a symlinked path.
+    return {"ok": True, "cwd": PS._resolved(cwd), "name": held["name"],
+            "tree_session": session_id, "goals": len(made), "bound": bound}
 
 
 # --- asking ------------------------------------------------------------------

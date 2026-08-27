@@ -457,6 +457,100 @@ class UnwrappedTests(unittest.TestCase):
         self.assertEqual("plan", out["card"])
 
 
+class FromChatTests(unittest.TestCase):
+    """The other cold start: a chat that has already said plenty.
+
+    Someone who runs /bart in a conversation they have been working in all
+    afternoon has no project and no goals, but they are not starting from
+    nothing -- the transcript is the description. So nothing is asked of
+    them: three things worth focusing on are read out of what they already
+    said, each with its tree already written, and the choosing is the whole
+    of their part.
+    """
+
+    def test_the_focus_options_carry_their_trees(self):
+        out = SC.normalize_focus({"focus": [
+            {"label": "Get uploads off the API", "why": "you kept coming back to it",
+             "subgoals": ["Signing route", "Client PUTs direct"]},
+            {"label": "Stop the flaky tests", "subgoals": ["Find the shared state"]}]})
+        self.assertEqual(2, len(out))
+        self.assertEqual("you kept coming back to it", out[0]["why"])
+        self.assertEqual(["Signing route", "Client PUTs direct"],
+                         [g["label"] for g in out[0]["subgoals"]])
+
+    def test_a_focus_with_no_tree_under_it_is_still_offered(self):
+        # The tree is what makes choosing cheap, but a goal without one is
+        # still a goal -- and refusing it would leave the reader two
+        # options where the model found three.
+        out = SC.normalize_focus({"focus": [{"label": "Just this"}]})
+        self.assertEqual([{"label": "Just this", "why": "", "subgoals": []}],
+                         out)
+
+    def test_a_focus_with_no_label_is_dropped(self):
+        out = SC.normalize_focus({"focus": [{"why": "no label"},
+                                            {"label": "real"}]})
+        self.assertEqual(["real"], [f["label"] for f in out])
+
+    def test_a_bare_list_is_read_as_the_options(self):
+        # Same slip the cards have: the payload arriving without its
+        # envelope is an answer, not a failure.
+        out = SC.normalize_focus([{"label": "one"}, {"label": "two"}])
+        self.assertEqual(["one", "two"], [f["label"] for f in out])
+
+    def test_the_options_are_capped(self):
+        out = SC.normalize_focus({"focus": [{"label": "f%d" % i}
+                                            for i in range(20)]})
+        self.assertEqual(SC.MAX_FOCUS, len(out))
+
+    def test_a_transcript_is_read_into_the_prompt_newest_last(self):
+        lines = SC.compose_chat([
+            {"role": "user", "text": "uploads are slow"},
+            {"role": "assistant", "text": "let us look at the proxy"}])
+        body = "\n".join(lines)
+        self.assertIn("uploads are slow", body)
+        self.assertIn("three", body.lower())
+
+    def test_a_chat_with_nothing_usable_in_it_says_so(self):
+        out = SC.from_chat([], engine=object())
+        self.assertFalse(out["ok"])
+        self.assertIn("nothing", out["error"])
+
+
+class BindingTests(unittest.TestCase):
+    """Adopting: the same commit, except this chat joins what it made."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_the_chat_that_asked_for_it_is_bound_to_it(self):
+        CS.paths("chat-1", self.root).session_dir.mkdir(parents=True,
+                                                        exist_ok=True)
+        out = SC.commit(self.root, "Adopted", {"description": "d"},
+                        [{"label": "a"}], "a", ["row"], bind="chat-1")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual([out["cwd"]],
+                         [CS.bound_project("chat-1", self.root)])
+        self.assertIn("chat-1", CS.chats_in_project(out["cwd"], self.root))
+
+    def test_without_a_chat_to_bind_nothing_is_bound(self):
+        out = SC.commit(self.root, "Alone", {"description": "d"},
+                        [{"label": "a"}], "a", ["row"])
+        self.assertEqual([], CS.chats_in_project(out["cwd"], self.root))
+
+    def test_a_binding_that_fails_does_not_lose_the_project(self):
+        # The project was made; failing to bind it is worth reporting, not
+        # worth throwing the work away over.
+        with mock.patch.object(CS, "bind_project",
+                               side_effect=OSError("vault is read-only")):
+            out = SC.commit(self.root, "Half", {"description": "d"},
+                            [{"label": "a"}], "a", ["row"], bind="chat-1")
+        self.assertTrue(out["ok"], out)
+        self.assertFalse(out.get("bound"))
+        self.assertEqual("Half", PS.load_project(self.root, out["cwd"])["name"])
+
+
 class AnswerTests(unittest.TestCase):
     """What the reader picked, on its way back into the conversation."""
 
