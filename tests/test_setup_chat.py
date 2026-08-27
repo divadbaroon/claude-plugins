@@ -546,7 +546,61 @@ class FromChatTests(unittest.TestCase):
                 raise RuntimeError("x" * 5000)
 
         out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
-        self.assertLessEqual(len(out["error"]), 240)
+        # The detail is trimmed; the advice that follows it is not the part
+        # that has to be defended against a model with a lot to say.
+        self.assertLess(out["error"].count("x"), 250)
+
+    def test_the_failure_says_what_to_do_next(self):
+        # Out of credit is not out of options, and a reader who cannot tell
+        # those apart concludes the install is broken.
+        class Boom:
+            def generate_json(self, prompt):
+                raise RuntimeError("boom")
+
+        out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
+        self.assertIn("hc setup-ui", out["error"])
+        self.assertIn("your own Claude account", out["error"])
+
+    def test_an_account_that_names_no_models_still_picks_a_model(self):
+        # `.get` answers None for an absent key, and iterating that None is
+        # what turned every such setup into a bare TypeError. A record with
+        # no `models` is the ordinary case, not a corrupt one.
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name)
+        (home / "auth.json").write_text(json.dumps({
+            "schema": 1,
+            "claude": {"baseUrl": "https://proxy.example.com",
+                       "budgetUsd": 25, "spendUsd": 25, "status": "exhausted"},
+        }), encoding="utf-8")
+        previous = os.environ.get("HUMAN_COMPACT_HOME")
+        os.environ["HUMAN_COMPACT_HOME"] = str(home)
+        try:
+            self.assertEqual(SC.SETUP_MODEL, SC.setup_model())
+        finally:
+            if previous is None:
+                os.environ.pop("HUMAN_COMPACT_HOME", None)
+            else:
+                os.environ["HUMAN_COMPACT_HOME"] = previous
+
+    def test_an_account_that_names_its_models_pins_the_one_it_may_use(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name)
+        (home / "auth.json").write_text(json.dumps({
+            "schema": 1,
+            "claude": {"baseUrl": "https://proxy.example.com",
+                       "models": ["claude-3-5-haiku", "claude-sonnet-4-5"]},
+        }), encoding="utf-8")
+        previous = os.environ.get("HUMAN_COMPACT_HOME")
+        os.environ["HUMAN_COMPACT_HOME"] = str(home)
+        try:
+            self.assertEqual("claude-sonnet-4-5", SC.setup_model())
+        finally:
+            if previous is None:
+                os.environ.pop("HUMAN_COMPACT_HOME", None)
+            else:
+                os.environ["HUMAN_COMPACT_HOME"] = previous
 
 
 class BindingTests(unittest.TestCase):

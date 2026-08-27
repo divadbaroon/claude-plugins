@@ -102,6 +102,13 @@ def setup_model(root=None) -> str:
         models = claude.get("models") if isinstance(claude, dict) else []
     except (OSError, ValueError):
         return SETUP_MODEL
+    # `.get` answers None for a key that is absent, and a record written by a
+    # CLI that had nothing to say about models is the ordinary case, not the
+    # broken one. Iterating that None crashed setup for every reader whose
+    # account did not name its models -- and the crash surfaced as a bare
+    # TypeError, which is how it went unread for so long.
+    if not isinstance(models, list):
+        return SETUP_MODEL
     for name in models:
         if isinstance(name, str) and SETUP_MODEL in name:
             return name
@@ -281,7 +288,18 @@ def unexpected(exc) -> Dict[str, Any]:
     is to say about it.
     """
     detail = " ".join(f"{type(exc).__name__}: {exc}".split())[:200]
-    return {"ok": False, "error": f"setup could not reach Claude -- {detail}"}
+    # The detail says what broke; this says what to do about it. Setup shells
+    # out to `claude`, and that subprocess inherits the environment the setup
+    # server was started with -- so a server left running from before an
+    # upgrade, or started when the credit was still live, is the ordinary
+    # cause of a failure that a fresh `hc setup-ui` simply does not have.
+    # Naming the member's own account matters too: out of credit is not out of
+    # options, and nobody should conclude their install is broken over it.
+    return {"ok": False, "error": (
+        f"setup could not reach Claude -- {detail}. "
+        "Close this page and run `hc setup-ui` again. Setup falls back to "
+        "your own Claude account when your Engelbart credit is spent, so "
+        "running out of credit is not what stops it.")}
 
 
 def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
