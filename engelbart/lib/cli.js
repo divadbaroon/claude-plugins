@@ -129,6 +129,13 @@ function accountClaude(account) {
 function setupEnvironment(account, env) {
   const claude = accountClaude(account);
   if (!claude || !claude.apiKey || account.projectConfigured === false) return null;
+  // A key the pool has stopped honouring is not a credential, it is a 401 with
+  // a delay. Forcing it on setup is worse than passing nothing: HC_USE_API_KEY
+  // makes the provider keep it instead of falling back, so setup fails on a
+  // dead key while the member's own working Claude login sits right there. Out
+  // of credit has to mean "setup runs on your account", the same fallback the
+  // credential helper takes when it unwires itself.
+  if (auth.spent(claude)) return { ...env };
   return {
     ...env,
     ANTHROPIC_BASE_URL: claude.baseUrl,
@@ -199,8 +206,13 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
     }
     const lines = auth.claudeEnv(claude);
     if (!lines) {
-      errorOutput.write('This account has no Claude key yet. Run `npx engelbart-cli auth` '
-        + 'again once your credit is ready.\n');
+      // Two different situations, and telling a member out of credit that they
+      // have "no key yet" sends them to re-run auth, which cannot help.
+      errorOutput.write(auth.spent(claude)
+        ? 'Your Engelbart Claude credit is used up, so there is nothing to export. '
+          + '`claude` will use your own account until it is topped up.\n'
+        : 'This account has no Claude key yet. Run `npx engelbart-cli auth` '
+          + 'again once your credit is ready.\n');
       return 1;
     }
     output.write(lines);

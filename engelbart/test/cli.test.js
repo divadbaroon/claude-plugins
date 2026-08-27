@@ -636,6 +636,83 @@ test('env prints only the exports, and nothing else reaches stdout', async () =>
   assert.equal(errors.read(), '');
 });
 
+// The bug this is here for: the deployment said `status: exhausted`, the CLI
+// dropped that field, and setup was handed the blocked key anyway -- with
+// HC_USE_API_KEY set, which is what stops the provider falling back. Setup
+// then failed on a 401 reported to the member as "is the CLI on PATH?".
+test('setup is not handed a key the pool has stopped honouring', async () => {
+  let passed = null;
+  const result = await installWith({
+    interactive: true,
+    readCredentials: () => ({
+      token: 'egb_t', email: 'member@example.com',
+      claude: { baseUrl: 'https://proxy.example.com' },
+    }),
+    rewire: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: {
+        apiKey: 'sk-dead', baseUrl: 'https://proxy.example.com',
+        status: 'exhausted', budgetUsd: 25, spendUsd: 25.96,
+      },
+      projectConfigured: true,
+    }),
+    openSetup: async (options) => { passed = options.env; return 'http://127.0.0.1:5321/setup'; },
+  });
+  assert.equal(result.code, 0);
+  // Setup still opens -- on the member's own Claude login, which works.
+  assert.ok(passed, 'setup should still open');
+  assert.equal(passed.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(passed.HC_USE_API_KEY, undefined);
+});
+
+test('setup still gets the key while there is credit left', async () => {
+  let passed = null;
+  await installWith({
+    interactive: true,
+    readCredentials: () => ({
+      token: 'egb_t', email: 'member@example.com',
+      claude: { baseUrl: 'https://proxy.example.com' },
+    }),
+    rewire: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: {
+        apiKey: 'sk-live', baseUrl: 'https://proxy.example.com',
+        status: 'active', budgetUsd: 25, spendUsd: 4,
+      },
+      projectConfigured: true,
+    }),
+    openSetup: async (options) => { passed = options.env; return 'http://127.0.0.1:5321/setup'; },
+  });
+  assert.equal(passed.ANTHROPIC_AUTH_TOKEN, 'sk-live');
+  assert.equal(passed.HC_USE_API_KEY, '1');
+});
+
+// Out of credit and no key yet are different problems with different answers,
+// and only one of them is fixed by running auth again.
+test('env says the credit is spent rather than blaming the sign-in', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({ token: 'egb_token', claude: { baseUrl: 'https://proxy.example.com' } }),
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-dead', baseUrl: 'https://proxy.example.com',
+      status: 'exhausted', budgetUsd: 25, spendUsd: 25.96,
+    }),
+    install: async () => { throw new Error('installer must not run'); },
+  });
+  assert.equal(code, 1);
+  // Nothing a shell would eval: a dead key must not reach stdout.
+  assert.equal(output.read(), '');
+  assert.match(errors.read(), /credit is used up/);
+  assert.doesNotMatch(errors.read(), /sk-dead/);
+});
+
 test('env on an unconnected machine fails without printing a broken script', async () => {
   const output = capture();
   const errors = capture();
