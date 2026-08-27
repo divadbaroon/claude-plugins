@@ -126,12 +126,17 @@ async function fetchClaudeKey(base, token, options = {}) {
   }
   if (!response.ok) throw new Error(value.error || `${base} answered ${response.status}`);
   if (!value.apiKey || !value.baseUrl) throw new Error('that account has no Claude key yet');
-  return {
+  const claude = {
     apiKey: String(value.apiKey),
     baseUrl: String(value.baseUrl),
     budgetUsd: Number(value.budgetUsd) || 0,
     spendUsd: Number(value.spendUsd) || 0,
   };
+  const models = Array.isArray(value.models)
+    ? value.models.filter((item) => typeof item === 'string' && item.trim())
+    : [];
+  if (models.length) claude.models = models;
+  return claude;
 }
 
 // Two lines, in the order a shell wants them. It takes the key as an argument
@@ -183,10 +188,10 @@ function envPath(managedRoot) {
 function writeEnvFile(managedRoot) {
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
-  const body = '# Written by `engelbart auth`. This file used to export your Claude key.\n'
-    + '# It no longer holds one: the key is fetched per use and never written to\n'
-    + '# this machine. Sourcing this is a no-op, kept so an older shell profile\n'
-    + '# that still sources it clears the exports it was given rather than\n'
+  const body = '# Written by `npx engelbart-cli auth`. This file used to export your\n'
+    + '# Claude key. It no longer holds one: the key is fetched per use and never\n'
+    + '# written to this machine. Sourcing this is a no-op, kept so an older shell\n'
+    + '# profile that still sources it clears the exports it was given rather than\n'
     + '# keeping them alive forever.\n'
     + `${claudeUnset()}`;
   atomicWrite(path.join(root, ENV_FILE), body, 0o600);
@@ -293,6 +298,8 @@ async function establish(base, token, email, options = {}) {
     claude: claudeRecord(claude),
   });
   output.write(`\nSigned in as ${email || 'your Engelbart account'}.\n`);
+  let projectConfigured = false;
+  let projectConfigReason = claude ? '' : 'no-key';
   if (claude) {
     const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
     output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
@@ -301,8 +308,24 @@ async function establish(base, token, email, options = {}) {
     // hunting for an anon key, and a deployment that will not answer is not a
     // reason to fail a sign-in that already succeeded.
     try {
-      await (options.shareProjectConfig || shareProjectConfig)(base, stored, options);
-    } catch (error) { /* `hc supabase setup` still works by hand */ }
+      const configured = await (options.shareProjectConfig || shareProjectConfig)(
+        base, stored, options);
+      projectConfigured = Boolean(
+        configured
+        && (configured.changed || configured.reason === 'member-config'),
+      );
+      projectConfigReason = projectConfigured
+        ? ''
+        : String((configured && configured.reason) || 'not-written');
+    } catch (error) {
+      // Keep the machine token: it does not become invalid because the public
+      // project-config endpoint failed. The caller gets a separate readiness
+      // bit and withholds setup until sync is wired.
+      projectConfigReason = error.message;
+    }
+    if (!projectConfigured) {
+      output.write(`Could not configure Supabase sync: ${projectConfigReason}\n`);
+    }
 
     // Claude Code is the reason the key exists, so it gets told directly
     // rather than being left to inherit a variable the member has to remember
@@ -340,7 +363,19 @@ async function establish(base, token, email, options = {}) {
   } else {
     output.write(`Could not read this account's Claude key: ${keyError}\n`);
   }
-  return { status: 'ready', email: email || '', claude, stored };
+  // A later reinstall reuses this record instead of pairing again. Carry the
+  // sync readiness with it, or that reinstall would open setup after a
+  // project-config failure this run correctly withheld it for.
+  stored.projectConfigured = projectConfigured;
+  writeCredentials(managedRoot, stored);
+  return {
+    status: 'ready',
+    email: email || '',
+    claude,
+    stored,
+    projectConfigured,
+    projectConfigReason,
+  };
 }
 
 // Running out of credit unwires this machine, which is the only thing that

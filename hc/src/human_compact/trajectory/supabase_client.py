@@ -36,7 +36,7 @@ from .secure_io import atomic_write_json
 
 CONFIG_NAME = "supabase.json"
 SESSION_NAME = "supabase-session.json"
-# Written by `engelbart auth`, in the CLI's own directory rather than the
+# Written by `npx engelbart-cli auth`, in the CLI's own directory rather than the
 # vault. It holds the machine token that stands in for the sign-in the member
 # already completed in a browser.
 ENGELBART_CREDENTIALS = "auth.json"
@@ -315,7 +315,7 @@ def _store_session(payload: Dict[str, Any],
 
 
 def engelbart_home() -> Path:
-    """Where `engelbart auth` keeps what it wrote, resolved as the CLI does."""
+    """Where `npx engelbart-cli auth` keeps what it wrote, as the CLI does."""
     configured = os.environ.get("HUMAN_COMPACT_HOME")
     return Path(configured) if configured else Path.home() / ".human-compact"
 
@@ -346,7 +346,7 @@ def _session_from_engelbart(root: Optional[Path] = None) -> Dict[str, Any]:
     credentials = engelbart_credentials()
     if not credentials:
         raise SupabaseError(
-            "not signed in -- run `engelbart auth`, or `hc supabase login` "
+            "not signed in -- run `npx engelbart-cli auth`, or `hc supabase login` "
             "to use a password instead")
     answer = _post(
         f"{str(credentials['apiBase']).rstrip('/')}{ENGELBART_SESSION_PATH}",

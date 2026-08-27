@@ -105,9 +105,26 @@ class AutosyncTests(unittest.TestCase):
     def test_a_burst_of_edits_is_one_send(self):
         for _ in range(6):
             AS.schedule(None, "/work/proj", _delay=TICK)
-            time.sleep(TICK / 4)
         self.assertTrue(self.gate.wait(2))
         settle()
+        self.assertEqual(self.sent, ["/work/proj"])
+
+    def test_a_timer_already_waking_cannot_send_after_rearm(self):
+        entered = threading.Event()
+        release = threading.Event()
+        real_fire = AS._fire
+
+        def slow_fire(*args):
+            entered.set()
+            release.wait(2)
+            real_fire(*args)
+
+        with mock.patch.object(AS, "_fire", slow_fire):
+            AS.schedule(None, "/work/proj", _delay=0.001)
+            self.assertTrue(entered.wait(2))
+            AS.schedule(None, "/work/proj", _delay=TICK)
+            release.set()
+            settle()
         self.assertEqual(self.sent, ["/work/proj"])
 
     def test_two_projects_each_get_their_own(self):

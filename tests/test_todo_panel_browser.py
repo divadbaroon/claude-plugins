@@ -813,6 +813,40 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_the_terminal_sits_under_the_watch_line_and_not_across_it(self):
+        # The state line is where the build says how long it has been going
+        # and what it has spent; a button beside it took the width those
+        # numbers needed. Terminal opens from the foot of the panel instead,
+        # and Log -- which is about the panel itself -- stays on the line.
+        os.environ["STUB_HOLD"] = "8"
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                head = page.locator(".hc-todo-watch-head")
+                expect(head).to_be_visible(timeout=10_000)
+                expect(head.locator("[data-hc-todo-log]")).to_have_count(1)
+                expect(head.locator("[data-hc-todo-term]")).to_have_count(0)
+                foot = page.locator(".hc-todo-watch-foot")
+                expect(foot.locator("[data-hc-todo-term]")).to_have_text(
+                    "Terminal", timeout=10_000)
+                # The panel's foot is below its line, not beside it.
+                line = page.locator(".hc-todo-watch-meta").bounding_box()
+                under = foot.bounding_box()
+                self.assertGreater(under["y"], line["y"] + line["height"] - 1)
+                # And the line the terminal made room for says the tokens.
+                expect(page.locator(".hc-todo-watch-meta")).to_contain_text("tok")
+            finally:
+                browser.close()
+
     def test_enter_on_a_building_row_opens_a_note_pane_and_the_build_is_told(self):
         # Enter on a row the build is on is not a new row: it opens the pane
         # under the row, and what is typed there goes to the build's session
@@ -1014,11 +1048,11 @@ class TodoPanelBrowserTests(unittest.TestCase):
             "Understanding", exact=True).click()
         expect(page.locator(".hc-understand-scenario")).to_be_visible()
 
-    def test_a_question_is_answered_in_given_when_then_and_followed_up(self):
+    def test_a_question_is_answered_in_prose_and_followed_up(self):
         # The model is answered for here: what is under test is the tab --
         # that a question goes with the scenario it is about, that the answer
-        # comes back under it in the shape it was asked for, and that a
-        # follow-up is asked with the answer above it.
+        # comes back under it as it was written, and that a follow-up is
+        # asked with the answer above it.
         from playwright.sync_api import expect, sync_playwright
         asked = []
 
@@ -1028,9 +1062,8 @@ class TodoPanelBrowserTests(unittest.TestCase):
                           body=json.dumps({
                               "ok": True,
                               "asked": asked[-1]["question"],
-                              "answer": "GIVEN two writers\n"
-                                        "WHEN both save\n"
-                                        "THEN the later one wins"}))
+                              "answer": "Both write the tree whole, so the"
+                                        " later one wins."}))
 
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
@@ -1043,7 +1076,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                     "Who wins a conflict?")
                 page.get_by_text("Ask Claude", exact=True).click()
                 expect(page.locator(".hc-understand-answer")).to_contain_text(
-                    "THEN the later one wins", timeout=15000)
+                    "the later one wins", timeout=15000)
                 # The question travels with the scenario it is about.
                 self.assertEqual("Two people work one tree from two machines.",
                                  asked[0]["scenario"])
@@ -1053,7 +1086,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.wait_for_timeout(1500)
                 thread = self.understanding()["questions"][0]["thread"]
                 self.assertEqual(1, len(thread))
-                self.assertIn("THEN the later one wins", thread[0]["a"])
+                self.assertIn("the later one wins", thread[0]["a"])
                 # A follow-up is asked with what was already said.
                 page.locator(".hc-understand-follow").fill(
                     "And if both are offline?")
@@ -1071,7 +1104,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.locator(".hc-rail-tabs").get_by_text(
                     "Prompt", exact=True).click()
                 expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
-                    "THEN the later one wins", timeout=15000)
+                    "the later one wins", timeout=15000)
             finally:
                 browser.close()
 
@@ -1115,6 +1148,74 @@ class TodoPanelBrowserTests(unittest.TestCase):
                     "Prompt", exact=True).click()
                 expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
                     str(path), timeout=15000)
+            finally:
+                browser.close()
+
+    def test_rough_words_are_shaped_and_what_they_left_out_is_asked_back(self):
+        # The reader writes the situation however they write it and the form
+        # is put on it here. What their words did not say comes back as an
+        # empty keyword and a line under the box -- theirs to fill, not the
+        # model's to invent, because this field opens every build.
+        from playwright.sync_api import expect, sync_playwright
+        sent = []
+
+        def shape(route):
+            sent.append(json.loads(route.request.post_data))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "ok": True,
+                              "scenario": "GIVEN two people share one tree\n"
+                                          "WHEN both save\nTHEN",
+                              "asks": ["which save should win?"],
+                              "shots": []}))
+
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.route("**/api/draft_scenario", shape)
+                self.open_understanding(page, url)
+                page.locator(".hc-understand-scenario").fill(
+                    "two ppl one tree, both save")
+                page.get_by_text("Shape it into GIVEN / WHEN / THEN",
+                                 exact=True).click()
+                expect(page.locator(".hc-understand-scenario")).to_have_value(
+                    "GIVEN two people share one tree\nWHEN both save\nTHEN",
+                    timeout=15000)
+                expect(page.locator(".hc-understand-blank")).to_contain_text(
+                    "which save should win?")
+                # Their own words are what was shaped, not a description of
+                # them -- and the shaped lines are the goal's now.
+                self.assertEqual("two ppl one tree, both save",
+                                 sent[0]["text"])
+                page.wait_for_timeout(1500)
+                self.assertEqual(
+                    "GIVEN two people share one tree\nWHEN both save\nTHEN",
+                    self.understanding()["scenario"])
+            finally:
+                browser.close()
+
+    def test_a_scenario_that_will_not_shape_leaves_the_box_alone(self):
+        from playwright.sync_api import expect, sync_playwright
+
+        def shape(route):
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "ok": False,
+                              "error": "that did not map onto GIVEN / WHEN /"
+                                       " THEN -- write it here"}))
+
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.route("**/api/draft_scenario", shape)
+                self.open_understanding(page, url)
+                page.locator(".hc-understand-scenario").fill("the thing broke")
+                page.get_by_text("Shape it into GIVEN / WHEN / THEN",
+                                 exact=True).click()
+                expect(page.locator(".hc-understand-err")).to_contain_text(
+                    "did not map", timeout=15000)
+                expect(page.locator(".hc-understand-scenario")).to_have_value(
+                    "the thing broke")
             finally:
                 browser.close()
 
@@ -1195,6 +1296,11 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         self.skipTest("headless-only")
 
     def test_a_build_pressed_mid_save_still_carries_the_row_it_names(self):
+        self.skipTest("headless-only")
+
+    def test_the_terminal_sits_under_the_watch_line_and_not_across_it(self):
+        # The panel being placed is a headless build's; a queued row has no
+        # run to watch, so there is no line and no terminal to sit under it.
         self.skipTest("headless-only")
 
     def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):

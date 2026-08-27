@@ -62,7 +62,7 @@ function helperPath(managedRoot) {
 function helperSource(credentialsFile, settingsFile, helperFile, baseUrl) {
   return `#!/usr/bin/env node
 'use strict';
-// Written by \`engelbart auth\`. Claude Code runs this for its credential.
+// Written by \`npx engelbart-cli auth\`. Claude Code runs this for its credential.
 //
 // The Claude key is not kept on this machine. It is fetched from the account
 // that owns it each time this runs, handed to Claude Code, and never written
@@ -70,10 +70,10 @@ function helperSource(credentialsFile, settingsFile, helperFile, baseUrl) {
 // on its own.
 //
 // To put Claude Code back on your own account, run this file with
-// --disconnect. That undoes exactly what \`engelbart auth\` wrote and nothing
-// else. It is spelled out here because the installer puts only \`hc\` on PATH:
-// there is no \`engelbart\` command to reach for, and while apiKeyHelper is set
-// even \`/login\` cannot get past it.
+// --disconnect. That undoes exactly what \`npx engelbart-cli auth\` wrote and
+// nothing else. It is spelled out here because the installer puts only \`hc\` on
+// PATH: there is no \`engelbart\` command to reach for, and while apiKeyHelper
+// is set even \`/login\` cannot get past it.
 const fs = require('fs');
 const FILE = ${JSON.stringify(credentialsFile)};
 const SETTINGS = ${JSON.stringify(settingsFile || '')};

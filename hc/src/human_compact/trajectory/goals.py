@@ -320,9 +320,9 @@ def todo_id() -> str:
 # would be a heading they could not rename.
 MAX_QUESTIONS = 12
 MAX_SCENARIO = 4000
-# A question is a thread, not a line: Claude answers it in GIVEN/WHEN/THEN and
-# the reader follows up in the same place. The answers are kept because they
-# are the understanding -- a build reading the questions alone would be reading
+# A question is a thread, not a line: Claude answers it in prose and the
+# reader follows up in the same place. The answers are kept because they are
+# the understanding -- a build reading the questions alone would be reading
 # what was not known yet.
 MAX_TURNS = 8
 MAX_ANSWER = 4000
@@ -427,8 +427,8 @@ def render_understanding(goal) -> list:
         lines += ["", "Questions the user wants answered about it. Answer each"
                   " one in your reply; where a question decides the work, let"
                   " the answer decide it. Some already carry an answer given"
-                  " in the tab, indented under them in GIVEN/WHEN/THEN: take"
-                  " it as settled unless the work shows otherwise.", ""]
+                  " in the tab, indented under them: take it as settled"
+                  " unless the work shows otherwise.", ""]
         for question in held["questions"]:
             lines.append("- " + question["text"])
             for turn in question["thread"]:

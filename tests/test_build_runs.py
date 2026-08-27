@@ -1264,7 +1264,13 @@ class TellTheBuildTests(BuildRunTests):
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0003"][0] == "done"))
         self.assertEqual("", self.rows()["taaaa0001"][0])
-        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+        # Consuming the final row directive precedes the reader thread's
+        # terminal-state write.  Observe the state transition itself instead
+        # of assuming the scheduler has run it by the time the row is visible.
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "idle"),
+            BUILD.load_run(self.session, self.root, "g1"))
 
     def test_deleting_everything_still_ends_the_process_without_a_word(self):
         self.hold()
@@ -1315,7 +1321,12 @@ class TellTheBuildTests(BuildRunTests):
                       self.said())
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0001"][0] == "done"))
-        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+        # The row directive is consumed before the reader thread writes the
+        # run's terminal state. Linux CI exposed that ordering window; wait on
+        # the state this assertion is actually about.
+        self.assertTrue(self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "idle"))
 
     def test_a_note_needs_a_row_the_build_is_on_and_some_words(self):
         self.assertFalse(BUILD.note(self.session, self.root, "g1",
@@ -1490,11 +1501,11 @@ class RestartCheckTests(BuildRunTests):
         return BUILD._run_for(self.session, self.root, "g1")
 
     def checked(self):
-        # The check has answered, or given up: the record says which, and
-        # no process of the run is left.
+        # The check has answered, or given up, and the reader thread has
+        # committed the terminal run state consumed by the assertions.
         return self.wait_for(
             lambda: self.restart().get("status") in ("yes", "no", "unknown", "skipped")
-            and not self.live()["running"], seconds=12)
+            and self.live()["status"] == "idle", seconds=12)
 
     def test_the_verdict_is_read_off_the_check_s_words_with_a_real_decoder(self):
         self.assertEqual(

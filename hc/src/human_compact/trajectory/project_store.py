@@ -16,7 +16,8 @@ halves of what is known about it:
 The shape, in one glance::
 
     {"schema_version", "generated_at",
-     "project": {"cwd", "name", "objective", "description", "sources"},
+     "project": {"cwd", "name", "objective", "description", "sources",
+                 "saved"},
      "chats": [{"session_id", "created_at", "updated_at",
                 "prompt_count", "goal_count"}],
      "goals": [{"key": "<session>:<goal id>", "id", "session_id",
@@ -47,6 +48,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -59,6 +61,64 @@ SCHEMA_VERSION = 1
 PROJECT_OBJECTIVE_LIMIT = 2000
 PROJECT_DESCRIPTION_LIMIT = 8000
 PROJECT_NAME_LIMIT = 80
+SAVED_LIMIT = 200
+
+
+# --- what the reader keeps here, without giving it to anybody ----------------
+#
+# A source is context: it is attached so the chats of this project can be
+# told about it. The saved list is the other thing a reader wants a project
+# to hold -- the paper they mean to read, the thread they want to find
+# again -- and it is deliberately NOT context. Nothing assembled for a
+# model reads this key, which is why it is its own list rather than a flag
+# on a source: a shelf and a briefing are different objects, and one that
+# was both would eventually be handed over by mistake.
+
+SAVED_KINDS = ("file", "link")
+
+
+def _saved_label(kind: str, ref: str) -> str:
+    """What a saved thing is called when the reader did not name it."""
+    text = str(ref or "").strip()
+    if kind == "link":
+        # The host is what a bare URL is recognised by; the path after it is
+        # usually a hash. Both are in the reference, which is the title.
+        body = text.split("://", 1)[-1]
+        return (body.split("/", 1)[0] or text)[:200]
+    return (Path(text).name or text)[:200]
+
+
+def normalize_saved(value) -> List[Dict[str, str]]:
+    """Accept plain strings or rows; always store ``{id, kind, label, ref}``.
+
+    ``ref`` is the one place the thing itself lives: an absolute path when it
+    is a file on this machine, a URL when it is not. Which of the two it is
+    is not guessed from the caller's word for it but from the reference, so a
+    row cannot claim to be a link and hold a path.
+    """
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for entry in (value if isinstance(value, list) else [])[:SAVED_LIMIT]:
+        if isinstance(entry, str):
+            entry = {"ref": entry}
+        if not isinstance(entry, dict):
+            continue
+        ref = str(entry.get("ref") or entry.get("url")
+                  or entry.get("path") or "").strip()[:1000]
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        kind = "link" if "://" in ref else "file"
+        if kind == "file":
+            try:
+                ref = str(Path(ref).expanduser())
+            except (OSError, RuntimeError, ValueError):
+                pass
+        label = str(entry.get("label") or "").strip()[:200]
+        out.append({"id": str(entry.get("id") or f"v{len(out) + 1}")[:40],
+                    "kind": kind, "label": label or _saved_label(kind, ref),
+                    "ref": ref})
+    return out
 
 
 def _now() -> str:
@@ -219,6 +279,71 @@ def repo_home(cwd) -> str:
     return answer
 
 
+def worktrees(cwd) -> List[Dict[str, Any]]:
+    """Every checkout of this repository, with the branch each one holds.
+
+    The reader runs Claude Code in one checkout and Engelbart's builds in
+    another only by accident; offering the list with branches is what lets
+    them say the two are the same. A directory git has never heard of is
+    its own single entry, so a caller always has something to show.
+    """
+    import subprocess
+    here = _resolved(cwd)
+    lone = [{"path": here, "branch": "", "head": "", "main": True}]
+    try:
+        listed = subprocess.run(
+            ("git", "worktree", "list", "--porcelain"),
+            cwd=here, capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return lone
+    if listed.returncode != 0 or not (listed.stdout or "").strip():
+        return lone
+    out: List[Dict[str, Any]] = []
+    current: Dict[str, Any] = {}
+    def keep():
+        if current.get("path"):
+            out.append({"path": current["path"],
+                        "branch": current.get("branch", ""),
+                        "head": current.get("head", ""),
+                        # The first entry git prints is the main worktree;
+                        # it is the one repo_home names, and the one a
+                        # project falls back to when nothing is chosen.
+                        "main": not out})
+    for line in (listed.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            keep()
+            current = {"path": _resolved(line[len("worktree "):])}
+        elif line.startswith("HEAD "):
+            current["head"] = line[len("HEAD "):].strip()[:40]
+        elif line.startswith("branch "):
+            ref = line[len("branch "):].strip()
+            current["branch"] = ref.split("refs/heads/", 1)[-1][:200]
+        elif line.startswith("detached"):
+            current["branch"] = ""
+    keep()
+    return out or lone
+
+
+def chosen_dir(cwd, wanted) -> str:
+    """The checkout a project builds in, or "" for its own home.
+
+    Not taken on its word: what is written here decides where a build
+    writes, so only a checkout of this same repository -- one git itself
+    lists, and one still on disk -- survives. Naming the main worktree is
+    the same as naming nowhere, since that is what "" already means.
+    """
+    asked = str(wanted or "").strip()
+    if not asked:
+        return ""
+    here = _resolved(asked)
+    if not Path(here).is_dir():
+        return ""
+    for tree in worktrees(cwd):
+        if tree["path"] == here:
+            return "" if tree.get("main") else here
+    return ""
+
+
 def project_path(root: Optional[Path], cwd) -> Path:
     """Where the project's file lives: beside the chat sessions, keyed by the
     digest of the resolved directory -- never by the path itself, which is
@@ -273,14 +398,42 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     sources = GM.normalize_sources(section.get("sources"))
     if sources:
         out["sources"] = sources
+    kept = normalize_saved(section.get("saved"))
+    if kept:
+        out["saved"] = kept
     identity = section.get("id")
     if isinstance(identity, str) and identity:
         out["id"] = identity[:64]
+    # Where the project's goals are. Read back as well as written: this is
+    # the authored half a regeneration rebuilds the record from, and a key
+    # written on one side of the whitelist and not the other is dropped by
+    # the next unrelated write -- which is how a project came to forget the
+    # store its own tree lives in on its first goal save.
+    held = section.get("tree_session")
+    if isinstance(held, str) and held:
+        out["tree_session"] = held[:200]
+    # Re-checked on the way out as well as in: a worktree the reader has
+    # since removed would otherwise keep sending builds to a path that is
+    # no longer there.
+    where = chosen_dir(cwd, section.get("working_dir"))
+    if where:
+        out["working_dir"] = where
     return out
 
 
-def save_project(root: Optional[Path], cwd, authored: Dict[str, Any]) -> Path:
-    """Write the authored half, leaving the derived goals where they are."""
+def save_project(root: Optional[Path], cwd, authored: Dict[str, Any],
+                 revive: bool = True) -> Path:
+    """Write the authored half, leaving the derived goals where they are.
+
+    Writing about a project is how a deleted one comes back: the reader
+    naming it again means they want it, and the tombstone that keeps a
+    regeneration from resurrecting it must not also keep them out. A writer
+    that is only stamping bookkeeping onto a record -- an id, the store its
+    tree sits in -- passes *revive* false, because none of that is anybody
+    saying the project should exist again.
+    """
+    if revive:
+        revive_project(root, cwd)
     record = read_file(root, cwd)
     section = record.get("project")
     section = dict(section) if isinstance(section, dict) else {}
@@ -313,7 +466,10 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     section = {"cwd": str(cwd), "name": named or Path(str(cwd)).name,
                "objective": objective,
                "description": description or objective,
-               "sources": GM.normalize_sources(authored.get("sources"))}
+               "sources": GM.normalize_sources(authored.get("sources")),
+               # The shelf. Written here and read by the Saved page alone --
+               # see normalize_saved for why it is not a source.
+               "saved": normalize_saved(authored.get("saved"))}
     # The project's own identity, when one has been minted: a directory is
     # where a project sits today, not what it is, so anything keyed on the
     # path alone calls the same repository on two machines two projects.
@@ -327,7 +483,196 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     held = authored.get("tree_session")
     if isinstance(held, str) and held:
         section["tree_session"] = held[:200]
+    # Which checkout of this repository the reader works in. Carried here
+    # for the same reason tree_session is: the section is rebuilt from a
+    # whitelist, and a key merely present in what was read is dropped by
+    # the next unrelated edit.
+    where = chosen_dir(cwd, authored.get("working_dir"))
+    if where:
+        section["working_dir"] = where
     return section
+
+
+# --- deleting a project ------------------------------------------------------
+#
+# Deleting is not forgetting. What the reader asks for on the projects screen
+# is that the project stop existing: its record, the records any other
+# checkout of the same repository left behind, the window it was pointing at,
+# and the vault directories of its chats -- the goals, the TODO rows, the
+# notes, the prompts. Nothing outside the vault is touched: the code the
+# project is about is the reader's, not this tool's.
+#
+# A deletion also has to survive the writers that would put the record back.
+# Every goal save regenerates the project file of the directory its chat
+# works in, so deleting the files alone means the project returns the moment
+# anything is saved. The homes that were deleted are written down, and a
+# regeneration skips them; anybody authoring the project again clears the
+# note, because saying what a project is for is saying it exists.
+
+def _projects_dir(root: Optional[Path]) -> Path:
+    return CS._state_base(root) / "projects"
+
+
+def _deleted_path(root: Optional[Path]) -> Path:
+    return _projects_dir(root) / "deleted.json"
+
+
+def _deleted(root: Optional[Path]) -> Dict[str, str]:
+    try:
+        value = json.loads(_deleted_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    homes = value.get("homes") if isinstance(value, dict) else None
+    if not isinstance(homes, dict):
+        return {}
+    return {k: str(v) for k, v in homes.items() if isinstance(k, str) and k}
+
+
+def _write_deleted(root: Optional[Path], homes: Dict[str, str]) -> None:
+    path = _deleted_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, {"homes": homes}, root=path.parent)
+
+
+def deleted(root: Optional[Path], cwd) -> bool:
+    """Whether this project was deleted and has not been remade since."""
+    if not cwd:
+        return False
+    return repo_home(cwd) in _deleted(root)
+
+
+def revive_project(root: Optional[Path], cwd) -> bool:
+    """Lift the deletion: the reader is writing about this project again."""
+    if not cwd:
+        return False
+    homes = _deleted(root)
+    if homes.pop(repo_home(cwd), None) is None:
+        return False
+    _write_deleted(root, homes)
+    return True
+
+
+def _note_deleted(root: Optional[Path], cwd) -> None:
+    homes = _deleted(root)
+    homes[repo_home(cwd)] = _now()
+    _write_deleted(root, homes)
+
+
+def records_for(root: Optional[Path], cwd) -> List[Path]:
+    """Every record file this repository has, not only the current one.
+
+    A vault written before worktrees were folded into one project holds a
+    file per checkout, all naming the same repository. Deleting the file the
+    digest points at and stopping there leaves those behind, and the switcher
+    -- which folds by repository -- goes on listing the project from one of
+    them. That is the deletion that did not take.
+    """
+    target = repo_home(cwd)
+    out: List[Path] = []
+    try:
+        entries = sorted(_projects_dir(root).glob("*.json"))
+    except OSError:
+        return out
+    for entry in entries:
+        if entry.name.endswith(".server.json") or entry == _deleted_path(root):
+            continue
+        try:
+            value = json.loads(entry.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        section = value.get("project")
+        here = (section or {}).get("cwd") if isinstance(section, dict) else None
+        here = here or value.get("cwd")
+        if isinstance(here, str) and here and repo_home(here) == target:
+            out.append(entry)
+    canonical = project_path(root, cwd)
+    if canonical.is_file() and canonical not in out:
+        out.append(canonical)
+    return out
+
+
+def _within(path: Path, base: Path) -> bool:
+    """Whether *path* is inside *base* -- asked before anything is removed."""
+    try:
+        return path.resolve().is_relative_to(base.resolve())
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        try:
+            path.resolve().relative_to(base.resolve())
+            return True
+        except (OSError, RuntimeError, ValueError):
+            return False
+
+
+def delete_project(root: Optional[Path], cwd,
+                   sessions: Optional[List[str]] = None) -> Optional[Dict[str, Any]]:
+    """Delete a project and everything the vault keeps for it.
+
+    What goes: every record the repository has, the window it was pointing
+    at, and the session directory of every chat in it -- which is where the
+    goals, the TODO rows, the notes and the prompts actually live, so this is
+    the only deletion a reader would call one. A project given a home inside
+    the vault, because it was made from a name alone, loses that too.
+
+    What stays: everything outside the vault. A project's directory is the
+    reader's repository, and no button on a projects screen should be able to
+    remove it.
+
+    *sessions* names chats the caller already knows belong here -- a caller
+    that has just cut them loose has to, because a chat unbound no longer
+    says which project it was in.
+
+    ``None`` when there was nothing here to delete.
+    """
+    if not cwd:
+        return None
+    base = CS._state_base(root)
+    target = repo_home(cwd)
+    records = records_for(root, cwd)
+    members = sorted(set(project_sessions(root, cwd))
+                     | set(CS.chats_in_project(cwd, root))
+                     | {str(s) for s in (sessions or []) if s})
+    chats, goals_gone = 0, 0
+    for session_id in members:
+        try:
+            seat = CS.paths(session_id, root).session_dir
+        except (ValueError, TypeError):
+            continue
+        try:
+            goals_gone += len([g for g in CS.load_goals(session_id, root)[0]
+                               .get("goals", []) if isinstance(g, dict)])
+        except (OSError, ValueError, TypeError):
+            pass
+        if not seat.is_dir() or not _within(seat, base):
+            continue
+        shutil.rmtree(seat, ignore_errors=True)
+        chats += 1
+    for entry in records:
+        try:
+            entry.unlink()
+        except OSError:
+            continue
+        try:
+            entry.with_name(entry.stem + ".server.json").unlink(missing_ok=True)
+        except OSError:
+            pass
+    clear_server_record(root, cwd)
+    # A project made from a name alone was given a folder in the vault; it is
+    # this tool's to remove. A directory anywhere else is the reader's.
+    workspaces = CS._state_location(root)[1] / "workspaces"
+    seat = Path(target)
+    workspace = False
+    if seat.is_dir() and _within(seat, workspaces):
+        shutil.rmtree(seat, ignore_errors=True)
+        workspace = True
+    if not (records or chats or workspace):
+        # Nothing was here. Noting a deletion would be noting one that never
+        # happened, and the note is what keeps a project off the screen.
+        return None
+    _note_deleted(root, cwd)
+    return {"cwd": target, "records": len(records), "chats": chats,
+            "goals": goals_gone, "workspace": workspace}
 
 
 def list_projects(root: Optional[Path]) -> List[Dict[str, Any]]:
@@ -338,13 +683,16 @@ def list_projects(root: Optional[Path]) -> List[Dict[str, Any]]:
     file whose ``cwd`` is missing is skipped: without it there is nothing to
     point the switcher at.
     """
-    base = CS._state_base(root) / "projects"
+    base = _projects_dir(root)
+    gone = _deleted(root)
     out: Dict[str, Dict[str, Any]] = {}
     try:
         entries = sorted(base.glob("*.json"))
     except OSError:
         return []
     for entry in entries:
+        if entry == _deleted_path(root):
+            continue
         try:
             value = json.loads(entry.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -362,6 +710,10 @@ def list_projects(root: Optional[Path]) -> List[Dict[str, Any]]:
         # record actually keyed by the repository wins, whatever else is
         # lying around beside it.
         key = repo_home(cwd)
+        # A project the reader deleted stays deleted, whatever wrote a record
+        # back afterwards.
+        if key in gone:
+            continue
         if key in out and entry != project_path(root, key):
             continue
         out[key] = {
@@ -408,7 +760,7 @@ def set_tree_session(root: Optional[Path], cwd, session_id: str) -> str:
     held = tree_session(root, cwd)
     if held:
         return held
-    save_project(root, cwd, {"tree_session": said})
+    save_project(root, cwd, {"tree_session": said}, revive=False)
     return said
 
 
@@ -460,28 +812,6 @@ def clear_server_record(root: Optional[Path], cwd) -> None:
         server_path(root, cwd).unlink(missing_ok=True)
     except OSError:
         pass
-
-
-def forget_project(root: Optional[Path], cwd) -> bool:
-    """Drop the project's record and the window it was pointing at.
-
-    What goes is the project: the name, the objective, the description, the
-    sources -- the half the reader wrote -- and the derived snapshot beside
-    them. What stays is every goal of every chat, which lives in the chats
-    and was only ever mirrored here. A chat bound to it is cut loose by the
-    caller, so it is asked where it belongs rather than left pointing at a
-    project that is not there.
-    """
-    target = project_path(root, cwd)
-    gone = False
-    try:
-        if target.is_file():
-            target.unlink()
-            gone = True
-    except OSError:
-        return False
-    clear_server_record(root, cwd)
-    return gone
 
 
 def project_sessions(root: Optional[Path], cwd) -> List[str]:
@@ -632,8 +962,13 @@ def build(root: Optional[Path], cwd) -> Dict[str, Any]:
 def write(root: Optional[Path], cwd) -> Optional[Path]:
     """Regenerate the project's file. ``None`` when there is no directory to
     write one for -- a chat whose manifest never recorded a cwd belongs to no
-    project, and inventing a digest for "" would collect all of them."""
-    if not cwd:
+    project, and inventing a digest for "" would collect all of them.
+
+    ``None`` too for a project the reader deleted: this is a regeneration,
+    not somebody asking for the project, and a snapshot rewritten by the next
+    goal save is exactly how a deletion used to undo itself.
+    """
+    if not cwd or deleted(root, cwd):
         return None
     return _write(root, cwd, build(root, cwd))
 

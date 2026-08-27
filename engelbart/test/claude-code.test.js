@@ -147,7 +147,7 @@ test('a configuration directory of its own is not the live one', () => {
 test('disconnecting removes what signing in added and nothing else', () => {
   const root = temporaryRoot();
   const file = write(settingsIn(root), { theme: 'dark', env: { EDITOR: 'vim' } });
-  // The order `engelbart auth` uses: the helper is written, then pointed at.
+  // The order `npx engelbart-cli auth` uses: helper first, then settings.
   claudeCode.writeHelper(root, path.join(root, 'auth.json'));
   connect(root, file);
   assert.ok(fs.existsSync(claudeCode.helperPath(root)));
