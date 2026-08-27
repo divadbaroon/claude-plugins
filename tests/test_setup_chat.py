@@ -192,6 +192,75 @@ class CardTests(unittest.TestCase):
         self.assertEqual(SC.MAX_TODOS, len(out["todos"]))
 
 
+class StageTests(unittest.TestCase):
+    """The order is not the model's to choose.
+
+    Left to its own judgement it sometimes wrote a plan from one sentence,
+    or offered goals nobody had agreed the shape of. The four steps are the
+    product -- ask, then say what you think this is, then which one first,
+    then the rows -- so the stage is worked out from what has actually been
+    produced and the model is told which card it is writing, not asked.
+    """
+
+    def test_a_conversation_with_nothing_in_it_asks_questions(self):
+        self.assertEqual("questions", SC.stage_of([], []))
+
+    def test_questions_come_before_a_plan(self):
+        # One round of answers is enough to write from; none is not.
+        self.assertEqual("questions", SC.stage_of([], ["questions"]))
+        self.assertEqual("plan", SC.stage_of([], ["questions", "questions"]))
+
+    def test_the_plan_is_not_skipped_however_much_was_said(self):
+        many = [{"role": "you", "text": "a very full description"}] * 8
+        self.assertEqual("questions", SC.stage_of(many, []))
+
+    def test_goals_come_after_the_plan_was_shown(self):
+        self.assertEqual("goals",
+                         SC.stage_of([], ["questions", "questions", "plan"]))
+
+    def test_todos_come_last(self):
+        self.assertEqual("todos", SC.stage_of(
+            [], ["questions", "questions", "plan", "goals"]))
+
+    def test_after_the_rows_there_is_nothing_left_to_ask_for(self):
+        self.assertEqual("none", SC.stage_of(
+            [], ["questions", "questions", "plan", "goals", "todos"]))
+
+    def test_a_card_out_of_turn_is_replaced_by_the_one_that_is_due(self):
+        # The model wrote a plan when the stage was questions. What it said
+        # is kept -- it is talking to the reader -- but the card is not
+        # drawn, because drawing it is what would skip the step.
+        class Eager:
+            def generate_json(self, prompt):
+                return {"say": "Here is the plan.", "card": "plan",
+                        "plan": {"head": "Move uploads", "lines": []}}
+        out = SC.ask([{"role": "you", "text": "uploads are slow"}],
+                     engine=Eager(), shown=[])
+        self.assertTrue(out["ok"])
+        self.assertEqual("none", out["card"])
+        self.assertEqual("Here is the plan.", out["say"])
+
+    def test_the_card_that_is_due_is_named_in_the_prompt(self):
+        seen = {}
+        class Stub:
+            def generate_json(self, prompt):
+                seen["prompt"] = prompt
+                return {"say": "ok", "card": "plan",
+                        "plan": {"head": "h", "lines": []}}
+        SC.ask([{"role": "you", "text": "x"}], engine=Stub(),
+               shown=["questions", "questions"])
+        self.assertIn("write the plan", seen["prompt"])
+
+    def test_the_card_that_is_due_is_kept(self):
+        class Stub:
+            def generate_json(self, prompt):
+                return {"say": "ok", "card": "plan",
+                        "plan": {"head": "h", "lines": []}}
+        out = SC.ask([{"role": "you", "text": "x"}], engine=Stub(),
+                     shown=["questions", "questions"])
+        self.assertEqual("plan", out["card"])
+
+
 class AccountTests(unittest.TestCase):
     """Whose Claude answers, and by what name the model is asked for."""
 
@@ -422,6 +491,31 @@ class RouteTests(unittest.TestCase):
         out = ui._apply_locked({"op": "setup_commit", "name": "x"},
                                trajdir=None, chat_scoped=False)
         self.assertEqual("setup_commit", out["__deferred__"][0])
+
+
+class TerminalTests(unittest.TestCase):
+    """Opening one for them, and refusing to open anything else."""
+
+    def test_only_a_plain_command_is_ever_opened(self):
+        # This exists to type `claude` into a window. Anything carrying a
+        # shell metacharacter is a request to run something else.
+        for bad in ("claude; rm -rf ~", "claude && curl x", "claude `id`",
+                    "claude > /tmp/x", "claude | sh"):
+            out = SC.open_terminal(bad)
+            self.assertFalse(out["ok"], bad)
+
+    def test_nothing_at_all_is_refused(self):
+        self.assertFalse(SC.open_terminal("")["ok"])
+
+    def test_a_machine_with_no_terminal_says_so_rather_than_failing(self):
+        # The copy row beside the button is still the answer, so this is a
+        # quiet no, not an error the reader has to deal with.
+        with mock.patch.object(SC, "__name__", SC.__name__), \
+             mock.patch("sys.platform", "linux"), \
+             mock.patch("shutil.which", return_value=None):
+            out = SC.open_terminal("claude")
+        self.assertFalse(out["ok"])
+        self.assertIn("no terminal", out["error"])
 
 
 class PageTests(unittest.TestCase):

@@ -30,6 +30,9 @@
     msgs: [],
     card: null,          // the last card the model named
     answers: {},         // per question id, for the card on screen
+    shown: [],           // the cards drawn so far: the step order is read
+                         // from this, and the server will not draw one out
+                         // of turn
     thinking: false,
     draft: "",
     error: "",
@@ -47,9 +50,13 @@
     + " I'll ask a few questions, then write up a plan for you to approve.";
 
   function dark() {
+    // Light unless the reader has asked for dark on this page. The first
+    // thing anybody sees of this tool should not depend on a system setting
+    // they made for something else -- and a dark install screen reads as a
+    // terminal, which is the thing they were trying to get out of.
     try {
-      return window.matchMedia
-        && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      return window.localStorage
+        && window.localStorage.getItem("hc-setup-theme") === "dark";
     } catch (e) { return false; }
   }
 
@@ -65,7 +72,11 @@
   function on(node, event, fn) { node.addEventListener(event, fn); return node; }
 
   function btn(label, cls, fn, disabled) {
-    var b = el("button", "btn " + (cls || ""), label);
+    var b = el("button", "btn " + (cls || ""));
+    b.appendChild(el("span", "", label));
+    // The chevron is on the button that moves the reader forward and on no
+    // other: it is what tells them which of two buttons is the way on.
+    if ((cls || "").indexOf("btn-on") >= 0) b.appendChild(el("span", "go", "›"));
     if (disabled) b.setAttribute("disabled", "disabled");
     else on(b, "click", fn);
     return b;
@@ -100,7 +111,8 @@
     st.card = null;
     st.answers = {};
     draw();
-    post({ op: "setup_say", transcript: st.msgs.concat(extra || []) })
+    post({ op: "setup_say", transcript: st.msgs.concat(extra || []),
+           shown: st.shown })
       .then(function (out) {
         st.thinking = false;
         if (!out || !out.ok) {
@@ -110,6 +122,7 @@
         }
         say("engelbart", out.say);
         st.card = out;
+        if (out.card && out.card !== "none") st.shown.push(out.card);
         if (out.card === "plan") st.plan = out.plan;
         if (out.card === "goals") st.goals = out.goals;
         if (out.card === "todos") {
@@ -217,7 +230,7 @@
     card.appendChild(head);
     var body = el("div", "card-body");
 
-    step(body, "1", "Open the chat you were working in.", "claude -r");
+    step(body, "1", "Open the chat you were working in.", "claude -r", true);
     var pick = el("div", "step");
     pick.appendChild(el("div", "step-n", "2"));
     var pb = el("div", "step-b");
@@ -240,19 +253,39 @@
     col.appendChild(card);
   }
 
-  function step(parent, n, text, command) {
+  function step(parent, n, text, command, openable) {
     var row = el("div", "step");
     row.appendChild(el("div", "step-n", n));
     var body = el("div", "step-b");
     body.appendChild(el("div", "step-t", text));
-    if (command) body.appendChild(commandRow(command));
+    if (command) body.appendChild(commandRow(command, openable));
     row.appendChild(body);
     parent.appendChild(row);
   }
 
-  function commandRow(command) {
+  function openTerminal(command, said) {
+    // The machine opens a terminal with the command already in it and the
+    // reader presses Return. Where it cannot -- no terminal it knows how to
+    // drive, a permission not granted -- the copy row beside this is still
+    // the answer, so a refusal says so quietly rather than failing.
+    said.textContent = "opening…";
+    post({ op: "setup_open_terminal", command: command }).then(function (out) {
+      said.textContent = (out && out.ok)
+        ? "opened — press Return in it"
+        : "copy it instead";
+      setTimeout(function () { said.textContent = ""; }, 6000);
+    });
+  }
+
+  function commandRow(command, openable) {
     var row = el("div", "cmd");
     row.appendChild(el("span", "cmd-text", command));
+    var said = el("span", "cmd-said", "");
+    if (openable) {
+      var open = el("button", "cmd-copy", "open terminal");
+      on(open, "click", function () { openTerminal(command, said); });
+      row.appendChild(open);
+    }
     var copy = el("button", "cmd-copy", "copy");
     on(copy, "click", function () {
       var done = function () {
@@ -277,7 +310,10 @@
       }
     });
     row.appendChild(copy);
-    return row;
+    var wrap = el("div", "");
+    wrap.appendChild(row);
+    wrap.appendChild(said);
+    return wrap;
   }
 
   // Screen 3: the conversation.
@@ -292,12 +328,7 @@
       col.appendChild(box);
     });
 
-    if (st.thinking) {
-      var think = el("div", "think rise");
-      think.appendChild(el("span", "spin"));
-      think.appendChild(el("span", "", "reading what you wrote…"));
-      col.appendChild(think);
-    }
+    if (st.thinking) col.appendChild(generating());
 
     if (st.error) col.appendChild(el("div", "err", st.error));
 
@@ -310,15 +341,31 @@
     drawComposer(app);
   }
 
+  function generating() {
+    // Nine dots in a square, lit in turn. A ring says "waiting"; this says
+    // something is being made, which is what is actually happening.
+    var box = el("div", "think rise");
+    var grid = el("span", "dots");
+    for (var i = 0; i < 9; i++) {
+      var dot = el("span", "dot");
+      dot.style.animationDelay = (i % 3 + Math.floor(i / 3)) * 90 + "ms";
+      grid.appendChild(dot);
+    }
+    box.appendChild(grid);
+    box.appendChild(el("span", "", "generating"));
+    return box;
+  }
+
   function cardBox(col, eyebrow, right) {
     var card = el("div", "card rise");
     var head = el("div", "card-head");
-    head.appendChild(el("span", "lbl", eyebrow));
-    if (right) {
-      var r = el("span", "lbl", right);
-      r.style.marginLeft = "auto";
-      head.appendChild(r);
-    }
+    var line = el("div", "");
+    line.style.display = "flex";
+    line.style.alignItems = "baseline";
+    line.appendChild(el("span", "lbl", eyebrow));
+    if (right) line.appendChild(el("span", "lbl right", right));
+    head.appendChild(line);
+    head.appendChild(el("div", "rule"));
     card.appendChild(head);
     var body = el("div", "card-body");
     card.appendChild(body);
@@ -332,8 +379,8 @@
     var set = st.card.questions;
     var items = set.items || [];
     var body = cardBox(col, set.eyebrow || "a few questions",
-                       items.length + (items.length === 1 ? " question"
-                                                          : " questions"));
+                       items.length === 1 ? "1 question"
+                                          : items.length + " questions");
     items.forEach(function (q) { body.appendChild(questionNode(q)); });
 
     var acts = el("div", "acts");
@@ -343,7 +390,7 @@
     });
     acts.appendChild(btn("Send answers", ready ? "btn-on" : "",
                          submitAnswers, !ready));
-    acts.appendChild(btn("Skip", "btn-quiet", skipAnswers));
+    acts.appendChild(btn("Skip", "", skipAnswers));
     body.appendChild(acts);
   }
 
@@ -351,6 +398,9 @@
     var box = el("div", "q");
     box.appendChild(el("div", "card-title", q.title));
     if (q.subtitle) box.appendChild(el("div", "card-sub", q.subtitle));
+    else if (q.type === "select_all") {
+      box.appendChild(el("div", "card-sub", "select all that apply"));
+    }
     if (q.type === "mcq" || q.type === "select_all") {
       box.appendChild(optionList(q));
     } else {
@@ -415,7 +465,13 @@
   function drawPlan(col) {
     var plan = st.card.plan || {};
     var body = cardBox(col, "plan");
-    if (plan.head) body.appendChild(el("div", "card-title", plan.head));
+    body.appendChild(el("div", "card-title",
+                        "Here's what I think you're working on"));
+    if (plan.head) {
+      var lead = el("div", "plan-v", plan.head);
+      lead.style.marginTop = "8px";
+      body.appendChild(lead);
+    }
     var rows = el("div", "");
     rows.style.marginTop = "10px";
     (plan.lines || []).forEach(function (line) {
@@ -427,12 +483,12 @@
     body.appendChild(rows);
 
     var acts = el("div", "acts");
-    acts.appendChild(btn("Approve", "btn-on", function () {
+    acts.appendChild(btn("Continue", "btn-on", function () {
       st.plan = plan;
       say("you", "Approved.");
       round();
     }));
-    acts.appendChild(btn("Change something", "btn-quiet", function () {
+    acts.appendChild(btn("Add something", "", function () {
       st.draft = "";
       var field = document.querySelector(".composer .f");
       if (field) field.focus();
@@ -441,13 +497,35 @@
     body.appendChild(el("div", "hint",
       "Nothing is saved yet. Say what to change in the box below and it"
       + " will write it again."));
+    var ask = el("div", "card-title", "Is that basically right?");
+    ask.style.marginTop = "14px";
+    body.insertBefore(ask, body.querySelector(".acts"));
   }
 
   // --- goals ----------------------------------------------------------------
 
   function drawGoals(col) {
     var goals = st.card.goals || [];
-    var body = cardBox(col, "start with");
+    var typing = st.chosen === " other";
+    var label = typing ? st.other.trim() : st.chosen;
+    var body = cardBox(col, "goal");
+    body.appendChild(el("div", "card-title", "What should we focus on?"));
+
+    // Chosen, it opens up: the one they picked is lifted out of the list and
+    // shown as the thing being started, with the rest still there to change
+    // their mind with. Reading a decision back is what makes it feel made.
+    if (label) {
+      var open = el("div", "chosen rise");
+      open.appendChild(el("div", "lbl", "chosen"));
+      var head = el("div", "card-title", label);
+      head.style.marginTop = "5px";
+      open.appendChild(head);
+      var why = "";
+      goals.forEach(function (g) { if (g.label === label) why = g.why; });
+      if (why) open.appendChild(el("div", "chosen-why", why));
+      body.appendChild(open);
+    }
+
     goals.forEach(function (g) {
       var picked = st.chosen === g.label;
       var row = el("div", "opt");
@@ -466,7 +544,6 @@
 
     // Their own, always on offer: the model proposed, it did not decide.
     var mine = el("div", "opt");
-    var typing = st.chosen === " other";
     mine.setAttribute("data-on", typing ? "1" : "0");
     mine.appendChild(el("span", "mark mark-one", ""));
     var mineText = el("span", "opt-text");
@@ -475,7 +552,7 @@
       "tell it what to start on instead and it will use that"));
     mine.appendChild(mineText);
     on(mine, "click", function () {
-      st.chosen = typing ? "" : " other";
+      st.chosen = typing ? "" : " other";
       draw();
     });
     body.appendChild(mine);
@@ -488,13 +565,13 @@
       input.setAttribute("placeholder", "what to start on");
       input.value = st.other;
       on(input, "input", function () { st.other = input.value; });
+      on(input, "blur", draw);
       wrap.appendChild(input);
       body.appendChild(wrap);
     }
 
-    var label = typing ? st.other.trim() : st.chosen;
     var acts = el("div", "acts");
-    acts.appendChild(btn("Break into TODOs", label ? "btn-on" : "", function () {
+    acts.appendChild(btn("Generate TODOs", label ? "btn-on" : "", function () {
       st.goals = goals;
       say("you", label);
       round();
@@ -510,7 +587,7 @@
                                                                 : " rows"));
     st.todos.forEach(function (t) {
       var row = el("div", "row");
-      row.appendChild(el("span", "dash", "—"));
+      row.appendChild(el("span", "tick", ""));
       var input = el("input", "f");
       input.setAttribute("type", "text");
       input.setAttribute("spellcheck", "false");
@@ -527,11 +604,11 @@
     });
 
     var add = el("div", "row");
-    add.appendChild(el("span", "dash", "+"));
+    add.appendChild(el("span", "mark mark-many", ""));
     var fresh = el("input", "f");
     fresh.setAttribute("type", "text");
     fresh.setAttribute("spellcheck", "false");
-    fresh.setAttribute("placeholder", "add a row");
+    fresh.setAttribute("placeholder", "add a task for the agents…");
     fresh.value = st.newTodo;
     on(fresh, "input", function () { st.newTodo = fresh.value; });
     on(fresh, "keydown", function (event) {
@@ -547,42 +624,43 @@
     add.appendChild(fresh);
     body.appendChild(add);
 
-    // The name, asked for here rather than at the start: by now they have
-    // seen what the project is, so naming it is recognition rather than
-    // invention -- and it is the one thing left to do while they read.
-    var nameWrap = el("div", "name-field");
-    nameWrap.appendChild(el("div", "lbl", "call it"));
-    var field = el("div", "field");
+    // The name, and the button that lives in it. Asked for here rather than
+    // at the start: by now they have seen what the project is, so naming it
+    // is recognition rather than invention -- and it is the one thing left
+    // to do while they read the rows. The button sits inside the field
+    // because naming and making are one act, not two.
+    var nameWrap = el("div", "");
+    nameWrap.style.marginTop = "18px";
+    nameWrap.appendChild(el("div", "lbl", "name your project"));
+    var pill = el("div", "name-row");
     var name = el("input", "f");
     name.setAttribute("type", "text");
     name.setAttribute("spellcheck", "false");
-    name.setAttribute("placeholder", "a name for this project");
+    name.setAttribute("placeholder", "a short name");
     name.value = st.name;
-    on(name, "input", function () {
-      st.name = name.value;
-      var go = document.querySelector("[data-hc-complete]");
-      if (!go) return;
-      // Toggled in place rather than by redrawing: the reader is typing in
-      // the field that decides it.
-      if (st.name.trim()) {
-        go.removeAttribute("disabled");
-        go.className = "btn btn-on";
-      } else {
-        go.setAttribute("disabled", "disabled");
-        go.className = "btn";
-      }
-    });
-    field.appendChild(name);
-    nameWrap.appendChild(field);
-    body.appendChild(nameWrap);
-
-    var acts = el("div", "acts");
     var go = btn("Create project", st.name.trim() ? "btn-on" : "",
                  complete, !st.name.trim());
     go.setAttribute("data-hc-complete", "");
-    if (!st.name.trim()) on(go, "click", complete);
-    acts.appendChild(go);
-    body.appendChild(acts);
+    on(name, "input", function () {
+      st.name = name.value;
+      // Toggled in place rather than by redrawing: the reader is typing in
+      // the field that decides it, and a sweep would take the caret away.
+      if (st.name.trim()) {
+        go.removeAttribute("disabled");
+        go.className = "btn btn-on";
+        if (!go.querySelector(".go")) go.appendChild(el("span", "go", "›"));
+        go.onclick = complete;
+      } else {
+        go.setAttribute("disabled", "disabled");
+        go.className = "btn";
+        var chev = go.querySelector(".go");
+        if (chev) chev.remove();
+      }
+    });
+    pill.appendChild(name);
+    pill.appendChild(go);
+    nameWrap.appendChild(pill);
+    body.appendChild(nameWrap);
     body.appendChild(el("div", "hint",
       "This makes the project and its goals. It is not attached to any"
       + " chat yet — the next screen says how to open it."));
@@ -651,7 +729,7 @@
     nhead.appendChild(el("span", "lbl", "open it"));
     next.appendChild(nhead);
     var nbody = el("div", "card-body");
-    step(nbody, "1", "Start a chat in your terminal.", "claude");
+    step(nbody, "1", "Start a chat in your terminal.", "claude", true);
     step(nbody, "2", "Open its workspace and pick this project.", "/bart");
     next.appendChild(nbody);
     col.appendChild(next);

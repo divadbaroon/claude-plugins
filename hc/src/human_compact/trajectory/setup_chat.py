@@ -20,6 +20,8 @@ document, so all of it is bounded and none of it is trusted.
 from __future__ import annotations
 
 import secrets
+import shutil
+from pathlib import Path
 from typing import Any, Dict, List
 
 from . import goals as GM
@@ -490,7 +492,46 @@ def commit(root, name, plan, offered, chosen, todos) -> Dict[str, Any]:
 
 # --- asking ------------------------------------------------------------------
 
-def ask(transcript, engine=None, extra=(), root=None) -> Dict[str, Any]:
+# The four steps, in the order they have to happen. Left to its own
+# judgement the model sometimes wrote a plan from one sentence, or offered
+# goals before anybody had agreed what the work was -- and a reader who is
+# handed goals for a project nobody described cannot tell whether the tool
+# understood them or guessed. So the order is not asked for, it is worked
+# out from what has actually been drawn and then required.
+#
+# Two rounds of questions before a plan is a floor, not a ceiling: the model
+# may keep asking (it is told when that reads as a form), but it may not
+# stop asking before it has heard anything back.
+ORDER = ("questions", "plan", "goals", "todos")
+MIN_QUESTION_ROUNDS = 2
+
+
+def stage_of(transcript, shown) -> str:
+    """Which card is due, from the cards already drawn.
+
+    Read from what was drawn rather than from what was said: a reader who
+    writes four paragraphs has still not answered a question, and the whole
+    point of the questions is that they change what gets proposed.
+    """
+    drawn = [c for c in (shown or []) if c in ORDER]
+    rounds = drawn.count("questions")
+    if rounds < MIN_QUESTION_ROUNDS:
+        return "questions"
+    for card in ORDER[1:]:
+        if card not in drawn:
+            return card
+    return "none"
+
+
+_DUE = {
+    "questions": "ask your questions -- this is a questions card",
+    "plan": "write the plan: this card is the plan and nothing else",
+    "goals": "offer the goals, as a goals card",
+    "todos": "break the chosen goal into rows, as a todos card",
+}
+
+
+def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any]:
     """One round: put the conversation to the model, take back one card.
 
     The reply is JSON the reader never sees -- what they see is the modal it
@@ -501,6 +542,15 @@ def ask(transcript, engine=None, extra=(), root=None) -> Dict[str, Any]:
     """
     from . import providers as PROVIDERS
     import os
+    due = stage_of(transcript, shown)
+    if due in _DUE:
+        extra = list(extra) + [
+            "", "# The card you are writing now", "",
+            "Whatever else you say, on this reply you %s." % _DUE[due],
+            "The reader is stepped through four cards in one order --",
+            "questions, plan, goals, todos -- and a card out of turn is not",
+            "drawn at all, so naming a different one costs them the round.",
+        ]
     try:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
@@ -512,6 +562,85 @@ def ask(transcript, engine=None, extra=(), root=None) -> Dict[str, Any]:
         return {"ok": False,
                 "error": "setup could not reach Claude (is the CLI on PATH?)"}
     card = normalize_card(raw)
+    # A card out of turn is not drawn. What it said is kept -- it is talking
+    # to the reader, and dropping that would leave a silent round -- but the
+    # card itself is refused, because drawing it is what skips the step.
+    if card["card"] != "none" and card["card"] != due:
+        card = dict(card, card="none", questions={"eyebrow": "", "items": []},
+                    plan={"head": "", "lines": []}, goals=[], todos=[])
     if not card["say"] and card["card"] == "none":
         return {"ok": False, "error": "the model answered with nothing"}
-    return dict(card, ok=True)
+    return dict(card, ok=True, due=due)
+
+
+# --- opening a terminal for them ---------------------------------------------
+#
+# The last step of every path is "run this in your terminal", which is the
+# step that loses people: they have to find the terminal, put it beside the
+# browser, and type something they half-remember. Where the machine will
+# open one with the command already in it, that is two of the three gone --
+# they press Return.
+#
+# Never the whole answer, though. A machine with no terminal this knows how
+# to drive, a desktop session it cannot reach, a reader on a remote host --
+# all of those still need the command written down, so the copy rows stay
+# and this is only ever an offer on top of them.
+
+def open_terminal(command, cwd=None) -> Dict[str, Any]:
+    """Open a terminal with *command* typed into it, unrun.
+
+    Typed rather than run: the reader presses Return. What is about to
+    happen is visible before it happens, which is the difference between a
+    tool that helps and a tool that does things to your machine.
+    """
+    import shlex
+    import subprocess
+    import sys
+    said = " ".join(str(command or "").split())
+    if not said or any(c in said for c in ";&|`$\n><"):
+        # Only the commands this page offers, and they are plain words. A
+        # shell metacharacter here is a request to run something else.
+        return {"ok": False, "error": "that is not a command this can open"}
+    here = str(Path(str(cwd)).expanduser()) if cwd else str(Path.home())
+    if sys.platform == "darwin":
+        # `do script` runs what it is given, so the command is written to
+        # the prompt with `keystroke` and left there for the reader.
+        script = (
+            'tell application "Terminal"\n'
+            '  activate\n'
+            '  do script "cd %s; clear"\n'
+            'end tell\n'
+            'delay 0.4\n'
+            'tell application "System Events" to keystroke "%s"\n'
+        ) % (shlex.quote(here).replace('"', '\\"'), said.replace('"', '\\"'))
+        try:
+            done = subprocess.run(("osascript", "-e", script), timeout=15,
+                                  capture_output=True, text=True)
+        except (OSError, subprocess.SubprocessError):
+            return {"ok": False, "error": "no terminal this could open"}
+        if done.returncode != 0:
+            # Almost always the automation permission, which is the reader's
+            # to grant and not worth dressing up as a bug.
+            return {"ok": False,
+                    "error": "macOS did not allow the terminal to be opened"}
+        return {"ok": True, "typed": said}
+    for name, args in (("x-terminal-emulator", ("-e",)),
+                       ("gnome-terminal", ("--",)),
+                       ("konsole", ("-e",)),
+                       ("xterm", ("-e",))):
+        found = shutil.which(name)
+        if not found:
+            continue
+        try:
+            # The command is put on the shell's history and the shell is
+            # left interactive, so it is one Up-arrow and Return away rather
+            # than run behind their back.
+            subprocess.Popen(
+                (found,) + args + ("bash", "-c",
+                                   "cd %s; history -s %s; exec bash"
+                                   % (shlex.quote(here), shlex.quote(said))),
+                start_new_session=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        return {"ok": True, "typed": said}
+    return {"ok": False, "error": "no terminal this could open"}

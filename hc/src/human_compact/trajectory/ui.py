@@ -2477,7 +2477,8 @@ def _apply(op, trajdir=None, chat_scoped=None):
     from . import build as BUILD
     kind, session_id, root, goal_id, op = deferred
     if kind == "setup_say":
-        return SETUP.ask(op.get("transcript"), root=root)
+        return SETUP.ask(op.get("transcript"), root=root,
+                         shown=op.get("shown") or [])
     if kind == "setup_commit":
         return SETUP.commit(root, op.get("name"), op.get("plan"),
                             op.get("goals"), op.get("chosen"),
@@ -2752,6 +2753,12 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 root = None
             return project_setup(op.get("cwd"), op.get("objective"),
                                  op.get("description"), root)
+        if kind == "setup_open_terminal":
+            # Offered on top of the copy rows, never instead of them: a
+            # machine with no terminal this can drive still has to be told
+            # what to type. Answered here rather than deferred -- it opens a
+            # window and returns, and spawns nothing that outlives it.
+            return SETUP.open_terminal(op.get("command"), op.get("cwd"))
         if kind in ("setup_say", "setup_commit"):
             # The cold-start conversation. Its whole transcript comes from
             # the browser and goes back to it: setup is not a chat of the
@@ -3386,7 +3393,7 @@ class H(BaseHTTPRequestHandler):
                                  if self.server.chat_scoped else (None, None))
                 who = _project_identity(trajdir, self.server.chat_scoped, session)
                 self._send(200, project_json(root, who["cwd"], full=full))
-            elif self.path in ("/setup", "/setup/"):
+            elif self.path.split("?")[0] in ("/setup", "/setup/"):
                 # What opens after `npx engelbart-cli`, before there is a
                 # chat or a project to open anything else on. Served from
                 # this process because it is the one that answers the ops
@@ -3394,7 +3401,10 @@ class H(BaseHTTPRequestHandler):
                 page = resources.files("human_compact.trajectory").joinpath(
                     "web/setup.html").read_bytes()
                 self._send(200, page, "text/html; charset=utf-8")
-            elif self.path == "/setup.js":
+            elif self.path.split("?")[0] == "/setup.js":
+                # The query is ignored rather than matched: a cache-buster
+                # on this URL used to fall through to the 404 body, which
+                # reads as a page that loaded and did nothing.
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/setup.js").read_bytes()
                 self._send(200, js, "application/javascript")
