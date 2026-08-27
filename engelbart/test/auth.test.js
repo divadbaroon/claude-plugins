@@ -382,14 +382,76 @@ test('signing in stores the Claude key beside the token', async () => {
   assert.equal(settings.apiKeyHelper, path.join(root, 'bin', 'engelbart-key'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
 
-  // The exports file is still written: it is what a shell, a CI runner, or
-  // anything that is not Claude Code reads.
+  // The exports file is still written, but with the key taken out of it. An
+  // exported ANTHROPIC_AUTH_TOKEN outranks a saved claude.ai login and can
+  // never be refreshed, so once the helper is wired the only job left for this
+  // file is undoing an older profile that still sources it.
   const envFile = auth.envPath(root);
-  assert.equal(fs.readFileSync(envFile, 'utf8'),
-    '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
-      + 'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
-      + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n');
+  const body = fs.readFileSync(envFile, 'utf8');
+  assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
+  assert.equal(body.includes('sk-abc'), false);
   assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+});
+
+// The whole point of wiring the helper is that a key the pool has stopped
+// honouring stops being Claude Code's credential. That only works if the
+// helper knows which settings file to take itself out of.
+test('the wired helper is told where its own settings file is', async () => {
+  const root = temporaryRoot();
+  const settingsFile = settingsIn(root);
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  await auth.login({
+    managedRoot: root,
+    settingsFile,
+    env: {},
+    output: collector(),
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  const helper = fs.readFileSync(path.join(root, 'bin', 'engelbart-key'), 'utf8');
+  assert.ok(helper.includes(JSON.stringify(settingsFile)));
+  assert.ok(helper.includes(JSON.stringify(path.join(root, 'bin', 'engelbart-key'))));
+});
+
+// A member pairing a second machine after the pool has run dry reads
+// "Claude Code is set up to use it" and then watches the first request fail.
+// Saying it up front is the difference between a known state and a bug report.
+test('signing in with the credit already spent says so', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 25,
+    }),
+  });
+
+  assert.match(output.text(), /\$0\.00 of \$25\.00 left/);
+  assert.match(output.text(), /used up.*own account/s);
 });
 
 // Redirecting Claude Code's credential at something the member did not choose

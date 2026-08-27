@@ -142,16 +142,33 @@ function claudeEnv(stored) {
     + `export ANTHROPIC_AUTH_TOKEN="${stored.claude.apiKey}"\n`;
 }
 
+// The opposite of `claudeEnv`, and the reason this file is still written at all
+// once the helper is wired. An earlier version of this CLI told members to put
+// `source .../env.sh` in their shell profile, and an exported
+// ANTHROPIC_AUTH_TOKEN outranks a saved claude.ai login: when the pool ran dry,
+// that export was what turned "out of credit" into a Claude Code that could not
+// fall back to the member's own account. Emptying the file in place is what
+// repairs those profiles, where deleting it would only make the profile noisy
+// and leave the exports live in every shell already open.
+function claudeUnset() {
+  return 'unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n';
+}
+
 function envPath(managedRoot) {
   return path.join(validateManagedRoot(managedRoot), ENV_FILE);
 }
 
 // `npx engelbart-cli` leaves no `engelbart` on PATH -- the installer puts only
 // `hc` there -- so telling the member to run `engelbart env` names a command
-// they do not have. A file next to the token is always reachable, costs no
-// network, and is cheap enough to source from a shell profile.
-function writeEnvFile(managedRoot, stored) {
-  const lines = claudeEnv(stored);
+// they do not have. A file next to the token is always reachable and costs no
+// network.
+//
+// It is a fallback, never the recommended path. A static export cannot be
+// refreshed, rotated or revoked, so it is written with a key in it only when
+// Claude Code's own credential helper could not be wired -- which is to say,
+// only when the member has an apiKeyHelper of their own that we will not touch.
+function writeEnvFile(managedRoot, stored, wired = false) {
+  const lines = wired ? claudeUnset() : claudeEnv(stored);
   if (!lines) {
     try {
       fs.rmSync(envPath(managedRoot), { force: true });
@@ -160,8 +177,13 @@ function writeEnvFile(managedRoot, stored) {
   }
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
-  const body = '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
-    + `${lines}`;
+  const body = wired
+    ? '# Written by `engelbart auth`. Claude Code now reads this account\'s key\n'
+      + '# from its own credential helper, which can refresh and revoke it; a static\n'
+      + '# export here could only go stale. Sourcing this is now a no-op by design.\n'
+      + `${lines}`
+    : '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
+      + `${lines}`;
   atomicWrite(path.join(root, ENV_FILE), body, 0o600);
   return envPath(managedRoot);
 }
@@ -194,7 +216,17 @@ function sleep(seconds) {
 function wireClaudeCode(managedRoot, stored, options = {}) {
   if (!stored || !stored.claude || !stored.claude.baseUrl) return { changed: false, reason: 'no-key' };
   try {
-    claudeCode.writeHelper(managedRoot, credentialsPath(managedRoot));
+    // The helper is told which settings file it lives in, because taking
+    // itself back out is half its job: a key the pool has stopped honouring
+    // has to stop being Claude Code's credential, or the member cannot reach
+    // their own account either.
+    const target = claudeCode.resolveTarget({
+      homedir: options.homedir,
+      settingsFile: options.settingsFile,
+      env: options.env,
+      allowRealHome: options.allowRealHome,
+    });
+    claudeCode.writeHelper(managedRoot, credentialsPath(managedRoot), target.file);
     return claudeCode.connect({
       managedRoot,
       homedir: options.homedir,
@@ -279,10 +311,6 @@ async function login(options = {}) {
       if (claude) {
         const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
         output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
-        const written = writeEnvFile(managedRoot, stored);
-        // Claude Code is the reason the key exists, so it gets told directly
-        // rather than being left to inherit a variable the member has to
-        // remember to export.
         // `hc` needs the same project this account lives in. Handing it over
         // now is the difference between a member typing a password and a
         // member hunting for an anon key, and a deployment that will not
@@ -291,14 +319,28 @@ async function login(options = {}) {
           await (options.shareProjectConfig || shareProjectConfig)(base, stored, options);
         } catch (error) { /* `hc supabase setup` still works by hand */ }
 
+        // Claude Code is the reason the key exists, so it gets told directly
+        // rather than being left to inherit a variable the member has to
+        // remember to export. Wiring comes first because it decides what the
+        // exports file is for: a no-op that repairs an older profile when the
+        // helper is in place, and the fallback itself when it is not.
         const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
+        const written = writeEnvFile(managedRoot, stored, wired.changed);
         if (wired.changed) {
           output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
         } else if (wired.reason === 'foreign-helper') {
           output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
-          output.write(`To use this credit instead, run: source ${written}\n`);
+          output.write(`To use this credit in this terminal instead, run: source ${written}\n`);
         } else {
-          output.write(`\nRun this once here so \`claude\` uses it:\n\n    source ${written}\n`);
+          output.write(`\nRun this in each terminal where you want \`claude\` to use it:\n\n    source ${written}\n`);
+        }
+        // Said last so it is the line left on screen. A member who pairs a
+        // second machine after the pool has run dry would otherwise read
+        // "Claude Code is set up to use it" and take the first failed request
+        // as the setup being broken.
+        if (left <= 0) {
+          output.write('\nThat credit is used up, so `claude` will keep using your own account\n'
+            + 'until it is topped up. Nothing else needs doing here.\n');
         }
       } else {
         output.write(`Could not read this account's Claude key: ${keyError}\n`);
@@ -370,6 +412,7 @@ module.exports = {
   POLL_CEILING_SECONDS,
   apiBase,
   claudeEnv,
+  claudeUnset,
   clearCredentials,
   ENV_FILE,
   credentialsPath,

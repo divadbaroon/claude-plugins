@@ -207,3 +207,169 @@ test('the credential helper is executable, self-contained, and owner-only', () =
   assert.ok(source.includes(JSON.stringify(credentials)));
   assert.equal(/require\('\.\.?\//.test(source), false);
 });
+
+// ---------------------------------------------------------------------------
+// What the helper does when the pool runs dry.
+//
+// These run the generated script for real, against a real socket. The bug they
+// exist for could not be caught by reading the source: the old helper did ask
+// the server first -- it just treated every answer it did not like, including
+// "your credit is gone", as if the network were down, and printed the dead key
+// anyway.
+// ---------------------------------------------------------------------------
+
+const http = require('http');
+const { execFile } = require('child_process');
+
+function stubServer(reply) {
+  const server = http.createServer((req, res) => {
+    const answer = reply(req);
+    res.writeHead(answer.status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(answer.body === undefined ? {} : answer.body));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      base: `http://127.0.0.1:${server.address().port}`,
+      close: () => new Promise((done) => server.close(done)),
+    }));
+  });
+}
+
+// A wired machine: credentials on disk, helper written, settings pointing at it.
+function wiredMachine(apiBase) {
+  const root = temporaryRoot();
+  const settingsFile = settingsIn(root);
+  write(settingsFile, { theme: 'dark' });
+  // The helper goes in first: the installer will not adopt a managed root that
+  // already holds files it did not write.
+  const credentials = path.join(root, 'auth.json');
+  const helper = claudeCode.writeHelper(root, credentials, settingsFile);
+  fs.writeFileSync(credentials, JSON.stringify({
+    schema: 1,
+    apiBase,
+    token: 'egb_token',
+    email: 'm@example.com',
+    claude: { apiKey: 'sk-stored', baseUrl: BASE_URL, budgetUsd: 25, spendUsd: 25 },
+  }));
+  connect(root, settingsFile);
+  return { root, settingsFile, helper };
+}
+
+function runHelper(helper) {
+  return new Promise((resolve) => {
+    execFile(helper, [], { timeout: 15000 }, (error, stdout, stderr) => {
+      resolve({ code: error ? error.code || 1 : 0, stdout, stderr });
+    });
+  });
+}
+
+test('a server that says the credit is spent does not get the stored key printed anyway', async () => {
+  const stub = await stubServer(() => ({
+    status: 402,
+    body: { error: 'your Engelbart Claude credit is used up' },
+  }));
+  try {
+    const machine = wiredMachine(stub.base);
+    const result = await runHelper(machine.helper);
+
+    // The whole failure this change exists for: printing `sk-stored` here is
+    // what buys a session that dies on its first request.
+    assert.equal(result.stdout, '');
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /used up/);
+
+    // And it takes itself out, so Claude Code falls back to the member's own
+    // login instead of being left with no usable credential at all.
+    const settings = read(machine.settingsFile);
+    assert.equal(settings.apiKeyHelper, undefined);
+    assert.equal(settings.env, undefined);
+    assert.equal(settings.theme, 'dark');
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a 200 that reports an exhausted status is a refusal too', async () => {
+  const stub = await stubServer(() => ({
+    status: 200,
+    body: { apiKey: 'sk-fresh', baseUrl: BASE_URL, status: 'exhausted', budgetUsd: 25, spendUsd: 25 },
+  }));
+  try {
+    const machine = wiredMachine(stub.base);
+    const result = await runHelper(machine.helper);
+
+    // A key that exists but cannot be spent is worse than no key: it looks
+    // like success right up until the first request.
+    assert.equal(result.stdout, '');
+    assert.equal(result.code, 1);
+    assert.equal(read(machine.settingsFile).apiKeyHelper, undefined);
+  } finally {
+    await stub.close();
+  }
+});
+
+// The other half of the trade. Failing closed on a refusal is only safe if a
+// bad minute on conference wifi is never mistaken for one.
+test('an unreachable server still gets the stored key, and changes nothing', async () => {
+  const machine = wiredMachine('http://127.0.0.1:1');
+  const result = await runHelper(machine.helper);
+
+  assert.equal(result.stdout, 'sk-stored');
+  assert.equal(result.code, 0);
+  assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper);
+});
+
+test('a deployment having a bad minute is not a refusal', async () => {
+  const stub = await stubServer(() => ({ status: 503, body: { error: 'upstream unavailable' } }));
+  try {
+    const machine = wiredMachine(stub.base);
+    const result = await runHelper(machine.helper);
+
+    assert.equal(result.stdout, 'sk-stored');
+    assert.equal(result.code, 0);
+    assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper);
+  } finally {
+    await stub.close();
+  }
+});
+
+test('a healthy server still rotates the key in front of the stored one', async () => {
+  const stub = await stubServer(() => ({
+    status: 200,
+    body: { apiKey: 'sk-fresh', baseUrl: BASE_URL, status: 'active', budgetUsd: 25, spendUsd: 1 },
+  }));
+  try {
+    const machine = wiredMachine(stub.base);
+    const result = await runHelper(machine.helper);
+
+    assert.equal(result.stdout, 'sk-fresh');
+    assert.equal(result.code, 0);
+    assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper);
+  } finally {
+    await stub.close();
+  }
+});
+
+// A member who pointed Claude Code at their own helper after signing in keeps
+// it: unwiring is only ever allowed to remove the exact value we wrote.
+test('refusing never removes a helper we did not write', async () => {
+  const stub = await stubServer(() => ({ status: 403, body: { error: 'this key is paused' } }));
+  try {
+    const machine = wiredMachine(stub.base);
+    write(machine.settingsFile, { apiKeyHelper: '/opt/other-tool/key', theme: 'dark' });
+    const result = await runHelper(machine.helper);
+
+    assert.equal(result.stdout, '');
+    assert.equal(result.code, 1);
+    assert.equal(read(machine.settingsFile).apiKeyHelper, '/opt/other-tool/key');
+  } finally {
+    await stub.close();
+  }
+});
+
+// Claude Code re-runs the helper on a 401 and otherwise waits out this cache.
+// An exhausted LiteLLM budget answers 400 or 429, never 401, so this window is
+// the only bound on how long a spent key stays in front of a member.
+test('the cache window is short enough to bound a spent key', () => {
+  assert.ok(claudeCode.HELPER_TTL_MS <= 900000);
+});

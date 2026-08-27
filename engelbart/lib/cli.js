@@ -282,10 +282,20 @@ async function run(deps = {}) {
     if (!options.dryRun && !(account && account.status === 'ready')) {
       output.write('Run `engelbart auth` to connect your Engelbart account and its Claude credits.\n');
     } else if (account && account.reused && auth.claudeEnv(account.stored)) {
-      // A fresh pairing prints this itself; a reused one has to be told, or a
-      // second install looks like it forgot the key it is already holding.
-      output.write('\nRun this once here so `claude` uses your credit:\n\n    source '
-        + `${auth.envPath(managedRoot)}\n`);
+      // A fresh pairing wires Claude Code itself; a reused one has to be
+      // re-wired here, or upgrading the CLI would leave whatever helper the
+      // previous version installed in place -- including the one that could
+      // not tell a spent key from an unreachable server.
+      const wired = (deps.wireClaudeCode || auth.wireClaudeCode)(
+        managedRoot,
+        account.stored,
+        authDeps,
+      );
+      auth.writeEnvFile(managedRoot, account.stored, wired.changed);
+      output.write(wired.changed
+        ? '\nClaude Code is set up to use your Engelbart credit. Just run `claude`.\n'
+        : '\nRun this in each terminal where you want `claude` to use your credit:'
+          + `\n\n    source ${auth.envPath(managedRoot)}\n`);
     }
     return 0;
   } catch (error) {
