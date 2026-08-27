@@ -214,10 +214,13 @@ class SessionTests(VaultTests):
         self.assertTrue(any("refresh_token" in c for c in calls))
 
     def test_without_a_session_the_reader_is_told_what_to_run(self):
+        # Both ways in are named, and by the spelling the CLI itself uses:
+        # `hc supabase-login` has not been a command for a while.
         self.write()
         with self.assertRaises(SB.SupabaseError) as caught:
             SB.current_session()
-        self.assertIn("supabase-login", str(caught.exception))
+        self.assertIn("hc supabase login", str(caught.exception))
+        self.assertIn("engelbart auth", str(caught.exception))
 
     def test_signing_out_removes_the_tokens(self):
         self.write()
@@ -328,6 +331,106 @@ class SendTests(VaultTests):
         with self.assertRaises(SB.SupabaseError) as caught:
             SB.sync_project(None, "/tmp/whatever")
         self.assertIn("supabase.json", str(caught.exception))
+
+
+class ConnectedMachineTests(VaultTests):
+    """A machine that ran `engelbart auth` has already proved who it is."""
+
+    def setUp(self):
+        super().setUp()
+        self.home = Path(self.tmp.name) / "engelbart"
+        self.home.mkdir(parents=True, exist_ok=True)
+        patch = mock.patch.dict(
+            os.environ, {"HUMAN_COMPACT_HOME": str(self.home)}, clear=False)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def connect(self, **fields):
+        (self.home / SB.ENGELBART_CREDENTIALS).write_text(json.dumps(dict({
+            "schema": 1,
+            "apiBase": "https://berkeley.example.com",
+            "token": "egb_machine",
+            "email": "m@example.com",
+        }, **fields)))
+
+    def answer(self, payload, seen=None, status=200):
+        def _post(url, headers, body, where="rpc"):
+            if seen is not None:
+                seen.update({"url": url, "headers": headers, "body": body})
+            return payload
+        return mock.patch.object(SB, "_post", _post)
+
+    def test_a_connected_machine_needs_no_second_sign_in(self):
+        self.write()
+        self.connect()
+        seen = {}
+        with self.answer({"accessToken": "jwt", "expiresIn": 3600,
+                          "userId": "user-uuid", "email": "m@example.com"}, seen):
+            session = SB.current_session()
+        self.assertEqual("jwt", session["access_token"])
+        self.assertEqual("user-uuid", session["user_id"])
+        self.assertEqual(
+            "https://berkeley.example.com/api/engelbart-session", seen["url"])
+        self.assertEqual("Bearer egb_machine", seen["headers"]["Authorization"])
+
+    def test_the_stored_session_cannot_be_renewed_on_its_own(self):
+        # The renewable half stays on the server, so a stolen vault buys an
+        # hour rather than an account.
+        self.write()
+        self.connect()
+        with self.answer({"accessToken": "jwt", "expiresIn": 3600,
+                          "userId": "user-uuid", "email": "m@example.com"}):
+            SB.current_session()
+        stored = json.loads(SB.session_path().read_text())
+        self.assertEqual("", stored["refresh_token"])
+
+    def test_an_expired_session_is_exchanged_again_not_refreshed(self):
+        self.write()
+        self.connect()
+        SB.session_path().parent.mkdir(parents=True, exist_ok=True)
+        SB.session_path().write_text(json.dumps({
+            "access_token": "old", "refresh_token": "", "user_id": "user-uuid",
+            "email": "m@example.com", "expires_at": int(time.time()) - 10}))
+        with self.answer({"accessToken": "fresh", "expiresIn": 3600,
+                          "userId": "user-uuid", "email": "m@example.com"}):
+            session = SB.current_session()
+        self.assertEqual("fresh", session["access_token"])
+
+    def test_a_machine_that_was_never_connected_is_told_both_ways_in(self):
+        self.write()
+        with self.assertRaises(SB.SupabaseError) as caught:
+            SB.current_session()
+        self.assertIn("engelbart auth", str(caught.exception))
+        self.assertIn("hc supabase login", str(caught.exception))
+
+    def test_credentials_without_a_token_do_not_count_as_connected(self):
+        self.write()
+        (self.home / SB.ENGELBART_CREDENTIALS).write_text(
+            json.dumps({"apiBase": "https://berkeley.example.com"}))
+        self.assertEqual({}, SB.engelbart_credentials())
+
+    def test_the_button_reads_as_signed_in_before_the_first_exchange(self):
+        self.write()
+        self.connect()
+        state = SB.status()
+        self.assertTrue(state["signed_in"])
+        self.assertTrue(state["connected"])
+        self.assertEqual("m@example.com", state["email"])
+
+    def test_a_password_sign_in_still_refreshes_the_ordinary_way(self):
+        self.write()
+        SB.session_path().parent.mkdir(parents=True, exist_ok=True)
+        SB.session_path().write_text(json.dumps({
+            "access_token": "old", "refresh_token": "renewable",
+            "user_id": "user-uuid", "email": "m@example.com",
+            "expires_at": int(time.time()) - 10}))
+        seen = {}
+        with self.answer({"access_token": "refreshed", "expires_in": 3600,
+                          "user": {"id": "user-uuid", "email": "m@example.com"}},
+                         seen):
+            session = SB.current_session()
+        self.assertEqual("refreshed", session["access_token"])
+        self.assertIn("grant_type=refresh_token", seen["url"])
 
 
 if __name__ == "__main__":

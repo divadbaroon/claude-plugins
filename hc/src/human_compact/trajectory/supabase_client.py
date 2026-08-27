@@ -35,6 +35,11 @@ from .secure_io import atomic_write_json
 
 CONFIG_NAME = "supabase.json"
 SESSION_NAME = "supabase-session.json"
+# Written by `engelbart auth`, in the CLI's own directory rather than the
+# vault. It holds the machine token that stands in for the sign-in the member
+# already completed in a browser.
+ENGELBART_CREDENTIALS = "auth.json"
+ENGELBART_SESSION_PATH = "/api/engelbart-session"
 TIMEOUT_S = 20.0
 # Renew a little before the token actually lapses: a send that starts valid
 # and finishes expired is a confusing failure to read.
@@ -308,6 +313,57 @@ def _store_session(payload: Dict[str, Any],
     return session
 
 
+def engelbart_home() -> Path:
+    """Where `engelbart auth` keeps what it wrote, resolved as the CLI does."""
+    configured = os.environ.get("HUMAN_COMPACT_HOME")
+    return Path(configured) if configured else Path.home() / ".human-compact"
+
+
+def engelbart_credentials() -> Dict[str, Any]:
+    try:
+        value = json.loads(
+            (engelbart_home() / ENGELBART_CREDENTIALS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    if not value.get("token") or not value.get("apiBase"):
+        return {}
+    return value
+
+
+def _session_from_engelbart(root: Optional[Path] = None) -> Dict[str, Any]:
+    """A Supabase session for a machine that is already connected.
+
+    Row security is written against ``auth.uid()``, so a sync needs a Supabase
+    token; the machine holds an Engelbart one. Rather than ask for a password
+    a second time, that token is exchanged for a short-lived session, which is
+    minted by Supabase and expires on its own. Nothing renewable is stored:
+    when it lapses the exchange simply happens again, and revoking the machine
+    from the website ends it for good.
+    """
+    credentials = engelbart_credentials()
+    if not credentials:
+        raise SupabaseError(
+            "not signed in -- run `engelbart auth`, or `hc supabase login` "
+            "to use a password instead")
+    answer = _post(
+        f"{str(credentials['apiBase']).rstrip('/')}{ENGELBART_SESSION_PATH}",
+        {"Authorization": f"Bearer {credentials['token']}"},
+        {}, "auth")
+    if not answer.get("accessToken"):
+        raise SupabaseError(
+            "this machine is connected but Engelbart issued no session")
+    return _store_session({
+        "access_token": answer.get("accessToken"),
+        # Deliberately empty: the renewable half never leaves the server, and
+        # a file that cannot renew is a file that cannot be replayed.
+        "refresh_token": "",
+        "expires_in": answer.get("expiresIn"),
+        "user": {"id": answer.get("userId"), "email": answer.get("email")},
+    }, root)
+
+
 def load_session(root: Optional[Path] = None) -> Dict[str, Any]:
     try:
         value = json.loads(session_path(root).read_text(encoding="utf-8"))
@@ -349,13 +405,27 @@ def _refresh(session: Dict[str, Any],
     return _store_session(payload, root)
 
 
+def _renew(session: Dict[str, Any],
+           root: Optional[Path] = None) -> Dict[str, Any]:
+    """Whichever renewal this machine is entitled to.
+
+    A connected machine asks Engelbart, because its session was never
+    renewable and was not meant to be. One signed in with a password holds a
+    refresh token and uses it. A machine with both prefers the exchange: it is
+    the credential the member can revoke from the website.
+    """
+    if engelbart_credentials():
+        return _session_from_engelbart(root)
+    return _refresh(session, root)
+
+
 def current_session(root: Optional[Path] = None) -> Dict[str, Any]:
     """A session whose access token is good for the next call."""
     session = load_session(root)
     if not session.get("access_token"):
-        raise SupabaseError("not signed in -- run `hc supabase-login`")
+        return _session_from_engelbart(root)
     if int(session.get("expires_at") or 0) - REFRESH_MARGIN_S <= time.time():
-        session = _refresh(session, root)
+        session = _renew(session, root)
     return session
 
 
@@ -367,10 +437,15 @@ def status(root: Optional[Path] = None) -> Dict[str, Any]:
         return {"configured": False, "signed_in": False, "error": str(exc),
                 "config_path": str(config_path(root))}
     session = load_session(root)
+    # A connected machine can sync before it has ever held a session: the
+    # button would otherwise read "sign in" at a member who already did.
+    connected = engelbart_credentials()
     return {
         "configured": bool(config["url"] and config["anon_key"]),
-        "signed_in": bool(session.get("access_token")),
-        "email": session.get("email") or config.get("email") or "",
+        "signed_in": bool(session.get("access_token")) or bool(connected),
+        "connected": bool(connected),
+        "email": (session.get("email") or connected.get("email")
+                  or config.get("email") or ""),
         "user_id": session.get("user_id") or "",
         "expires_at": session.get("expires_at") or 0,
         "config_path": str(config_path(root)),
