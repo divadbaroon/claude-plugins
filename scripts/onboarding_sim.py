@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,7 @@ HC_SRC = REPO / "hc" / "src"
 sys.path.insert(0, str(HC_SRC))
 
 from human_compact.trajectory import chat_state as CS  # noqa: E402
+from human_compact.trajectory import goals as GM  # noqa: E402
 from human_compact.trajectory import project_store as PS  # noqa: E402
 from human_compact.trajectory import ui as UI  # noqa: E402
 
@@ -37,10 +39,73 @@ EXAMPLE_PROJECTS = (
 )
 
 
-def seed(state_root: Path) -> Path:
-    """Create one unbound chat and realistic choices, all below state_root."""
+@dataclass(frozen=True)
+class Scenario:
+    description: str
+    saved_projects: bool = False
+    starts_in_saved_project: bool = False
+    legacy_goal: bool = False
+    already_bound: bool = False
+
+
+SCENARIOS = {
+    "first-use": Scenario(
+        "an unbound first chat with no projects Engelbart has saved",
+    ),
+    "returning": Scenario(
+        "an unbound chat with two projects available to resume",
+        saved_projects=True,
+    ),
+    "in-project": Scenario(
+        "an unbound chat opened inside a project Engelbart already knows",
+        saved_projects=True,
+        starts_in_saved_project=True,
+    ),
+    "legacy-goals": Scenario(
+        "an upgraded chat with existing goals but no explicit project binding",
+        saved_projects=True,
+        starts_in_saved_project=True,
+        legacy_goal=True,
+    ),
+    "already-onboarded": Scenario(
+        "a chat already bound to a project, showing the post-onboarding landing",
+        saved_projects=True,
+        starts_in_saved_project=True,
+        already_bound=True,
+    ),
+}
+
+
+def _example_projects(state_root: Path) -> dict[str, Path]:
+    homes = {}
+    for name, objective in EXAMPLE_PROJECTS:
+        home = PS.workspace_home(state_root, name)
+        if home is None:
+            raise RuntimeError(f"could not create example project: {name}")
+        home.mkdir(parents=True, exist_ok=True)
+        PS.save_project(
+            state_root,
+            str(home),
+            {"name": name, "objective": objective},
+        )
+        homes[name] = home
+    return homes
+
+
+def seed(state_root: Path, scenario_name: str = "returning") -> Path:
+    """Create one scenario below state_root and return its real chat store."""
     state_root = state_root.resolve()
-    starting_dir = state_root / "starting-directory"
+    try:
+        scenario = SCENARIOS[scenario_name]
+    except KeyError as exc:
+        raise ValueError(f"unknown onboarding scenario: {scenario_name}") from exc
+
+    projects = _example_projects(state_root) if scenario.saved_projects else {}
+    starting_dir = (
+        projects[EXAMPLE_PROJECTS[0][0]]
+        if scenario.starts_in_saved_project
+        else state_root / "project-open-in-claude"
+    )
     starting_dir.mkdir(parents=True, exist_ok=True)
 
     CS.ingest_hook(
@@ -53,16 +118,22 @@ def seed(state_root: Path) -> Path:
     )
     CS.mark_goals_ui_invoked(SESSION_ID, root=state_root)
 
-    for name, objective in EXAMPLE_PROJECTS:
-        home = PS.workspace_home(state_root, name)
-        if home is None:
-            raise RuntimeError(f"could not create example project: {name}")
-        home.mkdir(parents=True, exist_ok=True)
-        PS.save_project(
-            state_root,
-            str(home),
-            {"name": name, "objective": objective},
+    if scenario.legacy_goal:
+        CS.save_goals(
+            SESSION_ID,
+            {
+                "version": 1,
+                "goals": [GM.new_goal(
+                    "g1",
+                    "Preserve the work already in this chat",
+                    description="This goal predates explicit project binding.",
+                )],
+            },
+            {"items": []},
+            root=state_root,
         )
+    if scenario.already_bound:
+        CS.bind_project(SESSION_ID, str(starting_dir), root=state_root)
 
     return CS.paths(SESSION_ID, state_root).session_dir
 
@@ -96,11 +167,43 @@ def _stop(process: Optional[subprocess.Popen]) -> None:
         process.wait(timeout=2)
 
 
-def run(port: int = 0, open_browser: bool = True) -> int:
+def _checkout_label() -> str:
+    try:
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"], cwd=REPO,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=REPO,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        return f"{branch or 'detached'} @ {commit}{' + working edits' if dirty else ''}"
+    except (OSError, subprocess.CalledProcessError):
+        return "working tree"
+
+
+def _assert_checkout_import() -> None:
+    loaded = Path(CS.__file__).resolve()
+    if HC_SRC.resolve() not in loaded.parents:
+        raise RuntimeError(
+            f"loaded human_compact from {loaded}, not this checkout at {HC_SRC}"
+        )
+
+
+def run(
+    scenario_name: str = "returning",
+    port: int = 0,
+    open_browser: bool = True,
+) -> int:
+    _assert_checkout_import()
     process: Optional[subprocess.Popen] = None
     with tempfile.TemporaryDirectory(prefix="engelbart-onboarding-") as held:
         state_root = Path(held)
-        session_dir = seed(state_root)
+        session_dir = seed(state_root, scenario_name)
         env = os.environ.copy()
         env["HC_CHAT_STATE_DIR"] = str(state_root)
         env["HC_CHAT_UI_IDLE_SECONDS"] = "0"
@@ -119,9 +222,13 @@ def run(port: int = 0, open_browser: bool = True) -> int:
             "--port",
             str(port),
         ]
-        print("\n  disposable onboarding state · " + str(state_root), flush=True)
-        print("  both onboarding forks are available; Ctrl-C resets everything\n",
+        print(f"\n  scenario · {scenario_name}", flush=True)
+        print(f"  state    · {SCENARIOS[scenario_name].description}", flush=True)
+        print(f"  source   · {HC_SRC} ({_checkout_label()})", flush=True)
+        print("  package  · none; the npm wheel and installed runtime are bypassed",
               flush=True)
+        print("  sandbox  · " + str(state_root), flush=True)
+        print("  Ctrl-C deletes the sandbox and resets the scenario\n", flush=True)
         try:
             process = subprocess.Popen(command, cwd=REPO, env=env)
             url = _server_url(session_dir / "server.json", process)
@@ -142,6 +249,13 @@ def main(argv=None) -> int:
         )
     )
     parser.add_argument(
+        "scenario",
+        nargs="?",
+        default="returning",
+        choices=tuple(SCENARIOS) + ("list",),
+        help="scenario to run, or 'list' to describe them",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=0,
@@ -153,10 +267,19 @@ def main(argv=None) -> int:
         help="print the URL without opening a browser",
     )
     args = parser.parse_args(argv)
+    if args.scenario == "list":
+        width = max(map(len, SCENARIOS))
+        for name, scenario in SCENARIOS.items():
+            print(f"{name:<{width}}  {scenario.description}")
+        return 0
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
     try:
-        return run(port=args.port, open_browser=not args.no_open)
+        return run(
+            scenario_name=args.scenario,
+            port=args.port,
+            open_browser=not args.no_open,
+        )
     except RuntimeError as exc:
         print(f"onboarding simulator: {exc}", file=sys.stderr)
         return 1

@@ -38,17 +38,22 @@ Stops analysis and injection for this chat.
 
 ## Develop onboarding
 
-Run the production onboarding UI against a fresh, disposable vault:
+List the available terminal scenarios, then run one:
 
 ```bash
-python3 scripts/onboarding_sim.py
+python3 scripts/onboarding_sim.py list
+python3 scripts/onboarding_sim.py first-use
+python3 scripts/onboarding_sim.py returning
 ```
 
-The simulator opens both paths: creating a project and resuming one of two
-seeded projects. It reads the working tree's real UI and server code, never the
-installed copy, and writes nothing to `~/.claude-vault`. Refresh the browser
-after a browser-side edit; server-side edits restart the simulator process in
-place. `Ctrl-C` deletes every simulated project and resets the workflow.
+The scenarios cover first use, returning with saved projects, starting inside
+a known project, migration of a chat with legacy goals, and the already-bound
+landing. The terminal prints the exact checkout branch and commit in use. The
+simulator imports `hc/src` from this working tree and explicitly bypasses both
+the npm package's vendored wheel and the installed `~/.human-compact` runtime.
+It writes nothing to `~/.claude-vault`. Refresh the browser after a browser-side
+edit; server-side edits restart the simulator process in place. `Ctrl-C` deletes
+every simulated project and resets the workflow.
 
 **Workspace** — goal tree, one markdown document per goal, linked prompts, assembled prompt. Per chat, on a local port.
 
