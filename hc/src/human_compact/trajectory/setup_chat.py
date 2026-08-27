@@ -305,20 +305,22 @@ def to_goals(offered, chosen, todos) -> List[Dict[str, Any]]:
     chosen = _one(chosen, MAX_LABEL)
     rows = [_one(t, MAX_TODO) for t in todos or []]
     rows = [t for t in rows if t][:MAX_TODOS]
-    made: List[Dict[str, Any]] = []
+    doc: Dict[str, Any] = {"goals": []}
     labels = []
     for row in _normalize_goals(offered):
         labels.append(row["label"])
-        made.append(_goal(row["label"], row["why"],
-                          rows if row["label"] == chosen else []))
+        doc["goals"].append(_goal(doc, row["label"], row["why"],
+                                  rows if row["label"] == chosen else []))
     if chosen and chosen not in labels:
-        made.append(_goal(chosen, "", rows))
-    return made
+        doc["goals"].append(_goal(doc, chosen, "", rows))
+    return doc["goals"]
 
 
-def _goal(title, why, rows) -> Dict[str, Any]:
-    goal = GM.new_goal(GM.goal_id() if hasattr(GM, "goal_id") else None,
-                       title[:MAX_LABEL], origin="user")
+def _goal(doc, title, why, rows) -> Dict[str, Any]:
+    # Ids are allocated against the tree as it grows: next_goal_id reads
+    # what is already in it, so each goal must be in the document before
+    # the next one asks for a name.
+    goal = GM.new_goal(GM.next_goal_id(doc), title[:MAX_LABEL], origin="user")
     goal["description"] = why
     # No status is what the rail means by "not yet sent to a build", and
     # setup has run nothing: every row it writes is the reader's to send.
@@ -341,3 +343,53 @@ def to_project(name, plan) -> Dict[str, Any]:
     body = "\n".join("%s: %s" % (row["k"], row["v"]) for row in plan["lines"])
     return {"name": _one(name, 80), "objective": plan["head"],
             "description": body}
+
+
+# --- what setup leaves behind ------------------------------------------------
+#
+# The setup conversation happens on a web page, not in a Claude Code chat.
+# There is therefore no chat to bind: the project is made from the name the
+# reader typed while the goals were being written, and its goal tree lives in
+# a workspace this vault minted. A chat joins it later, by opening it, the
+# same way it would join any project it did not start.
+
+def commit(root, name, plan, offered, chosen, todos) -> Dict[str, Any]:
+    """Make the project, write its tree, attach it to nothing.
+
+    Refused before anything is created when there is nothing to save, when
+    the name cannot become a folder, and when the name is already a
+    project's -- two projects with one name are two answers to "which one
+    did I mean", and the reader is told rather than handed the first.
+    """
+    from . import chat_state as CS
+    from . import project_store as PS
+
+    made = to_goals(offered, chosen, todos)
+    held = to_project(name, plan)
+    if not made and not held["objective"]:
+        return {"ok": False, "error": "nothing to save yet"}
+    if not held["name"]:
+        return {"ok": False, "error": "name this project first"}
+    if PS.workspace_home(root, held["name"]) is None:
+        return {"ok": False, "error": "that name cannot become a folder"}
+    if PS.project_named(root, held["name"]) is not None:
+        return {"ok": False,
+                "error": "a project is already called that; pick another name"}
+
+    cwd = PS.create_named(root, held["name"])
+    if not cwd:
+        return {"ok": False, "error": "that name cannot become a folder"}
+    # A session of this vault's own rather than one Claude started: it holds
+    # the tree, and no conversation is bound to it. Written in the same save
+    # as the name and the objective -- the project section is rebuilt from a
+    # whitelist on every write, so naming the store in a second save of its
+    # own is a second chance to drop one of the two.
+    session_id = CS.open_workspace_for(cwd, root)
+    held["tree_session"] = session_id
+    PS.save_project(root, cwd, held)
+    if made:
+        goals = {"goals": made}
+        GM.sanitize(goals)
+        CS.save_goals(session_id, goals, {"items": []}, root)
+    return {"ok": True, "cwd": cwd, "name": held["name"],
+            "tree_session": session_id, "goals": len(made)}

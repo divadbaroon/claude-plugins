@@ -12,12 +12,15 @@ every field is bounded and every shape is coerced rather than trusted.
 """
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "hc" / "src"))
 
+from human_compact.trajectory import chat_state as CS  # noqa: E402
+from human_compact.trajectory import project_store as PS  # noqa: E402
 from human_compact.trajectory import setup_chat as SC  # noqa: E402
 
 
@@ -233,6 +236,80 @@ class TreeTests(unittest.TestCase):
         self.assertEqual("Move uploads off the API", held["objective"])
         self.assertIn("the work", held["description"])
         self.assertIn("under 200ms", held["description"])
+
+
+class CommitTests(unittest.TestCase):
+    """What setup leaves behind: a project, and nothing attached to it.
+
+    The setup conversation happens on a web page, not in a Claude Code chat,
+    so there is no chat to bind. The project is made from the name the reader
+    typed while the goals were being written, and its goal tree lives in a
+    workspace this vault minted rather than in any chat's store.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def commit(self, name="Uploads API", chosen="Signed uploads"):
+        return SC.commit(
+            self.root, name,
+            {"head": "Move uploads off the API",
+             "lines": [{"k": "the work", "v": "direct to storage"}]},
+            [{"label": "Signed uploads", "why": "proves the shape"},
+             {"label": "Under 200ms"}],
+            chosen, ["Add the signing route", "Switch the client"])
+
+    def test_the_project_is_made_from_the_name_the_reader_typed(self):
+        out = self.commit()
+        self.assertTrue(out["ok"], out)
+        record = PS.load_project(self.root, out["cwd"])
+        self.assertEqual("Uploads API", record["name"])
+        self.assertEqual("Move uploads off the API", record["objective"])
+
+    def test_its_goals_live_in_a_workspace_no_chat_owns(self):
+        # "hcws-" is this vault's own minting; a chat's id is Claude's.
+        out = self.commit()
+        self.assertTrue(out["tree_session"].startswith("hcws-"))
+        self.assertEqual(out["tree_session"],
+                         PS.tree_session(self.root, out["cwd"]))
+
+    def test_no_chat_is_bound_to_it(self):
+        # The web page is not a chat. Binding the one the reader happened to
+        # have open would attach the project to a conversation that had no
+        # part in it.
+        out = self.commit()
+        self.assertEqual([], CS.chats_in_project(out["cwd"], self.root))
+
+    def test_the_tree_holds_every_goal_with_rows_under_the_chosen_one(self):
+        out = self.commit()
+        goals, _important = CS.load_goals(out["tree_session"], self.root)
+        titles = [g["title"] for g in goals["goals"]]
+        self.assertIn("Signed uploads", titles)
+        self.assertIn("Under 200ms", titles)
+        chosen = [g for g in goals["goals"]
+                  if g["title"] == "Signed uploads"][0]
+        self.assertEqual(["Add the signing route", "Switch the client"],
+                         [r["text"] for r in chosen["todo_items"]])
+
+    def test_a_name_that_cannot_become_a_folder_is_refused(self):
+        out = SC.commit(self.root, "///", {"head": "h"}, [{"label": "a"}],
+                        "a", [])
+        self.assertFalse(out["ok"])
+        self.assertIn("name", out["error"])
+
+    def test_a_name_already_taken_is_reported_rather_than_reused(self):
+        first = self.commit()
+        self.assertTrue(first["ok"])
+        again = self.commit()
+        self.assertFalse(again["ok"])
+        self.assertIn("already", again["error"])
+
+    def test_nothing_to_save_is_refused_before_a_project_is_made(self):
+        out = SC.commit(self.root, "Empty", {"head": ""}, [], "", [])
+        self.assertFalse(out["ok"])
+        self.assertEqual([], PS.list_projects(self.root))
 
 
 if __name__ == "__main__":

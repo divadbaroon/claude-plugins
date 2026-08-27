@@ -404,6 +404,14 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     identity = section.get("id")
     if isinstance(identity, str) and identity:
         out["id"] = identity[:64]
+    # Where the project's goals are. Read back as well as written: this is
+    # the authored half a regeneration rebuilds the record from, and a key
+    # written on one side of the whitelist and not the other is dropped by
+    # the next unrelated write -- which is how a project came to forget the
+    # store its own tree lives in on its first goal save.
+    held = section.get("tree_session")
+    if isinstance(held, str) and held:
+        out["tree_session"] = held[:200]
     # Re-checked on the way out as well as in: a worktree the reader has
     # since removed would otherwise keep sending builds to a path that is
     # no longer there.

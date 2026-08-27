@@ -319,6 +319,19 @@ class WorktreeChoiceTests(unittest.TestCase):
         self.assertEqual(PS._resolved(self.tree),
                          PS.load_project(self.root, self.repo)["working_dir"])
 
+    def test_the_store_holding_the_tree_survives_a_regeneration(self):
+        # _project_section writes tree_session, but load_project did not read
+        # it back, so build() -- the regeneration every goal save triggers --
+        # rebuilt the record without it and the project forgot where its
+        # goals were. The comment beside the key had warned about exactly
+        # this: a field written on one side of the whitelist and not the
+        # other is dropped by the next unrelated write.
+        PS.save_project(self.root, self.repo, {"name": "Repo"})
+        PS.set_tree_session(self.root, self.repo, "hcws-abc123")
+        PS.write(self.root, self.repo)
+        self.assertEqual("hcws-abc123",
+                         PS.tree_session(self.root, self.repo))
+
     def test_a_checkout_of_another_repository_is_refused(self):
         # The choice decides where a build writes. A path from elsewhere is
         # not a view of this project and is not taken on its word.
