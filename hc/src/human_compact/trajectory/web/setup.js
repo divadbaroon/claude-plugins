@@ -729,7 +729,11 @@
     post({ op: "setup_commit", name: st.name,
            plan: st.plan, goals: st.goals,
            chosen: st.chosen === " other" ? st.other : st.chosen,
-           todos: st.todos.map(function (t) { return t.text; }) })
+           todos: st.todos.map(function (t) { return t.text; }),
+           subgoals: st.pieces.map(function (g) {
+             return { label: g.label,
+                      todos: g.todos.map(function (t) { return t.text; }) };
+           }) })
       .then(function (out) {
         st.thinking = false;
         if (!out || !out.ok) {
