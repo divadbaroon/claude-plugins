@@ -38,22 +38,30 @@ Stops analysis and injection for this chat.
 
 ## Develop onboarding
 
-List the available terminal scenarios, then run one:
+Open the terminal-style web console:
 
 ```bash
-python3 scripts/onboarding_sim.py list
-python3 scripts/onboarding_sim.py first-use
-python3 scripts/onboarding_sim.py returning
+python3 scripts/onboarding_sim.py
 ```
 
-The scenarios cover first use, returning with saved projects, starting inside
-a known project, migration of a chat with legacy goals, and the already-bound
-landing. The terminal prints the exact checkout branch and commit in use. The
-simulator imports `hc/src` from this working tree and explicitly bypasses both
-the npm package's vendored wheel and the installed `~/.human-compact` runtime.
-It writes nothing to `~/.claude-vault`. Refresh the browser after a browser-side
-edit; server-side edits restart the simulator process in place. `Ctrl-C` deletes
-every simulated project and resets the workflow.
+Its two controls launch the first-run states under evaluation: a substantive
+chat before `/bart` (four inferred core outcome-goals, depth at most three) and
+a blank chat whose only turn is `/bart` (zero goals and the current weak manual
+`+ Add goal` affordance, but no guided first-goal/review flow). Run the same
+states without the console when a stable CLI command is more useful:
+
+```bash
+python3 scripts/onboarding_sim.py worked-chat
+python3 scripts/onboarding_sim.py cold-start
+```
+
+`python3 scripts/onboarding_sim.py list` retains the lower-level binding and
+migration fixtures. The terminal prints the exact checkout branch and commit in
+use. The simulator imports `hc/src` from this working tree and explicitly
+bypasses both the npm package's vendored wheel and the installed
+`~/.human-compact` runtime. It writes nothing to `~/.claude-vault`. Refresh the
+browser after a browser-side edit; server-side edits restart the scenario
+process in place. `Ctrl-C` stops the console and deletes its active sandbox.
 
 **Workspace** — goal tree, one markdown document per goal, linked prompts, assembled prompt. Per chat, on a local port.
 

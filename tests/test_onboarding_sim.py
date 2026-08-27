@@ -45,6 +45,8 @@ class OnboardingSimulatorTests(unittest.TestCase):
 
     def test_scenarios_reach_the_distinct_production_states(self):
         expected = {
+            "worked-chat": (True, 4, 1),
+            "cold-start": (True, 0, 1),
             "first-use": (False, 0, 0),
             "returning": (False, 0, 2),
             "in-project": (False, 0, 2),
@@ -62,6 +64,69 @@ class OnboardingSimulatorTests(unittest.TestCase):
                 self.assertEqual(bound, state["project_bound"])
                 self.assertEqual(goals, len(state["goals"]))
                 self.assertEqual(projects, len(SIM.PS.list_projects(state_root)))
+
+    def test_worked_chat_is_one_conversation_four_core_outcomes(self):
+        with tempfile.TemporaryDirectory() as held:
+            root = Path(held).resolve()
+            session_dir = SIM.seed(root, "worked-chat")
+            state = SIM.UI._payload(session_dir, True)
+            tree = {"version": 1, "goals": state["goals"]}
+
+            self.assertTrue(state["project_bound"])
+            self.assertEqual(4, len(state["goals"]))
+            self.assertLessEqual(
+                max(SIM.GM.depth(tree, goal["id"]) for goal in state["goals"]),
+                3,
+            )
+            self.assertEqual(
+                {"core"}, {goal["relevance"] for goal in state["goals"]}
+            )
+            self.assertTrue(
+                all(not goal["relevance_why"] for goal in state["goals"])
+            )
+            self.assertEqual("", state["project"]["objective"])
+            self.assertEqual(
+                [SIM.SESSION_ID],
+                SIM.PS.project_sessions(root, state["project"]["cwd"]),
+            )
+            self.assertEqual(3, len(SIM.CS.load_prompts(SIM.SESSION_ID, root)))
+            events = SIM.CS.load_events(SIM.SESSION_ID, root)
+            kinds = {
+                event["kind"]
+                for event in events
+            }
+            self.assertTrue({"human_prompt", "assistant_message",
+                             "plan_update", "tool_use",
+                             "tool_result"}.issubset(kinds))
+            self.assertTrue(
+                any("README.md" in event["text"] for event in events)
+            )
+
+    def test_cold_start_contains_only_an_excluded_launcher_and_no_goals(self):
+        with tempfile.TemporaryDirectory() as held:
+            root = Path(held).resolve()
+            session_dir = SIM.seed(root, "cold-start")
+            state = SIM.UI._payload(session_dir, True)
+            events = SIM.CS.load_events(SIM.SESSION_ID, root)
+
+            self.assertTrue(state["project_bound"])
+            self.assertEqual([], state["goals"])
+            self.assertEqual([], SIM.CS.load_prompts(SIM.SESSION_ID, root))
+            self.assertEqual(1, len(events))
+            self.assertEqual("/bart", events[0]["text"])
+            self.assertFalse(events[0]["usable_for_goals"])
+            self.assertEqual("", state["project"]["objective"])
+
+    def test_web_console_offers_exactly_the_two_first_run_scenarios(self):
+        page = SIM.console_html("test-token").decode("utf-8")
+
+        for name in SIM.CONSOLE_SCENARIOS:
+            self.assertIn(f'data-run="{name}"', page)
+            self.assertIn(SIM.html.escape(SIM.CONSOLE_DETAILS[name]), page)
+        for name in set(SIM.SCENARIOS) - set(SIM.CONSOLE_SCENARIOS):
+            self.assertNotIn(f'data-run="{name}"', page)
+        self.assertIn('const token="test-token"', page)
+        self.assertIn("window.open('about:blank','engelbart-scenario')", page)
 
     def test_list_is_a_terminal_scenario_index(self):
         output = io.StringIO()
