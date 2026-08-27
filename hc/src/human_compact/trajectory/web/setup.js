@@ -40,6 +40,7 @@
     goals: null,         // the goals they were offered
     chosen: "",          // the one they picked
     other: "",           // ...or the one they typed
+    goalNote: "",        // what else the rows should know about it
     todos: [],           // rows, editable
     newTodo: "",
     name: "",            // the project's name, typed while the rest arrives
@@ -199,7 +200,7 @@
   // spinner -- they have just installed and have not asked for anything yet.
   function drawFork() {
     var col = column(app);
-    hero(col, "Installed. What are we opening?");
+    hero(col, "");
     var card = el("div", "card rise");
     var body = el("div", "card-body");
     body.appendChild(el("div", "card-title", "Is this new work, or work you already have?"));
@@ -240,9 +241,6 @@
     body.appendChild(pick);
     step(body, "3", "Open its workspace.", "/bart");
 
-    body.appendChild(el("div", "hint",
-      "Engelbart reads what is already in that chat, so its goals are"
-      + " written from work you have already done."));
     var acts = el("div", "acts");
     acts.appendChild(btn("Back", "btn-quiet", function () {
       st.screen = "fork";
@@ -467,21 +465,26 @@
     var body = cardBox(col, "plan");
     body.appendChild(el("div", "card-title",
                         "Here's what I think you're working on"));
-    if (plan.head) {
-      var lead = el("div", "plan-v", plan.head);
-      lead.style.marginTop = "8px";
-      body.appendChild(lead);
-    }
-    var rows = el("div", "");
-    rows.style.marginTop = "10px";
-    (plan.lines || []).forEach(function (line) {
-      var row = el("div", "plan-row");
-      row.appendChild(el("span", "lbl plan-k", line.k));
-      row.appendChild(el("span", "plan-v", line.v));
-      rows.appendChild(row);
+    str(plan.description).split("\n\n").forEach(function (para) {
+      if (!para.trim()) return;
+      body.appendChild(el("div", "prose", para.trim()));
     });
-    body.appendChild(rows);
-
+    // What it could not settle. The part that tells them whether it
+    // understood them or guessed, so it is shown rather than buried.
+    if ((plan.unsure || []).length) {
+      var box = el("div", "inset");
+      box.appendChild(el("div", "lbl", "still unsure about"));
+      plan.unsure.forEach(function (line) {
+        var row = el("div", "bullet");
+        row.appendChild(el("span", "bullet-dot", "·"));
+        row.appendChild(el("span", "", line));
+        box.appendChild(row);
+      });
+      body.appendChild(box);
+    }
+    var ask = el("div", "card-title", "Is that basically right?");
+    ask.style.marginTop = "16px";
+    body.appendChild(ask);
     var acts = el("div", "acts");
     acts.appendChild(btn("Continue", "btn-on", function () {
       st.plan = plan;
@@ -489,17 +492,10 @@
       round();
     }));
     acts.appendChild(btn("Add something", "", function () {
-      st.draft = "";
       var field = document.querySelector(".composer .f");
       if (field) field.focus();
     }));
     body.appendChild(acts);
-    body.appendChild(el("div", "hint",
-      "Nothing is saved yet. Say what to change in the box below and it"
-      + " will write it again."));
-    var ask = el("div", "card-title", "Is that basically right?");
-    ask.style.marginTop = "14px";
-    body.insertBefore(ask, body.querySelector(".acts"));
   }
 
   // --- goals ----------------------------------------------------------------
@@ -514,18 +510,6 @@
     // Chosen, it opens up: the one they picked is lifted out of the list and
     // shown as the thing being started, with the rest still there to change
     // their mind with. Reading a decision back is what makes it feel made.
-    if (label) {
-      var open = el("div", "chosen rise");
-      open.appendChild(el("div", "lbl", "chosen"));
-      var head = el("div", "card-title", label);
-      head.style.marginTop = "5px";
-      open.appendChild(head);
-      var why = "";
-      goals.forEach(function (g) { if (g.label === label) why = g.why; });
-      if (why) open.appendChild(el("div", "chosen-why", why));
-      body.appendChild(open);
-    }
-
     goals.forEach(function (g) {
       var picked = st.chosen === g.label;
       var row = el("div", "opt");
@@ -570,10 +554,31 @@
       body.appendChild(wrap);
     }
 
+    // Chosen, it opens a box rather than reading the goal back at them:
+    // what they have to add is what the rows should know, and the goal is
+    // still on screen two lines above.
+    if (label) {
+      var more = el("div", "rise");
+      more.style.marginTop = "14px";
+      more.appendChild(el("div", "lbl", "anything the rows should know"));
+      var wrap = el("div", "field");
+      var note = el("textarea", "f");
+      note.setAttribute("rows", "3");
+      note.setAttribute("spellcheck", "false");
+      note.setAttribute("placeholder",
+                        "constraints, what to leave alone, where to start…");
+      note.value = st.goalNote;
+      on(note, "input", function () { st.goalNote = note.value; });
+      wrap.appendChild(note);
+      more.appendChild(wrap);
+      body.appendChild(more);
+    }
+
     var acts = el("div", "acts");
     acts.appendChild(btn("Generate TODOs", label ? "btn-on" : "", function () {
       st.goals = goals;
-      say("you", label);
+      say("you", st.goalNote.trim()
+          ? label + "\n\n" + st.goalNote.trim() : label);
       round();
     }, !label));
     body.appendChild(acts);
@@ -587,7 +592,7 @@
                                                                 : " rows"));
     st.todos.forEach(function (t) {
       var row = el("div", "row");
-      row.appendChild(el("span", "tick", ""));
+      row.appendChild(el("span", "bullet-dot", "·"));
       var input = el("input", "f");
       input.setAttribute("type", "text");
       input.setAttribute("spellcheck", "false");
@@ -604,7 +609,7 @@
     });
 
     var add = el("div", "row");
-    add.appendChild(el("span", "mark mark-many", ""));
+    add.appendChild(el("span", "bullet-dot", "·"));
     var fresh = el("input", "f");
     fresh.setAttribute("type", "text");
     fresh.setAttribute("spellcheck", "false");
@@ -661,9 +666,6 @@
     pill.appendChild(go);
     nameWrap.appendChild(pill);
     body.appendChild(nameWrap);
-    body.appendChild(el("div", "hint",
-      "This makes the project and its goals. It is not attached to any"
-      + " chat yet — the next screen says how to open it."));
   }
 
   function complete() {

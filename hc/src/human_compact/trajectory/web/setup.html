@@ -18,9 +18,9 @@ body{background:#fff;font-family:'Source Code Pro',ui-monospace,Menlo,monospace}
 .hc{min-height:100vh;background:var(--bg);color:var(--ink);display:flex;flex-direction:column}
 
 .wrap{flex:1;overflow-y:auto}
-.col{max-width:620px;margin:0 auto;padding:0 28px 64px}
+.col{max-width:820px;margin:0 auto;padding:0 32px 64px}
 .foot{flex:none;background:var(--bg)}
-.foot .col{padding:8px 28px 26px}
+.foot .col{padding:8px 32px 26px}
 
 /* --- the tracked micro-caps that label everything ---------------------- */
 .lbl{font:500 9px/1 'Source Code Pro',monospace;letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
@@ -42,7 +42,7 @@ body{background:#fff;font-family:'Source Code Pro',ui-monospace,Menlo,monospace}
 .msg{padding:16px 0 0}
 .msg-them .msg-body{margin-top:7px;font:13px/1.75 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;text-wrap:pretty}
 .msg-you{display:flex;justify-content:flex-end}
-.msg-you .msg-body{max-width:82%;margin-top:7px;padding:11px 14px;background:var(--ink);color:var(--bg);border-radius:10px;font:12.5px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;text-wrap:pretty}
+.msg-you .msg-body{max-width:74%;margin-top:7px;padding:11px 14px;background:var(--ink);color:var(--bg);border-radius:10px;font:12.5px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;text-wrap:pretty}
 
 /* --- an option: a row that is a box when chosen ------------------------ */
 .opt{display:flex;align-items:flex-start;gap:11px;padding:9px 12px;margin-top:5px;border:1px solid transparent;border-bottom-color:var(--bd);border-radius:7px;cursor:pointer;transition:border-color 120ms,background 120ms}
@@ -70,10 +70,11 @@ textarea.f{resize:none}
 /* --- an aside the model is unsure about, or a note --------------------- */
 .inset{margin-top:12px;padding:11px 14px;background:var(--tint);border-radius:8px;font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
 
-/* --- plan: prose under a left rule ------------------------------------ */
-.plan-row{display:flex;gap:14px;padding:9px 0 9px 13px;border-left:1px solid var(--bd)}
-.plan-k{flex:none;width:82px;padding-top:3px}
-.plan-v{flex:1;font:12.5px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+/* --- plan: prose, then the doubts under it ---------------------------- */
+.prose{margin-top:10px;font:12.5px/1.8 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+.bullet{display:flex;gap:9px;margin-top:6px;font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+.bullet-dot{flex:none;color:var(--fnt)}
+.inset .lbl{margin-bottom:4px}
 
 /* --- the goal, once chosen: it opens up ------------------------------- */
 .chosen{margin:14px 0 2px;padding:14px 16px;border:1px solid var(--ink);border-radius:9px;background:var(--tint)}
@@ -87,7 +88,7 @@ textarea.f{resize:none}
 .row .x{flex:none;padding:0 3px;font:12px/1 'Source Code Pro',monospace;color:var(--fnt);background:none;border:none;cursor:pointer;opacity:0}
 .row:hover .x{opacity:1}
 .row .x:hover{color:var(--del)}
-.tick{flex:none;width:11px;height:11px;border:1.5px solid var(--ink);border-radius:2px;background:var(--ink)}
+.row .bullet-dot{padding-bottom:2px}
 
 /* --- the name, and the button that lives in it ------------------------- */
 .name-row{display:flex;align-items:center;gap:10px;margin-top:9px;padding:5px 5px 5px 14px;background:var(--tint);border:1px solid var(--bd);border-radius:999px}

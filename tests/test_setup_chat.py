@@ -142,24 +142,28 @@ class CardTests(unittest.TestCase):
         self.assertEqual(2, len(set(ids)))
         self.assertTrue(all(ids))
 
-    def test_the_plan_keeps_its_head_and_its_lines_in_order(self):
+    def test_the_plan_is_prose_and_the_doubts_under_it(self):
         out = SC.normalize_card({"card": "plan", "plan": {
-            "head": "Move uploads off the API",
+            "description": "Move uploads off the API.\n\nDone when the"
+                           " client PUTs straight to storage.",
+            "unsure": ["which bucket", "who signs the URL"]}})
+        # Paragraphs survive; a form's labels were never the reader's words.
+        self.assertIn("\n\n", out["plan"]["description"])
+        self.assertEqual(["which bucket", "who signs the URL"],
+                         out["plan"]["unsure"])
+
+    def test_a_plan_still_written_as_rows_is_folded_into_the_prose(self):
+        # Half a plan is worse than a clumsy one, so a model writing the
+        # older shape is read rather than dropped.
+        out = SC.normalize_card({"card": "plan", "plan": {
             "lines": [{"k": "the work", "v": "direct to storage"},
                       {"k": "constraint", "v": "under 200ms"}]}})
-        self.assertEqual("Move uploads off the API", out["plan"]["head"])
-        self.assertEqual(["the work", "constraint"],
-                         [l["k"] for l in out["plan"]["lines"]])
+        self.assertIn("direct to storage", out["plan"]["description"])
+        self.assertIn("under 200ms", out["plan"]["description"])
 
-    def test_a_plan_line_missing_either_half_is_dropped(self):
-        out = SC.normalize_card({"card": "plan", "plan": {
-            "head": "h", "lines": [{"k": "", "v": "orphan"},
-                                   {"k": "scope", "v": ""},
-                                   {"k": "ok", "v": "kept"}]}})
-        self.assertEqual([{"k": "ok", "v": "kept"}], out["plan"]["lines"])
-
-    def test_a_plan_with_no_head_and_no_lines_is_not_a_card(self):
-        out = SC.normalize_card({"card": "plan", "plan": {"lines": []}})
+    def test_a_plan_that_says_nothing_is_not_a_card(self):
+        out = SC.normalize_card({"card": "plan",
+                                 "plan": {"unsure": ["everything"]}})
         self.assertEqual("none", out["card"])
 
     def test_goals_carry_the_reason_each_one_is_offered(self):
@@ -233,7 +237,7 @@ class StageTests(unittest.TestCase):
         class Eager:
             def generate_json(self, prompt):
                 return {"say": "Here is the plan.", "card": "plan",
-                        "plan": {"head": "Move uploads", "lines": []}}
+                        "plan": {"description": "Move uploads"}}
         out = SC.ask([{"role": "you", "text": "uploads are slow"}],
                      engine=Eager(), shown=[])
         self.assertTrue(out["ok"])
@@ -246,7 +250,7 @@ class StageTests(unittest.TestCase):
             def generate_json(self, prompt):
                 seen["prompt"] = prompt
                 return {"say": "ok", "card": "plan",
-                        "plan": {"head": "h", "lines": []}}
+                        "plan": {"description": "h"}}
         SC.ask([{"role": "you", "text": "x"}], engine=Stub(),
                shown=["questions", "questions"])
         self.assertIn("write the plan", seen["prompt"])
@@ -255,7 +259,7 @@ class StageTests(unittest.TestCase):
         class Stub:
             def generate_json(self, prompt):
                 return {"say": "ok", "card": "plan",
-                        "plan": {"head": "h", "lines": []}}
+                        "plan": {"description": "h"}}
         out = SC.ask([{"role": "you", "text": "x"}], engine=Stub(),
                      shown=["questions", "questions"])
         self.assertEqual("plan", out["card"])
@@ -385,13 +389,12 @@ class TreeTests(unittest.TestCase):
 
     def test_the_plan_becomes_the_projects_objective_and_notes(self):
         held = SC.to_project("uploads-api", {
-            "head": "Move uploads off the API",
-            "lines": [{"k": "the work", "v": "direct to storage"},
-                      {"k": "constraint", "v": "under 200ms"}]})
+            "description": "Move uploads off the API.\nDone when the client"
+                           " PUTs straight to storage."})
         self.assertEqual("uploads-api", held["name"])
-        self.assertEqual("Move uploads off the API", held["objective"])
-        self.assertIn("the work", held["description"])
-        self.assertIn("under 200ms", held["description"])
+        # One line, because every chat in the project reads it.
+        self.assertEqual("Move uploads off the API.", held["objective"])
+        self.assertIn("PUTs straight to storage", held["description"])
 
 
 class CommitTests(unittest.TestCase):
@@ -450,7 +453,8 @@ class CommitTests(unittest.TestCase):
                          [r["text"] for r in chosen["todo_items"]])
 
     def test_a_name_that_cannot_become_a_folder_is_refused(self):
-        out = SC.commit(self.root, "///", {"head": "h"}, [{"label": "a"}],
+        out = SC.commit(self.root, "///", {"description": "h"},
+                        [{"label": "a"}],
                         "a", [])
         self.assertFalse(out["ok"])
         self.assertIn("name", out["error"])
@@ -463,7 +467,7 @@ class CommitTests(unittest.TestCase):
         self.assertIn("already", again["error"])
 
     def test_nothing_to_save_is_refused_before_a_project_is_made(self):
-        out = SC.commit(self.root, "Empty", {"head": ""}, [], "", [])
+        out = SC.commit(self.root, "Empty", {"description": ""}, [], "", [])
         self.assertFalse(out["ok"])
         self.assertEqual([], PS.list_projects(self.root))
 

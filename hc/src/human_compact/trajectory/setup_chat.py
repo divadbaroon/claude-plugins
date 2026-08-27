@@ -47,7 +47,8 @@ MAX_TURNS = 40          # of transcript carried into the next call
 MAX_TURN_TEXT = 2000
 MAX_QUESTIONS = 6
 MAX_OPTIONS = 8
-MAX_PLAN_LINES = 8
+MAX_PLAN = 2400
+MAX_UNSURE = 6
 MAX_GOALS = 8
 MAX_TODOS = 20
 
@@ -126,16 +127,20 @@ FORM = [
     '                                        "why": "<optional: what it',
     '                                                buys them>"}],',
     '                            "placeholder": "<free and open>"}]},',
-    '   "plan": {"head": "<one line: what this project is>",',
-    '            "lines": [{"k": "the work", "v": "..."},',
-    '                      {"k": "in place", "v": "..."},',
-    '                      {"k": "constraint", "v": "..."},',
-    '                      {"k": "done means", "v": "..."}]},',
+    '   "plan": {"description": "<a short paragraph or two: what you think',
+    '                            they are doing and what done looks like>",',
+    '            "unsure": ["<something you could not settle from what they',
+    '                        said, in their terms>"]},',
     '   "goals": [{"label": "<an outcome, not a task>",',
     '              "why": "<why this one is worth starting on>"}],',
     '   "todos": ["<one row of work>"]}',
     "",
     "Only the key for the card you name is read; leave the others out.",
+    "",
+    "The plan is prose and doubts, not a form. Say what you think the work",
+    "is in a couple of short paragraphs they could argue with, then list what",
+    "you could not settle -- that list is what tells them whether you",
+    "understood them or guessed, so write the real gaps and not none.",
     "",
     "The order this normally goes in: questions, questions again if the",
     "answers opened something, then plan, then goals, then todos. Do not",
@@ -193,6 +198,22 @@ def compose(transcript, extra=()) -> List[str]:
 
 def _one(value, cap: int) -> str:
     return " ".join(str(value or "").split())[:cap]
+
+
+def _long(value, cap: int) -> str:
+    """Prose, with its paragraphs left in. Blank runs are collapsed so a
+    model that pads with newlines does not push the buttons off screen."""
+    lines = [" ".join(line.split()) for line in str(value or "").splitlines()]
+    out, blank = [], False
+    for line in lines:
+        if not line:
+            blank = True
+            continue
+        if out and blank:
+            out.append("")
+        blank = False
+        out.append(line)
+    return "\n".join(out)[:cap]
 
 
 def _question_id(seen) -> str:
@@ -263,20 +284,31 @@ def _normalize_questions(value) -> Dict[str, Any]:
 
 
 def _normalize_plan(value) -> Dict[str, Any]:
+    """The plan: what it thinks the work is, and what it is still unsure of.
+
+    Prose and doubts, not a form. A table of labelled rows read as something
+    the reader had to fill in rather than something they had to agree with,
+    and the labels were the model's invention anyway. What is worth saying
+    here is the description -- which they can argue with -- and the list of
+    what it could not settle, which is the part that tells them whether it
+    understood them or guessed.
+    """
     value = value if isinstance(value, dict) else {}
-    lines = []
-    for row in value.get("lines") or []:
-        if not isinstance(row, dict):
-            continue
-        key = _one(row.get("k"), MAX_LINE_KEY)
-        val = _one(row.get("v"), MAX_LINE_VALUE)
-        # Half a line says nothing: a label with no answer under it reads as
-        # a question the plan failed to settle.
-        if key and val:
-            lines.append({"k": key, "v": val})
-        if len(lines) >= MAX_PLAN_LINES:
+    said = _long(value.get("description") or value.get("head"), MAX_PLAN)
+    # A model still writing the old shape has its rows folded into the prose
+    # rather than dropped: half a plan is worse than a clumsy one.
+    if not said:
+        rows = [r for r in value.get("lines") or [] if isinstance(r, dict)]
+        said = " ".join(_one(r.get("v"), MAX_LINE_VALUE) for r in rows).strip()
+    unsure = []
+    for row in value.get("unsure") or []:
+        text = _one(row.get("text") if isinstance(row, dict) else row,
+                    MAX_LINE_VALUE)
+        if text:
+            unsure.append(text)
+        if len(unsure) >= MAX_UNSURE:
             break
-    return {"head": _one(value.get("head"), MAX_TITLE), "lines": lines}
+    return {"description": said, "unsure": unsure}
 
 
 def _normalize_goals(value) -> List[Dict[str, str]]:
@@ -334,7 +366,7 @@ def normalize_card(value) -> Dict[str, Any]:
     out: Dict[str, Any] = {"say": _one(value.get("say"), MAX_SAY),
                            "card": card, "questions": {"eyebrow": "",
                                                        "items": []},
-                           "plan": {"head": "", "lines": []},
+                           "plan": {"description": "", "unsure": []},
                            "goals": [], "todos": []}
     if card == "questions":
         held = _normalize_questions(value.get("questions"))
@@ -344,7 +376,7 @@ def normalize_card(value) -> Dict[str, Any]:
     elif card == "plan":
         held = _normalize_plan(value.get("plan"))
         out["plan"] = held
-        if not held["head"] and not held["lines"]:
+        if not held["description"]:
             out["card"] = "none"
     elif card == "goals":
         out["goals"] = _normalize_goals(value.get("goals"))
@@ -435,9 +467,12 @@ def to_project(name, plan) -> Dict[str, Any]:
     which is where the reader looks for what they agreed the work was.
     """
     plan = _normalize_plan(plan)
-    body = "\n".join("%s: %s" % (row["k"], row["v"]) for row in plan["lines"])
-    return {"name": _one(name, 80), "objective": plan["head"],
-            "description": body}
+    said = plan["description"]
+    # The objective is one line -- every chat in the project reads it -- so
+    # it is the first sentence of what was agreed, not the whole of it.
+    first = said.split("\n")[0].strip()
+    return {"name": _one(name, 80), "objective": first[:400],
+            "description": said}
 
 
 # --- what setup leaves behind ------------------------------------------------
@@ -567,7 +602,8 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
     # card itself is refused, because drawing it is what skips the step.
     if card["card"] != "none" and card["card"] != due:
         card = dict(card, card="none", questions={"eyebrow": "", "items": []},
-                    plan={"head": "", "lines": []}, goals=[], todos=[])
+                    plan={"description": "", "unsure": []},
+                    goals=[], todos=[])
     if not card["say"] and card["card"] == "none":
         return {"ok": False, "error": "the model answered with nothing"}
     return dict(card, ok=True, due=due)
