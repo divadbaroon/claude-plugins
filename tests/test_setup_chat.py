@@ -11,9 +11,12 @@ Everything here is model output on its way into the reader's document, so
 every field is bounded and every shape is coerced rather than trusted.
 """
 
+import contextlib
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -419,6 +422,59 @@ class RouteTests(unittest.TestCase):
         out = ui._apply_locked({"op": "setup_commit", "name": "x"},
                                trajdir=None, chat_scoped=False)
         self.assertEqual("setup_commit", out["__deferred__"][0])
+
+
+class PageTests(unittest.TestCase):
+    """The page itself, served by the workspace that answers its ops."""
+
+    @contextlib.contextmanager
+    def server(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        srv = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.H)
+        ui._configure_server(srv, Path(tmp.name), False)
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield "http://127.0.0.1:%d" % srv.server_address[1]
+        finally:
+            srv.follow_stop.set()
+            srv.shutdown()
+            srv.server_close()
+            thread.join(timeout=2)
+
+    def get(self, url):
+        with urllib.request.urlopen(url, timeout=10) as answer:
+            return answer.status, answer.read().decode("utf-8")
+
+    def test_the_page_is_served_and_asks_for_its_own_script(self):
+        with self.server() as base:
+            status, body = self.get(base + "/setup")
+            self.assertEqual(200, status)
+            self.assertIn("setup.js", body)
+            # The workspace's own palette, so the page is not a second look.
+            self.assertIn("--acc:#0000ee", body)
+
+    def test_the_script_is_served_beside_it(self):
+        with self.server() as base:
+            status, body = self.get(base + "/setup.js")
+            self.assertEqual(200, status)
+            self.assertIn("setup_commit", body)
+
+    def test_the_first_screen_asks_new_or_existing_before_anything_else(self):
+        # No model call and no spinner: they have just installed and have
+        # not asked for anything yet.
+        _status, body = None, None
+        with self.server() as base:
+            _status, body = self.get(base + "/setup.js")
+        self.assertIn("Start a new project", body)
+        self.assertIn("Resume an existing one", body)
+
+    def test_the_resume_path_hands_over_both_commands_to_copy(self):
+        with self.server() as base:
+            _status, body = self.get(base + "/setup.js")
+        self.assertIn("claude -r", body)
+        self.assertIn("/bart", body)
 
 
 if __name__ == "__main__":

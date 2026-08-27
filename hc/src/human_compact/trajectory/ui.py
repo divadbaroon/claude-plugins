@@ -3386,6 +3386,18 @@ class H(BaseHTTPRequestHandler):
                                  if self.server.chat_scoped else (None, None))
                 who = _project_identity(trajdir, self.server.chat_scoped, session)
                 self._send(200, project_json(root, who["cwd"], full=full))
+            elif self.path in ("/setup", "/setup/"):
+                # What opens after `npx engelbart-cli`, before there is a
+                # chat or a project to open anything else on. Served from
+                # this process because it is the one that answers the ops
+                # the page posts; it needs nothing else of the workspace.
+                page = resources.files("human_compact.trajectory").joinpath(
+                    "web/setup.html").read_bytes()
+                self._send(200, page, "text/html; charset=utf-8")
+            elif self.path == "/setup.js":
+                js = resources.files("human_compact.trajectory").joinpath(
+                    "web/setup.js").read_bytes()
+                self._send(200, js, "application/javascript")
             elif self.path == "/bridge.js":
                 js = resources.files("human_compact.trajectory").joinpath(
                     "web/bridge.js").read_bytes()
