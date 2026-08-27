@@ -243,7 +243,7 @@ function wiredMachine(apiBase) {
   // The helper goes in first: the installer will not adopt a managed root that
   // already holds files it did not write.
   const credentials = path.join(root, 'auth.json');
-  const helper = claudeCode.writeHelper(root, credentials, settingsFile);
+  const helper = claudeCode.writeHelper(root, credentials, settingsFile, BASE_URL);
   fs.writeFileSync(credentials, JSON.stringify({
     schema: 1,
     apiBase,
@@ -255,9 +255,9 @@ function wiredMachine(apiBase) {
   return { root, settingsFile, helper };
 }
 
-function runHelper(helper) {
+function runHelper(helper, args = []) {
   return new Promise((resolve) => {
-    execFile(helper, [], { timeout: 15000 }, (error, stdout, stderr) => {
+    execFile(helper, args, { timeout: 15000 }, (error, stdout, stderr) => {
       resolve({ code: error ? error.code || 1 : 0, stdout, stderr });
     });
   });
@@ -420,10 +420,65 @@ test('a refusal that could not unwire names the way out', async () => {
 
     assert.equal(result.code, 1);
     assert.equal(read(machine.settingsFile).apiKeyHelper, '/opt/other-tool/key');
-    assert.match(result.stderr, /engelbart logout/);
+    // A path, not a command name: there is no `engelbart` on PATH, npx needs
+    // a network, and this file is the one thing certainly present.
+    assert.match(result.stderr, /--disconnect/);
+    assert.ok(result.stderr.includes(machine.helper));
   } finally {
     await stub.close();
   }
+});
+
+// The whole answer to "how do I put this back?". It has to work with no
+// network, no npx, no `engelbart` on PATH, and no credentials file -- because
+// any of those being the problem is a reason someone is reaching for it.
+test('--disconnect puts Claude Code back on the member own account', async () => {
+  const machine = wiredMachine('http://127.0.0.1:1');
+  const before = read(machine.settingsFile);
+  assert.equal(before.apiKeyHelper, machine.helper);
+  assert.equal(before.env.ANTHROPIC_BASE_URL, BASE_URL);
+
+  const result = await runHelper(machine.helper, ['--disconnect']);
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /back on your own account/);
+  const after = read(machine.settingsFile);
+  assert.equal(after.apiKeyHelper, undefined);
+  assert.equal(after.env, undefined);
+  assert.equal(after.theme, 'dark', 'their settings are still their settings');
+});
+
+test('--disconnect works with the credentials file already gone', async () => {
+  const machine = wiredMachine('http://127.0.0.1:1');
+  fs.rmSync(path.join(machine.root, 'auth.json'), { force: true });
+
+  const result = await runHelper(machine.helper, ['--disconnect']);
+
+  assert.equal(result.code, 0);
+  const after = read(machine.settingsFile);
+  assert.equal(after.apiKeyHelper, undefined);
+  // The gateway URL is baked into the helper as well as stored, so it is still
+  // recognisable as ours once the credentials are gone.
+  assert.equal(after.env, undefined);
+});
+
+test('--disconnect run twice is not an error', async () => {
+  const machine = wiredMachine('http://127.0.0.1:1');
+  await runHelper(machine.helper, ['--disconnect']);
+  const second = await runHelper(machine.helper, ['--disconnect']);
+
+  assert.equal(second.code, 0);
+  assert.match(second.stdout, /already on your own account/);
+});
+
+test('--disconnect leaves a helper it did not write alone', async () => {
+  const machine = wiredMachine('http://127.0.0.1:1');
+  write(machine.settingsFile, { apiKeyHelper: '/opt/other-tool/key', theme: 'dark' });
+
+  const result = await runHelper(machine.helper, ['--disconnect']);
+
+  assert.equal(result.code, 0, 'the state they asked for is already true');
+  assert.equal(read(machine.settingsFile).apiKeyHelper, '/opt/other-tool/key');
 });
 
 // Nothing is left behind when the swap declines: a stray temp file beside the

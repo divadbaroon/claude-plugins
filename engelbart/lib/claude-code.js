@@ -59,15 +59,21 @@ function helperPath(managedRoot) {
 // out. While an `apiKeyHelper` is set, Claude Code does not fall back to the
 // member's own claude.ai login -- so a helper that keeps printing a dead key
 // does not degrade the session, it ends it.
-function helperSource(credentialsFile, settingsFile, helperFile) {
+function helperSource(credentialsFile, settingsFile, helperFile, baseUrl) {
   return `#!/usr/bin/env node
 'use strict';
 // Written by \`engelbart auth\`. Claude Code runs this for its credential.
-// Edit ${MARKER} state with \`engelbart auth\` / \`engelbart logout\`, not here.
+//
+// To put Claude Code back on your own account, run this file with
+// --disconnect. That undoes exactly what \`engelbart auth\` wrote and nothing
+// else. It is spelled out here because the installer puts only \`hc\` on PATH:
+// there is no \`engelbart\` command to reach for, and while apiKeyHelper is set
+// even \`/login\` cannot get past it.
 const fs = require('fs');
 const FILE = ${JSON.stringify(credentialsFile)};
 const SETTINGS = ${JSON.stringify(settingsFile || '')};
 const HELPER = ${JSON.stringify(helperFile || '')};
+const BASE_URL = ${JSON.stringify(baseUrl || '')};
 const TTL = ${JSON.stringify(String(HELPER_TTL_MS))};
 
 // A refusal is an answer; a timeout is not. Only these say "this account has
@@ -113,7 +119,7 @@ function settings() {
 // last moment, and anything that moved underneath us means someone else's
 // change is in flight: a spent key is not worth overwriting a permission the
 // member just granted, and the next run will refuse again anyway.
-function unwire(baseUrl) {
+function unwireOnce(baseUrl) {
   if (!SETTINGS || !HELPER) return false;
   const before = settings();
   if (!before || before.parsed.apiKeyHelper !== HELPER) return false;
@@ -121,7 +127,8 @@ function unwire(baseUrl) {
   delete next.apiKeyHelper;
   if (next.env && typeof next.env === 'object') {
     const env = { ...next.env };
-    if (baseUrl && env.ANTHROPIC_BASE_URL === baseUrl) delete env.ANTHROPIC_BASE_URL;
+    const gateway = baseUrl || BASE_URL;
+    if (gateway && env.ANTHROPIC_BASE_URL === gateway) delete env.ANTHROPIC_BASE_URL;
     if (env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS === TTL) delete env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS;
     if (Object.keys(env).length) next.env = env;
     else delete next.env;
@@ -145,6 +152,23 @@ function unwire(baseUrl) {
   }
 }
 
+// Losing the race is only a deferral when this runs unattended -- the next
+// refusal tries again. When a member ran --disconnect it is the whole point of
+// the command, so it gets a few attempts before giving up.
+function unwire(baseUrl, attempts = 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (unwireOnce(baseUrl)) return true;
+  }
+  return false;
+}
+
+// Already gone counts as success: a member running this twice, or running it
+// after \`engelbart logout\`, asked for a state that is already true.
+function disconnected() {
+  const current = settings();
+  return !current || current.parsed.apiKeyHelper !== HELPER;
+}
+
 // Never the silent path: a member whose session just changed accounts is owed
 // the reason, and stderr is the only channel a credential helper has. Claude
 // Code reads stdout for the key, so nothing here can go there.
@@ -154,15 +178,44 @@ function refuse(value, reason) {
   // The second line is never decoration. Un-wired, the member is already back
   // on their own account and only needs to know why. Still wired -- because
   // their settings file moved under us, or is not ours to edit -- they are
-  // stuck until the setting goes, and \`/login\` cannot get them out of it, so
-  // the command that can has to be on screen.
+  // stuck until the setting goes, and \`/login\` cannot get them out of it.
+  //
+  // So what is printed is a path, not a command name. There is no \`engelbart\`
+  // on PATH to run, npx needs a network, and this file is the one thing that
+  // is certainly here and certainly executable: Claude Code just ran it.
   process.stderr.write(unwired
-    ? 'Claude Code is back on your own account. Run \`engelbart auth\` once credits are topped up.\\n'
-    : 'Run \`engelbart logout\` to put Claude Code back on your own account.\\n');
+    ? 'Claude Code is back on your own account. Reconnect with \`npx engelbart-cli auth\`.\\n'
+    : 'To put Claude Code back on your own account, run:\\n\\n    '
+      + HELPER + ' --disconnect\\n');
   process.exit(1);
 }
 
+// The way back, and deliberately not dependent on anything: no network, no
+// npx, no PATH, no credentials file. Whatever else has gone wrong, the member
+// still has this file and it still knows which three values to take out.
+function disconnect() {
+  if (disconnected()) {
+    process.stdout.write('Claude Code is already on your own account.\\n');
+    return 0;
+  }
+  const value = stored();
+  if (unwire(value && value.claude && value.claude.baseUrl, 3)) {
+    process.stdout.write('Claude Code is back on your own account.\\n');
+    process.stdout.write('Reconnect with \`npx engelbart-cli auth\`.\\n');
+    return 0;
+  }
+  process.stderr.write('Could not edit ' + SETTINGS + '.\\n');
+  process.stderr.write('Remove "apiKeyHelper" from it by hand to undo this.\\n');
+  return 1;
+}
+
 async function main() {
+  // Checked before anything else reads a file or opens a socket: this is the
+  // command a stuck member runs, so it must not be able to fail for any of the
+  // reasons that got them stuck.
+  if (process.argv.slice(2).some((arg) => arg === '--disconnect')) {
+    process.exit(disconnect());
+  }
   const value = stored();
   if (!value || !value.claude || !value.claude.apiKey) process.exit(1);
   // Asking the server first is what lets a rotated, revoked or spent key take
@@ -210,13 +263,15 @@ main();
 `;
 }
 
-function writeHelper(managedRoot, credentialsFile, settingsFile) {
+function writeHelper(managedRoot, credentialsFile, settingsFile, baseUrl) {
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   const file = path.join(bin, HELPER_FILE);
-  atomicWrite(file, helperSource(credentialsFile, settingsFile, file), 0o700);
+  // The gateway URL is baked in as well as stored, so `--disconnect` still
+  // knows which ANTHROPIC_BASE_URL was ours after the credentials file is gone.
+  atomicWrite(file, helperSource(credentialsFile, settingsFile, file, baseUrl), 0o700);
   return file;
 }
 

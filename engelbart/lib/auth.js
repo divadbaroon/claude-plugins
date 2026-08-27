@@ -226,7 +226,12 @@ function wireClaudeCode(managedRoot, stored, options = {}) {
       env: options.env,
       allowRealHome: options.allowRealHome,
     });
-    claudeCode.writeHelper(managedRoot, credentialsPath(managedRoot), target.file);
+    claudeCode.writeHelper(
+      managedRoot,
+      credentialsPath(managedRoot),
+      target.file,
+      stored.claude.baseUrl,
+    );
     return claudeCode.connect({
       managedRoot,
       homedir: options.homedir,
@@ -328,6 +333,11 @@ async function login(options = {}) {
         const written = writeEnvFile(managedRoot, stored, wired.changed);
         if (wired.changed) {
           output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
+          // Said at the moment the change is made, not only when something
+          // goes wrong. This edits a file the member owns, and the way to put
+          // it back should not be something they have to come asking for --
+          // especially since there is no `engelbart` on PATH to guess at.
+          output.write(`\nTo undo that at any point:\n\n    ${wired.helper} --disconnect\n`);
         } else if (wired.reason === 'foreign-helper') {
           output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
           output.write(`To use this credit in this terminal instead, run: source ${written}\n`);
