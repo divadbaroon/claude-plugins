@@ -1,10 +1,10 @@
 """The rail's Build: picked TODO rows handed to a headless Claude session.
 
 A stub `claude` on PATH stands in for the CLI: it prints stream-json the way
-the real one does, asks a question on its first turn and finishes the row on
-the resumed one. What is under test is the plumbing -- the prompt, the
-statuses, the question thread, the answer going back into the same session --
-never the model.
+the real one does, estimates the build, asks a question on its first turn and
+finishes the row on the resumed one. What is under test is the plumbing -- the
+prompt, the statuses, the question thread, the answer going back into the same
+session, the estimate read off the build's own words -- never the model.
 """
 
 import json
@@ -56,10 +56,17 @@ if os.environ.get("STUB_FAIL_ONCE") == "1":
     print(json.dumps({"type": "result", "is_error": False, "result": "done",
                       "usage": USAGE}))
     raise SystemExit(0)
+ESTIMATE = '{"estimate": {"tokens": 12000, "minutes": 3}}'
 if os.environ.get("STUB_FINISH") == "1" and not resume:
     with open(log, "a") as fh:
         fh.write(json.dumps({"args": args, "prompt": prompt}) + "\n")
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    # The protocol's first line: what the whole build will cost. STUB_HOLD
+    # keeps the build running after it, so a test can watch the countdown.
+    print(json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": ESTIMATE}]}}), flush=True)
+    if os.environ.get("STUB_HOLD"):
+        time.sleep(float(os.environ["STUB_HOLD"]))
     for i in ids:
         print(json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}), flush=True)
@@ -73,8 +80,32 @@ with open(log, "a") as fh:
 def say(text):
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": text}]}}), flush=True)
+if resume and '{"restart": true' in prompt:
+    # The restart check: the finished build's session, resumed on the
+    # question. STUB_RESTART says how it answers; STUB_CHECK_HOLD keeps it
+    # out for a while first, so a test can look at a check in progress.
+    if os.environ.get("STUB_CHECK_HOLD"):
+        time.sleep(float(os.environ["STUB_CHECK_HOLD"]))
+    verdict = os.environ.get("STUB_RESTART", "no")
+    if verdict == "yes":
+        say("Looking back over the change.")
+        say(json.dumps({"restart": True,
+                        "why": "the session-cache change lives in the running dev server",
+                        "prompt": "Restart the goals-ui dev process so the new session-cache"
+                                  " code loads: kill `goals-ui serve`, run `goals-ui serve"
+                                  " --dev`, confirm the log says {loaded}."}))
+    elif verdict == "no":
+        say('{"restart": false}')
+    elif verdict == "thought":
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "thinking", "thinking": 'Nothing long-running: {"restart": false}'}]}}),
+              flush=True)
+    print(json.dumps({"type": "result", "is_error": False, "result": "checked",
+                      "usage": USAGE}))
+    raise SystemExit(0)
 if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    say(ESTIMATE)
     say("Looking at the rows.")
     say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
     print(json.dumps({"type": "result", "is_error": False, "result": "asked",
@@ -135,6 +166,11 @@ class BuildRunTests(unittest.TestCase):
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
         os.environ["STUB_LOG"] = str(self.log)
         os.environ["HC_BUILD_MODE"] = "headless"
+        # A finished build is followed by the restart check -- a second
+        # process, a second prompt in the stub's log. The tests below count
+        # prompts and processes; the check has its own class, which turns
+        # it back on.
+        os.environ["HC_BUILD_RESTART_CHECK"] = "0"
         # An API key in the server's shell must not reach the build: the
         # reader's subscription pays for the reader's button.
         os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-should-not-leak"
@@ -698,8 +734,9 @@ class CancelTests(BuildRunTests):
         self.assertTrue(self.wait_for(lambda: len(self.calls()) == 2))
         second = self.calls()[1]
         self.assertTrue(second["resume"], "the same session, told to move on")
-        self.assertIn("withdrew", second["prompt"])
-        self.assertIn("taaaa0001", second["prompt"])
+        self.assertIn("deleted these TODO rows", second["prompt"])
+        self.assertIn("- Add the route [taaaa0001]", second["prompt"])
+        self.assertIn("- Update the docs [taaaa0003]", second["prompt"])
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0003"][0] == "done"))
         self.assertEqual(("", ""), self.rows()["taaaa0001"])
@@ -965,10 +1002,100 @@ class WatchingABuildTests(BuildRunTests):
         self.assertFalse(live["running"])
         self.assertEqual(1, live["rows"])
         self.assertIsInstance(live["elapsed_s"], int)
-        # An estimate is for a build that is still going; this one is not.
+        # The build's own word on what it will cost rides along...
+        self.assertEqual(3, live["estimate"]["minutes"])
+        self.assertEqual(12000, live["estimate"]["tokens"])
+        # ...but a countdown is for a build that is still going; this one
+        # is not.
         self.assertIsNone(live["eta_s"])
         self.assertEqual("waiting on your answer", live["last"]["text"])
         self.assertTrue(live["can_open"], "its session can be resumed")
+
+    def test_the_prompt_asks_the_build_to_estimate_itself_first(self):
+        # The estimate is asked of the build session, which already holds the
+        # context, rather than of a second process handed a copy of it: one
+        # protocol line, before the rows, in a shape the reader can parse.
+        self.assertIn('{"estimate": {"tokens": <integer>, "minutes": <integer>}}',
+                      BUILD.PROTOCOL)
+        self.assertLess(BUILD.PROTOCOL.index('"estimate"'),
+                        BUILD.PROTOCOL.index('"question"'),
+                        "first, before the rows")
+        goals, important = chat_state.load_goals(self.session, self.root)
+        prompt = BUILD.preview(self.session, self.root, goals, important,
+                               GM.by_id(goals, "g1"), ["taaaa0001"])
+        self.assertIn('"estimate"', prompt)
+
+    def test_an_estimate_is_read_off_the_build_s_own_words(self):
+        self.assertEqual(
+            {"tokens": 120000, "minutes": 25},
+            BUILD.estimate_in('Sizing it up.\n'
+                              '{"estimate": {"tokens": 120000, "minutes": 25}}'))
+        # The later word wins; a half estimate still counts; fractions are
+        # whole numbers to the rail.
+        self.assertEqual(
+            {"tokens": 0, "minutes": 4},
+            BUILD.estimate_in('{"estimate": {"tokens": 1000}} no, '
+                              '{"estimate": {"minutes": 4.9}}'))
+        # Not an estimate: a row directive, a boolean, prose.
+        self.assertIsNone(BUILD.estimate_in('{"id": "taaaa0001", "state": "DONE"}'))
+        self.assertIsNone(BUILD.estimate_in('{"estimate": {"tokens": true}}'))
+        self.assertIsNone(BUILD.estimate_in("about 25 minutes, I think"))
+        # And a row directive is not mistaken for one, or vice versa.
+        self.assertEqual([], BUILD.directives('{"estimate": {"minutes": 4}}'))
+
+    def test_a_build_is_calculating_until_it_has_estimated_itself(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_SLEEP"] = "1.1"          # before it prints anything
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertTrue(live["running"])
+        # No estimate yet: no number to count down from, and none invented.
+        self.assertIsNone(live["estimate"])
+        self.assertIsNone(live["eta_s"])
+        self.assertEqual(0, live["tokens"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"))
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["tokens"] > 0))
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertEqual({"tokens": 12000, "minutes": 3},
+                         {k: live["estimate"][k] for k in ("tokens", "minutes")})
+        self.assertIsNone(live["eta_s"], "stopped: nothing to count down")
+        # What it actually spent stands beside what it guessed.
+        self.assertEqual(5200, live["tokens"])
+        said = [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+        self.assertIn("estimated about 3 min and 12,000 tokens for the build",
+                      said)
+
+    def test_a_running_build_counts_down_from_its_own_estimate(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_HOLD"] = "1.5"           # after the estimate
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertTrue(live["running"])
+        # Three minutes, less the second or so it has been at it.
+        self.assertGreater(live["eta_s"], 160)
+        self.assertLessEqual(live["eta_s"], 180)
+        self.assertEqual(180 - live["elapsed_s"], live["eta_s"])
+
+    def test_a_new_build_does_not_inherit_the_last_one_s_estimate(self):
+        os.environ["STUB_FINISH"] = "1"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        os.environ["STUB_SLEEP"] = "1.1"          # the next says nothing yet
+        BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        live = BUILD.live(self.session, self.root)["g1"]
+        self.assertTrue(live["running"])
+        self.assertIsNone(live["estimate"], "the last build's word is not this one's")
+        self.assertIsNone(live["eta_s"])
 
     def test_how_long_a_row_takes_is_measured_like_what_it_costs(self):
         empty = BUILD.cost(self.session, self.root)
@@ -1013,6 +1140,549 @@ class WatchingABuildTests(BuildRunTests):
         state = ui._payload(trajdir, True)
         self.assertIn("g1", state["build_runs"])
         self.assertEqual("waiting", state["build_runs"]["g1"]["status"])
+
+
+class EstimateStandInTests(BuildRunTests):
+    """A build that never says what it will cost -- most do not, and one
+    that did took three minutes -- must not leave the rail on "calculating"
+    for the length of the build."""
+
+    def live(self):
+        return BUILD.live(self.session, self.root)["g1"]
+
+    def test_the_protocol_asks_for_the_estimate_before_the_first_read(self):
+        flat = " ".join(BUILD.PROTOCOL.split())
+        head = flat.index('"estimate"')
+        self.assertIn("before you read, search or run anything", flat[:head])
+        self.assertIn("same reply as your first tool call", flat)
+
+    def test_a_build_that_says_nothing_is_given_a_stand_in_after_the_grace(self):
+        os.environ["STUB_SLEEP"] = "2.5"          # says nothing for a while
+        grace = BUILD.ESTIMATE_GRACE_S
+        BUILD.ESTIMATE_GRACE_S = 1
+        self.addCleanup(setattr, BUILD, "ESTIMATE_GRACE_S", grace)
+        # This chat has measured one build: 100k tokens and 300s per row.
+        BUILD.record_usage(self.session, self.root, 2, 100, 200000, 600)
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        live = self.live()
+        self.assertTrue(live["running"])
+        self.assertIsNone(live["estimate"], "within the grace: calculating")
+        self.assertTrue(self.wait_for(lambda: self.live()["estimate"] is not None))
+        live = self.live()
+        self.assertEqual("measured", live["estimate"]["source"])
+        self.assertEqual(5, live["estimate"]["minutes"])
+        self.assertEqual(BUILD.cost(self.session, self.root)["context_tokens"]
+                         + 100000, live["estimate"]["tokens"])
+        self.assertIsInstance(live["eta_s"], int)
+        # The build's own word, when it comes, is the one that stands.
+        self.assertTrue(self.wait_for(
+            lambda: (self.live()["estimate"] or {}).get("source") == "build"))
+        self.assertEqual(3, self.live()["estimate"]["minutes"])
+
+    def test_with_nothing_measured_the_stand_in_is_the_default_and_says_so(self):
+        os.environ["STUB_SLEEP"] = "2"
+        grace = BUILD.ESTIMATE_GRACE_S
+        BUILD.ESTIMATE_GRACE_S = 1
+        self.addCleanup(setattr, BUILD, "ESTIMATE_GRACE_S", grace)
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(self.wait_for(lambda: self.live()["estimate"] is not None))
+        live = self.live()
+        self.assertEqual("default", live["estimate"]["source"])
+        self.assertEqual(2 * BUILD.DEFAULT_ROW_SECONDS // 60,
+                         live["estimate"]["minutes"])
+
+    def test_an_estimate_thought_rather_than_said_still_counts(self):
+        # What a build writes before its first tool call has reached the
+        # stream as a thinking block; the number in it is the number meant.
+        run = BUILD.Run(self.session, self.root, "g1", str(self.root), "sess")
+        run._estimate(BUILD._stream_thinking(
+            {"type": "assistant", "message": {"content": [
+                {"type": "thinking",
+                 "thinking": 'Sizing it: {"estimate": {"tokens": "1.2M", "minutes": 30}}'}]}}))
+        kept = BUILD.load_run(self.session, self.root, "g1")["estimate"]
+        self.assertEqual({"tokens": 1200000, "minutes": 30, "source": "build"},
+                         {k: kept[k] for k in ("tokens", "minutes", "source")})
+        # A row directive thought is not a row directive said.
+        self.assertEqual("", BUILD._stream_text(
+            {"type": "assistant", "message": {"content": [
+                {"type": "thinking", "thinking": '{"id": "taaaa0001", "state": "DONE"}'}]}}))
+        # And numbers written the way people write them.
+        self.assertEqual({"tokens": 600000, "minutes": 45},
+                         BUILD.estimate_in('{"estimate": {"tokens": "600k", "minutes": "45"}}'))
+        self.assertEqual({"tokens": 600000, "minutes": 0},
+                         BUILD.estimate_in('{"estimate": {"tokens": "600,000"}}'))
+        self.assertIsNone(BUILD.estimate_in('{"estimate": {"tokens": "lots"}}'))
+
+
+class TellTheBuildTests(BuildRunTests):
+    """A word for a build mid-work: a row deleted from under it, a note
+    added to one. The process reads nothing, so it is ended and its session
+    resumed on the message (Run.redirect)."""
+
+    def prompts(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def said(self):
+        return [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+
+    def settled(self):
+        return self.wait_for(
+            lambda: (BUILD.load_run(self.session, self.root, "g1")
+                     or {}).get("status") == "waiting")
+
+    def hold(self):
+        # A build mid-work: the stub prints its estimate, then holds.
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_HOLD"] = "8"
+
+    def test_deleting_a_building_row_tells_the_build_and_reminds_it_of_the_rest(self):
+        self.hold()
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(out["ok"], out)
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("redirected"), out)
+        self.assertEqual("", self.rows()["taaaa0001"][0])
+        # The process was ended and the session resumed on the word.
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
+        second = self.prompts()[1]
+        self.assertTrue(second["resume"])
+        message = second["prompt"]
+        self.assertIn("deleted these TODO rows", message)
+        self.assertIn("- Add the route [taaaa0001]", message)
+        self.assertIn("  - and its test", message)
+        self.assertIn("print no protocol lines for them", message)
+        self.assertIn("The rows still yours, in order:", message)
+        self.assertIn("- Update the docs [taaaa0003]", message)
+        self.assertIn("you deleted 1 row from the build; telling it", self.said())
+        # The build goes on to its end: the other row lands, the deleted
+        # one stays off the build, and nothing reads as a failure.
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done"))
+        self.assertEqual("", self.rows()["taaaa0001"][0])
+        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+
+    def test_deleting_everything_still_ends_the_process_without_a_word(self):
+        self.hold()
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        run = BUILD._run_for(self.session, self.root, "g1")
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("stopped"), out)
+        self.assertNotIn("redirected", out)
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        self.assertEqual(1, len(self.prompts()), "nothing to resume on")
+
+    def test_a_row_deleted_while_a_question_stands_rides_in_with_the_answer(self):
+        # The stub asks on the first row; the second is building behind it.
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(self.settled())
+        self.assertEqual("building", self.rows()["taaaa0003"][0])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(out.get("pending"), out)
+        self.assertEqual("", self.rows()["taaaa0003"][0])
+        self.assertEqual(1, len(self.prompts()), "the answer is the ride")
+        out = BUILD.answer(self.session, self.root, "g1", "taaaa0001", "src/a.ts")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
+        message = self.prompts()[1]["prompt"]
+        self.assertIn("deleted these TODO rows", message)
+        self.assertIn("- Update the docs [taaaa0003]", message)
+        self.assertTrue(message.rstrip().endswith(
+            json.dumps({"id": "taaaa0001", "answer": "src/a.ts"})))
+        self.assertEqual([], BUILD.load_run(self.session, self.root, "g1")["pending"])
+
+    def test_a_note_on_a_building_row_reaches_the_session_and_the_build_carries_on(self):
+        self.hold()
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.live(self.session, self.root)["g1"]["estimate"]))
+        out = BUILD.note(self.session, self.root, "g1", "taaaa0001",
+                         "use the v2 router, not v1")
+        self.assertTrue(out.get("redirected"), out)
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
+        message = self.prompts()[1]["prompt"]
+        self.assertTrue(self.prompts()[1]["resume"])
+        self.assertIn("added context to a TODO row", message)
+        self.assertIn("- Add the route [taaaa0001]", message)
+        self.assertIn('"use the v2 router, not v1"', message)
+        self.assertIn("you added to “Add the route”: use the v2 router, not v1",
+                      self.said())
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0001"][0] == "done"))
+        self.assertEqual("idle", BUILD.load_run(self.session, self.root, "g1")["status"])
+
+    def test_a_note_needs_a_row_the_build_is_on_and_some_words(self):
+        self.assertFalse(BUILD.note(self.session, self.root, "g1",
+                                    "taaaa0001", "  ")["ok"])
+        out = BUILD.note(self.session, self.root, "g1", "taaaa0001", "hello")
+        self.assertFalse(out["ok"])
+        self.assertIn("working on", out["error"])
+        self.assertFalse(BUILD.note(self.session, self.root, "g1",
+                                    "nope", "hello")["ok"])
+
+    def test_the_op_route_reaches_the_note_and_a_waiting_run_holds_it(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "note_todo", "goal_id": "g1", "id": "taaaa0001",
+                         "note": "x"}, trajdir, True)
+        self.assertFalse(out["ok"])
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(self.settled())
+        out = ui._apply({"op": "note_todo", "goal_id": "g1", "id": "taaaa0003",
+                         "note": "mind the tests"}, trajdir, True)
+        self.assertTrue(out.get("pending"), out)
+        held = BUILD.load_run(self.session, self.root, "g1")["pending"]
+        self.assertEqual(1, len(held))
+        self.assertIn('"mind the tests"', held[0])
+
+
+class TellTheSessionTests(BuildRunTests):
+    """The same two words, when the build is the connected session: they
+    queue, and the next hook carries them."""
+
+    def test_a_deleted_row_and_a_note_reach_the_session_at_the_next_hook(self):
+        os.environ["HC_BUILD_MODE"] = "session"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        self.assertTrue(BUILD.deliver(self.session, self.root, "Stop"))
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(out.get("queued"), out)
+        self.assertEqual("", self.rows()["taaaa0001"][0])
+        out = BUILD.note(self.session, self.root, "g1", "taaaa0003", "keep it small")
+        self.assertTrue(out.get("queued"), out)
+        text = BUILD.deliver(self.session, self.root, "Stop")
+        self.assertIn("deleted these TODO rows", text)
+        self.assertIn("- Add the route [taaaa0001]", text)
+        self.assertIn("The rows still yours, in order:", text)
+        self.assertIn("- Update the docs [taaaa0003]", text)
+        self.assertIn("added context to a TODO row", text)
+        self.assertIn('"keep it small"', text)
+        self.assertEqual("", BUILD.deliver(self.session, self.root, "Stop"))
+
+    def test_a_row_that_only_waited_is_dropped_without_a_word(self):
+        os.environ["HC_BUILD_MODE"] = "session"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001", "taaaa0003"])
+        out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertNotIn("queued", out)
+        text = BUILD.deliver(self.session, self.root, "Stop")
+        self.assertNotIn("deleted", text)
+        self.assertIn("[taaaa0003]", text)
+        self.assertNotIn("[taaaa0001]", text)
+
+
+class BuildSettingsTests(BuildRunTests):
+    """Which model a build runs on, and at what effort: chosen once for the
+    vault, handed to every claude -p after."""
+
+    def test_the_chosen_model_and_effort_reach_the_command_line(self):
+        trajdir = chat_state.paths(self.session, self.root).session_dir
+        out = ui._apply({"op": "set_build_settings", "model": "claude-opus-5",
+                         "effort": "high"}, trajdir, True)
+        self.assertEqual({"model": "claude-opus-5", "effort": "high",
+                          "check": True, "check_model": "", "check_effort": ""},
+                         out["settings"])
+        self.assertEqual(out["settings"], BUILD.load_settings(self.session, self.root))
+        run = BUILD.Run(self.session, self.root, "g1", str(self.root), "sess")
+        cmd = run._command("hi", resume=False)
+        self.assertEqual("claude-opus-5", cmd[cmd.index("--model") + 1])
+        self.assertEqual("high", cmd[cmd.index("--effort") + 1])
+        # One key at a time; nothing chosen is the CLI's own default.
+        out = ui._apply({"op": "set_build_settings", "effort": ""}, trajdir, True)
+        self.assertEqual(("claude-opus-5", ""),
+                         (out["settings"]["model"], out["settings"]["effort"]))
+        self.assertNotIn("--effort", run._command("hi", resume=False))
+        ui._apply({"op": "set_build_settings", "model": ""}, trajdir, True)
+        self.assertNotIn("--model", run._command("hi", resume=False))
+        # The shell's word stands where nothing is chosen.
+        os.environ["HC_BUILD_MODEL"] = "sonnet"
+        os.environ["HC_BUILD_EFFORT"] = "low"
+        cmd = run._command("hi", resume=False)
+        self.assertEqual("sonnet", cmd[cmd.index("--model") + 1])
+        self.assertEqual("low", cmd[cmd.index("--effort") + 1])
+
+    def test_an_effort_the_cli_does_not_know_and_a_bad_model_id_are_refused(self):
+        self.assertFalse(BUILD.save_settings(self.session, self.root,
+                                             {"effort": "extreme"})["ok"])
+        self.assertFalse(BUILD.save_settings(self.session, self.root,
+                                             {"model": "not a model"})["ok"])
+        self.assertEqual(dict(BUILD.SETTINGS_DEFAULTS),
+                         BUILD.load_settings(self.session, self.root))
+
+    def test_the_models_are_read_off_the_installed_binary_and_kept_beside_it(self):
+        # A stand-in binary: big enough to be a program, naming a few models
+        # the way the real one does, in the bytes between everything else.
+        versions = self.root / "versions"
+        versions.mkdir()
+        fake = versions / "2.1.245"
+        fake.write_bytes(b"\0" * 1_000_000
+                         + b"x claude-opus-5 y claude-sonnet-4-5-20250929 z"
+                         + b" claude-opus-4-6-fast claude-haiku-4-5\0"
+                         + b"claude-opus-4-1-20250805-v1 claude-opus-4-8")
+        os.environ["HC_CLAUDE_BINARY"] = str(fake)
+        got = BUILD.models(self.session, self.root)
+        self.assertEqual(["fable", "opus", "sonnet", "haiku"], got["aliases"])
+        self.assertEqual(list(BUILD.EFFORTS), got["efforts"])
+        # Newest first within a family; the fast and v1 variants are not
+        # models to choose.
+        self.assertEqual(["claude-opus-5", "claude-opus-4-8",
+                          "claude-sonnet-4-5-20250929", "claude-haiku-4-5"],
+                         got["models"])
+        self.assertEqual("2.1.245", got["source"]["version"])
+        self.assertEqual(str(fake.resolve()), got["source"]["path"])
+        self.assertEqual(dict(BUILD.SETTINGS_DEFAULTS), got["settings"])
+        self.assertEqual({"model": "sonnet", "effort": "high"}, got["check_defaults"])
+        # Read once: the second answer is the cache, stamped as the first was.
+        again = BUILD.models(self.session, self.root)
+        self.assertEqual(got["source"]["scanned_at"], again["source"]["scanned_at"])
+        # A binary that has changed is read again.
+        fake.write_bytes(b"\0" * 1_000_000 + b" claude-fable-5 ")
+        os.utime(fake, (time.time() + 5, time.time() + 5))
+        self.assertEqual(["claude-fable-5"],
+                         BUILD.models(self.session, self.root)["models"])
+
+    def test_without_a_binary_the_aliases_and_efforts_still_stand(self):
+        os.environ["HC_CLAUDE_BINARY"] = str(self.root / "nowhere")
+        os.environ["PATH"] = str(self.bin)      # the stub alone: a script
+        got = BUILD.models(self.session, self.root)
+        self.assertTrue(got["ok"])
+        self.assertIsNone(got["source"])
+        self.assertEqual([], got["models"])
+        self.assertEqual(["fable", "opus", "sonnet", "haiku"], got["aliases"])
+
+
+class RestartCheckTests(BuildRunTests):
+    """A build that finished on its own is asked, in the same session and on
+    the check's own model, whether what it changed is what is running. The
+    answer -- the reason and the prompt to paste into the local chat, or a
+    bare no -- goes on the run record for the rail; the rows are not
+    touched by it."""
+
+    def on(self, verdict="no", hold=None):
+        # Per test rather than in setUp: the base class's tests run again
+        # under this one, and they count prompts with the check off.
+        os.environ["HC_BUILD_RESTART_CHECK"] = "1"
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_RESTART"] = verdict
+        if hold is not None:
+            os.environ["STUB_CHECK_HOLD"] = str(hold)
+
+    def prompts(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def said(self):
+        return [line["text"] for line
+                in BUILD.load_activity(self.session, self.root, "g1")]
+
+    def live(self):
+        return BUILD.live(self.session, self.root)["g1"]
+
+    def restart(self):
+        return (self.live() or {}).get("restart") or {}
+
+    def build(self, ids=("taaaa0001",)):
+        out = BUILD.start(self.session, self.root, "g1", list(ids))
+        self.assertTrue(out["ok"], out)
+        return BUILD._run_for(self.session, self.root, "g1")
+
+    def checked(self):
+        # The check has answered, or given up: the record says which, and
+        # no process of the run is left.
+        return self.wait_for(
+            lambda: self.restart().get("status") in ("yes", "no", "unknown", "skipped")
+            and not self.live()["running"], seconds=12)
+
+    def test_the_verdict_is_read_off_the_check_s_words_with_a_real_decoder(self):
+        self.assertEqual(
+            {"restart": False, "why": "", "prompt": ""},
+            BUILD.restart_in('Nothing long-running here.\n{"restart": false}'))
+        # A prompt is prose, and prose can hold a brace: a regex over the
+        # braces would have cut this one short.
+        got = BUILD.restart_in(
+            'Yes.\n{"restart": true, "why": "the server caches the module",'
+            ' "prompt": "kill it, then run `serve --dev` and confirm {loaded}"}')
+        self.assertEqual("the server caches the module", got["why"])
+        self.assertEqual("kill it, then run `serve --dev` and confirm {loaded}",
+                         got["prompt"])
+        # The last word wins, as with the estimate; a non-boolean is not a
+        # verdict; neither is a row directive or an estimate.
+        self.assertFalse(BUILD.restart_in(
+            '{"restart": true, "why": "x"} -- no, on reflection {"restart": false}')["restart"])
+        self.assertIsNone(BUILD.restart_in('{"restart": "yes"}'))
+        self.assertIsNone(BUILD.restart_in('{"id": "taaaa0001", "state": "DONE"}'))
+        self.assertIsNone(BUILD.restart_in('{"estimate": {"minutes": 4}}'))
+        self.assertIsNone(BUILD.restart_in("restart it, I think"))
+        self.assertEqual([], BUILD.directives('{"restart": false}'))
+
+    def test_a_finished_build_is_asked_in_its_own_session_on_the_check_model(self):
+        self.on("yes")
+        run = self.build()
+        self.assertTrue(self.wait_for(lambda: self.rows()["taaaa0001"][0] == "done"))
+        self.assertTrue(self.checked(), self.live())
+        # Two prompts: the build, then the check -- resumed on the same
+        # session, on sonnet at high effort rather than what the build got.
+        prompts = self.prompts()
+        self.assertEqual(2, len(prompts))
+        check = prompts[1]
+        self.assertTrue(check["resume"])
+        self.assertIn("--resume", check["args"])
+        self.assertEqual(run.claude_session, check["args"][check["args"].index("--resume") + 1])
+        self.assertEqual("sonnet", check["args"][check["args"].index("--model") + 1])
+        self.assertEqual("high", check["args"][check["args"].index("--effort") + 1])
+        self.assertIn("[Engelbart] The rows are done", check["prompt"])
+        self.assertIn('{"restart": false}', check["prompt"])
+        self.assertIn("Edit nothing", check["prompt"])
+        # The verdict, as the rail is shown it.
+        verdict = self.restart()
+        self.assertEqual("yes", verdict["status"])
+        self.assertEqual("the session-cache change lives in the running dev server",
+                         verdict["why"])
+        self.assertIn("confirm the log says {loaded}", verdict["prompt"])
+        self.assertEqual({"model": "sonnet", "effort": "high"},
+                         {k: verdict[k] for k in ("model", "effort")})
+        live = self.live()
+        self.assertEqual("idle", live["status"])
+        self.assertFalse(live["running"])
+        # The rows are the build's verdict, not the check's: still done.
+        self.assertEqual("done", self.rows()["taaaa0001"][0])
+        # The log tells the story in order.
+        said = self.said()
+        self.assertLess(said.index("the build finished"),
+                        said.index("checking whether these changes go stale"
+                                   " without a local restart…"))
+        self.assertIn("restart needed: the session-cache change lives in the"
+                      " running dev server", said)
+
+    def test_a_no_leaves_nothing_but_the_word_no(self):
+        self.on("no")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        verdict = self.restart()
+        self.assertEqual("no", verdict["status"])
+        self.assertEqual(("", ""), (verdict["why"], verdict["prompt"]))
+        self.assertIn("no restart needed", self.said())
+
+    def test_a_verdict_thought_rather_than_said_still_counts(self):
+        self.on("thought")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("no", self.restart()["status"])
+
+    def test_a_check_that_says_nothing_leaves_the_question_open(self):
+        self.on("silent")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("unknown", self.restart()["status"])
+        self.assertIn("the check gave no answer", self.said())
+
+    def test_while_the_check_runs_the_rail_sees_checking_and_no_countdown(self):
+        self.on("yes", hold=3)
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        live = self.live()
+        self.assertTrue(live["running"])
+        self.assertIsNone(live["eta_s"], "nothing to count down: the rows are done")
+        self.assertEqual("checking", live["restart"]["status"])
+        self.assertEqual(("sonnet", "high"),
+                         (live["restart"]["model"], live["restart"]["effort"]))
+        # The build's clock stopped when its rows did; the check's writes
+        # to the record do not move it.
+        frozen = live["elapsed_s"]
+        time.sleep(1.2)
+        self.assertEqual(frozen, self.live()["elapsed_s"])
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("yes", self.restart()["status"])
+
+    def test_the_next_build_starts_with_no_verdict_and_ends_with_its_own(self):
+        self.on("yes")
+        self.build()
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("yes", self.restart()["status"])
+        os.environ["STUB_RESTART"] = "no"
+        os.environ["STUB_SLEEP"] = "1"
+        self.build(["taaaa0003"])
+        self.assertIsNone(self.live()["restart"],
+                          "the last build's word is about code this one changes")
+        self.assertTrue(self.checked(), self.live())
+        self.assertEqual("no", self.restart()["status"])
+
+    def test_rows_picked_during_the_check_wait_behind_it(self):
+        self.on("no", hold=2)
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(out.get("after_run"), out)
+        self.assertEqual("queued", self.rows()["taaaa0003"][0])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done", seconds=15))
+        # build, check, build, check: the second build opened fresh, after
+        # the check had answered.
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 4, seconds=12))
+        self.assertNotIn("--resume", self.prompts()[2]["args"])
+
+    def test_a_reopen_ends_the_check_and_takes_the_session(self):
+        self.on("yes", hold=4)
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        out = BUILD.reopen(self.session, self.root, "g1", "taaaa0001", "wrong file")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["resumed"])
+        self.assertEqual("building", self.rows()["taaaa0001"][0])
+        self.assertTrue(self.wait_for(lambda: self.rows()["taaaa0001"][0] == "done"))
+        # The stopped check is recorded as such, then the reopened run's
+        # own finish asks again.
+        self.assertIn("the check was stopped", self.said())
+        os.environ["STUB_CHECK_HOLD"] = ""
+        self.assertTrue(self.wait_for(
+            lambda: self.restart().get("status") == "yes"
+            and not self.live()["running"], seconds=15))
+
+    def test_the_check_can_be_turned_off_and_its_model_chosen(self):
+        self.on("no")
+        BUILD.save_settings(self.session, self.root, {"check": False})
+        self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["status"] == "idle"))
+        time.sleep(0.5)
+        self.assertEqual(1, len(self.prompts()), "no check was run")
+        self.assertIsNone(self.live()["restart"])
+        # Back on, on a model and effort of the reader's choosing.
+        out = BUILD.save_settings(self.session, self.root,
+                                  {"check": "true", "check_model": "haiku",
+                                   "check_effort": "low"})
+        self.assertTrue(out["ok"], out)
+        os.environ["STUB_RESTART"] = "no"
+        self.build(["taaaa0003"])
+        self.assertTrue(self.checked(), self.live())
+        check = self.prompts()[-1]
+        self.assertEqual("haiku", check["args"][check["args"].index("--model") + 1])
+        self.assertEqual("low", check["args"][check["args"].index("--effort") + 1])
+        self.assertEqual(("haiku", "low"),
+                         (self.restart()["model"], self.restart()["effort"]))
+        # The shell can turn it off for every build a server starts.
+        os.environ["HC_BUILD_RESTART_CHECK"] = "0"
+        self.assertFalse(BUILD.check_enabled(self.session, self.root))
+        # And what the Builds tab is offered names the defaults.
+        offered = BUILD.models(self.session, self.root)
+        self.assertEqual({"model": "sonnet", "effort": "high"}, offered["check_defaults"])
+        self.assertEqual(("haiku", "low", True),
+                         tuple(offered["settings"][k]
+                               for k in ("check_model", "check_effort", "check")))
+
+    def test_a_build_the_reader_stopped_or_that_failed_is_not_asked(self):
+        self.on("yes")
+        os.environ["STUB_HOLD"] = "6"
+        run = self.build()
+        self.assertTrue(self.wait_for(lambda: self.live()["estimate"]))
+        BUILD.cancel(self.session, self.root, "g1", ["taaaa0001"])
+        self.assertTrue(self.wait_for(lambda: not run.alive()))
+        time.sleep(0.5)
+        self.assertEqual(1, len(self.prompts()))
+        self.assertIsNone(self.live()["restart"])
+        self.assertEqual("cancelled", self.live()["status"])
 
 
 if __name__ == "__main__":

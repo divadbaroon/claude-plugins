@@ -107,7 +107,7 @@ class ProjectTests(unittest.TestCase):
     def test_the_state_names_the_project_from_the_manifest(self):
         with server_for(self.trajdir) as url:
             who = get_json(url + "/api/state")["project"]
-        self.assertEqual(str(self.project), who["cwd"])
+        self.assertEqual(PS._resolved(self.project), who["cwd"])
         self.assertEqual("myrepo", who["name"])
         self.assertEqual("feat/x", who["branch"])
         self.assertEqual("https://github.com/acme/myrepo.git", who["remote"])
@@ -130,7 +130,7 @@ class ProjectTests(unittest.TestCase):
         with server_for(self.trajdir) as url:
             out = get_json(url + "/api/tree")
         self.assertTrue(out["ok"])
-        self.assertEqual(str(self.project), out["root"])
+        self.assertEqual(PS._resolved(self.project), out["root"])
         names = [row["n"] for row in out["tree"]]
         self.assertIn("README.md", names)
         self.assertIn("src/", names)
@@ -478,7 +478,7 @@ class ProjectTests(unittest.TestCase):
         # In the file's `project` section: the flat shape it was first
         # written in is migrated on read, not written any more.
         self.assertEqual("Ship the thing, well.", record["project"]["objective"])
-        self.assertEqual(str(self.project), record["project"]["cwd"])
+        self.assertEqual(PS._resolved(self.project), record["project"]["cwd"])
 
     def test_the_project_can_be_renamed_and_the_directory_is_the_fallback(self):
         # A directory is where a project sits today, not what it is called.
@@ -763,7 +763,14 @@ class CloneProjectTests(unittest.TestCase):
 
         def run(command, **kwargs):
             seen["commands"].append(list(command))
-            seen["env"] = kwargs.get("env") or {}
+            seen.setdefault("envs", []).append(kwargs.get("env") or {})
+            seen["env"] = seen["envs"][0]
+            # Only a clone is stood in for. This patches subprocess.run for
+            # everything, and a project's home is worked out with git too --
+            # left unguarded the stand-in "cloned" into a directory named
+            # after that call's last flag, in the checkout the suite runs in.
+            if list(command)[:2] != ["git", "clone"]:
+                return mock.Mock(stdout="", stderr="", returncode=0)
             if raises is not None:
                 raise raises
             if not returncode:
@@ -1093,3 +1100,141 @@ class StaleServerTests(unittest.TestCase):
                                mock.Mock(side_effect=OSError)):
             self.assertEqual(0.0, ui._code_stamp())
             self.assertFalse(ui._server_is_stale())
+
+
+class OneWindowPerProjectFromAnywhereTests(unittest.TestCase):
+    """Opening a project that already has a window opens THAT window.
+
+    Three places were keeping track of what was running -- the chat's own
+    directory, the project's record, and a dictionary inside whichever server
+    process happened to be asked. They disagreed, so a reader sitting in one
+    project and clicking through to another got a brand new server on a new
+    port showing a tree nobody was looking at.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        Path(self.home).mkdir(parents=True, exist_ok=True)
+        self.og = "aaaaaaaa-7777-4ccc-8ddd-eeeeeeeeeeee"
+        chat_state.ingest_hook({"session_id": self.og,
+                                "hook_event_name": "SessionStart",
+                                "cwd": self.home}, root=self.root)
+        chat_state.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "the work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        chat_state.bind_project(self.og, self.home, root=self.root)
+        self.trajdir = chat_state.paths(self.og, self.root).session_dir
+
+    def test_a_running_workspace_is_returned_rather_than_a_second_one(self):
+        PS.set_server_record(self.root, self.home, {
+            "schema_version": 1, "session_id": self.og, "pid": os.getpid(),
+            "url": "http://127.0.0.1:9/", "started_at": 0})
+        with mock.patch.object(ui, "_serve_session") as spawn, \
+                mock.patch.object(ui, "_running_workspace",
+                                  side_effect=lambda rec, *a: rec):
+            said = ui.open_project(self.home, self.trajdir)
+        self.assertTrue(said.get("ok"), said)
+        self.assertEqual("http://127.0.0.1:9/", said["url"])
+        self.assertTrue(said.get("already"))
+        spawn.assert_not_called()
+
+    def test_a_workspace_that_has_died_is_replaced_not_reported(self):
+        PS.set_server_record(self.root, self.home, {
+            "schema_version": 1, "session_id": self.og, "pid": 999999,
+            "url": "http://127.0.0.1:9/", "started_at": 0})
+        with mock.patch.object(ui, "_serve_session",
+                               return_value={"url": "http://127.0.0.1:10/",
+                                             "thread": None}) as spawn:
+            said = ui.open_project(self.home, self.trajdir)
+        self.assertEqual("http://127.0.0.1:10/", said["url"])
+        spawn.assert_called_once()
+
+    def test_the_window_it_opens_serves_the_project_s_own_tree(self):
+        # Not whichever session sorted last: that is how a reader clicking
+        # into a project landed on an empty chat of it.
+        later = "zzzzzzzz-7777-4ccc-8ddd-eeeeeeeeeeee"
+        chat_state.ingest_hook({"session_id": later,
+                                "hook_event_name": "SessionStart",
+                                "cwd": self.home}, root=self.root)
+        chat_state.bind_project(later, self.home, root=self.root)
+        seen = {}
+
+        def spawn(session_id, root, **kw):
+            seen["session"] = session_id
+            return {"url": "http://127.0.0.1:11/", "thread": None}
+
+        with mock.patch.object(ui, "_serve_session", side_effect=spawn):
+            ui.open_project(self.home, self.trajdir)
+        self.assertEqual(self.og, seen["session"],
+                         "the project's tree is what its window must serve")
+
+    def test_what_it_starts_is_written_where_every_chat_looks(self):
+        with mock.patch.object(ui, "_serve_session",
+                               return_value={"url": "http://127.0.0.1:12/",
+                                             "thread": None}):
+            ui.open_project(self.home, self.trajdir)
+        self.assertEqual("http://127.0.0.1:12/",
+                         (PS.server_record(self.root, self.home) or {}).get("url"))
+
+
+class BindingJoinsTheWindowRatherThanClaimingItTests(unittest.TestCase):
+    """A chat that binds into a project with a window open goes to it.
+
+    An unbound chat gets a workspace of its own -- it has no project yet and
+    is about to be asked which. When the answer names a project that already
+    has a window, taking that window over pointed every other chat of the
+    project at this ad-hoc one; the reader had two ports for one tree again.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = str(self.root / "acme")
+        Path(self.home).mkdir(parents=True, exist_ok=True)
+        self.og = "aaaaaaaa-8888-4ccc-8ddd-eeeeeeeeeeee"
+        self.joiner = "bbbbbbbb-8888-4ccc-8ddd-eeeeeeeeeeee"
+        for sid in (self.og, self.joiner):
+            chat_state.ingest_hook({"session_id": sid,
+                                    "hook_event_name": "SessionStart",
+                                    "cwd": self.home}, root=self.root)
+        chat_state.save_goals(self.og, {"version": 1, "goals": [
+            {"id": "g1", "title": "the work", "status": "active",
+             "parent_goal_id": None}]}, {"items": []}, root=self.root)
+        chat_state.bind_project(self.og, self.home, root=self.root)
+        PS.set_server_record(self.root, self.home, {
+            "schema_version": 1, "session_id": self.og, "pid": os.getpid(),
+            "url": "http://127.0.0.1:9/", "started_at": 0})
+
+    def test_the_project_s_window_is_where_the_joiner_is_sent(self):
+        joiner_dir = chat_state.paths(self.joiner, self.root).session_dir
+        from human_compact import cli
+        cli._write_server_registry(joiner_dir, {
+            "schema_version": 1, "session_id": self.joiner, "pid": os.getpid(),
+            "url": "http://127.0.0.1:99/", "started_at": 0})
+        with mock.patch.object(ui, "_running_workspace",
+                               side_effect=lambda rec, *a: rec):
+            chat_state.bind_project(self.joiner, self.home, root=self.root)
+            went = ui._adopt_server_for_project(
+                joiner_dir, self.joiner, self.root)
+        self.assertEqual("http://127.0.0.1:9/", went,
+                         "the joiner is sent to the project's window")
+        self.assertEqual("http://127.0.0.1:9/",
+                         PS.server_record(self.root, self.home)["url"],
+                         "and does not take the project's window over")
+
+    def test_a_project_with_no_window_adopts_the_one_that_joined_it(self):
+        PS.clear_server_record(self.root, self.home)
+        joiner_dir = chat_state.paths(self.joiner, self.root).session_dir
+        from human_compact import cli
+        cli._write_server_registry(joiner_dir, {
+            "schema_version": 1, "session_id": self.joiner, "pid": os.getpid(),
+            "url": "http://127.0.0.1:99/", "started_at": 0})
+        chat_state.bind_project(self.joiner, self.home, root=self.root)
+        went = ui._adopt_server_for_project(joiner_dir, self.joiner, self.root)
+        self.assertEqual("", went, "nowhere else to send the reader")
+        self.assertEqual("http://127.0.0.1:99/",
+                         PS.server_record(self.root, self.home)["url"])

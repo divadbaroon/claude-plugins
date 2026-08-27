@@ -28,8 +28,8 @@ Commands:
                         credit; use as: eval "$(engelbart env)"
 
 Options:
-  --no-login            install without connecting an Engelbart account
-  --non-interactive     accepted for compatibility; the installer never prompts
+  --local-only          install without connecting an Engelbart account
+  --non-interactive     install locally without opening a browser
   --dry-run             verify the bundled release and show the plan only
   -h, --help            show this help
 
@@ -58,7 +58,7 @@ function parseArgs(argv) {
     goals: null,
     nonInteractive: false,
     dryRun: false,
-    noLogin: false,
+    localOnly: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -72,7 +72,9 @@ function parseArgs(argv) {
     else if (arg === '-h' || arg === '--help') result.help = true;
     else if (arg === '--non-interactive') result.nonInteractive = true;
     else if (arg === '--dry-run') result.dryRun = true;
-    else if (arg === '--no-login') result.noLogin = true;
+    // `--no-login` was this flag's name before the rename; both spellings
+    // mean the same thing, so a script written against either still works.
+    else if (arg === '--local-only' || arg === '--no-login') result.localOnly = true;
     else if (arg === '--global-vault' || arg === '--goals') {
       if (index + 1 >= argv.length) throw new UsageError(`${arg} requires 1 or 2`);
       const value = numericChoice(arg, argv[index += 1]);
@@ -244,7 +246,7 @@ async function run(deps = {}) {
     // The install stands on its own. An account adds the hosted Claude
     // credits to it, so failing to connect one is reported, never fatal.
     let account = null;
-    if (!options.dryRun && !options.noLogin) {
+    if (!options.dryRun && !options.localOnly && !options.nonInteractive) {
       const stored = (deps.readCredentials || auth.readCredentials)(managedRoot, authDeps.env);
       if (stored) {
         account = { status: 'ready', email: stored.email || '', reused: true, stored };
@@ -258,15 +260,15 @@ async function run(deps = {}) {
       }
     }
     // The chat hooks record from the moment they are installed -- that is what
-    // lets /goals-ui, run mid-chat, see the chat from its beginning. Only
+    // lets /bart, run mid-chat, see the chat from its beginning. Only
     // analysis and injection wait for it, so those are what this line promises.
     output.write(experimentalEnabled()
       ? '\nInstalled. Chats are recorded locally; nothing is analyzed or '
-        + 'injected until you run /goals-ui in a chat.\n'
+        + 'injected until you run /bart in a chat.\n'
         + 'Global Vault hooks are wired (HC_EXPERIMENTAL=1); capture follows '
         + 'your global Vault setting.\n'
       : '\nInstalled. Chats are recorded locally; nothing is analyzed or '
-        + 'injected until you run /goals-ui in a chat.\n');
+        + 'injected until you run /bart in a chat.\n');
     if (reach && !reach.onPath) {
       output.write(reach.added
         ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`
@@ -275,7 +277,7 @@ async function run(deps = {}) {
         : `\nAdd this to your shell profile, then run it here:\n\n    ${reach.line}\n`);
     }
     const needsPathStep = !!(reach && !reach.onPath);
-    const next = 'Open any Claude Code chat and type /goals-ui.';
+    const next = 'Open any Claude Code chat and type /bart.';
     output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
     if (!options.dryRun && !(account && account.status === 'ready')) {
       output.write('Run `engelbart auth` to connect your Engelbart account and its Claude credits.\n');

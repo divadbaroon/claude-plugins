@@ -36,7 +36,7 @@ def tokens_in(text):
 
 
 STUB = r'''#!/usr/bin/env python3
-import json, sys, os
+import json, sys, os, time
 args = sys.argv[1:]
 if "--output-format" not in args:
     # providers.ClaudeCLI: the prompt arrives on stdin, plain text goes out
@@ -45,18 +45,49 @@ if "--output-format" not in args:
     sys.exit(0)
 prompt = args[args.index("-p") + 1]
 resume = "--resume" in args
+if os.environ.get("STUB_LOG"):
+    with open(os.environ["STUB_LOG"], "a") as fh:
+        fh.write(json.dumps({"prompt": prompt, "resume": resume}) + "\n")
 def say(text):
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": text}]}}), flush=True)
+def end():
+    print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
+    sys.exit(0)
+if resume and '{"restart": true' in prompt:
+    # The restart check that follows a finished build (RestartCheckBrowserTests).
+    if os.environ.get("STUB_CHECK_HOLD"):
+        time.sleep(float(os.environ["STUB_CHECK_HOLD"]))
+    if os.environ.get("STUB_RESTART") == "yes":
+        say(json.dumps({"restart": True,
+                        "why": "the session-cache change lives in a long-running process",
+                        "prompt": "Restart the goals-ui dev process so the new session-cache"
+                                  " code loads: kill the running `goals-ui serve`, then"
+                                  " re-run `goals-ui serve --dev`."}))
+    else:
+        say('{"restart": false}')
+    end()
 if not resume:
     ids = [w.strip("[]") for w in prompt.split() if w.startswith("[t") and w.endswith("]")]
+    if os.environ.get("STUB_HOLD"):
+        # Mid-work for a while: long enough to be told something.
+        say('{"estimate": {"tokens": 12000, "minutes": 3}}')
+        time.sleep(float(os.environ["STUB_HOLD"]))
+        for i in ids:
+            say('{"id": "%s", "state": "DONE"}' % i)
+        end()
     say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
     for other in ids[1:]:
         say('{"id": "%s", "state": "DONE"}' % other)
 else:
-    msg = json.loads(prompt)
+    try:
+        msg = json.loads(prompt)
+    except ValueError:
+        # Not an answer -- a note, a deleted row: carry on to the end.
+        say("Moving on.")
+        end()
     say('{"id": "%s", "state": "DONE"}' % msg["id"])
-print(json.dumps({"type": "result", "is_error": False, "result": "ok"}))
+end()
 '''
 
 
@@ -96,6 +127,10 @@ class TodoPanelBrowserTests(unittest.TestCase):
         p.important.write_text(json.dumps({"items": []}))
         p.prompts.write_text(json.dumps({"prompts": []}))
         p.manifest.write_text(json.dumps({"cwd": str(self.root)}))
+        # A chat that has said which project it is for: otherwise the page
+        # opens on onboarding, whose shade sits over the rail and takes
+        # every click these tests make.
+        chat_state.bind_project(self.session, str(self.root), root=self.root)
         self.trajdir = p.session_dir
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -105,6 +140,10 @@ class TodoPanelBrowserTests(unittest.TestCase):
         self.old_env = dict(os.environ)
         os.environ["PATH"] = str(self.bin) + os.pathsep + os.environ.get("PATH", "")
         os.environ["HC_BUILD_MODE"] = "headless"
+        # The restart check that follows a finished build is a second
+        # process on the same session; the tests that are about it turn it
+        # on themselves (see RestartCheckBrowserTests).
+        os.environ["HC_BUILD_RESTART_CHECK"] = "0"
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(self.old_env)))
         BUILD._RUNS.clear()
 
@@ -728,12 +767,13 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_a_row_is_priced_at_what_the_prompt_tab_counts(self):
-        # The number in a row's corner and the number above the prompt field
-        # are the same measurement of the same string -- the context a build
-        # of that row opens on. They were not: the corner added a guess about
-        # the work on top, which read as tens of thousands beside the tab's
-        # few, and the two surfaces disagreed about what a row costs.
+    def test_an_unbuilt_row_carries_no_price_but_the_prompt_tab_still_counts(self):
+        # A row's corner used to guess at what its build would cost, before
+        # the build; the number beside a row still being written was the
+        # wrong place for a guess, and the guess is now the build's own,
+        # on the watch panel once it has been asked for. The Prompt tab
+        # still counts the string a build opens on, since that is a
+        # measurement of a string that exists.
         from playwright.sync_api import expect, sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
@@ -744,20 +784,12 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.keyboard.type("Add the route")
                 page.wait_for_timeout(1500)
                 corner = page.locator(".hc-todo-cost").first
-                expect(corner).not_to_have_text("", timeout=15000)
                 page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
                 note = page.locator(".hc-rail-ctx-note")
                 expect(note).to_contain_text("tok", timeout=15000)
-                above, beside = tokens_in(note.inner_text()), tokens_in(corner.inner_text())
-                self.assertGreater(beside, 0)
-                # Not to the token: the tab counts the row's line in the
-                # composed prompt and the corner counts the row's own text.
-                # Within a tenth of each other, where the old corner was a
-                # factor of twenty away.
-                self.assertLess(abs(above - beside), 0.1 * above)
-                # And the work it dropped from the number is still said, where
-                # it can be called the guess it is.
-                self.assertIn("work", corner.get_attribute("title") or "")
+                self.assertGreater(tokens_in(note.inner_text()), 0)
+                expect(corner).to_have_text("")
+                expect(corner).to_be_hidden()
             finally:
                 browser.close()
 
@@ -778,6 +810,121 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 expect(page.locator("textarea.hc-rail-code")).to_have_count(0)
                 expect(page.locator(".hc-rail-generate")).to_have_count(0)
                 expect(page.locator(".hc-rail-copy")).to_be_visible()
+            finally:
+                browser.close()
+
+    def test_enter_on_a_building_row_opens_a_note_pane_and_the_build_is_told(self):
+        # Enter on a row the build is on is not a new row: it opens the pane
+        # under the row, and what is typed there goes to the build's session
+        # -- the process ended and resumed on it -- which then carries on.
+        if BUILD.mode() == "session":
+            self.skipTest("a headless build's process is the one told mid-work")
+        os.environ["STUB_HOLD"] = "8"
+        log = self.root / "stub.log"
+        os.environ["STUB_LOG"] = str(log)
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("building", timeout=10_000)
+                self.tile(page, "Add the route").locator(".hc-todo-line").click()
+                page.keyboard.press("Enter")
+                pane = page.locator(".hc-todo-note-pane")
+                expect(pane).to_be_visible()
+                expect(pane).to_contain_text("Anything to add")
+                # The row was not split: one row reads "Add the route".
+                self.assertEqual(1, len([r for r in self.rows()
+                                         if r[0] == "Add the route"]))
+                page.keyboard.type("use the v2 router")
+                page.keyboard.press("Enter")
+                expect(page.locator(".hc-todo-note-pane")).to_have_count(0)
+                deadline = time.time() + 10
+                while time.time() < deadline:
+                    if log.exists() and len(log.read_text().splitlines()) == 2:
+                        break
+                    time.sleep(0.1)
+                lines = [json.loads(l) for l in log.read_text().splitlines()]
+                self.assertEqual(2, len(lines), lines)
+                self.assertTrue(lines[1]["resume"])
+                self.assertIn("added context to a TODO row", lines[1]["prompt"])
+                self.assertIn('"use the v2 router"', lines[1]["prompt"])
+                # And the build went on to its end.
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("done", timeout=10_000)
+                expect(page.locator(".hc-todo-error")).to_be_hidden()
+            finally:
+                browser.close()
+
+
+    def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):
+        # The rows land done; the same session is then asked, on sonnet at
+        # high effort, whether the program needs a local restart. The rail
+        # shows the check under the rows while it runs, then -- the stub
+        # says yes -- the reason and the exact prompt to paste, with a copy
+        # button; and a banner that asks for a hand and stays up until it
+        # gets one.
+        from playwright.sync_api import expect, sync_playwright
+        os.environ["HC_BUILD_RESTART_CHECK"] = "1"
+        os.environ["STUB_HOLD"] = "1"
+        os.environ["STUB_RESTART"] = "yes"
+        os.environ["STUB_CHECK_HOLD"] = "4"
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Cache goals.md per session")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-dash").first.click()
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                expect(page.locator(".hc-todo-status").first
+                       ).to_have_text("done", timeout=15_000)
+                checking = page.locator(".hc-todo-restart[data-hc-todo-restart=\"checking\"]")
+                expect(checking).to_be_visible(timeout=10_000)
+                expect(checking).to_contain_text("sonnet · effort high")
+                expect(checking).to_contain_text(
+                    "checking whether these changes go stale without a local restart")
+                meta = page.locator(".hc-todo-watch-meta")
+                expect(meta).to_contain_text("finished")
+                expect(meta).not_to_contain_text("calculating")
+                yes = page.locator(".hc-todo-restart[data-hc-todo-restart=\"yes\"]")
+                expect(yes).to_be_visible(timeout=15_000)
+                expect(checking).to_have_count(0)
+                expect(yes).to_contain_text(
+                    "the session-cache change lives in a long-running process")
+                expect(yes).to_contain_text("send to local claude code")
+                expect(yes.locator(".hc-todo-restart-prompt")).to_contain_text(
+                    "re-run `goals-ui serve --dev`")
+                banner = page.locator(".hc-alert[data-hc-alert-kind=\"restart\"]")
+                expect(banner).to_be_visible(timeout=10_000)
+                expect(banner).to_contain_text("Restart needed")
+                expect(banner).to_contain_text(
+                    "the session-cache change lives in a long-running process")
+                # Past the six seconds a finish banner gets: still up.
+                page.wait_for_timeout(7000)
+                expect(banner).to_be_visible()
+                # Copy puts the prompt on the clipboard, verbatim.
+                yes.locator("[data-hc-todo-restart-copy]").click()
+                expect(yes.locator("[data-hc-todo-restart-copy]")).to_have_text("copied ✓")
+                prompt = page.evaluate("() => navigator.clipboard.readText()")
+                self.assertTrue(prompt.startswith("Restart the goals-ui dev process"), prompt)
+                self.assertTrue(prompt.endswith("re-run `goals-ui serve --dev`."), prompt)
+                # The row is the build's verdict, not the check's: still done.
+                self.assertEqual(["done"], [r[2] for r in self.rows()])
+                # Dismissing the banner marks it read; it does not come back.
+                banner.locator(".hc-alert-close").click()
+                expect(banner).to_have_count(0)
             finally:
                 browser.close()
 
@@ -1050,6 +1197,11 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
     def test_a_build_pressed_mid_save_still_carries_the_row_it_names(self):
         self.skipTest("headless-only")
 
+    def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):
+        # The check is a second process on the build's session; there is no
+        # process in session mode.
+        self.skipTest("headless-only")
+
     def test_a_row_out_with_the_builder_comes_back_on_escape_or_its_corner(self):
         # In session mode the row waits in the queue: cancelling it from the
         # caret takes it out of the queue and back to active.
@@ -1079,7 +1231,6 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
                 expect(page.locator(".hc-todo-error")).to_be_hidden()
             finally:
                 browser.close()
-
 
 if __name__ == "__main__":
     unittest.main()

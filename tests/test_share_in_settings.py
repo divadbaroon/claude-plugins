@@ -162,7 +162,8 @@ class SettingsTabTests(BridgeTestCase):
             + "  return out; };"
             + "later(function () { " + tail + " });"))
 
-    ALL = ("cloud", "notifications", "supabase", "project", "shared", "data")
+    ALL = ("cloud", "notifications", "builds", "supabase", "project",
+           "shared", "data")
 
     def only(self, *on):
         return dict((name, name in on) for name in self.ALL)
@@ -172,8 +173,8 @@ class SettingsTabTests(BridgeTestCase):
             "return JSON.stringify([tabs.map(function (t) { return t.textContent; }),"
             " tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([["Account", "Alerts", "Sharing", "Cloud", "Data"],
-                          ["", None, None, None, None],
+        self.assertEqual([["Account", "Alerts", "Sharing", "Cloud", "Data", "Builds"],
+                          ["", None, None, None, None, None],
                           self.only("supabase")], got)
 
     def test_cloud_is_where_the_connection_is_settled(self):
@@ -185,22 +186,76 @@ class SettingsTabTests(BridgeTestCase):
         self.assertEqual([self.only("cloud"), True, True], got)
 
     def test_data_is_the_record_this_machine_keeps(self):
+        # Named and copied, not shown: a real project's record runs to
+        # hundreds of kilobytes, past what the route hands a pane, and a
+        # dump that stops a quarter of the way in reads as nothing. The
+        # pane says where the file is and offers the copy.
         got = self.panel(
             "click(tabs[4]);"
-            "return JSON.stringify([secs(),"
-            " deepText(panel.querySelector('[data-hc-record]')),"
+            "var pane = panel.querySelector('[data-hc-record]');"
+            "return JSON.stringify([secs(), deepText(pane),"
+            " pane.querySelector('.hc-settings-record') === null,"
             " calls.filter(function (c) { return String(c[0]).indexOf("
             "   '/api/project.json') >= 0; }).length]);")
         self.assertEqual([self.only("data"),
-                          "/vault/projects/abc123.json" + RECORD["text"],
-                          1], got)
+                          "/vault/projects/abc123.jsonCopy project record",
+                          True, 1], got)
+
+    def copies(self, tail, record=None):
+        # Timers held: "copied ✓" clears itself after a moment, and the
+        # test reads it before that moment.
+        return json.loads(self.run_js(
+            PRELUDE + fetch_js(record=record)
+            + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
+            + "P.gear.open(); P.gear.tab('data');"
+            + "var panel = P.gear.panel();"
+            + "var copied = [];"
+            + "navigator.clipboard = { writeText: function (t) { copied.push(t);"
+            + "  return Promise.resolve(); } };"
+            + "var said = function () { var b = panel.querySelector('.hc-record-btn');"
+            + "  return b ? [b.getAttribute('data-hc-record-copy'),"
+            + "    b.querySelector('.hc-record-said').textContent] : null; };"
+            + "later(function () { " + tail + " });",
+            extra_env={"HC_DEFER_TIMEOUT": "1"}))
+
+    def test_the_copy_button_fetches_the_file_whole_and_says_copied(self):
+        got = self.copies(
+            "click(panel.querySelector('.hc-record-btn'));"
+            "var seen = [said()];"
+            "return later(function () {"
+            "  seen.push([said(), copied, calls.filter(function (c) {"
+            "    return String(c[0]).indexOf('/api/project.json?full=1') >= 0; }).length]);"
+            "  fireTimers(); seen.push(said());"
+            "  return JSON.stringify(seen); });")
+        self.assertEqual(
+            [["busy", "reading…"],
+             [["copied", "copied ✓"], [RECORD["text"]], 1],
+             [None, ""]],
+            got)
+
+    def test_an_older_server_that_still_cuts_the_read_is_said_so(self):
+        cut = dict(RECORD, truncated=True)
+        got = self.copies(
+            "return P.record.copy().then(function (ok) {"
+            "  return JSON.stringify([ok, said(), copied]); });",
+            record=cut)
+        self.assertEqual([True, ["cut", "copied · cut short"], [RECORD["text"]]],
+                         got)
+
+    def test_a_chat_without_a_directory_offers_no_copy(self):
+        got = self.copies(
+            "return JSON.stringify([said(),"
+            " deepText(panel.querySelector('[data-hc-record]'))]);",
+            record={"ok": False, "error": "no project"})
+        self.assertEqual([None, "This chat has no project directory, so there"
+                                " is no record to read."], got)
 
     def test_sharing_carries_this_project_and_the_workspaces_joined(self):
         got = self.panel(
             "click(tabs[2]);"
             "return JSON.stringify([tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([[None, None, "", None, None],
+        self.assertEqual([[None, None, "", None, None, None],
                           self.only("project", "shared")], got)
 
     def test_alerts_is_where_the_banner_settings_went(self):

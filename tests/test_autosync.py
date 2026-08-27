@@ -220,7 +220,10 @@ class EditedGoalTests(unittest.TestCase):
         out = UI._apply({"op": "set_notes", "goal_id": "g1",
                          "notes": "# what this is for"}, self.trajdir, True)
         self.assertTrue(out.get("ok"), out)
-        self.assertEqual(self.armed, [str(self.cwd)])
+        # Resolved on both sides: the project identity resolves symlinks, and
+        # on macOS a temp dir is /var -> /private/var.
+        self.assertEqual([str(Path(c).resolve()) for c in self.armed],
+                         [str(self.cwd.resolve())])
 
     def test_asking_a_question_of_the_workspace_arms_nothing(self):
         UI._apply({"op": "list_shares"}, self.trajdir, True)

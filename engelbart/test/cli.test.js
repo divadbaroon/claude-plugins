@@ -80,7 +80,7 @@ test('parseArgs accepts only numeric choices and enforces goal dependency', () =
   withExperimental('1', () => {
     assert.deepEqual(parseArgs(['--non-interactive', '--global-vault', '1', '--goals', '2']), {
       command: 'install', globalVault: '1', goals: '2',
-      nonInteractive: true, dryRun: false, noLogin: false, help: false,
+      nonInteractive: true, dryRun: false, localOnly: false, help: false,
     });
   });
   assert.equal(parseArgs(['--global-vault', '2']).goals, '2');
@@ -101,7 +101,7 @@ test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
     // The inert choice keeps working, so scripted installs do not break.
     assert.deepEqual(parseArgs(['--global-vault', '2', '--goals', '2']), {
       command: 'install', globalVault: '2', goals: '2',
-      nonInteractive: false, dryRun: false, noLogin: false, help: false,
+      nonInteractive: false, dryRun: false, localOnly: false, help: false,
     });
   });
   withExperimental('0', () => {
@@ -143,7 +143,7 @@ test('dry-run verifies the package and never invokes installer', async () => {
     assert.equal(code, 0);
     assert.equal(invoked, false);
     assert.match(output.read(), /Verified bundled backend 0\.16\.0/);
-    assert.match(output.read(), /Open any Claude Code chat and type \/goals-ui\./);
+    assert.match(output.read(), /Open any Claude Code chat and type \/bart\./);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -164,9 +164,10 @@ test('explicit flags are still honoured for scripted installs', async () => {
   // The contradiction is caught while parsing, before anything is installed.
   assert.throws(() => parseArgs(['--global-vault', '2', '--goals', '1']),
     /requires --global-vault 1/);
+  assert.equal(parseArgs(['--local-only']).localOnly, true);
 });
 
-// The install ends by telling the user to open /goals-ui, and says so only
+// The install ends by telling the user to open /bart, and says so only
 // after any step their shell still needs to reach `hc`.
 async function installOutput({ onPath, added, present, linked }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-path-'));
@@ -194,28 +195,25 @@ async function installOutput({ onPath, added, present, linked }) {
 }
 
 test('help does not document a prompt the installer never shows', () => {
-  // resolveChoices never reads stdin, so "require every applicable choice as a
-  // flag" describes an interaction that no longer exists.
   const text = usage();
-  assert.doesNotMatch(text, /require every applicable choice as a flag/);
-  assert.match(text,
-    /^ {2}--non-interactive {5}accepted for compatibility; the installer never prompts$/m);
+  assert.match(text, /^ {2}--local-only {10}install without connecting an Engelbart account$/m);
+  assert.match(text, /^ {2}--non-interactive {5}install locally without opening a browser$/m);
 });
 
-test('the closing line says what is recorded and what waits for /goals-ui', async () => {
+test('the closing line says what is recorded and what waits for /bart', async () => {
   // The hooks record from install; only analysis and injection wait. Claiming
   // "nothing is captured" was false the moment the plugin was on disk.
   const quiet = await withExperimentalAsync(undefined,
     () => installOutput({ onPath: true, added: false }));
   assert.match(quiet,
-    /Installed\. Chats are recorded locally; nothing is analyzed or injected until you run \/goals-ui in a chat\./);
+    /Installed\. Chats are recorded locally; nothing is analyzed or injected until you run \/bart in a chat\./);
   assert.doesNotMatch(quiet, /Nothing is captured or analyzed yet/);
   assert.doesNotMatch(quiet, /Global Vault hooks are wired/);
 
   const wired = await withExperimentalAsync('1',
     () => installOutput({ onPath: true, added: false }));
   assert.match(wired,
-    /Installed\. Chats are recorded locally; nothing is analyzed or injected until you run \/goals-ui in a chat\./);
+    /Installed\. Chats are recorded locally; nothing is analyzed or injected until you run \/bart in a chat\./);
   assert.match(wired,
     /Global Vault hooks are wired \(HC_EXPERIMENTAL=1\); capture follows your global Vault setting\./);
 });
@@ -223,7 +221,7 @@ test('the closing line says what is recorded and what waits for /goals-ui', asyn
 test('a reachable launcher gets no PATH advice', async () => {
   const text = await installOutput({ onPath: true, added: false });
   assert.match(text, /hc {11}ready in this terminal/);
-  assert.match(text, /Next: Open any Claude Code chat and type \/goals-ui\./);
+  assert.match(text, /Next: Open any Claude Code chat and type \/bart\./);
   assert.doesNotMatch(text, /export PATH/);
   assert.doesNotMatch(text, /Then:/);
   assert.doesNotMatch(text, /hc ui/);
@@ -235,9 +233,9 @@ test('an unreachable launcher says what to run now, before the next step', async
   assert.match(text, /new terminals get it from \/home\/u\/\.zshrc/);
   // The order is the point: an instruction the user cannot yet follow must
   // not come before the one that makes it work.
-  assert.match(text, /Then: Open any Claude Code chat and type \/goals-ui\./);
+  assert.match(text, /Then: Open any Claude Code chat and type \/bart\./);
   // The order is what matters, so pin it to the instruction itself: the
-  // recording line above also names /goals-ui, and a bare indexOf would find
+  // recording line above also names /bart, and a bare indexOf would find
   // that one and pass no matter where the instruction ended up.
   assert.ok(text.indexOf('export PATH')
     < text.indexOf('Then: Open any Claude Code chat'));
@@ -347,7 +345,7 @@ function installWith(extra) {
     const output = capture();
     const errors = capture();
     return run({
-      argv: ['--non-interactive', '--global-vault', '2'],
+      argv: ['--global-vault', '2'],
       packageRoot: root,
       managedRoot: path.join(root, 'managed'),
       platform: 'darwin',

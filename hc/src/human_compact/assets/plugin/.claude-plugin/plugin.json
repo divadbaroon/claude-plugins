@@ -1,7 +1,7 @@
 {
   "name": "vault",
   "version": "0.5.0",
-  "description": "Chat-scoped goals for Claude Code via /goals-ui.",
+  "description": "Chat-scoped goals for Claude Code via /bart.",
   "author": {
     "name": "David Baroon"
   }

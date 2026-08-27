@@ -1,5 +1,5 @@
 {
-  "description": "Chat-scoped goal updates for /goals-ui.",
+  "description": "Chat-scoped goal updates for /bart.",
   "hooks": {
     "SessionStart": [
       { "hooks": [
@@ -12,7 +12,7 @@
       ] }
     ],
     "UserPromptExpansion": [
-      { "matcher": "goals-ui", "hooks": [
+      { "matcher": "bart", "hooks": [
         { "type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh", "args": [], "timeout": 45 }
       ] }
     ],

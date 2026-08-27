@@ -1,26 +1,26 @@
 # vault — chat-scoped goals for Claude Code
 
-Maintain per-chat goal state through `/goals-ui`, and — experimentally —
+Maintain per-chat goal state through `/bart`, and — experimentally —
 persist Claude Code conversation history that survives context compaction.
 There is no telemetry; persisted state stays on your machine.
 
 ## Chat-scoped goals (always available after install)
 
-Run `/goals-ui` inside Claude Code. The browser UI is keyed to that chat's
+Run `/bart` inside Claude Code. The browser UI is keyed to that chat's
 stable session ID and stored at `~/.claude-vault/chat-sessions/<session-id>/`.
 User prompts can be linked many-to-many with goals. Inference also observes
 assistant plans/progress, tool activity, task events, and completion evidence.
 
 From install, the hooks record each chat's own prompts and events into that
 directory — the same conversation Claude Code already keeps in
-`~/.claude/projects/` — so that `/goals-ui`, run mid-chat, still sees the chat
+`~/.claude/projects/` — so that `/bart`, run mid-chat, still sees the chat
 from its beginning. Nothing is analyzed or injected until it is run.
 
-From the moment `/goals-ui` runs in a chat, that chat's goals document is
+From the moment `/bart` runs in a chat, that chat's goals document is
 injected back into it as context — whole the first time, then as a diff
 against what the chat was last shown — and subagents and tool batches receive
-it too. `/goals-ui disable` turns analysis and injection off again for the
-chat; `/goals-ui` turns them back on. A chat that never ran `/goals-ui` is
+it too. `/bart disable` turns analysis and injection off again for the
+chat; `/bart` turns them back on. A chat that never ran `/bart` is
 still recorded, but is never analyzed and never injected into.
 
 This chat-scoped layer does not require the shim or `CLAUDE_VAULT=1`.
@@ -38,9 +38,9 @@ Install the managed Python runtime and Claude Code integration together:
     npx engelbart-cli
 
 The installer takes no required options and asks no questions: it installs the
-runtime, the hooks, and `/goals-ui`. Nothing is analyzed or injected until
-`/goals-ui` runs in a chat.
-Start a new Claude Code session (or run `/reload-plugins`) and use `/goals-ui`.
+runtime, the hooks, and `/bart`. Nothing is analyzed or injected until
+`/bart` runs in a chat.
+Start a new Claude Code session (or run `/reload-plugins`) and use `/bart`.
 No Homebrew, pipx, jq, shell-profile edit, or manual `hc` command is required.
 
 ## Experimental (HC_EXPERIMENTAL=1)
@@ -98,7 +98,7 @@ Vault declares an explicit timeout for the final snapshot.
 Remove the managed runtime and Claude integration directories after preserving
 any state you want to keep:
 
-    rm -rf ~/.human-compact ~/.claude/skills/vault ~/.claude/skills/goals-ui ~/.claude/skills/hc-ui
+    rm -rf ~/.human-compact ~/.claude/skills/vault ~/.claude/skills/bart ~/.claude/skills/hc-ui
 
 The command used to be `/hc-ui`. Installing over that release removes its
 `~/.claude/skills/hc-ui` directory when the installer recognizes it as its

@@ -4,7 +4,7 @@ The audit's "built but not exposed" capabilities keep their implementations,
 but their entry points answer with a refusal unless ``HC_EXPERIMENTAL=1`` is
 set.  The CLI half of that boundary lives in ``cli.EXPERIMENTAL_COMMANDS``;
 these tests hold the HTTP half, which is reachable from any running server —
-including the per-chat server ``/goals-ui`` starts.
+including the per-chat server ``/bart`` starts.
 """
 import json
 import os
