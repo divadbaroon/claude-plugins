@@ -372,13 +372,31 @@
       input.setAttribute("spellcheck", "false");
       input.setAttribute("placeholder", "a tool for…, a rewrite of…, …");
       input.value = st.summary;
-      on(input, "input", function () { st.summary = input.value; });
       wrap.appendChild(input);
       body.appendChild(wrap);
       var acts = el("div", "acts");
-      acts.appendChild(btn("Done", st.summary.trim() ? "btn-on" : "",
-                           function () { st.saidSummary = true; draw(); },
-                           !st.summary.trim()));
+      var done = btn("Done", st.summary.trim() ? "btn-on" : "",
+                     function () { st.saidSummary = true; draw(); },
+                     !st.summary.trim());
+      // Toggled in place, never by redrawing: they are typing in the field
+      // that decides it, and a sweep would take the caret out of the box.
+      on(input, "input", function () {
+        st.summary = input.value;
+        if (st.summary.trim()) {
+          done.removeAttribute("disabled");
+          done.className = "btn btn-on";
+          if (!done.querySelector(".go")) {
+            done.appendChild(el("span", "go", "\u203a"));
+          }
+          done.onclick = function () { st.saidSummary = true; draw(); };
+        } else {
+          done.setAttribute("disabled", "disabled");
+          done.className = "btn";
+          var chev = done.querySelector(".go");
+          if (chev) chev.remove();
+        }
+      });
+      acts.appendChild(done);
       acts.appendChild(btn("Skip", "", function () {
         st.saidSummary = true;
         draw();

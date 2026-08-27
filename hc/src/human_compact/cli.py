@@ -26,6 +26,10 @@ ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
 ALWAYS_LINE = "export CLAUDE_VAULT=1"
 _DETACHED_PROCESSES = []
+# The address that says "show me every project" to a workspace window.
+# The page is an overlay on a running workspace rather than a route of its
+# own, so the ask has to survive the hop from a terminal into a browser.
+_HOME_HASH = "projects"
 MIN_CLAUDE_VERSION = (2, 1, 175)
 MIN_CLAUDE_VERSION_TEXT = ".".join(map(str, MIN_CLAUDE_VERSION))
 MANAGED_MARKER = ".human-compact-managed.json"
@@ -2003,16 +2007,105 @@ def hc_main():
         print(f"unknown command: {cmd}"); sys.exit(2)
 
 
+def bart_start_main(argv=None):
+    """Open the vault's Projects page from a terminal.
+
+    The page lists every project this vault knows, and it is drawn by
+    whichever workspace server is up -- the question is "is one running?",
+    not "is mine running?". So a healthy server anywhere in the vault is the
+    answer, and the directory this was run in only decides which server is
+    asked first.
+
+    Nothing is minted. A viewer that created a project for the directory it
+    happened to be run in would fill the list it exists to show; a vault with
+    no projects yet is told to open one from a chat instead.
+    """
+    import contextlib
+    import io
+    import webbrowser
+    ap = argparse.ArgumentParser(
+        prog="bart start",
+        description="Open the workspace listing every project in this vault.")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    from .trajectory import project_store as PS
+
+    rows = PS.list_projects(None)
+    if not rows:
+        sys.stderr.write(
+            "bart: this vault has no projects yet. Run /bart inside a Claude "
+            "Code chat to open the first one.\n")
+        raise SystemExit(1)
+
+    # Newest first, except the project underfoot, which goes first: a reader
+    # standing in one asked for that window, not the last one they touched.
+    try:
+        here = PS.repo_home(os.getcwd())
+    except (OSError, ValueError):
+        here = ""
+    order = ([r for r in rows if r["cwd"] == here]
+             + [r for r in rows if r["cwd"] != here])
+
+    url = ""
+    for row in order:
+        record = PS.server_record(None, row["cwd"])
+        if isinstance(record, dict) and _healthy_chat_server(
+                record, str(record.get("session_id") or "")):
+            url = str(record.get("url") or "")
+            if url:
+                break
+            url = ""
+
+    if not url:
+        # Nothing is up. A server serves one project's store, so the first
+        # project in the order that HAS a store is the one started; a project
+        # nobody has ever opened has none, and cannot be served.
+        for row in order:
+            session = PS.tree_session(None, row["cwd"])
+            if not session:
+                held = PS.project_sessions(None, row["cwd"])
+                session = held[-1] if held else ""
+            if not session:
+                continue
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                chat_ui_main(["--session", session, "--cwd", row["cwd"],
+                              "--port", str(args.port), "--no-open"])
+            url = next((line.strip()
+                        for line in reversed(said.getvalue().splitlines())
+                        if line.strip().startswith("http://127.0.0.1:")), "")
+            if url:
+                break
+
+    if not url:
+        sys.stderr.write("bart: no workspace could be started for this vault\n")
+        raise SystemExit(1)
+
+    page = url + ("" if url.endswith("/") else "/") + "#" + _HOME_HASH
+    print(page)
+    if not args.no_open:
+        with contextlib.suppress(Exception):
+            webbrowser.open(page)
+    return 0
+
+
 def bart_main(argv=None):
     """Authenticate Claude Code against the Engelbart metered gateway."""
     from . import engelbart_auth as EA
+
+    said = list(sys.argv[1:] if argv is None else argv)
+    # Opening the workspace is not an authentication question, and it carries
+    # its own flags, so it is taken before the account parser sees anything.
+    if said and said[0] == "start":
+        return bart_start_main(said[1:])
 
     ap = argparse.ArgumentParser(
         prog="bart",
         description="Connect Claude Code to an Engelbart account and credit key.")
     ap.add_argument("action", nargs="?", default="status",
-                    choices=("auth", "status", "token", "logout"))
-    args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+                    choices=("auth", "status", "token", "logout", "start"))
+    args = ap.parse_args(said)
     try:
         if args.action == "token":
             print(EA.token())

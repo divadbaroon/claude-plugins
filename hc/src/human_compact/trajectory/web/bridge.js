@@ -4094,6 +4094,24 @@
   // window that answers is a different one, so the ask rides in the URL.
   var OVERVIEW_HASH = "overview";
 
+  // The projects list is an overlay this window puts up, not a page of its
+  // own, so a terminal that wants to open on it has nowhere to point but the
+  // address. `bart start` writes this; clicking the brand does the same
+  // thing without it.
+  var HOME_HASH = "projects";
+
+  function takeHomeHash() {
+    if (typeof location === "undefined" || !location) return false;
+    if (str(location.hash).replace(/^#/, "") !== HOME_HASH) return false;
+    if (!openHome()) return false;
+    try {
+      history.replaceState(null, "", location.pathname + location.search);
+    } catch (e) {
+      location.hash = "";
+    }
+    return true;
+  }
+
   function overviewURL(url) {
     var base = str(url);
     if (!base) return base;
@@ -12956,6 +12974,7 @@
       renderAnalyzer();
       renderProjectChip();
       armBrand();
+      takeHomeHash();
       takeOverviewHash();
       renderHome();
       renderOverview();
