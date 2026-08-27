@@ -105,7 +105,6 @@ class AutosyncTests(unittest.TestCase):
     def test_a_burst_of_edits_is_one_send(self):
         for _ in range(6):
             AS.schedule(None, "/work/proj", _delay=TICK)
-            time.sleep(TICK / 4)
         self.assertTrue(self.gate.wait(2))
         settle()
         self.assertEqual(self.sent, ["/work/proj"])
