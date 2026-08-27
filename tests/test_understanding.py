@@ -2,10 +2,12 @@
 
 The rail's Understanding tab writes onto a goal what the work is actually
 for, in the reader's words -- typed, with screenshots of it pasted beside
-them -- and what they want answered about it. Claude answers those
-questions in GIVEN/WHEN/THEN and they can follow up; the answers are kept
-with the questions. All of it survives the artifact posting its own tree
-back, and all of it opens every build of that goal's rows.
+them -- and what they want answered about it. The scenario itself is shaped
+into GIVEN / WHEN / THEN, with a question beside every line the reader's own
+words did not fill; the questions about it are answered in ordinary prose and
+they can follow up. The answers are kept with the questions. All of it
+survives the artifact posting its own tree back, and all of it opens every
+build of that goal's rows.
 """
 
 import json
@@ -33,7 +35,8 @@ EMPTY = {"scenario": "", "shots": [], "questions": []}
 class Engine:
     """A provider that answers once and remembers what it was asked."""
 
-    def __init__(self, said="GIVEN a tree\nWHEN two edit it\nTHEN one wins"):
+    def __init__(self, said="The later save wins: the tree is written whole,"
+                            " so the second writer's copy replaces the first."):
         self.said, self.seen, self.dirs = said, "", None
         self.searched = None
 
@@ -307,7 +310,7 @@ class UnderstandingRouteTests(unittest.TestCase):
 
 
 class AskAboutTheScenarioTests(unittest.TestCase):
-    """A question about the scenario, answered in GIVEN / WHEN / THEN."""
+    """A question about the scenario, answered the way a person would."""
 
     def tree(self):
         goal = GM.new_goal("g1", "Share a goal tree", None, origin="user")
@@ -316,19 +319,25 @@ class AskAboutTheScenarioTests(unittest.TestCase):
         GM.sanitize(goals)
         return goals["goals"]
 
-    def test_the_answer_is_asked_for_in_the_one_shape(self):
+    def test_the_answer_comes_back_as_an_answer_and_not_as_a_form(self):
+        # What this changes: the tab used to demand GIVEN / WHEN / THEN of
+        # every answer, and a reader asking what happens to the second build
+        # had to read the answer back out of three capitalised clauses.
         engine = Engine()
         out = ui.ask_scenario(self.tree(), "g1",
                               "Two people work one tree from two machines.",
                               "  Who   wins a conflict?  ", engine=engine)
         self.assertTrue(out["ok"], out)
         self.assertEqual("Who wins a conflict?", out["asked"])
-        self.assertEqual("GIVEN a tree\nWHEN two edit it\nTHEN one wins",
+        self.assertEqual("The later save wins: the tree is written whole, so"
+                         " the second writer's copy replaces the first.",
                          out["answer"])
-        # The shape is asked for, and the material to answer from is there:
-        # the scenario itself and the goal it belongs to.
-        self.assertIn("GIVEN <what is true before anything happens>",
-                      engine.seen)
+        # Prose is asked for by name, and the form is not.
+        self.assertIn("Answer in plain prose", engine.seen)
+        self.assertNotIn("GIVEN <what is true before anything happens>",
+                         engine.seen)
+        # And the material to answer from is there: the scenario itself and
+        # the goal it belongs to.
         self.assertIn("Two people work one tree from two machines.",
                       engine.seen)
         self.assertIn("Two machines, one document.", engine.seen)
@@ -371,39 +380,57 @@ class AskAboutTheScenarioTests(unittest.TestCase):
                               "What happens with the second todo?",
                               engine=engine)
         self.assertFalse(out["ok"])
-        self.assertIn("GIVEN / WHEN / THEN", out["error"])
+        self.assertIn("tool call", out["error"])
         # Asked twice before being refused, and told the second time what was
         # wrong with the first reply.
         self.assertEqual(2, len(engine.asked))
         self.assertIn("Your last reply was not an answer", engine.asked[1])
         self.assertNotIn("Your last reply was not an answer", engine.asked[0])
 
-    def test_a_second_try_in_the_shape_is_the_answer(self):
+    def test_a_second_try_that_is_an_answer_is_the_answer(self):
         engine = Replies('{"command":"rg -n building"}',
-                         "GIVEN one build is running\nTHEN the second waits")
+                         "The second waits for the first to finish.")
         out = ui.ask_scenario(self.tree(), "g1", "Two people work one tree.",
                               "What happens with the second todo?",
                               engine=engine)
         self.assertTrue(out["ok"], out)
-        self.assertEqual("GIVEN one build is running\nTHEN the second waits",
+        self.assertEqual("The second waits for the first to finish.",
                          out["answer"])
 
-    def test_a_preamble_the_form_asked_for_none_of_is_dropped(self):
-        engine = Engine(said="Sure -- here is the answer:\n\n```\n"
-                             "GIVEN a tree\nTHEN one wins\n```")
+    def test_an_answer_wrapped_whole_in_a_fence_is_unwrapped(self):
+        # The fence is the model's packaging, not the reader's answer, and
+        # what is kept here is drawn as it stands.
+        engine = Engine(said="```\nThe later save wins.\n```")
         out = ui.ask_scenario(self.tree(), "g1", "Two people work one tree.",
                               "Who wins?", engine=engine)
         self.assertTrue(out["ok"], out)
-        self.assertEqual("GIVEN a tree\nTHEN one wins", out["answer"])
+        self.assertEqual("The later save wins.", out["answer"])
 
-    def test_a_keyword_set_in_bold_is_still_a_keyword(self):
-        # The tab colours a keyword by finding it at the head of its line, so
-        # markdown the form asked for none of comes off before it is kept.
-        engine = Engine(said="- **GIVEN** a tree\n- **THEN** one wins")
+    def test_an_answer_that_quotes_code_keeps_the_code_it_quotes(self):
+        # A fence around part of an answer is the code being shown, not
+        # packaging: taking it off would run the quote into the prose.
+        said = ("The later save wins -- the whole tree is written:\n\n"
+                "```python\nwrite(tree)\n```\n\nSo the second copy replaces"
+                " the first.")
+        engine = Engine(said=said)
         out = ui.ask_scenario(self.tree(), "g1", "Two people work one tree.",
                               "Who wins?", engine=engine)
         self.assertTrue(out["ok"], out)
-        self.assertEqual("GIVEN a tree\nTHEN one wins", out["answer"])
+        self.assertEqual(said, out["answer"])
+
+    def test_an_answer_that_quotes_json_in_it_is_still_an_answer(self):
+        # Only the opening line is weighed against a tool call. An answer
+        # about this project may well quote a line of JSON out of it, and
+        # refusing that would refuse the answers that went and looked.
+        said = ('The name is fixed in the manifest:\n\n'
+                '{"name": "engelbart", "version": "0.19.2"}\n\n'
+                'so a rename there is a rename everywhere.')
+        engine = Replies(said)
+        out = ui.ask_scenario(self.tree(), "g1", "Two people work one tree.",
+                              "Where does the name come from?", engine=engine)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(said, out["answer"])
+        self.assertEqual(1, len(engine.asked))
 
     def test_a_question_about_the_project_is_answered_out_of_the_project(self):
         # What this fixes: an answer kept on the goal that said it could not
@@ -420,10 +447,7 @@ class AskAboutTheScenarioTests(unittest.TestCase):
         self.assertIn("Grep for the names the scenario uses", engine.seen)
         # And is not told the opposite in the same breath.
         self.assertNotIn("You have no tools on this call", engine.seen)
-        # The shape is still the shape -- that is what the tab draws.
-        self.assertIn("GIVEN <what is true before anything happens>",
-                      engine.seen)
-        # UNCLEAR is what you write after looking, not instead of it.
+        # What is still open is said after looking, not instead of it.
         self.assertIn("never that you could not check the code", engine.seen)
 
     def test_a_directory_that_is_not_one_is_answered_from_the_words(self):
@@ -438,18 +462,30 @@ class AskAboutTheScenarioTests(unittest.TestCase):
         self.assertIsNone(engine.searched)
         self.assertIn("You have no tools on this call", engine.seen)
 
-    def test_a_reply_out_of_shape_is_asked_again_without_being_called_off(self):
+    def test_a_printed_tool_call_is_asked_again_without_being_called_off(self):
         # The second try in the project keeps the project: what was wrong
-        # with the first reply was its shape, not its looking.
-        engine = Replies("Here is what I found in build.py.",
-                         "GIVEN one build is running\nTHEN the second waits")
+        # with the first reply was that the call was printed, not that it
+        # went looking.
+        engine = Replies('{"tool":"grep","input":{"pattern":"building"}}',
+                         "The second build waits for the first.")
         out = ui.ask_scenario(self.tree(), "g1", "Two builds at once.",
                               "What happens with the second todo?",
                               cwd=str(ROOT), engine=engine)
         self.assertTrue(out["ok"], out)
         self.assertEqual(2, len(engine.asked))
-        self.assertIn("it is only the shape that was", engine.asked[1])
+        self.assertIn("You really can search this project", engine.asked[1])
         self.assertNotIn("You have no tools on this call", engine.asked[1])
+
+    def test_a_plain_answer_from_the_code_is_kept_as_it_stands(self):
+        # Prose that reads like a report is an answer: nothing is asked twice
+        # for saying where it looked.
+        engine = Replies("I read build.py: the second build waits"
+                         " (src/build.py:212).")
+        out = ui.ask_scenario(self.tree(), "g1", "Two builds at once.",
+                              "What happens with the second todo?",
+                              cwd=str(ROOT), engine=engine)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(1, len(engine.asked))
 
     def test_a_follow_up_carries_the_thread_it_follows(self):
         engine = Engine()
@@ -457,18 +493,23 @@ class AskAboutTheScenarioTests(unittest.TestCase):
             self.tree(), "g1", "Two people work one tree.",
             "And if both are offline?",
             # The tab's own spelling of a turn, which is not the ask panel's.
-            turns=[{"q": "Who wins a conflict?", "a": "GIVEN two\nTHEN later"},
+            turns=[{"q": "Who wins a conflict?", "a": "The later save wins."},
                    {"q": "asked, never answered", "a": ""}],
             engine=engine)
         self.assertIn("Q: Who wins a conflict?", engine.seen)
-        self.assertIn("A: GIVEN two\nTHEN later", engine.seen)
+        self.assertIn("A: The later save wins.", engine.seen)
         self.assertNotIn("asked, never answered", engine.seen)
-        self.assertLess(engine.seen.index("A: GIVEN two"),
+        self.assertLess(engine.seen.index("A: The later save wins."),
                         engine.seen.index("And if both are offline?"))
 
 
 class DraftTheScenarioTests(unittest.TestCase):
-    """The scenario written from screenshots, from rough words, or both."""
+    """The scenario mapped onto GIVEN / WHEN / THEN from what they had.
+
+    Screenshots, rough words, or both -- and a question back for every line
+    their words did not fill, rather than a plausible line written in for
+    them.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -483,26 +524,72 @@ class DraftTheScenarioTests(unittest.TestCase):
         self.shots, self.shot = self.shots.resolve(), self.shot.resolve()
 
     def test_a_screenshot_is_named_for_the_provider_to_open(self):
-        engine = Engine(said="Two people edit one goal tree at once.")
+        engine = Engine(said="GIVEN two people share one goal tree\n"
+                             "WHEN both save\nTHEN the later one wins")
         out = ui.draft_scenario(
             self.scope, "  ", [{"path": str(self.shot), "name": "the rail"}],
             engine=engine)
         self.assertTrue(out["ok"], out)
-        self.assertEqual("Two people edit one goal tree at once.",
+        self.assertEqual("GIVEN two people share one goal tree\n"
+                         "WHEN both save\nTHEN the later one wins",
                          out["scenario"])
+        self.assertEqual([], out["asks"])
         self.assertIn(str(self.shot), engine.seen)
         # Named files are of no use to a provider not allowed to open them.
         self.assertEqual([str(self.shots)], engine.dirs)
 
-    def test_words_alone_are_answered_without_opening_anything(self):
-        engine = Engine(said="Two people edit one tree.")
+    def test_words_alone_are_mapped_without_opening_anything(self):
+        engine = Engine(said="GIVEN two people share one tree\nWHEN both save"
+                             "\nTHEN the later one wins")
         out = ui.draft_scenario(self.scope, "two ppl one tree, conflicts",
                                 [], engine=engine)
         self.assertTrue(out["ok"], out)
         self.assertIn("two ppl one tree, conflicts", engine.seen)
+        # The form the words are being put into is asked for by name.
+        self.assertIn("Map what they wrote onto GIVEN / WHEN / THEN",
+                      engine.seen)
         # No files to open, so the plain round trip -- and no directory
         # handed to a subprocess for a call that reads nothing.
         self.assertIsNone(engine.dirs)
+
+    def test_a_line_their_words_do_not_fill_comes_back_as_a_question(self):
+        # The point of the mapping: an empty THEN stays an empty THEN, with
+        # the question that would fill it beside it. This field opens every
+        # build of the goal's rows -- a plausible line invented here is a
+        # line nobody knows to check.
+        engine = Engine(said="GIVEN two people share one tree\nWHEN both save"
+                             "\nTHEN\nASK: which save should win?")
+        out = ui.draft_scenario(self.scope, "two ppl one tree", [],
+                                engine=engine)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual("GIVEN two people share one tree\nWHEN both save"
+                         "\nTHEN", out["scenario"])
+        self.assertEqual(["which save should win?"], out["asks"])
+
+    def test_words_that_map_onto_nothing_come_back_as_questions_only(self):
+        engine = Engine(said="ASK who is doing this?\nASK what are they"
+                             " looking at?")
+        out = ui.draft_scenario(self.scope, "the thing is broken", [],
+                                engine=engine)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual("", out["scenario"])
+        self.assertEqual(["who is doing this?", "what are they looking at?"],
+                         out["asks"])
+
+    def test_markdown_the_form_asked_for_none_of_comes_off(self):
+        engine = Engine(said="- **GIVEN** one tree\n- **THEN** one wins")
+        out = ui.draft_scenario(self.scope, "one tree", [], engine=engine)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual("GIVEN one tree\nTHEN one wins", out["scenario"])
+
+    def test_a_reply_with_no_shape_in_it_leaves_the_box_alone(self):
+        # Refused rather than emptied: what the reader typed is still the
+        # best scenario anybody has.
+        engine = Engine(said="Sure! Here is a lovely scenario for you.")
+        out = ui.draft_scenario(self.scope, "two ppl one tree", [],
+                                engine=engine)
+        self.assertFalse(out["ok"])
+        self.assertIn("did not map", out["error"])
 
     def test_a_path_this_workspace_never_wrote_is_not_opened(self):
         # The paths arrive from a browser and decide what a subprocess may
@@ -550,16 +637,16 @@ class ScenarioRouteTests(unittest.TestCase):
         def answer(lines, engine=None, read_dirs=None, search_dir=""):
             seen["prompt"] = "\n".join(lines)
             seen["where"] = search_dir
-            return {"ok": True, "answer": "GIVEN a tree\nTHEN one wins"}
+            return {"ok": True, "answer": "The later save wins."}
 
         with mock.patch.object(ui, "_answer", answer):
             with server_for(self.trajdir) as url:
                 out = post_json(url + "/api/ask_scenario", {
                     "goal": "g1", "scenario": "Two people, one tree.",
                     "question": "Who wins a conflict?",
-                    "turns": [{"q": "earlier?", "a": "GIVEN nothing"}]})
+                    "turns": [{"q": "earlier?", "a": "Nothing yet."}]})
         self.assertTrue(out["ok"], out)
-        self.assertEqual("GIVEN a tree\nTHEN one wins", out["answer"])
+        self.assertEqual("The later save wins.", out["answer"])
         self.assertIn("Two people, one tree.", seen["prompt"])
         self.assertIn("Q: earlier?", seen["prompt"])
         # The project this chat works in, taken from its own manifest rather
@@ -571,7 +658,7 @@ class ScenarioRouteTests(unittest.TestCase):
         goals, _ = chat_state.load_goals(self.session, self.root)
         self.assertEqual(EMPTY, GM.by_id(goals, "g1")["understanding"])
 
-    def test_the_draft_route_writes_the_scenario_from_a_screenshot(self):
+    def test_the_draft_route_shapes_the_scenario_from_a_screenshot(self):
         shots = self.trajdir / "attachments"
         shots.mkdir()
         shot = shots / "20260824-000000-aaaa.png"
@@ -582,7 +669,9 @@ class ScenarioRouteTests(unittest.TestCase):
         def answer(lines, engine=None, read_dirs=None, search_dir=""):
             seen["prompt"] = "\n".join(lines)
             seen["dirs"] = read_dirs
-            return {"ok": True, "answer": "Two people edit one tree."}
+            return {"ok": True, "answer": "GIVEN two people edit one tree"
+                                          "\nWHEN both save\nTHEN"
+                                          "\nASK which save should win?"}
 
         with mock.patch.object(ui, "_answer", answer):
             with server_for(self.trajdir) as url:
@@ -590,7 +679,9 @@ class ScenarioRouteTests(unittest.TestCase):
                     "text": "two ppl one tree",
                     "shots": [{"path": str(shot), "name": "the rail"}]})
         self.assertTrue(out["ok"], out)
-        self.assertEqual("Two people edit one tree.", out["scenario"])
+        self.assertEqual("GIVEN two people edit one tree\nWHEN both save"
+                         "\nTHEN", out["scenario"])
+        self.assertEqual(["which save should win?"], out["asks"])
         self.assertEqual([{"path": str(shot), "name": "the rail"}],
                          out["shots"])
         self.assertIn(str(shot), seen["prompt"])

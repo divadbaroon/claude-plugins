@@ -322,13 +322,19 @@ function credentialFetch(responses) {
 }
 
 test('the Claude key is provisioned then read back', async () => {
-  const key = { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 };
+  const key = {
+    apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25,
+    spendUsd: 4, models: ['claude-sonnet-4-6', '', 7],
+  };
   const scripted = credentialFetch([{ body: { ready: true } }, { body: key }]);
   const result = await auth.fetchClaudeKey('https://berkeley.mathetic.com', 'egb_token', {
     fetchImpl: scripted.fetchImpl,
   });
 
-  assert.deepEqual(result, { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 });
+  assert.deepEqual(result, {
+    apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25,
+    spendUsd: 4, models: ['claude-sonnet-4-6'],
+  });
   assert.equal(scripted.calls.length, 2);
   assert.equal(scripted.calls[0].method, 'POST');
   assert.equal(scripted.calls[1].method, 'GET');
@@ -364,12 +370,14 @@ test('signing in stores the Claude key beside the token', async () => {
     wait: async () => {},
     now: () => 0,
     hostname: 'laptop',
+    shareProjectConfig: async () => ({ changed: true, file: '/vault/supabase.json' }),
     fetchClaudeKey: async () => ({
       apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4,
     }),
   });
 
   assert.equal(result.status, 'ready');
+  assert.equal(result.projectConfigured, true);
   const stored = auth.readCredentials(root, {});
   assert.equal(stored.token, 'egb_token');
   assert.equal(stored.claude.apiKey, 'sk-abc');
@@ -386,7 +394,7 @@ test('signing in stores the Claude key beside the token', async () => {
   // anything that is not Claude Code reads.
   const envFile = auth.envPath(root);
   assert.equal(fs.readFileSync(envFile, 'utf8'),
-    '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
+    '# Written by `npx engelbart-cli auth`. Sourced by your shell; not meant to be edited.\n'
       + 'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
       + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n');
   assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
@@ -483,8 +491,11 @@ test('a deployment that will not publish its project still signs the member in',
   });
 
   assert.equal(result.status, 'ready');
+  assert.equal(result.projectConfigured, false);
+  assert.match(result.projectConfigReason, /answered 503/);
   assert.equal(auth.readCredentials(root, {}).token, 'egb_token');
   assert.match(output.text(), /Claude Code is set up to use it/);
+  assert.match(output.text(), /Could not configure Supabase sync/);
 });
 
 // A sourced profile would otherwise keep pointing `claude` at a key this

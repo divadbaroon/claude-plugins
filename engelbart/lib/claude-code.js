@@ -47,8 +47,8 @@ function helperPath(managedRoot) {
 function helperSource(credentialsFile) {
   return `#!/usr/bin/env node
 'use strict';
-// Written by \`engelbart auth\`. Claude Code runs this for its credential.
-// Edit ${MARKER} state with \`engelbart auth\` / \`engelbart logout\`, not here.
+// Written by \`npx engelbart-cli auth\`. Claude Code runs this for its credential.
+// Edit ${MARKER} state with \`npx engelbart-cli auth\` / \`npx engelbart-cli logout\`, not here.
 const fs = require('fs');
 const FILE = ${JSON.stringify(credentialsFile)};
 
@@ -64,7 +64,7 @@ async function main() {
   const value = stored();
   if (!value || !value.claude || !value.claude.apiKey) process.exit(1);
   // Asking the server first is what lets a rotated or revoked key take effect
-  // on the next Claude Code session instead of the next \`engelbart auth\`. The
+  // on the next Claude Code session instead of the next \`npx engelbart-cli auth\`. The
   // stored key is the answer when there is no network, which is the common
   // case in a room full of laptops on conference wifi.
   try {

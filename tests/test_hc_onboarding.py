@@ -251,8 +251,11 @@ class HcOnboardingTests(unittest.TestCase):
 class HcCommandGateTests(unittest.TestCase):
     """Only the launch surface is reachable without HC_EXPERIMENTAL=1."""
 
-    LAUNCH_COMMANDS = {"install", "setup", "chat-ui", "chat-serve", "chat-hook",
-                       "chat-refresh", "global-hook", "supabase"}
+    # setup-ui is on the launch surface, not behind the experimental flag:
+    # it is what somebody runs when the install is the only thing that has
+    # happened yet, which is the least experimental moment there is.
+    LAUNCH_COMMANDS = {"install", "setup", "setup-ui", "chat-ui", "chat-serve",
+                       "chat-hook", "chat-refresh", "global-hook", "supabase"}
 
     def _cli(self):
         if str(HC_SRC) not in sys.path:

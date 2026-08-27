@@ -49,8 +49,10 @@ function fakeRuntime(staging) {
   fs.mkdirSync(path.join(staging, 'bin'), { recursive: true });
   fs.writeFileSync(path.join(staging, 'bin', 'python'), '#!/bin/sh\n');
   fs.writeFileSync(path.join(staging, 'bin', 'hc'), '#!/bin/sh\n');
+  fs.writeFileSync(path.join(staging, 'bin', 'bart'), '#!/bin/sh\n');
   fs.chmodSync(path.join(staging, 'bin', 'python'), 0o700);
   fs.chmodSync(path.join(staging, 'bin', 'hc'), 0o700);
+  fs.chmodSync(path.join(staging, 'bin', 'bart'), 0o700);
 }
 
 function installOptions(packageRoot, managedRoot, calls, setupStatus = 0) {
@@ -239,6 +241,11 @@ test('installer creates stable launcher, manifest, and exact setup argv', async 
       fs.realpathSync(result.launcher),
       fs.realpathSync(path.join(result.runtime, 'bin', 'hc')),
     );
+    assert.equal(fs.lstatSync(result.bartLauncher).isSymbolicLink(), true);
+    assert.equal(
+      fs.realpathSync(result.bartLauncher),
+      fs.realpathSync(path.join(result.runtime, 'bin', 'bart')),
+    );
     const setup = calls.find((call) => call.args[0] === 'setup');
     assert.deepEqual(setup.args, [
       'setup', '--global-vault', 'yes', '--goals', 'no',
@@ -247,6 +254,7 @@ test('installer creates stable launcher, manifest, and exact setup argv', async 
     const manifest = JSON.parse(fs.readFileSync(path.join(managedRoot, 'install.json')));
     assert.equal(manifest.owner, 'engelbart-cli');
     assert.equal(manifest.backendVersion, '0.16.0');
+    assert.equal(manifest.bartLauncher, path.join(managedRoot, 'bin', 'bart'));
 
     let rebuilt = false;
     const repeat = installOptions(packageRoot, managedRoot, [], 0);
@@ -419,7 +427,7 @@ test('PATH: an unrecognised shell is instructed, not edited', () => {
   assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
 });
 
-test('PATH: the launcher is linked into a directory the shell already searches', () => {
+test('PATH: both launchers are linked into a directory the shell already searches', () => {
   const links = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -432,8 +440,13 @@ test('PATH: the launcher is linked into a directory the shell already searches',
     },
   });
   assert.equal(got.onPath, true);
-  assert.equal(got.linked, '/home/u/.local/bin/hc');
-  assert.deepEqual(links, [['/home/u/.human-compact/bin/hc', '/home/u/.local/bin/hc']]);
+  assert.deepEqual(got.linked, [
+    '/home/u/.local/bin/hc', '/home/u/.local/bin/bart',
+  ]);
+  assert.deepEqual(links, [
+    ['/home/u/.human-compact/bin/hc', '/home/u/.local/bin/hc'],
+    ['/home/u/.human-compact/bin/bart', '/home/u/.local/bin/bart'],
+  ]);
 });
 
 test('PATH: an hc that is not ours is never overwritten', () => {
@@ -461,12 +474,14 @@ test('PATH: re-running the installer reuses its own link', () => {
     homedir: '/home/u',
     fileSystem: {
       lstatSync: () => ({ isSymbolicLink: () => true }),
-      readlinkSync: () => '/home/u/.human-compact/bin/hc',
+      readlinkSync: (link) => path.join('/home/u/.human-compact/bin', path.basename(link)),
       symlinkSync() { throw new Error('must not relink'); },
     },
   });
   assert.equal(got.onPath, true);
-  assert.equal(got.linked, '/home/u/.local/bin/hc');
+  assert.deepEqual(got.linked, [
+    '/home/u/.local/bin/hc', '/home/u/.local/bin/bart',
+  ]);
 });
 
 test('PATH: a directory on PATH but not a known bin dir is left alone', () => {

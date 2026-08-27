@@ -122,7 +122,10 @@ class ProjectTests(unittest.TestCase):
                                               "objective": "x"})
         self.assertEqual({"cwd": "", "name": "", "branch": "", "remote": "",
                           "objective": "", "description": "",
-                          "sources": []}, who)
+                          "sources": [], "saved": [],
+                          # A chat with no directory has no repository to
+                          # offer checkouts of, and nothing chosen in it.
+                          "working_dir": "", "worktrees": []}, who)
         self.assertEqual([], tree["tree"])
         self.assertFalse(out["ok"])
 

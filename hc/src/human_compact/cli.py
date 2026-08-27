@@ -26,6 +26,10 @@ ZSHRC = HOME / ".zshrc"
 PATH_LINE = 'export PATH="$HOME/.claude-vault/bin:$PATH"'
 ALWAYS_LINE = "export CLAUDE_VAULT=1"
 _DETACHED_PROCESSES = []
+# The address that says "show me every project" to a workspace window.
+# The page is an overlay on a running workspace rather than a route of its
+# own, so the ask has to survive the hop from a terminal into a browser.
+_HOME_HASH = "projects"
 MIN_CLAUDE_VERSION = (2, 1, 175)
 MIN_CLAUDE_VERSION_TEXT = ".".join(map(str, MIN_CLAUDE_VERSION))
 MANAGED_MARKER = ".human-compact-managed.json"
@@ -46,6 +50,7 @@ _LAUNCH_COMMAND_HELP = (
     ("install", "install /bart for Claude Code"),
     ("setup", "noninteractive npm onboarding"),
     ("chat-ui", "goal tree for one Claude chat"),
+    ("setup-ui", "set a first project up, before there is a chat"),
     ("supabase", "connect this workspace to your own Supabase"),
     ("chat-serve", "session-scoped goal server (internal)"),
     ("chat-hook", "Claude Code chat-state hook (internal)"),
@@ -1717,6 +1722,48 @@ def chat_refresh_main(argv=None):
     return 0
 
 
+def setup_ui_main(argv=None):
+    """Open the setup page: what someone sees having only just installed.
+
+    There is no chat to scope a workspace to -- that is the whole situation
+    this page is for -- so a workspace of the vault's own is minted for the
+    directory the installer ran in, and the ordinary launcher is asked for a
+    server on it. The page it opens needs nothing of that workspace except
+    the process: it posts its own operations and writes nothing until the
+    reader presses the button at the end.
+    """
+    import contextlib
+    import io
+    import webbrowser
+    ap = argparse.ArgumentParser(
+        prog="hc setup-ui",
+        description="Set up a first project, before there is a chat.")
+    ap.add_argument("--cwd")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    from .trajectory import chat_state as CS
+    here = str(Path(args.cwd or os.getcwd()).expanduser().resolve())
+    session = CS.open_workspace_for(here)
+    # The launcher prints one line, the URL, and knows how to find a server
+    # that is already up. Its output is the mechanism, so it is captured
+    # rather than printed twice.
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        chat_ui_main(["--session", session, "--port", str(args.port),
+                      "--no-open"])
+    url = next((line.strip() for line in reversed(said.getvalue().splitlines())
+                if line.strip().startswith("http://127.0.0.1:")), "")
+    if not url:
+        sys.stderr.write("hc: the workspace did not start\n")
+        raise SystemExit(1)
+    page = url.rstrip("/") + "/setup"
+    print(page)
+    if not args.no_open:
+        with contextlib.suppress(Exception):
+            webbrowser.open(page)
+
+
 def chat_ui_main(argv=None):
     """Open or reuse the detached UI belonging to one Claude chat."""
     import webbrowser
@@ -1934,6 +1981,8 @@ def hc_main():
         ui_main(rest)
     elif cmd == "chat-ui":
         chat_ui_main(rest)
+    elif cmd == "setup-ui":
+        setup_ui_main(rest)
     elif cmd == "supabase":
         raise SystemExit(supabase_main(rest) or 0)
     elif cmd == "chat-serve":
@@ -1956,6 +2005,151 @@ def hc_main():
         worker_main(rest)
     else:
         print(f"unknown command: {cmd}"); sys.exit(2)
+
+
+def bart_start_main(argv=None):
+    """Open the vault's Projects page from a terminal.
+
+    The page lists every project this vault knows, and it is drawn by
+    whichever workspace server is up -- the question is "is one running?",
+    not "is mine running?". So a healthy server anywhere in the vault is the
+    answer, and the directory this was run in only decides which server is
+    asked first.
+
+    Nothing is minted. A viewer that created a project for the directory it
+    happened to be run in would fill the list it exists to show; a vault with
+    no projects yet is told to open one from a chat instead.
+    """
+    import contextlib
+    import io
+    import webbrowser
+    ap = argparse.ArgumentParser(
+        prog="bart start",
+        description="Open the workspace listing every project in this vault.")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    from .trajectory import project_store as PS
+
+    rows = PS.list_projects(None)
+    if not rows:
+        sys.stderr.write(
+            "bart: this vault has no projects yet. Run /bart inside a Claude "
+            "Code chat to open the first one.\n")
+        raise SystemExit(1)
+
+    # Newest first, except the project underfoot, which goes first: a reader
+    # standing in one asked for that window, not the last one they touched.
+    try:
+        here = PS.repo_home(os.getcwd())
+    except (OSError, ValueError):
+        here = ""
+    order = ([r for r in rows if r["cwd"] == here]
+             + [r for r in rows if r["cwd"] != here])
+
+    url = ""
+    for row in order:
+        record = PS.server_record(None, row["cwd"])
+        if isinstance(record, dict) and _healthy_chat_server(
+                record, str(record.get("session_id") or "")):
+            url = str(record.get("url") or "")
+            if url:
+                break
+            url = ""
+
+    if not url:
+        # Nothing is up. A server serves one project's store, so the first
+        # project in the order that HAS a store is the one started; a project
+        # nobody has ever opened has none, and cannot be served.
+        for row in order:
+            session = PS.tree_session(None, row["cwd"])
+            if not session:
+                held = PS.project_sessions(None, row["cwd"])
+                session = held[-1] if held else ""
+            if not session:
+                continue
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                chat_ui_main(["--session", session, "--cwd", row["cwd"],
+                              "--port", str(args.port), "--no-open"])
+            url = next((line.strip()
+                        for line in reversed(said.getvalue().splitlines())
+                        if line.strip().startswith("http://127.0.0.1:")), "")
+            if url:
+                break
+
+    if not url:
+        sys.stderr.write("bart: no workspace could be started for this vault\n")
+        raise SystemExit(1)
+
+    page = url + ("" if url.endswith("/") else "/") + "#" + _HOME_HASH
+    print(page)
+    if not args.no_open:
+        with contextlib.suppress(Exception):
+            webbrowser.open(page)
+    return 0
+
+
+def bart_main(argv=None):
+    """Open projects; keep old ``bart token`` helpers on the one auth store.
+
+    Account mutation belongs to the npm device flow.  ``bart`` remains the
+    installed project launcher, and ``token`` reads that flow's record so a
+    pre-merge Claude setting does not break during upgrade.
+    """
+
+    said = list(sys.argv[1:] if argv is None else argv)
+    # Opening the workspace is not an authentication question, and it carries
+    # its own flags, so it is taken before the account parser sees anything.
+    if said and said[0] == "start":
+        return bart_start_main(said[1:])
+
+    ap = argparse.ArgumentParser(
+        prog="bart",
+        description="Open Engelbart projects (account commands use engelbart-cli).")
+    ap.add_argument("action", nargs="?", default="status",
+                    choices=("auth", "status", "token", "logout", "start"))
+    args = ap.parse_args(said)
+
+    managed = Path(os.environ.get("HUMAN_COMPACT_HOME")
+                   or Path.home() / ".human-compact")
+    try:
+        record = json.loads((managed / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        record = {}
+    if not isinstance(record, dict):
+        record = {}
+
+    if args.action in ("auth", "logout"):
+        print(f"bart: run `npx engelbart-cli {args.action}`; account changes "
+              "use the device-auth flow", file=sys.stderr)
+        return 2
+    claude = record.get("claude") if isinstance(record.get("claude"), dict) else {}
+    if args.action == "token":
+        key = str(claude.get("apiKey") or "")
+        if not key:
+            print("bart: not connected; run `npx engelbart-cli auth`",
+                  file=sys.stderr)
+            return 1
+        print(key)
+        return 0
+    if args.action == "status":
+        print("account   " + (str(record.get("email") or "connected")
+                              if record.get("token") else "signed out"))
+        if claude.get("apiKey"):
+            spent = float(claude.get("spendUsd") or 0)
+            budget = float(claude.get("budgetUsd") or 0)
+            print(f"credits   ${spent:.2f} used of ${budget:.2f}")
+            models = [str(item) for item in (claude.get("models") or [])
+                      if isinstance(item, str)]
+            if models:
+                print("models    " + ", ".join(models))
+        else:
+            print("credits   not connected")
+        return 0
+
+    # ``start`` is handled above before account parsing.
+    return 2
 
 
 def main():   # keep hc-backup entry point working

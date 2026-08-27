@@ -15,7 +15,6 @@ const COMMANDS = Object.freeze(['install', 'auth', 'login', 'logout', 'whoami', 
 class UsageError extends Error {}
 class InputCancelled extends Error {}
 
-
 function usage() {
   return `Usage: npx engelbart-cli [command] [options]
 
@@ -25,11 +24,12 @@ Commands:
   logout                disconnect this machine and revoke its token
   whoami                show which account this machine is connected to
   env                   print the shell exports that point Claude Code at your
-                        credit; use as: eval "$(engelbart env)"
+                        credit; use as: eval "$(npx engelbart-cli env)"
 
 Options:
   --local-only          install without connecting an Engelbart account
   --non-interactive     install locally without opening a browser
+  --no-open             install without opening the setup page
   --dry-run             verify the bundled release and show the plan only
   -h, --help            show this help
 
@@ -59,6 +59,7 @@ function parseArgs(argv) {
     nonInteractive: false,
     dryRun: false,
     localOnly: false,
+    noOpen: false,
     help: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -72,6 +73,7 @@ function parseArgs(argv) {
     else if (arg === '-h' || arg === '--help') result.help = true;
     else if (arg === '--non-interactive') result.nonInteractive = true;
     else if (arg === '--dry-run') result.dryRun = true;
+    else if (arg === '--no-open') result.noOpen = true;
     // `--no-login` was this flag's name before the rename; both spellings
     // mean the same thing, so a script written against either still works.
     else if (arg === '--local-only' || arg === '--no-login') result.localOnly = true;
@@ -97,7 +99,6 @@ function parseArgs(argv) {
   return result;
 }
 
-
 async function resolveChoices(options) {
   // Onboarding moved into the goal UI, where the same two questions are asked
   // with their consequences visible. The installer only installs; it never
@@ -120,11 +121,46 @@ function canPrompt(deps = {}) {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
 }
 
-async function runAccountCommand(command, authDeps, deps, errorOutput) {
+function accountClaude(account) {
+  if (!account || account.status !== 'ready') return null;
+  return account.claude || (account.stored && account.stored.claude) || null;
+}
+
+function setupEnvironment(account, env) {
+  const claude = accountClaude(account);
+  if (!claude || !claude.apiKey || account.projectConfigured === false) return null;
+  return {
+    ...env,
+    ANTHROPIC_BASE_URL: claude.baseUrl,
+    ANTHROPIC_AUTH_TOKEN: claude.apiKey,
+    // Provider subprocesses normally strip shell API keys in favour of the
+    // reader's Claude subscription. Setup is the exception: this process was
+    // opened by the device flow specifically to use the key it just issued.
+    HC_USE_API_KEY: '1',
+  };
+}
+
+async function runAccountCommand(command, options, authDeps, deps, errorOutput) {
   const output = authDeps.output;
   if (command === 'auth') {
     const result = await (deps.login || auth.login)(authDeps);
-    return result.status === 'ready' ? 0 : 1;
+    if (result.status !== 'ready') return 1;
+    const setupEnv = setupEnvironment(result, authDeps.env);
+    if (!setupEnv) {
+      output.write('\nSetup is waiting for both Claude credits and Supabase sync. '
+        + 'Run `npx engelbart-cli auth` again after the missing connection is ready.\n');
+      return 0;
+    }
+    const launcher = deps.launcher || path.join(authDeps.managedRoot, 'bin', 'hc');
+    const opened = options.noOpen
+      ? null
+      : await (deps.openSetup || openSetup)({
+        launcher, env: setupEnv, output, spawn: deps.spawn,
+      });
+    output.write(opened
+      ? `\nNext: Setting up your first project: ${opened}\n`
+      : '\nNext: Run `hc setup-ui` to set up your first project.\n');
+    return 0;
   }
   if (command === 'logout') {
     const result = await (deps.logout || auth.logout)(authDeps);
@@ -147,8 +183,8 @@ async function runAccountCommand(command, authDeps, deps, errorOutput) {
     const lines = auth.claudeEnv(stored);
     if (!lines) {
       errorOutput.write(stored
-        ? 'This account has no Claude key yet. Run `engelbart auth` again once your credit is ready.\n'
-        : 'Not connected. Run `engelbart auth` to connect this machine.\n');
+        ? 'This account has no Claude key yet. Run `npx engelbart-cli auth` again once your credit is ready.\n'
+        : 'Not connected. Run `npx engelbart-cli auth` to connect this machine.\n');
       return 1;
     }
     output.write(lines);
@@ -160,8 +196,8 @@ async function runAccountCommand(command, authDeps, deps, errorOutput) {
     return 0;
   }
   errorOutput.write(result.reason
-    ? `Not connected: ${result.reason}\nRun \`engelbart auth\` to connect this machine.\n`
-    : 'Not connected. Run `engelbart auth` to connect this machine.\n');
+    ? `Not connected: ${result.reason}\nRun \`npx engelbart-cli auth\` to connect this machine.\n`
+    : 'Not connected. Run `npx engelbart-cli auth` to connect this machine.\n');
   return 1;
 }
 
@@ -175,14 +211,17 @@ async function run(deps = {}) {
       output.write(usage());
       return 0;
     }
+    const env = deps.env || process.env;
+    const homedir = deps.homedir || os.homedir();
     const managedRoot = path.resolve(
       deps.managedRoot
-        || process.env.HUMAN_COMPACT_HOME
-        || path.join(os.homedir(), '.human-compact'),
+        || env.HUMAN_COMPACT_HOME
+        || path.join(homedir, '.human-compact'),
     );
     const authDeps = {
       managedRoot,
-      env: deps.env || process.env,
+      env,
+      homedir,
       output,
       // The one place that knows it is running on a member's real machine, and
       // so the one place permitted to write their Claude Code settings.
@@ -194,7 +233,7 @@ async function run(deps = {}) {
       hostname: deps.hostname,
     };
     if (options.command !== 'install') {
-      return await runAccountCommand(options.command, authDeps, deps, errorOutput);
+      return await runAccountCommand(options.command, options, authDeps, deps, errorOutput);
     }
     const choices = await resolveChoices(options, {
       input: deps.input,
@@ -208,6 +247,8 @@ async function run(deps = {}) {
     const vendor = inspectVendor(packageRoot, packageJson.version);
 
     let reach = null;
+
+    let launcherPath = '';
     output.write(`\nengelbart-cli ${packageJson.version}\n\n`);
     if (options.dryRun) {
       output.write(`Verified bundled backend ${vendor.version} (${vendor.sha256.slice(0, 12)}).\n`);
@@ -228,20 +269,21 @@ async function run(deps = {}) {
       });
       // Only promise `hc` in this terminal once the shell can actually find it.
       const launcher = installed && installed.launcher;
+      launcherPath = launcher || '';
       if (launcher) {
         reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
           launcherDir: path.dirname(launcher),
-          env: process.env,
-          homedir: os.homedir(),
+          env,
+          homedir,
         });
       }
     }
     // One status block, then one instruction. Anything the user must do to
     // make that instruction work belongs above it, not after it.
     if (reach && reach.onPath) {
-      output.write(`  hc           ready in this terminal\n`);
+      output.write(`  hc + bart    ready in this terminal\n`);
     } else if (reach) {
-      output.write(`  hc           needs one more step (below)\n`);
+      output.write(`  hc + bart    need one more step (below)\n`);
     }
     // The install stands on its own. An account adds the hosted Claude
     // credits to it, so failing to connect one is reported, never fatal.
@@ -249,7 +291,13 @@ async function run(deps = {}) {
     if (!options.dryRun && !options.localOnly && !options.nonInteractive) {
       const stored = (deps.readCredentials || auth.readCredentials)(managedRoot, authDeps.env);
       if (stored) {
-        account = { status: 'ready', email: stored.email || '', reused: true, stored };
+        account = {
+          status: 'ready',
+          email: stored.email || '',
+          reused: true,
+          stored,
+          projectConfigured: stored.projectConfigured,
+        };
         output.write(`  account      ${stored.email || 'connected'}\n`);
       } else if (canPrompt(deps)) {
         try {
@@ -277,11 +325,41 @@ async function run(deps = {}) {
         : `\nAdd this to your shell profile, then run it here:\n\n    ${reach.line}\n`);
     }
     const needsPathStep = !!(reach && !reach.onPath);
-    const next = 'Open any Claude Code chat and type /bart.';
-    output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
-    if (!options.dryRun && !(account && account.status === 'ready')) {
-      output.write('Run `engelbart auth` to connect your Engelbart account and its Claude credits.\n');
-    } else if (account && account.reused && auth.claudeEnv(account.stored)) {
+    const setupEnv = setupEnvironment(account, env);
+    const accountReady = Boolean(setupEnv);
+    // The one instruction. Someone who has just installed has no chat and no
+    // project, so "open a chat and type /bart" is an instruction with a blank
+    // screen at the end of it -- the setup page is what asks them which of
+    // those two things they are actually doing. It is only offered where it
+    // can be followed: a launcher that is not yet on PATH cannot be run, and
+    // a step the reader must do first belongs above the instruction, not
+    // after it.
+    // Authentication is the gate, not a parallel branch: setup calls Claude,
+    // so opening it before the issued key exists produces a first screen that
+    // cannot answer. Pass that freshly-issued key to the detached setup server
+    // as well as wiring Claude Code, so a pre-existing foreign apiKeyHelper
+    // cannot make onboarding silently use the wrong account.
+    const opened = (accountReady && !needsPathStep && launcherPath && !options.noOpen)
+      ? await (deps.openSetup || openSetup)({ launcher: launcherPath, env: setupEnv,
+                                              output, spawn: deps.spawn })
+      : null;
+    if (!options.dryRun && !accountReady) {
+      output.write('\nNext: Run `npx engelbart-cli auth` to finish connecting your '
+        + 'Engelbart account, Claude credits, and Supabase sync. Setup starts '
+        + 'after that.\n');
+    } else {
+      const next = opened
+        ? `Setting up your first project: ${opened}`
+        : needsPathStep
+        ? 'Run the line above, then `hc setup-ui` to set up your first project.'
+        : 'Run `hc setup-ui` to set up your first project.';
+      output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
+    }
+    if (opened) {
+      output.write('Already have a project? Open its chat with `claude -r`'
+        + ' and type /bart.\n');
+    }
+    if (accountReady && account.reused && auth.claudeEnv(account.stored)) {
       // A fresh pairing prints this itself; a reused one has to be told, or a
       // second install looks like it forgot the key it is already holding.
       output.write('\nRun this once here so `claude` uses your credit:\n\n    source '
@@ -301,12 +379,43 @@ async function run(deps = {}) {
   }
 }
 
+/* Open the setup page for someone who has just installed.
+ *
+ * The launcher does the work -- minting a workspace, starting a server and
+ * printing the URL -- so this only has to run it and report what it said.
+ * Never fatal: a browser that will not open, or a launcher that will not
+ * run, leaves the reader with a command to type rather than a failed
+ * install, so anything that goes wrong here answers null and the caller
+ * prints the instruction instead.
+ */
+async function openSetup({ launcher, env, output, spawn }) {
+  const run = spawn || require('child_process').spawnSync;
+  try {
+    const done = run(launcher, ['setup-ui'], {
+      env,
+      encoding: 'utf8',
+      timeout: 20000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (!done || done.status !== 0) return null;
+    const said = String(done.stdout || '').trim().split('\n');
+    const url = said.reverse().find((line) => line.startsWith('http://127.0.0.1:'));
+    return url || null;
+  } catch (error) {
+    if (output && process.env.HC_DEBUG) {
+      output.write(`  setup        not opened (${error.message})\n`);
+    }
+    return null;
+  }
+}
+
 module.exports = {
   COMMANDS,
   InputCancelled,
   UsageError,
   canPrompt,
   numericChoice,
+  openSetup,
   parseArgs,
   resolveChoices,
   run,

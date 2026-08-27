@@ -7,9 +7,12 @@ command:
 npx engelbart-cli
 ```
 
-The installer takes no required options and asks no questions. It installs
-the `hc` runtime, the Claude Code hooks, and the `/bart` command, then
-connects this machine to your Engelbart account.
+The installer takes no required options. It installs the `hc` runtime, the
+Claude Code hooks, and the `/bart` command; connects this machine to your
+Engelbart account; provisions its Claude key and Supabase project config; then
+opens the first-project setup page. Authentication is a gate: setup does not
+start until the account has supplied a Claude key and a usable Supabase
+configuration.
 
 ## Connecting your account
 
@@ -23,10 +26,10 @@ secret that never leaves your machine, so a pairing link someone else sends you
 cannot connect their terminal to your account.
 
 ```bash
-engelbart auth      # connect this machine (or reconnect it)
-engelbart whoami    # show which account this machine is connected to
-engelbart env       # print the exports that point Claude Code at your credit
-engelbart logout    # disconnect this machine and revoke its token
+npx engelbart-cli auth      # connect this machine (or reconnect it)
+npx engelbart-cli whoami    # show which account this machine is connected to
+npx engelbart-cli env       # print exports for the issued Claude credit
+npx engelbart-cli logout    # disconnect this machine and revoke its token
 ```
 
 ## Using your Claude credit
@@ -42,22 +45,32 @@ claude
 ```
 
 Add that `source` line to your shell profile and every new terminal picks it
-up. The file is written on `engelbart auth` and removed on `engelbart logout`,
-so a disconnected machine stops pointing `claude` at a key it no longer holds.
+up. The file is written by `npx engelbart-cli auth` and removed by
+`npx engelbart-cli logout`, so a disconnected machine stops pointing `claude`
+at a key it no longer holds.
 
-`engelbart env` prints the same two lines to stdout for anyone who has the
-command on their PATH -- `npx engelbart-cli` does not leave one there, which is
-why the file is what the installer points at. Only the exports reach stdout, so
-`eval "$(engelbart env)"` is safe; everything else goes to stderr.
+`npx engelbart-cli env` prints the same two lines to stdout. Only the exports
+reach stdout, so `eval "$(npx engelbart-cli env)"` is safe; everything else
+goes to stderr.
 
 Credits can lag a new account. If the key is not ready when you approve the
-code, the machine still connects -- run `engelbart auth` again once it is.
+code, the machine still connects -- run `npx engelbart-cli auth` again once it
+is.
 
 Connecting is skipped when there is no terminal to answer in -- a scripted or
 CI install never waits on a browser -- and `--local-only` skips it outright. The
-install itself does not depend on it: run `engelbart auth` whenever you are
-ready. Set `ENGELBART_API_BASE` to point at a deployment other than
+install itself does not depend on it: run `npx engelbart-cli auth` whenever you
+are ready. Set `ENGELBART_API_BASE` to point at a deployment other than
 `https://berkeley.mathetic.com`.
+
+## First-project setup
+
+After authentication has returned a Claude key and configured Supabase, the
+installer starts `hc setup-ui` and opens its `/setup` page. New work enters the
+guided onboarding conversation; existing work is handed to the normal `/bart`
+flow. If the page cannot be opened, the installer prints `hc setup-ui` as the
+recoverable next step. `--no-open` keeps authentication but suppresses that
+automatic launch.
 
 From then on the hooks record each chat's own prompts and events to a local,
 owner-only store under `~/.claude-vault/chat-sessions/<session-id>/` — the
@@ -95,7 +108,7 @@ npx engelbart-cli --local-only
 authentication.
 `--dry-run` verifies the bundled wheel and prints the plan without installing.
 Neither form waits on a browser, so a scripted install finishes unattended and
-leaves the account to be connected later with `engelbart auth`.
+leaves the account to be connected later with `npx engelbart-cli auth`.
 
 ## Experimental (HC_EXPERIMENTAL=1)
 
@@ -127,9 +140,14 @@ See [`STASHED.md`](../STASHED.md) for the full inventory.
 - Claude Code 2.1.175+
 
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
-runtimes live under `~/.human-compact/runtimes/`; and the stable backend
-launcher is `~/.human-compact/bin/hc`. Re-running the same npm version repairs
-the Claude integration and reuses a verified runtime.
+runtimes live under `~/.human-compact/runtimes/`; and the stable launchers are
+`~/.human-compact/bin/hc` and `~/.human-compact/bin/bart`. Re-running the same
+npm version repairs the Claude integration and reuses a verified runtime.
+
+If `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is already exported in the
+shell, unset it before launching Claude Code: shell variables take precedence
+over the credential helper. Engelbart never replaces a foreign
+`apiKeyHelper`, and logout removes only the Claude settings it authored.
 
 The installer uses an existing compatible Python when available. Otherwise it
 downloads pinned `uv` 0.11.32 release assets, verifies their published SHA-256,

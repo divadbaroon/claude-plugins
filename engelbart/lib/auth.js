@@ -126,12 +126,17 @@ async function fetchClaudeKey(base, token, options = {}) {
   }
   if (!response.ok) throw new Error(value.error || `${base} answered ${response.status}`);
   if (!value.apiKey || !value.baseUrl) throw new Error('that account has no Claude key yet');
-  return {
+  const claude = {
     apiKey: String(value.apiKey),
     baseUrl: String(value.baseUrl),
     budgetUsd: Number(value.budgetUsd) || 0,
     spendUsd: Number(value.spendUsd) || 0,
   };
+  const models = Array.isArray(value.models)
+    ? value.models.filter((item) => typeof item === 'string' && item.trim())
+    : [];
+  if (models.length) claude.models = models;
+  return claude;
 }
 
 // Two lines, in the order a shell wants them, so `eval` is the whole install
@@ -160,7 +165,7 @@ function writeEnvFile(managedRoot, stored) {
   }
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
-  const body = '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
+  const body = '# Written by `npx engelbart-cli auth`. Sourced by your shell; not meant to be edited.\n'
     + `${lines}`;
   atomicWrite(path.join(root, ENV_FILE), body, 0o600);
   return envPath(managedRoot);
@@ -258,7 +263,7 @@ async function login(options = {}) {
     if (result.status === 'ready') {
       // The key is fetched before the token is written, but a failure to get
       // one never discards the pairing: the account is connected either way,
-      // and `engelbart auth` can be run again once credits are ready.
+      // and `npx engelbart-cli auth` can be run again once credits are ready.
       let claude = null;
       let keyError = '';
       try {
@@ -276,6 +281,8 @@ async function login(options = {}) {
         claude,
       });
       output.write(`\nSigned in as ${result.email || 'your Engelbart account'}.\n`);
+      let projectConfigured = false;
+      let projectConfigReason = claude ? '' : 'no-key';
       if (claude) {
         const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
         output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
@@ -288,8 +295,24 @@ async function login(options = {}) {
         // member hunting for an anon key, and a deployment that will not
         // answer is not a reason to fail a sign-in that already succeeded.
         try {
-          await (options.shareProjectConfig || shareProjectConfig)(base, stored, options);
-        } catch (error) { /* `hc supabase setup` still works by hand */ }
+          const configured = await (options.shareProjectConfig || shareProjectConfig)(
+            base, stored, options);
+          projectConfigured = Boolean(
+            configured
+            && (configured.changed || configured.reason === 'member-config'),
+          );
+          projectConfigReason = projectConfigured
+            ? ''
+            : String((configured && configured.reason) || 'not-written');
+        } catch (error) {
+          // Keep the machine token and Claude key: neither becomes invalid
+          // because the public project-config endpoint failed. The caller gets
+          // a separate readiness bit and withholds setup until sync is wired.
+          projectConfigReason = error.message;
+        }
+        if (!projectConfigured) {
+          output.write(`Could not configure Supabase sync: ${projectConfigReason}\n`);
+        }
 
         const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
         if (wired.changed) {
@@ -303,7 +326,19 @@ async function login(options = {}) {
       } else {
         output.write(`Could not read this account's Claude key: ${keyError}\n`);
       }
-      return { status: 'ready', email: result.email || '', claude, stored };
+      // A later reinstall reuses this record instead of pairing again. Carry
+      // the sync readiness with it, or that reinstall would open setup after
+      // a project-config failure this run correctly withheld it for.
+      stored.projectConfigured = projectConfigured;
+      writeCredentials(managedRoot, stored);
+      return {
+        status: 'ready',
+        email: result.email || '',
+        claude,
+        stored,
+        projectConfigured,
+        projectConfigReason,
+      };
     }
     if (result.status === 'denied') {
       output.write('\nThat code was rejected in the browser. Nothing was connected.\n');
