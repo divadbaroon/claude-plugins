@@ -40,10 +40,10 @@ and nothing else.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
-from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 
 # Long enough that a burst of edits is one send, short enough that a reader
 # who stops typing and looks at another window sees it land.
@@ -74,7 +74,7 @@ _TRANSIENT_MARKERS = (
 
 _LOCK = threading.RLock()
 _CV = threading.Condition(_LOCK)
-_STATES: Dict[Tuple[str, str], "_Project"] = {}
+_STATES: Dict[str, "_Project"] = {}
 _PUMP: Optional[threading.Thread] = None
 _STOP = False
 
@@ -127,8 +127,24 @@ class _Project:
         return max(min(quiet, ceiling), self.next_attempt_at)
 
 
-def _key(root, cwd: str) -> Tuple[str, str]:
-    return (str(root) if root is not None else "", str(cwd))
+def _key(root, cwd: str) -> str:
+    """A project's identity here: its directory, spelled one way.
+
+    Deliberately NOT keyed by the vault root as well. The same project is
+    marked from several places -- the pane's op handler, a build's own
+    thread, the goal store -- and they do not all hold the root spelled the
+    same way: one has None and lets the environment decide, another the
+    resolved path with /private in front of it on this platform. Keyed by
+    the pair, one project becomes two entries, and a single change is sent
+    twice. The root is carried on the record instead, where a difference in
+    spelling is harmless.
+    """
+    if not cwd:
+        return ""
+    try:
+        return os.path.realpath(os.path.expanduser(str(cwd)))
+    except (OSError, ValueError):
+        return str(cwd)
 
 
 def _state(root, cwd: str) -> Optional[_Project]:
@@ -141,10 +157,16 @@ def _state(root, cwd: str) -> Optional[_Project]:
     if not cwd:
         return None
     key = _key(root, cwd)
+    if not key:
+        return None
     state = _STATES.get(key)
     if state is None:
         state = _Project(root, str(cwd))
         _STATES[key] = state
+    elif root is not None and state.root is None:
+        # A later caller knowing the vault explicitly is worth more than an
+        # earlier one that left it to the environment.
+        state.root = root
     return state
 
 
@@ -234,7 +256,7 @@ def _classify(error: str) -> bool:
     return any(marker in lowered for marker in _TRANSIENT_MARKERS)
 
 
-def _send(state: _Project, boundary: bool = False) -> Tuple[bool, str]:
+def _send(state: _Project, boundary: bool = False):
     """One sync, outside the lock. Returns ``(ok, error)``.
 
     Every failure is caught. This runs on a daemon thread that must outlive

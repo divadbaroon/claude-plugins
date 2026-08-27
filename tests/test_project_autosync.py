@@ -306,6 +306,40 @@ class AutosyncTest(unittest.TestCase):
         self.settle()
         self.assertEqual(self.net.count, 0)
 
+    def test_one_project_marked_from_two_callers_is_one_entry(self):
+        # The bug this exists for: the workspace's op handler holds the
+        # vault root resolved, a build holds its own, and the goal store may
+        # hold none at all. Keyed by (root, cwd) the same project became two
+        # schedules, and a single change went up twice.
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "work")
+            os.makedirs(real)
+            AS.mark_dirty(None, real)
+            AS.mark_dirty(Path("/somewhere/vault/chat-sessions"), real)
+            AS.mark_dirty("/another/root", real + "/")
+            self.assertEqual(len(AS._STATES), 1)
+            self.clock.advance(AS.QUIET_SECONDS + 0.1)
+            self.settle(want=1)
+            self.assertEqual(self.net.count, 1, "one project, one send")
+
+    def test_the_same_directory_spelled_two_ways_is_one_project(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            real = os.path.join(tmp, "work")
+            os.makedirs(real)
+            AS.mark_dirty(None, real)
+            # On this platform a temporary directory is reached by two names
+            # (/var/... and /private/var/...); realpath is what makes them
+            # the same project rather than two.
+            AS.mark_dirty(None, os.path.realpath(real))
+            AS.mark_dirty(None, os.path.join(real, ".", ""))
+            self.assertEqual(len(AS._STATES), 1)
+
     def test_a_project_without_a_directory_is_never_scheduled(self):
         AS.mark_dirty(None, "")
         AS.flush_soon(None, "")
