@@ -180,11 +180,27 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
   // a shell would choke on. Everything explanatory goes to stderr.
   if (command === 'env') {
     const stored = (deps.readCredentials || auth.readCredentials)(authDeps.managedRoot, authDeps.env);
-    const lines = auth.claudeEnv(stored);
+    if (!stored) {
+      errorOutput.write('Not connected. Run `npx engelbart-cli auth` to connect this machine.\n');
+      return 1;
+    }
+    // Fetched, not read back: this machine does not keep the key. That also
+    // makes these exports current rather than whatever was true at sign-in.
+    let claude = null;
+    try {
+      claude = await (deps.fetchClaudeKey || auth.fetchClaudeKey)(
+        auth.apiBase(authDeps.env),
+        stored.token,
+        authDeps,
+      );
+    } catch (error) {
+      errorOutput.write(`Could not fetch this account's Claude key: ${error.message}\n`);
+      return 1;
+    }
+    const lines = auth.claudeEnv(claude);
     if (!lines) {
-      errorOutput.write(stored
-        ? 'This account has no Claude key yet. Run `npx engelbart-cli auth` again once your credit is ready.\n'
-        : 'Not connected. Run `npx engelbart-cli auth` to connect this machine.\n');
+      errorOutput.write('This account has no Claude key yet. Run `npx engelbart-cli auth` '
+        + 'again once your credit is ready.\n');
       return 1;
     }
     output.write(lines);
@@ -291,14 +307,26 @@ async function run(deps = {}) {
     if (!options.dryRun && !options.localOnly && !options.nonInteractive) {
       const stored = (deps.readCredentials || auth.readCredentials)(managedRoot, authDeps.env);
       if (stored) {
-        account = {
-          status: 'ready',
-          email: stored.email || '',
-          reused: true,
-          stored,
-          projectConfigured: stored.projectConfigured,
-        };
         output.write(`  account      ${stored.email || 'connected'}\n`);
+        // The key is not on this disk any more, so a reinstall cannot read one
+        // back out of the stored record -- it has to ask for a fresh one. The
+        // token this machine already holds is enough for that, so this costs
+        // the member nothing: no browser, no code to approve.
+        try {
+          account = await (deps.rewire || auth.rewire)(auth.apiBase(authDeps.env), authDeps);
+        } catch (error) {
+          account = null;
+        }
+        if (account) account.reused = true;
+        else {
+          account = {
+            status: 'ready',
+            email: stored.email || '',
+            reused: true,
+            stored,
+            projectConfigured: stored.projectConfigured,
+          };
+        }
       } else if (canPrompt(deps)) {
         try {
           account = await (deps.login || auth.login)(authDeps);
@@ -358,12 +386,6 @@ async function run(deps = {}) {
     if (opened) {
       output.write('Already have a project? Open its chat with `claude -r`'
         + ' and type /bart.\n');
-    }
-    if (accountReady && account.reused && auth.claudeEnv(account.stored)) {
-      // A fresh pairing prints this itself; a reused one has to be told, or a
-      // second install looks like it forgot the key it is already holding.
-      output.write('\nRun this once here so `claude` uses your credit:\n\n    source '
-        + `${auth.envPath(managedRoot)}\n`);
     }
     return 0;
   } catch (error) {

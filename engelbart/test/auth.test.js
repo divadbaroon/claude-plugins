@@ -352,7 +352,7 @@ test('a credential endpoint that refuses says why', async () => {
   );
 });
 
-test('signing in stores the Claude key beside the token', async () => {
+test('signing in stores the token and pointedly not the key', async () => {
   const root = temporaryRoot();
   const output = collector();
   const scripted = scriptedFetch([
@@ -380,8 +380,15 @@ test('signing in stores the Claude key beside the token', async () => {
   assert.equal(result.projectConfigured, true);
   const stored = auth.readCredentials(root, {});
   assert.equal(stored.token, 'egb_token');
-  assert.equal(stored.claude.apiKey, 'sk-abc');
   assert.match(output.text(), /\$21\.00 of \$25\.00 left/);
+
+  // The key is the account's, not this machine's. What is kept is where to
+  // spend it and how much is left -- enough to say something useful without a
+  // round trip, and useless to anyone who takes the file.
+  assert.equal(stored.claude.apiKey, undefined);
+  assert.equal(stored.claude.baseUrl, 'https://proxy.example.com');
+  assert.equal(stored.claude.budgetUsd, 25);
+  assert.equal(fs.readFileSync(auth.credentialsPath(root), 'utf8').includes('sk-abc'), false);
 
   // Claude Code is the reason the key exists, so signing in wires it directly
   // and the member is told to run `claude`, not a shell line.
@@ -390,14 +397,76 @@ test('signing in stores the Claude key beside the token', async () => {
   assert.equal(settings.apiKeyHelper, path.join(root, 'bin', 'engelbart-key'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
 
-  // The exports file is still written: it is what a shell, a CI runner, or
-  // anything that is not Claude Code reads.
+  // The exports file is still written, but with the key taken out of it. An
+  // exported ANTHROPIC_AUTH_TOKEN outranks a saved claude.ai login and can
+  // never be refreshed, so once the helper is wired the only job left for this
+  // file is undoing an older profile that still sources it.
   const envFile = auth.envPath(root);
-  assert.equal(fs.readFileSync(envFile, 'utf8'),
-    '# Written by `npx engelbart-cli auth`. Sourced by your shell; not meant to be edited.\n'
-      + 'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
-      + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n');
+  const body = fs.readFileSync(envFile, 'utf8');
+  assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
+  assert.equal(body.includes('sk-abc'), false);
   assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+});
+
+// The whole point of wiring the helper is that a key the pool has stopped
+// honouring stops being Claude Code's credential. That only works if the
+// helper knows which settings file to take itself out of.
+test('the wired helper is told where its own settings file is', async () => {
+  const root = temporaryRoot();
+  const settingsFile = settingsIn(root);
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  await auth.login({
+    managedRoot: root,
+    settingsFile,
+    env: {},
+    output: collector(),
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  const helper = fs.readFileSync(path.join(root, 'bin', 'engelbart-key'), 'utf8');
+  assert.ok(helper.includes(JSON.stringify(settingsFile)));
+  assert.ok(helper.includes(JSON.stringify(path.join(root, 'bin', 'engelbart-key'))));
+});
+
+// A member pairing a second machine after the pool has run dry reads
+// "Claude Code is set up to use it" and then watches the first request fail.
+// Saying it up front is the difference between a known state and a bug report.
+test('signing in with the credit already spent says so', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 25,
+    }),
+  });
+
+  assert.match(output.text(), /\$0\.00 of \$25\.00 left/);
+  assert.match(output.text(), /used up.*own account/s);
 });
 
 // Redirecting Claude Code's credential at something the member did not choose
@@ -430,10 +499,16 @@ test('an apiKeyHelper we did not write sends the member to the exports instead',
   });
 
   assert.match(output.text(), /Leaving your existing apiKeyHelper alone \(\/opt\/other-tool\/key\)/);
-  assert.match(output.text(), new RegExp(`source ${auth.envPath(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.equal(settings.apiKeyHelper, '/opt/other-tool/key');
   assert.equal(settings.env, undefined);
+
+  // The exports are printed to the terminal the member is already reading,
+  // not written to a file. Handing back a key we just went to the trouble of
+  // not storing would give it a home on disk by the back door.
+  assert.match(output.text(), /export ANTHROPIC_AUTH_TOKEN="sk-abc"/);
+  assert.match(output.text(), /not saved anywhere/);
+  assert.equal(fs.readFileSync(auth.envPath(root), 'utf8').includes('sk-abc'), false);
 });
 
 // Connecting an account is meant to be the only step, so the project `hc`
@@ -517,10 +592,18 @@ test('disconnecting takes the shell exports with it', () => {
   assert.equal(fs.existsSync(auth.credentialsPath(root)), false);
 });
 
-test('a connection with no Claude key writes no exports to source', () => {
+// The file is written to take exports away, never to give them. Members who
+// followed older instructions have `source .../env.sh` in a shell profile, and
+// that line has to keep working -- as a no-op.
+test('the exports file only ever unsets', () => {
   const root = temporaryRoot();
-  assert.equal(auth.writeEnvFile(root, { token: 'egb_secret' }), '');
-  assert.equal(fs.existsSync(auth.envPath(root)), false);
+  const written = auth.writeEnvFile(root);
+
+  assert.equal(written, auth.envPath(root));
+  const body = fs.readFileSync(written, 'utf8');
+  assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
+  assert.equal(/^export /m.test(body), false, 'no export statement, only prose about one');
+  assert.equal(fs.statSync(written).mode & 0o777, 0o600);
 });
 
 // Credits can lag the account. Losing the key must not lose the pairing too,
@@ -552,12 +635,150 @@ test('a missing Claude key still leaves the machine connected', async () => {
   assert.match(output.text(), /Could not read this account's Claude key: Credits are not ready/);
 });
 
+// It takes the fetched key, not the stored credentials, because there is no
+// key in the stored credentials to take.
 test('the shell exports are exactly two lines, and absent without a key', () => {
   assert.equal(auth.claudeEnv(null), '');
-  assert.equal(auth.claudeEnv({ token: 'egb_token' }), '');
+  assert.equal(auth.claudeEnv({ baseUrl: 'https://proxy.example.com' }), '');
+  assert.equal(auth.claudeEnv({ apiKey: 'sk-abc' }), '');
   assert.equal(
-    auth.claudeEnv({ claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' } }),
+    auth.claudeEnv({ apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' }),
     'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
       + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n',
   );
+});
+
+// The record kept on disk, stated as a whole so that adding a key to it later
+// has to be a deliberate act that fails this test.
+test('what is stored about the key is where and how much, never the key', () => {
+  assert.equal(auth.claudeRecord(null), null);
+  assert.equal(auth.claudeRecord({ apiKey: 'sk-abc' }), null, 'a key alone is not a record');
+  assert.deepEqual(
+    auth.claudeRecord({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4,
+    }),
+    { baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Coming back after the credit ran out.
+//
+// Exhaustion unwires the machine, which is the only thing that gives a member
+// their own account back. Topping the pool up has to be able to wire it again
+// -- and charging them a browser round trip to re-enable a machine that never
+// stopped being paired would be a strange price for having spent the credit
+// they were given.
+// ---------------------------------------------------------------------------
+
+// A machine that is still paired: token on disk, nothing wired.
+function pairedButUnwired(root, apiBase = 'https://berkeley.mathetic.com') {
+  auth.writeCredentials(root, {
+    schema: 1,
+    apiBase,
+    token: 'egb_token',
+    email: 'm@example.com',
+    label: 'laptop',
+    createdAt: '2026-08-27T00:00:00.000Z',
+    claude: { baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 25 },
+  });
+}
+
+test('a topped-up account re-wires without sending anyone to a browser', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  pairedButUnwired(root);
+  // Only whoami is scripted. A device-code flow would ask for `start` next and
+  // blow up on the empty script, which is the assertion.
+  const scripted = scriptedFetch([{ body: { email: 'm@example.com' } }]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: () => { throw new Error('no browser may be opened'); },
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 2,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(scripted.calls.map((call) => call.body.action), ['whoami']);
+  assert.doesNotMatch(output.text(), /Connect this machine/);
+  assert.doesNotMatch(output.text(), /code {3}/);
+  assert.match(output.text(), /\$23\.00 of \$25\.00 left/);
+
+  // And it is wired again, which is the whole point of running it.
+  const settings = JSON.parse(fs.readFileSync(settingsIn(root), 'utf8'));
+  assert.equal(settings.apiKeyHelper, path.join(root, 'bin', 'engelbart-key'));
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+});
+
+// The reuse must not become a way to get stuck. A token the server no longer
+// honours has to fall through to a fresh pairing rather than fail.
+test('a token the server rejects falls back to the device flow', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  pairedButUnwired(root);
+  const scripted = scriptedFetch([
+    { ok: false, status: 401, body: { error: 'that token was revoked' } },
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_fresh', email: 'm@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(scripted.calls.map((call) => call.body.action), ['whoami', 'start', 'poll']);
+  assert.match(output.text(), /Connect this machine/);
+  assert.equal(auth.readCredentials(root, {}).token, 'egb_fresh');
+});
+
+// Re-pairing a machine onto a different account has to stay possible, so the
+// reuse is a default and not a trap.
+test('pairing can be forced past a token that would otherwise be reused', async () => {
+  const root = temporaryRoot();
+  pairedButUnwired(root);
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_other', email: 'other@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output: collector(),
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    forcePairing: true,
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(scripted.calls.map((call) => call.body.action), ['start', 'poll']);
+  assert.equal(auth.readCredentials(root, {}).email, 'other@example.com');
 });

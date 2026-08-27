@@ -537,18 +537,53 @@ test('a failed account connection reports itself without failing the install', a
 
 test('reinstalling on a connected machine leaves the connection alone', async () => {
   let logins = 0;
+  let rewires = 0;
+  const result = await installWith({
+    interactive: true,
+    // What a connected machine actually has on disk: a token, and where to
+    // spend the credit. Never the key.
+    readCredentials: () => ({
+      token: 'egb_t',
+      email: 'member@example.com',
+      claude: { baseUrl: 'https://proxy.example.com' },
+    }),
+    rewire: async () => {
+      rewires += 1;
+      return {
+        status: 'ready',
+        email: 'member@example.com',
+        claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+        projectConfigured: true,
+      };
+    },
+    login: async () => { logins += 1; return { status: 'ready' }; },
+  });
+  // The token it already holds is enough: no browser, no code to approve.
+  assert.equal(rewires, 1);
+  assert.equal(logins, 0);
+  assert.match(result.output, /account {6}member@example\.com/);
+  assert.doesNotMatch(result.output, /Run `npx engelbart-cli auth`/);
+});
+
+// Setup calls Claude, so it needs a live key -- and the key is not on this
+// disk to be read back. A reinstall that could not get a fresh one has to say
+// so rather than opening a page whose first screen cannot answer.
+test('a reinstall that cannot reach the pool withholds setup instead of guessing', async () => {
+  let opened = 0;
   const result = await installWith({
     interactive: true,
     readCredentials: () => ({
       token: 'egb_t',
       email: 'member@example.com',
-      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      claude: { baseUrl: 'https://proxy.example.com' },
     }),
-    login: async () => { logins += 1; return { status: 'ready' }; },
+    rewire: async () => { throw new Error('berkeley.mathetic.com is unreachable'); },
+    openSetup: async () => { opened += 1; return 'http://127.0.0.1:5321/setup'; },
   });
-  assert.equal(logins, 0);
+  assert.equal(result.code, 0);
+  assert.equal(opened, 0);
   assert.match(result.output, /account {6}member@example\.com/);
-  assert.doesNotMatch(result.output, /Run `npx engelbart-cli auth`/);
+  assert.match(result.output, /Run `npx engelbart-cli auth`/);
 });
 
 test('a stored Supabase configuration failure still withholds setup on reinstall', async () => {
@@ -559,7 +594,13 @@ test('a stored Supabase configuration failure still withholds setup on reinstall
       token: 'egb_t',
       email: 'member@example.com',
       projectConfigured: false,
+      claude: { baseUrl: 'https://proxy.example.com' },
+    }),
+    rewire: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
       claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      projectConfigured: false,
     }),
     openSetup: async () => { opened += 1; return 'http://127.0.0.1:5321/setup'; },
   });
@@ -577,9 +618,12 @@ test('env prints only the exports, and nothing else reaches stdout', async () =>
     output: output.stream,
     errorOutput: errors.stream,
     managedRoot: '/nonexistent/managed',
-    readCredentials: () => ({
-      token: 'egb_token',
-      claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+    // Stored credentials carry no key, so `env` has to go and get one. That
+    // also makes what it prints current rather than whatever was true at
+    // sign-in.
+    readCredentials: () => ({ token: 'egb_token', claude: { baseUrl: 'https://proxy.example.com' } }),
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4,
     }),
     install: async () => { throw new Error('installer must not run'); },
   });
@@ -616,6 +660,9 @@ test('env distinguishes a connected machine whose credit is not ready yet', asyn
     errorOutput: errors.stream,
     managedRoot: '/nonexistent/managed',
     readCredentials: () => ({ token: 'egb_token', claude: null }),
+    // The account is paired; the credit behind it is not ready. That is the
+    // server's answer to give, now that this machine keeps no key of its own.
+    fetchClaudeKey: async () => { throw new Error('that account has no Claude key yet'); },
   });
   assert.equal(code, 1);
   assert.equal(output.read(), '');
