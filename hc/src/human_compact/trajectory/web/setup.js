@@ -41,7 +41,8 @@
     chosen: "",          // the one they picked
     other: "",           // ...or the one they typed
     goalNote: "",        // what else the rows should know about it
-    todos: [],           // rows, editable
+    todos: [],           // rows, editable -- flat, when it did not break down
+    pieces: [],          // ...or the pieces of the chosen goal, with rows
     newTodo: "",
     name: "",            // the project's name, typed while the rest arrives
     made: null           // what commit gave back
@@ -85,6 +86,10 @@
 
   function str(value) { return value == null ? "" : String(value); }
 
+  function fresh() { return "x" + Math.random().toString(36).slice(2, 8); }
+
+  function row(text) { return { id: fresh(), text: str(text) }; }
+
   function post(body) {
     return fetch(API, {
       method: "POST",
@@ -127,9 +132,10 @@
         if (out.card === "plan") st.plan = out.plan;
         if (out.card === "goals") st.goals = out.goals;
         if (out.card === "todos") {
-          st.todos = (out.todos || []).map(function (t, i) {
-            return { id: "t" + i + "-" + Math.random().toString(36).slice(2, 7),
-                     text: t };
+          st.todos = (out.todos || []).map(row);
+          st.pieces = (out.subgoals || []).map(function (g) {
+            return { id: fresh(), label: g.label,
+                     todos: (g.todos || []).map(row) };
           });
         }
         draw();
@@ -597,47 +603,51 @@
   // --- todos, and the name ---------------------------------------------------
 
   function drawTodos(col) {
+    var pieces = st.pieces;
+    var count = pieces.length
+      ? pieces.reduce(function (n, g) { return n + g.todos.length; }, 0)
+      : st.todos.length;
     var body = cardBox(col, "todos",
-                       st.todos.length + (st.todos.length === 1 ? " row"
-                                                                : " rows"));
-    st.todos.forEach(function (t) {
-      var row = el("div", "row");
-      row.appendChild(el("span", "bullet-dot", "·"));
-      var input = el("input", "f");
-      input.setAttribute("type", "text");
-      input.setAttribute("spellcheck", "false");
-      input.value = t.text;
-      on(input, "input", function () { t.text = input.value; });
-      row.appendChild(input);
-      var x = el("button", "x", "×");
-      on(x, "click", function () {
-        st.todos = st.todos.filter(function (r) { return r !== t; });
-        draw();
-      });
-      row.appendChild(x);
-      body.appendChild(row);
-    });
+                       count === 1 ? "1 row" : count + " rows");
 
-    var add = el("div", "row");
-    add.appendChild(el("span", "bullet-dot", "·"));
-    var fresh = el("input", "f");
-    fresh.setAttribute("type", "text");
-    fresh.setAttribute("spellcheck", "false");
-    fresh.setAttribute("placeholder", "add a task for the agents…");
-    fresh.value = st.newTodo;
-    on(fresh, "input", function () { st.newTodo = fresh.value; });
-    on(fresh, "keydown", function (event) {
-      if (event.key !== "Enter") return;
-      event.preventDefault();
-      var text = fresh.value.trim();
-      if (!text) return;
-      st.todos.push({ id: "t" + Math.random().toString(36).slice(2, 8),
-                      text: text });
-      st.newTodo = "";
-      draw();
-    });
-    add.appendChild(fresh);
-    body.appendChild(add);
+    if (pieces.length) {
+      // The pieces of the goal, with their rows under them. Editable in
+      // place: what the model proposed is a first draft of the reader's
+      // own tree, not a thing to accept whole.
+      pieces.forEach(function (piece) {
+        var head = el("div", "piece");
+        var name = el("input", "f piece-name");
+        name.setAttribute("type", "text");
+        name.setAttribute("spellcheck", "false");
+        name.value = piece.label;
+        on(name, "input", function () { piece.label = name.value; });
+        head.appendChild(name);
+        var drop = el("button", "x", "×");
+        on(drop, "click", function () {
+          st.pieces = st.pieces.filter(function (g) { return g !== piece; });
+          draw();
+        });
+        head.appendChild(drop);
+        body.appendChild(head);
+        var kids = el("div", "kids");
+        piece.todos.forEach(function (t) {
+          kids.appendChild(todoRow(t, piece.todos, function () {
+            piece.todos = piece.todos.filter(function (r) { return r !== t; });
+          }));
+        });
+        kids.appendChild(adder(function (text) {
+          piece.todos.push(row(text));
+        }));
+        body.appendChild(kids);
+      });
+    } else {
+      st.todos.forEach(function (t) {
+        body.appendChild(todoRow(t, st.todos, function () {
+          st.todos = st.todos.filter(function (r) { return r !== t; });
+        }));
+      });
+      body.appendChild(adder(function (text) { st.todos.push(row(text)); }));
+    }
 
     // The name, and the button that lives in it. Asked for here rather than
     // at the start: by now they have seen what the project is, so naming it
@@ -645,7 +655,7 @@
     // to do while they read the rows. The button sits inside the field
     // because naming and making are one act, not two.
     var nameWrap = el("div", "");
-    nameWrap.style.marginTop = "18px";
+    nameWrap.style.marginTop = "20px";
     nameWrap.appendChild(el("div", "lbl", "name your project"));
     var pill = el("div", "name-row");
     var name = el("input", "f");
@@ -655,7 +665,6 @@
     name.value = st.name;
     var go = btn("Create project", st.name.trim() ? "btn-on" : "",
                  complete, !st.name.trim());
-    go.setAttribute("data-hc-complete", "");
     on(name, "input", function () {
       st.name = name.value;
       // Toggled in place rather than by redrawing: the reader is typing in
@@ -663,7 +672,7 @@
       if (st.name.trim()) {
         go.removeAttribute("disabled");
         go.className = "btn btn-on";
-        if (!go.querySelector(".go")) go.appendChild(el("span", "go", "›"));
+        if (!go.querySelector(".go")) go.appendChild(el("span", "go", "\u203a"));
         go.onclick = complete;
       } else {
         go.setAttribute("disabled", "disabled");
@@ -676,6 +685,40 @@
     pill.appendChild(go);
     nameWrap.appendChild(pill);
     body.appendChild(nameWrap);
+  }
+
+  function todoRow(t, list, drop) {
+    var line = el("div", "row");
+    line.appendChild(el("span", "bullet-dot", "\u00b7"));
+    var input = el("input", "f");
+    input.setAttribute("type", "text");
+    input.setAttribute("spellcheck", "false");
+    input.value = t.text;
+    on(input, "input", function () { t.text = input.value; });
+    line.appendChild(input);
+    var x = el("button", "x", "\u00d7");
+    on(x, "click", function () { drop(); draw(); });
+    line.appendChild(x);
+    return line;
+  }
+
+  function adder(add) {
+    var line = el("div", "row");
+    line.appendChild(el("span", "bullet-dot", "\u00b7"));
+    var input = el("input", "f");
+    input.setAttribute("type", "text");
+    input.setAttribute("spellcheck", "false");
+    input.setAttribute("placeholder", "add a row\u2026");
+    on(input, "keydown", function (event) {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      var text = input.value.trim();
+      if (!text) return;
+      add(text);
+      draw();
+    });
+    line.appendChild(input);
+    return line;
   }
 
   function complete() {
@@ -728,6 +771,7 @@
       st.chosen = "";
       st.other = "";
       st.todos = [];
+      st.pieces = [];
       st.name = "";
       st.made = null;
       draw();

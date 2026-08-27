@@ -339,6 +339,75 @@ class AccountTests(unittest.TestCase):
         self.assertEqual("mcq", out["questions"]["items"][0]["type"])
 
 
+class SubgoalTests(unittest.TestCase):
+    """The breakdown: pieces of the chosen goal, with rows under each.
+
+    A goal worth starting on is rarely one row of work, and a flat list of
+    twelve rows is a list nobody reads. The last card names the pieces and
+    puts the rows under the piece they belong to, which is also the shape
+    the workspace's own tree holds -- so the reader gets a goal with
+    subgoals rather than a goal with a wall.
+    """
+
+    def test_the_pieces_come_back_with_their_rows(self):
+        out = SC.normalize_card({"card": "todos", "subgoals": [
+            {"label": "Signing route", "todos": ["Add POST /uploads/sign",
+                                                 "Scope the token"]},
+            {"label": "Client", "todos": ["PUT straight to storage"]}]})
+        self.assertEqual("todos", out["card"])
+        self.assertEqual(["Signing route", "Client"],
+                         [g["label"] for g in out["subgoals"]])
+        self.assertEqual(["Add POST /uploads/sign", "Scope the token"],
+                         out["subgoals"][0]["todos"])
+
+    def test_a_piece_with_no_rows_under_it_is_dropped(self):
+        # A subgoal is a place to put work. One with none is a heading.
+        out = SC.normalize_card({"card": "todos", "subgoals": [
+            {"label": "Empty", "todos": []},
+            {"label": "Real", "todos": ["do it"]}]})
+        self.assertEqual(["Real"], [g["label"] for g in out["subgoals"]])
+
+    def test_a_flat_list_of_rows_is_still_a_card(self):
+        # The shape before this one, and what a model gives when the work
+        # genuinely does not break down.
+        out = SC.normalize_card({"card": "todos", "todos": ["one", "two"]})
+        self.assertEqual(["one", "two"], out["todos"])
+        self.assertEqual([], out["subgoals"])
+
+    def test_the_pieces_become_subgoals_under_the_one_chosen(self):
+        goals = SC.to_goals([{"label": "Signed uploads"}], "Signed uploads",
+                            [], [{"label": "Signing route",
+                                  "todos": ["Add the route"]},
+                                 {"label": "Client",
+                                  "todos": ["PUT to storage", "Drop the proxy"]}])
+        parent = [g for g in goals if g["title"] == "Signed uploads"][0]
+        kids = [g for g in goals if g.get("parent_goal_id") == parent["id"]]
+        self.assertEqual(["Signing route", "Client"],
+                         [k["title"] for k in kids])
+        self.assertEqual(["PUT to storage", "Drop the proxy"],
+                         [r["text"] for r in kids[1]["todo_items"]])
+        # The rows live on the piece they belong to, not on the parent.
+        self.assertEqual([], parent["todo_items"])
+
+    def test_without_pieces_the_rows_stay_on_the_goal(self):
+        goals = SC.to_goals([{"label": "a"}], "a", ["one"], [])
+        self.assertEqual(["one"], [r["text"] for r in goals[0]["todo_items"]])
+
+    def test_a_subgoal_is_in_progress_and_its_parent_is_too(self):
+        goals = SC.to_goals([{"label": "a"}], "a", [],
+                            [{"label": "piece", "todos": ["row"]}])
+        self.assertEqual("in_progress", goals[0]["status"])
+        kid = [g for g in goals if g.get("parent_goal_id")][0]
+        self.assertEqual("in_progress", kid["status"])
+
+    def test_the_goals_not_chosen_get_no_pieces(self):
+        goals = SC.to_goals([{"label": "a"}, {"label": "b"}], "a", [],
+                            [{"label": "piece", "todos": ["row"]}])
+        parents = [g for g in goals if not g.get("parent_goal_id")]
+        self.assertEqual(["a", "b"], [g["title"] for g in parents])
+        self.assertEqual(1, len([g for g in goals if g.get("parent_goal_id")]))
+
+
 class AnswerTests(unittest.TestCase):
     """What the reader picked, on its way back into the conversation."""
 

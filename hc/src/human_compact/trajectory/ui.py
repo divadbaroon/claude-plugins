@@ -2482,7 +2482,7 @@ def _apply(op, trajdir=None, chat_scoped=None):
     if kind == "setup_commit":
         return SETUP.commit(root, op.get("name"), op.get("plan"),
                             op.get("goals"), op.get("chosen"),
-                            op.get("todos"))
+                            op.get("todos"), op.get("subgoals") or [])
     if kind == "reopen_session":
         return BUILD.reopen(session_id, root)
     if kind == "build_log":

@@ -51,6 +51,7 @@ MAX_PLAN = 2400
 MAX_UNSURE = 6
 MAX_GOALS = 8
 MAX_TODOS = 20
+MAX_SUBGOALS = 6
 
 CARDS = ("questions", "plan", "goals", "todos", "none")
 
@@ -133,7 +134,9 @@ FORM = [
     '                        said, in their terms>"]},',
     '   "goals": [{"label": "<an outcome, not a task>",',
     '              "why": "<why this one is worth starting on>"}],',
-    '   "todos": ["<one row of work>"]}',
+    '   "subgoals": [{"label": "<a piece of the chosen goal>",',
+    '                 "todos": ["<one row of work in that piece>"]}],',
+    '   "todos": ["<or, where it does not break down, just the rows>"]}',
     "",
     "Only the key for the card you name is read; leave the others out.",
     "",
@@ -170,6 +173,12 @@ FORM = [
     "A goal is an outcome someone could tell you they had reached. A TODO row",
     "is one piece of work, in the imperative, that a coding agent could pick",
     "up and finish. Neither is a phase, a heading or a category.",
+    "",
+    "On the todos card, break the chosen goal into its pieces and put the",
+    "rows under the piece they belong to -- two to four pieces is usually",
+    "the shape of it, and a list of twelve rows in one heap is a list nobody",
+    "reads. A piece is still an outcome, smaller. Where the work genuinely",
+    "does not break down, send the rows flat instead and say so.",
     "",
     "Nothing you propose is saved until they approve it, so propose the thing",
     "you actually think rather than the safe version of it.",
@@ -351,6 +360,28 @@ def _normalize_todos(value) -> List[str]:
     return out
 
 
+def _normalize_subgoals(value) -> List[Dict[str, Any]]:
+    """The pieces of the chosen goal, each with the rows that belong to it.
+
+    A piece with no rows under it is dropped: a subgoal is a place to put
+    work, and one with none is a heading. The reader can add rows to it
+    afterwards, but a heading the model invented and left empty is not
+    something they asked for.
+    """
+    out = []
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        label = _one(row.get("label") or row.get("title"), MAX_LABEL)
+        rows = _normalize_todos(row.get("todos"))
+        if not label or not rows:
+            continue
+        out.append({"label": label, "todos": rows})
+        if len(out) >= MAX_SUBGOALS:
+            break
+    return out
+
+
 def normalize_card(value) -> Dict[str, Any]:
     """Whatever came back, as the one shape the rail draws.
 
@@ -367,7 +398,7 @@ def normalize_card(value) -> Dict[str, Any]:
                            "card": card, "questions": {"eyebrow": "",
                                                        "items": []},
                            "plan": {"description": "", "unsure": []},
-                           "goals": [], "todos": []}
+                           "goals": [], "todos": [], "subgoals": []}
     if card == "questions":
         held = _normalize_questions(value.get("questions"))
         out["questions"] = held
@@ -383,8 +414,9 @@ def normalize_card(value) -> Dict[str, Any]:
         if not out["goals"]:
             out["card"] = "none"
     elif card == "todos":
+        out["subgoals"] = _normalize_subgoals(value.get("subgoals"))
         out["todos"] = _normalize_todos(value.get("todos"))
-        if not out["todos"]:
+        if not out["subgoals"] and not out["todos"]:
             out["card"] = "none"
     return out
 
@@ -418,36 +450,58 @@ def answers_as_said(questions, answers) -> str:
 
 # --- the approved conversation, as a project ---------------------------------
 
-def to_goals(offered, chosen, todos) -> List[Dict[str, Any]]:
-    """Every goal that was offered, with the rows under the one picked.
+def to_goals(offered, chosen, todos, subgoals=()) -> List[Dict[str, Any]]:
+    """Every goal that was offered, and under the one picked, its pieces.
 
     The goals not chosen are kept and left alone -- they were proposed and
     approved together, and dropping the two the reader did not start on
     would make the approval mean less than it said. Only the chosen one is
-    in progress; only the chosen one has rows.
+    in progress; only the chosen one has anything under it.
+
+    Where the work broke into pieces, the rows live on the piece they belong
+    to rather than in one list on the parent: that is the shape the
+    workspace's tree already holds, and a goal with a wall of twelve rows is
+    a wall nobody reads.
 
     *chosen* is a label rather than an index because the reader may have
     typed their own, which is then a goal of its own alongside the offer.
     """
     chosen = _one(chosen, MAX_LABEL)
-    rows = [_one(t, MAX_TODO) for t in todos or []]
-    rows = [t for t in rows if t][:MAX_TODOS]
+    pieces = _normalize_subgoals(subgoals)
+    rows = _normalize_todos(todos)
     doc: Dict[str, Any] = {"goals": []}
     labels = []
+    picked = None
     for row in _normalize_goals(offered):
         labels.append(row["label"])
-        doc["goals"].append(_goal(doc, row["label"], row["why"],
-                                  rows if row["label"] == chosen else []))
+        mine = row["label"] == chosen
+        made = _goal(doc, row["label"], row["why"],
+                     [] if (mine and pieces) else (rows if mine else []))
+        if mine:
+            picked = made
+            if pieces:
+                made["status"] = "in_progress"
+        doc["goals"].append(made)
     if chosen and chosen not in labels:
-        doc["goals"].append(_goal(doc, chosen, "", rows))
+        picked = _goal(doc, chosen, "", [] if pieces else rows)
+        if pieces:
+            picked["status"] = "in_progress"
+        doc["goals"].append(picked)
+    if picked is not None:
+        for piece in pieces:
+            kid = _goal(doc, piece["label"], "", piece["todos"],
+                        parent=picked["id"])
+            doc["goals"].append(kid)
     return doc["goals"]
 
 
-def _goal(doc, title, why, rows) -> Dict[str, Any]:
+def _goal(doc, title, why, rows, parent=None) -> Dict[str, Any]:
     # Ids are allocated against the tree as it grows: next_goal_id reads
     # what is already in it, so each goal must be in the document before
-    # the next one asks for a name.
-    goal = GM.new_goal(GM.next_goal_id(doc), title[:MAX_LABEL], origin="user")
+    # the next one asks for a name. A child takes its id from its parent's,
+    # which is how the tree says who belongs to whom.
+    gid = GM.child_goal_id(doc, parent) if parent else GM.next_goal_id(doc)
+    goal = GM.new_goal(gid, title[:MAX_LABEL], parent, origin="user")
     goal["description"] = why
     # No status is what the rail means by "not yet sent to a build", and
     # setup has run nothing: every row it writes is the reader's to send.
@@ -483,7 +537,8 @@ def to_project(name, plan) -> Dict[str, Any]:
 # a workspace this vault minted. A chat joins it later, by opening it, the
 # same way it would join any project it did not start.
 
-def commit(root, name, plan, offered, chosen, todos) -> Dict[str, Any]:
+def commit(root, name, plan, offered, chosen, todos,
+           subgoals=()) -> Dict[str, Any]:
     """Make the project, write its tree, attach it to nothing.
 
     Refused before anything is created when there is nothing to save, when
@@ -494,7 +549,7 @@ def commit(root, name, plan, offered, chosen, todos) -> Dict[str, Any]:
     from . import chat_state as CS
     from . import project_store as PS
 
-    made = to_goals(offered, chosen, todos)
+    made = to_goals(offered, chosen, todos, subgoals)
     held = to_project(name, plan)
     if not made and not held["objective"]:
         return {"ok": False, "error": "nothing to save yet"}
@@ -620,7 +675,7 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
             card = dict(card, card="none",
                         questions={"eyebrow": "", "items": []},
                         plan={"description": "", "unsure": []},
-                        goals=[], todos=[])
+                        goals=[], todos=[], subgoals=[])
             card["say"] = card["say"] or kept
     if not card["say"] and card["card"] == "none":
         return {"ok": False, "error": "the model answered with nothing"}

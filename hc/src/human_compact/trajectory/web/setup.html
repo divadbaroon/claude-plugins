@@ -79,8 +79,13 @@ textarea.f{resize:none}
 /* --- the goal, once chosen: it opens up ------------------------------- */
 .chosen{margin:14px 0 2px;padding:14px 16px;border:1px solid var(--ink);border-radius:9px;background:var(--tint)}
 .chosen-why{margin-top:6px;font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
-.kids{margin-top:10px;padding-left:14px;border-left:1px solid var(--bd)}
-.kid{display:flex;align-items:flex-start;gap:10px;padding:6px 0;font:12.5px/1.6 'Source Code Pro',monospace;color:var(--mut)}
+.piece{display:flex;align-items:center;gap:8px;margin-top:16px;padding-bottom:2px}
+.piece:first-of-type{margin-top:8px}
+.piece .x{opacity:0}
+.piece:hover .x{opacity:1}
+input.f.piece-name{font:500 13px/1.6 'Source Code Pro',monospace;color:var(--ink)}
+.kids{margin:2px 0 0;padding-left:14px;border-left:1px solid var(--bd)}
+.kids .row{border-bottom:none;padding:5px 2px}
 
 /* --- todo rows ---------------------------------------------------------- */
 .row{display:flex;align-items:center;gap:11px;padding:8px 2px;border-bottom:1px solid var(--bd)}
