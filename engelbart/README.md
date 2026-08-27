@@ -33,17 +33,22 @@ engelbart logout    # disconnect this machine and revoke its token
 
 Approving the code also fetches the Claude key your account was allocated, so
 there is nothing to copy out of the browser. The key lands in the same
-owner-only file as the token; `engelbart env` prints the two lines a shell
-needs to reach it:
+owner-only file as the token, and the two lines a shell needs are written
+beside it:
 
 ```bash
-eval "$(engelbart env)"     # this terminal
+source ~/.human-compact/env.sh     # this terminal
 claude
 ```
 
-Add that `eval` line to your shell profile to have every new terminal pick it
-up. `engelbart env` writes only the exports to stdout, so it is safe to run
-through `eval`; everything else it has to say goes to stderr.
+Add that `source` line to your shell profile and every new terminal picks it
+up. The file is written on `engelbart auth` and removed on `engelbart logout`,
+so a disconnected machine stops pointing `claude` at a key it no longer holds.
+
+`engelbart env` prints the same two lines to stdout for anyone who has the
+command on their PATH -- `npx engelbart-cli` does not leave one there, which is
+why the file is what the installer points at. Only the exports reach stdout, so
+`eval "$(engelbart env)"` is safe; everything else goes to stderr.
 
 Credits can lag a new account. If the key is not ready when you approve the
 code, the machine still connects -- run `engelbart auth` again once it is.

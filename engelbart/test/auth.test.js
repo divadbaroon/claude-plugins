@@ -351,7 +351,41 @@ test('signing in stores the Claude key beside the token', async () => {
   assert.equal(stored.token, 'egb_token');
   assert.equal(stored.claude.apiKey, 'sk-abc');
   assert.match(output.text(), /\$21\.00 of \$25\.00 left/);
-  assert.match(output.text(), /eval "\$\(engelbart env\)"/);
+
+  // The instruction has to name a path that exists, not a command the member
+  // may not have: `npx engelbart-cli` leaves no `engelbart` on PATH.
+  const envFile = auth.envPath(root);
+  assert.match(output.text(), new RegExp(`source ${envFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.equal(fs.readFileSync(envFile, 'utf8'),
+    '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
+      + 'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
+      + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n');
+  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+});
+
+// A sourced profile would otherwise keep pointing `claude` at a key this
+// machine no longer holds.
+test('disconnecting takes the shell exports with it', () => {
+  const root = temporaryRoot();
+  const stored = auth.writeCredentials(root, {
+    schema: 1,
+    apiBase: 'https://berkeley.mathetic.com',
+    token: 'egb_secret',
+    email: 'm@example.com',
+    claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+  });
+  auth.writeEnvFile(root, stored);
+  assert.ok(fs.existsSync(auth.envPath(root)));
+
+  auth.clearCredentials(root);
+  assert.equal(fs.existsSync(auth.envPath(root)), false);
+  assert.equal(fs.existsSync(auth.credentialsPath(root)), false);
+});
+
+test('a connection with no Claude key writes no exports to source', () => {
+  const root = temporaryRoot();
+  assert.equal(auth.writeEnvFile(root, { token: 'egb_secret' }), '');
+  assert.equal(fs.existsSync(auth.envPath(root)), false);
 });
 
 // Credits can lag the account. Losing the key must not lose the pairing too,
