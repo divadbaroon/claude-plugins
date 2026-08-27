@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from . import chat_state as CS
+from . import file_provenance as FP
 from . import project_sync as SY
 from .secure_io import atomic_write_json
 
@@ -45,6 +46,10 @@ CONFIG_TEMPLATE = {
     "url": "https://YOUR-PROJECT-REF.supabase.co",
     "anon_key": "PASTE-YOUR-ANON-PUBLIC-KEY-HERE",
     "email": "you@example.com",
+    # "off" sends file metadata and change history but no excerpts of the
+    # files themselves. The one setting here that decides whether any of
+    # your source leaves this machine.
+    "file_content": "on",
 }
 
 
@@ -106,14 +111,24 @@ def load_config(root: Optional[Path] = None) -> Dict[str, str]:
     email = str(stored.get("email") or "").strip()
     if email == CONFIG_TEMPLATE["email"]:
         email = ""      # the template's stand-in is not an address
+    # Whether a sync may carry excerpts of the project's own source. On by
+    # default because a shared project whose files cannot be read is a
+    # shared project nobody can follow -- but stated as a key, in the same
+    # file as the credentials, so turning it off is one word and does not
+    # require reading this module to find.
+    content = str(stored.get("file_content") or "on").strip().lower()
+    if content not in ("on", "off"):
+        content = "on"
     if url and url.startswith("http://") and "127.0.0.1" not in url \
             and "localhost" not in url:
         # A key sent in the clear is a key given away.
         raise SupabaseError("the Supabase URL must be https")
     if any(marker in url or marker in key
            for marker in ("YOUR-PROJECT-REF", "PASTE-YOUR")):
-        return {"url": "", "anon_key": "", "email": email}
-    return {"url": url, "anon_key": key, "email": email}
+        return {"url": "", "anon_key": "", "email": email,
+                "file_content": content}
+    return {"url": url, "anon_key": key, "email": email,
+            "file_content": content}
 
 
 # The dashboard shows several URLs and they are easy to confuse: the REST
@@ -1010,5 +1025,41 @@ def sync_project(root: Optional[Path], cwd) -> Dict[str, Any]:
         {"apikey": config["anon_key"],
          "Authorization": f"Bearer {session['access_token']}"},
         {"payload": payload})
+    out = {"ok": True, "project_id": payload["project_id"],
+           "sent": SY.counts(payload), "result": result}
+    # The files follow the goals, in a second call and a second transaction.
+    # Deliberately not folded into the first: the goal sync is the one the
+    # reader is waiting on, and a project whose git tree is enormous or
+    # whose repository is in a strange state should not be able to fail the
+    # part that was already built and correct.
+    try:
+        out["files"] = sync_files(root, cwd, session=session, config=config)
+    except (SupabaseError, OSError, ValueError) as exc:
+        out["files"] = {"ok": False, "error": str(exc)[:200]}
+    return out
+
+
+def sync_files(root: Optional[Path], cwd, session: Optional[Dict] = None,
+               config: Optional[Dict] = None,
+               content: Optional[bool] = None) -> Dict[str, Any]:
+    """This project's files, the runs that changed them, and their excerpts.
+
+    Separate from ``sync_project`` because it prunes differently and may be
+    switched off: with ``file_content`` set to "off" in the config the same
+    call goes up carrying metadata and history alone, and the server drops
+    any excerpt an earlier sync left behind.
+    """
+    if not cwd:
+        raise SupabaseError("this chat has no project directory")
+    config = config or load_config(root)
+    if not config["url"] or not config["anon_key"]:
+        raise SupabaseError(f"fill in {config_path(root)} first")
+    session = session or current_session(root)
+    if content is None:
+        content = config.get("file_content", "on") != "off"
+    payload = FP.snapshot(root, cwd, session["user_id"], content=bool(content))
+    result = _rpc("hc_sync_files", {"payload": payload}, config,
+                  session["access_token"])
     return {"ok": True, "project_id": payload["project_id"],
-            "sent": SY.counts(payload), "result": result}
+            "content": bool(content), "sent": FP.counts(payload),
+            "result": result}
