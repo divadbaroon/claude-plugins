@@ -244,6 +244,24 @@ class StageTests(unittest.TestCase):
         self.assertEqual("none", out["card"])
         self.assertEqual("Here is the plan.", out["say"])
 
+    def test_a_reply_that_was_only_the_wrong_card_is_asked_again(self):
+        # Discarding the card would leave nothing at all, and a silent round
+        # reads to the reader as a tool that broke.
+        tries = []
+        class Eager:
+            def generate_json(self, prompt):
+                tries.append(prompt)
+                if len(tries) == 1:
+                    return {"card": "plan", "plan": {"description": "early"}}
+                return {"say": "Two questions.", "card": "questions",
+                        "questions": {"items": [
+                            {"id": "a", "type": "free", "title": "Who for?"}]}}
+        out = SC.ask([{"role": "you", "text": "x"}], engine=Eager(), shown=[])
+        self.assertEqual(2, len(tries))
+        self.assertIn("was discarded", tries[1])
+        self.assertTrue(out["ok"])
+        self.assertEqual("questions", out["card"])
+
     def test_the_card_that_is_due_is_named_in_the_prompt(self):
         seen = {}
         class Stub:

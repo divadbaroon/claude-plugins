@@ -600,10 +600,28 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
     # A card out of turn is not drawn. What it said is kept -- it is talking
     # to the reader, and dropping that would leave a silent round -- but the
     # card itself is refused, because drawing it is what skips the step.
+    #
+    # A reply that was ONLY the wrong card leaves nothing at all, and a
+    # silent round reads to the reader as a tool that broke. So it is asked
+    # once more, told plainly what it just did.
     if card["card"] != "none" and card["card"] != due:
-        card = dict(card, card="none", questions={"eyebrow": "", "items": []},
-                    plan={"description": "", "unsure": []},
-                    goals=[], todos=[])
+        kept = card["say"]
+        if not kept:
+            try:
+                raw = engine.generate_json(
+                    "\n".join(compose(transcript, list(extra) + [
+                        "", "You just replied with a %s card when the card"
+                        " due is %s. That reply was discarded. Write the %s"
+                        " card." % (card["card"], due, due)])) + "\n")
+            except Exception:                            # noqa: BLE001
+                raw = {}
+            card = normalize_card(raw)
+        if card["card"] != due:
+            card = dict(card, card="none",
+                        questions={"eyebrow": "", "items": []},
+                        plan={"description": "", "unsure": []},
+                        goals=[], todos=[])
+            card["say"] = card["say"] or kept
     if not card["say"] and card["card"] == "none":
         return {"ok": False, "error": "the model answered with nothing"}
     return dict(card, ok=True, due=due)
