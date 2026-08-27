@@ -182,6 +182,9 @@ async function run(deps = {}) {
       managedRoot,
       env: deps.env || process.env,
       output,
+      // The one place that knows it is running on a member's real machine, and
+      // so the one place permitted to write their Claude Code settings.
+      allowRealHome: true,
       fetchImpl: deps.fetchImpl,
       openUrl: deps.openUrl,
       wait: deps.wait,

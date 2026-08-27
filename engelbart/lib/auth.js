@@ -6,6 +6,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const { atomicWrite, establishOwnership, validateManagedRoot } = require('./installer');
+const claudeCode = require('./claude-code');
 
 const DEFAULT_API_BASE = 'https://berkeley.mathetic.com';
 const CREDENTIALS_SCHEMA = 1;
@@ -186,6 +187,26 @@ function sleep(seconds) {
   return new Promise((resolve) => { setTimeout(resolve, seconds * 1000); });
 }
 
+// Failing to wire Claude Code is never fatal: the exports file still works,
+// and a member whose settings we will not touch is better served by being told
+// than by having their configuration rewritten.
+function wireClaudeCode(managedRoot, stored, options = {}) {
+  if (!stored || !stored.claude || !stored.claude.baseUrl) return { changed: false, reason: 'no-key' };
+  try {
+    claudeCode.writeHelper(managedRoot, credentialsPath(managedRoot));
+    return claudeCode.connect({
+      managedRoot,
+      homedir: options.homedir,
+      settingsFile: options.settingsFile,
+      env: options.env,
+      allowRealHome: options.allowRealHome,
+      baseUrl: stored.claude.baseUrl,
+    });
+  } catch (error) {
+    return { changed: false, reason: error.message };
+  }
+}
+
 async function login(options = {}) {
   const env = options.env || process.env;
   const base = apiBase(env);
@@ -243,8 +264,18 @@ async function login(options = {}) {
         const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
         output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
         const written = writeEnvFile(managedRoot, stored);
-        output.write(`\nRun this once here so \`claude\` uses it:\n\n    source ${written}\n`);
-        output.write('\nAdd that line to your shell profile and every new terminal picks it up.\n');
+        // Claude Code is the reason the key exists, so it gets told directly
+        // rather than being left to inherit a variable the member has to
+        // remember to export.
+        const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
+        if (wired.changed) {
+          output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
+        } else if (wired.reason === 'foreign-helper') {
+          output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
+          output.write(`To use this credit instead, run: source ${written}\n`);
+        } else {
+          output.write(`\nRun this once here so \`claude\` uses it:\n\n    source ${written}\n`);
+        }
       } else {
         output.write(`Could not read this account's Claude key: ${keyError}\n`);
       }
@@ -280,8 +311,16 @@ async function logout(options = {}) {
   } catch (error) {
     revoked = false;
   }
+  const unwired = claudeCode.disconnect({
+    managedRoot,
+    homedir: options.homedir,
+    settingsFile: options.settingsFile,
+    env: options.env,
+    allowRealHome: options.allowRealHome,
+    baseUrl: stored.claude && stored.claude.baseUrl,
+  });
   clearCredentials(managedRoot);
-  return { revoked, signedOut: true, email: stored.email || '' };
+  return { revoked, signedOut: true, email: stored.email || '', unwired: unwired.changed };
 }
 
 async function whoami(options = {}) {
@@ -319,6 +358,7 @@ module.exports = {
   postJson,
   readCredentials,
   whoami,
+  wireClaudeCode,
   writeCredentials,
   writeEnvFile,
 };

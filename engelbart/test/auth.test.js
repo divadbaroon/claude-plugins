@@ -12,6 +12,15 @@ function temporaryRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-auth-'));
 }
 
+// Wiring Claude Code means writing a settings file, and the default one is the
+// real one. Every test that signs in or out names its own instead, so the
+// suite can never rewrite the configuration of whoever is running it. It sits
+// beside the managed root rather than inside it, because the installer refuses
+// to adopt a root that already has files it did not put there.
+function settingsIn(root) {
+  return path.join(`${root}-config`, 'settings.json');
+}
+
 function collector() {
   const chunks = [];
   return { write(value) { chunks.push(value); }, text() { return chunks.join(''); } };
@@ -99,6 +108,7 @@ test('login prints the code before opening the browser and stores the token', as
 
   const result = await auth.login({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     output,
     hostname: 'laptop.local',
@@ -136,6 +146,7 @@ test('login works on a machine with no browser to open', async () => {
   ]);
   const result = await auth.login({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     output,
     fetchImpl: script.fetchImpl,
@@ -158,6 +169,7 @@ test('a rejected or expired code ends the wait instead of polling on', async () 
     ]);
     const result = await auth.login({
       managedRoot: root,
+      settingsFile: settingsIn(root),
       env: {},
       output,
       fetchImpl: script.fetchImpl,
@@ -181,6 +193,7 @@ test('a slow_down answer backs the polling off instead of ignoring it', async ()
   ]);
   await auth.login({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     output: collector(),
     fetchImpl: script.fetchImpl,
@@ -202,6 +215,7 @@ test('a pairing that is never approved gives up at its own deadline', async () =
   ]);
   const result = await auth.login({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     output,
     fetchImpl: script.fetchImpl,
@@ -219,7 +233,12 @@ test('logout revokes the token and removes it locally', async () => {
     schema: 1, apiBase: 'https://berkeley.mathetic.com', token: 'egb_t', email: 'm@example.com',
   });
   const script = scriptedFetch([{ body: { revoked: true } }]);
-  const result = await auth.logout({ managedRoot: root, env: {}, fetchImpl: script.fetchImpl });
+  const result = await auth.logout({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    fetchImpl: script.fetchImpl,
+  });
   assert.deepEqual(script.calls[0].body, { action: 'revoke', token: 'egb_t' });
   assert.equal(result.revoked, true);
   assert.equal(auth.readCredentials(root, {}), null);
@@ -234,6 +253,7 @@ test('logout clears the local token even when it cannot be revoked', async () =>
   });
   const result = await auth.logout({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     async fetchImpl() { throw new Error('offline'); },
   });
@@ -244,8 +264,10 @@ test('logout clears the local token even when it cannot be revoked', async () =>
 });
 
 test('logout on an unconnected machine is not an error', async () => {
+  const root = temporaryRoot();
   const result = await auth.logout({
-    managedRoot: temporaryRoot(),
+    managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     fetchImpl() { throw new Error('must not be called'); },
   });
@@ -334,6 +356,7 @@ test('signing in stores the Claude key beside the token', async () => {
 
   const result = await auth.login({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     output,
     fetchImpl: scripted.fetchImpl,
@@ -352,15 +375,57 @@ test('signing in stores the Claude key beside the token', async () => {
   assert.equal(stored.claude.apiKey, 'sk-abc');
   assert.match(output.text(), /\$21\.00 of \$25\.00 left/);
 
-  // The instruction has to name a path that exists, not a command the member
-  // may not have: `npx engelbart-cli` leaves no `engelbart` on PATH.
+  // Claude Code is the reason the key exists, so signing in wires it directly
+  // and the member is told to run `claude`, not a shell line.
+  assert.match(output.text(), /Claude Code is set up to use it/);
+  const settings = JSON.parse(fs.readFileSync(settingsIn(root), 'utf8'));
+  assert.equal(settings.apiKeyHelper, path.join(root, 'bin', 'engelbart-key'));
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+
+  // The exports file is still written: it is what a shell, a CI runner, or
+  // anything that is not Claude Code reads.
   const envFile = auth.envPath(root);
-  assert.match(output.text(), new RegExp(`source ${envFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.equal(fs.readFileSync(envFile, 'utf8'),
     '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
       + 'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
       + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n');
   assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+});
+
+// Redirecting Claude Code's credential at something the member did not choose
+// is a worse failure than one extra line of instruction, so a helper we did
+// not write sends signing in back to the shell exports.
+test('an apiKeyHelper we did not write sends the member to the exports instead', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const settingsFile = settingsIn(root);
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ apiKeyHelper: '/opt/other-tool/key', theme: 'dark' }));
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  await auth.login({
+    managedRoot: root,
+    settingsFile,
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  assert.match(output.text(), /Leaving your existing apiKeyHelper alone \(\/opt\/other-tool\/key\)/);
+  assert.match(output.text(), new RegExp(`source ${auth.envPath(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(settings.apiKeyHelper, '/opt/other-tool/key');
+  assert.equal(settings.env, undefined);
 });
 
 // A sourced profile would otherwise keep pointing `claude` at a key this
@@ -400,6 +465,7 @@ test('a missing Claude key still leaves the machine connected', async () => {
 
   const result = await auth.login({
     managedRoot: root,
+    settingsFile: settingsIn(root),
     env: {},
     output,
     fetchImpl: scripted.fetchImpl,
