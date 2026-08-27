@@ -76,6 +76,33 @@ into.
 - The prompt picker is newest-first, scrollable, and fuzzy-searchable. Prompt
   links are durable across UI imports and later inference.
 
+## The project's dev server
+
+A goal whose work is a web interface has a page, and the project it lives in
+already knows how to serve it. The rail's strip says whether that server is
+up, starts it when it is not, and links to the address the process printed.
+
+It runs one script out of the project's own `package.json` — `dev`, or `start`
+where there is no `dev` — with the package manager the lockfile (or a
+`packageManager` field) names. It installs nothing: a project whose
+`node_modules` is missing is reported rather than repaired, because `npm
+install` runs lifecycle scripts from the whole dependency tree and a preview
+is not a reason to.
+
+The address is read back off the server's own output, never guessed: Next
+moves to 3001 when 3000 is taken, and the strip follows it. When the port the
+project usually takes is already answering and the workspace did not start it,
+nothing is started — the strip says so and offers *Start anyway*, which lets
+the framework pick a free port.
+
+The process is spawned into a session of its own and signalled by process
+group, since `npm run dev` is a wrapper whose real server is its child. It
+outlives the workspace on purpose: closing the page and opening it again finds
+the same server (a recorded pid is confirmed alive, still its own group
+leader, and still running what we spawned before it is believed or signalled)
+and it stops when you stop it. Its log lives under
+`~/.claude-vault/chat-sessions/<session-id>/dev/`.
+
 ## Inference data boundary
 
 The state store and web server are local. Goal inference is not necessarily
