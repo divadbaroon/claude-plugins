@@ -84,10 +84,16 @@ function stored() {
   }
 }
 
+// The raw bytes come back too, because they are what makes the write safe:
+// this file is the member's, it holds their hooks and permissions and theme,
+// and it is being read and written by the Claude Code session that spawned us.
 function settings() {
   try {
-    const parsed = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    const raw = fs.readFileSync(SETTINGS, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? { raw, parsed }
+      : null;
   } catch (error) {
     return null;
   }
@@ -96,11 +102,22 @@ function settings() {
 // Removes only what \`engelbart auth\` wrote, matched by value, so a member who
 // pointed any of this somewhere else keeps it. Claude Code reloads settings on
 // save, so the running session picks its own login back up without a restart.
+//
+// Removing it is not tidiness. While \`apiKeyHelper\` is set, its output takes
+// precedence over a saved claude.ai login and \`/login\` cannot override it, so
+// this is the only thing that gives a member their own account back -- exiting
+// non-zero and leaving the setting in place strands them.
+//
+// The read and the write are separated by a whole process, and Claude Code is
+// running the entire time. So the bytes we parsed are checked again at the
+// last moment, and anything that moved underneath us means someone else's
+// change is in flight: a spent key is not worth overwriting a permission the
+// member just granted, and the next run will refuse again anyway.
 function unwire(baseUrl) {
   if (!SETTINGS || !HELPER) return false;
-  const existing = settings();
-  if (!existing || existing.apiKeyHelper !== HELPER) return false;
-  const next = { ...existing };
+  const before = settings();
+  if (!before || before.parsed.apiKeyHelper !== HELPER) return false;
+  const next = { ...before.parsed };
   delete next.apiKeyHelper;
   if (next.env && typeof next.env === 'object') {
     const env = { ...next.env };
@@ -109,12 +126,21 @@ function unwire(baseUrl) {
     if (Object.keys(env).length) next.env = env;
     else delete next.env;
   }
+  let temporary = '';
   try {
-    const temporary = SETTINGS + '.tmp-' + process.pid;
+    temporary = SETTINGS + '.engelbart-' + process.pid;
     fs.writeFileSync(temporary, JSON.stringify(next, null, 2) + '\\n', { mode: 0o600 });
+    const after = settings();
+    if (!after || after.raw !== before.raw) {
+      fs.rmSync(temporary, { force: true });
+      return false;
+    }
     fs.renameSync(temporary, SETTINGS);
     return true;
   } catch (error) {
+    try {
+      if (temporary) fs.rmSync(temporary, { force: true });
+    } catch (cleanup) { /* nothing left to remove */ }
     return false;
   }
 }
@@ -125,9 +151,14 @@ function unwire(baseUrl) {
 function refuse(value, reason) {
   const unwired = unwire(value && value.claude && value.claude.baseUrl);
   process.stderr.write('Engelbart: ' + reason + '\\n');
+  // The second line is never decoration. Un-wired, the member is already back
+  // on their own account and only needs to know why. Still wired -- because
+  // their settings file moved under us, or is not ours to edit -- they are
+  // stuck until the setting goes, and \`/login\` cannot get them out of it, so
+  // the command that can has to be on screen.
   process.stderr.write(unwired
     ? 'Claude Code is back on your own account. Run \`engelbart auth\` once credits are topped up.\\n'
-    : 'Run \`engelbart auth\` once credits are topped up.\\n');
+    : 'Run \`engelbart logout\` to put Claude Code back on your own account.\\n');
   process.exit(1);
 }
 

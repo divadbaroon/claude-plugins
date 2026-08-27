@@ -367,6 +367,82 @@ test('refusing never removes a helper we did not write', async () => {
   }
 });
 
+// This file is the member's, and the session that spawned the helper is
+// writing it for its own reasons -- a permission granted, a theme changed, a
+// `/config` edit. Unwiring subtracts the three values `engelbart auth` wrote
+// and nothing else, so work that landed after wiring survives being unwired.
+//
+// (The helper also re-reads the file immediately before renaming and declines
+// the write if the bytes moved, which narrows the window where a write already
+// in flight could be lost. That window is sub-millisecond and on the far side
+// of a process boundary, so it is not what this test pins down.)
+test('unwiring subtracts our three values and preserves the rest', async () => {
+  const stub = await stubServer(() => ({ status: 402, body: { error: 'credit used up' } }));
+  try {
+    const machine = wiredMachine(stub.base);
+
+    const wired = read(machine.settingsFile);
+    write(machine.settingsFile, {
+      ...wired,
+      permissions: { allow: ['Bash(npm test)'] },
+      env: { ...wired.env, HTTPS_PROXY: 'http://corp.example.com:8080' },
+    });
+
+    const result = await runHelper(machine.helper);
+    assert.equal(result.stdout, '', 'still refuses to hand over a spent key');
+    assert.equal(result.code, 1);
+
+    const after = read(machine.settingsFile);
+    assert.equal(after.apiKeyHelper, undefined, 'ours goes');
+    assert.equal(after.env.ANTHROPIC_BASE_URL, undefined, 'ours goes');
+    assert.equal(after.env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS, undefined, 'ours goes');
+    // Everything else is untouched, including a key inside the same `env`
+    // object we edited.
+    assert.equal(after.env.HTTPS_PROXY, 'http://corp.example.com:8080');
+    assert.deepEqual(after.permissions, { allow: ['Bash(npm test)'] });
+    assert.equal(after.theme, 'dark');
+  } finally {
+    await stub.close();
+  }
+});
+
+// Still wired means still stuck: while `apiKeyHelper` is set its output takes
+// precedence over a saved claude.ai login and `/login` cannot override it. So
+// a member whose settings we would not touch has to be told the command that
+// does work, not left to find it.
+test('a refusal that could not unwire names the way out', async () => {
+  const stub = await stubServer(() => ({ status: 402, body: { error: 'credit used up' } }));
+  try {
+    const machine = wiredMachine(stub.base);
+    write(machine.settingsFile, { apiKeyHelper: '/opt/other-tool/key', theme: 'dark' });
+
+    const result = await runHelper(machine.helper);
+
+    assert.equal(result.code, 1);
+    assert.equal(read(machine.settingsFile).apiKeyHelper, '/opt/other-tool/key');
+    assert.match(result.stderr, /engelbart logout/);
+  } finally {
+    await stub.close();
+  }
+});
+
+// Nothing is left behind when the swap declines: a stray temp file beside the
+// member's settings is its own small mess.
+test('a declined swap leaves no temporary file behind', async () => {
+  const stub = await stubServer(() => ({ status: 402, body: { error: 'credit used up' } }));
+  try {
+    const machine = wiredMachine(stub.base);
+    write(machine.settingsFile, { apiKeyHelper: '/opt/other-tool/key' });
+    await runHelper(machine.helper);
+
+    const strays = fs.readdirSync(path.dirname(machine.settingsFile))
+      .filter((name) => name.includes('engelbart-'));
+    assert.deepEqual(strays, []);
+  } finally {
+    await stub.close();
+  }
+});
+
 // Claude Code re-runs the helper on a 401 and otherwise waits out this cache.
 // An exhausted LiteLLM budget answers 400 or 429, never 401, so this window is
 // the only bound on how long a spent key stays in front of a member.
