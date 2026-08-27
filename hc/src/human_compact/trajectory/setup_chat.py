@@ -589,11 +589,13 @@ def commit(root, name, plan, offered, chosen, todos,
 # understood them or guessed. So the order is not asked for, it is worked
 # out from what has actually been drawn and then required.
 #
-# Two rounds of questions before a plan is a floor, not a ceiling: the model
-# may keep asking (it is told when that reads as a form), but it may not
-# stop asking before it has heard anything back.
+# One round of questions before a plan is the floor: the model may keep
+# asking (it is told when that reads as a form), but it may not write a plan
+# for someone it has not asked anything. Two was a floor the model fought --
+# it would have enough after one round, try to move on, be discarded, and
+# the reader would sit in front of a card that never came.
 ORDER = ("questions", "plan", "goals", "todos")
-MIN_QUESTION_ROUNDS = 2
+MIN_QUESTION_ROUNDS = 1
 
 
 def stage_of(transcript, shown) -> str:

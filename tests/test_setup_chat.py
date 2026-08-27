@@ -210,25 +210,27 @@ class StageTests(unittest.TestCase):
         self.assertEqual("questions", SC.stage_of([], []))
 
     def test_questions_come_before_a_plan(self):
-        # One round of answers is enough to write from; none is not.
-        self.assertEqual("questions", SC.stage_of([], ["questions"]))
-        self.assertEqual("plan", SC.stage_of([], ["questions", "questions"]))
+        # One round of answers is enough to write from; none is not. The
+        # floor is one because two was a floor the model fought: it would
+        # have enough, try to move on, be discarded, and the reader would
+        # sit in front of a card that never came.
+        self.assertEqual("questions", SC.stage_of([], []))
+        self.assertEqual("plan", SC.stage_of([], ["questions"]))
 
     def test_the_plan_is_not_skipped_however_much_was_said(self):
         many = [{"role": "you", "text": "a very full description"}] * 8
         self.assertEqual("questions", SC.stage_of(many, []))
 
     def test_goals_come_after_the_plan_was_shown(self):
-        self.assertEqual("goals",
-                         SC.stage_of([], ["questions", "questions", "plan"]))
+        self.assertEqual("goals", SC.stage_of([], ["questions", "plan"]))
 
     def test_todos_come_last(self):
         self.assertEqual("todos", SC.stage_of(
-            [], ["questions", "questions", "plan", "goals"]))
+            [], ["questions", "plan", "goals"]))
 
     def test_after_the_rows_there_is_nothing_left_to_ask_for(self):
         self.assertEqual("none", SC.stage_of(
-            [], ["questions", "questions", "plan", "goals", "todos"]))
+            [], ["questions", "plan", "goals", "todos"]))
 
     def test_a_card_out_of_turn_is_replaced_by_the_one_that_is_due(self):
         # The model wrote a plan when the stage was questions. What it said
@@ -270,7 +272,7 @@ class StageTests(unittest.TestCase):
                 return {"say": "ok", "card": "plan",
                         "plan": {"description": "h"}}
         SC.ask([{"role": "you", "text": "x"}], engine=Stub(),
-               shown=["questions", "questions"])
+               shown=["questions"])
         self.assertIn("write the plan", seen["prompt"])
 
     def test_the_card_that_is_due_is_kept(self):
@@ -279,7 +281,7 @@ class StageTests(unittest.TestCase):
                 return {"say": "ok", "card": "plan",
                         "plan": {"description": "h"}}
         out = SC.ask([{"role": "you", "text": "x"}], engine=Stub(),
-                     shown=["questions", "questions"])
+                     shown=["questions"])
         self.assertEqual("plan", out["card"])
 
 
