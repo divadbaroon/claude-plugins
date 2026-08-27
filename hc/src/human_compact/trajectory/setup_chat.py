@@ -736,45 +736,32 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
 # all of those still need the command written down, so the copy rows stay
 # and this is only ever an offer on top of them.
 
-def _system_events_ok(run) -> bool:
-    """Whether this process may drive System Events.
-
-    Asked before anything is opened, and answered without opening anything:
-    typing into a window needs Accessibility, which is granted per
-    application and this one is a python in a managed runtime -- almost
-    never a binary anybody has granted. Finding that out *after* opening the
-    window is how a reader ends up looking at a blank terminal being told a
-    command was typed into it.
-    """
-    try:
-        done = run(("osascript", "-e",
-                    'tell application "System Events" to return name of'
-                    ' first process'),
-                   timeout=10, capture_output=True, text=True)
-    except (OSError, ValueError, Exception):             # noqa: BLE001
-        return False
-    return getattr(done, "returncode", 1) == 0
-
-
 # Seeds the command into whichever interactive shell opened, so it is one
-# Up-arrow away. zsh takes `print -rs`, bash takes `history -s`, and the
-# one that is not there fails harmlessly into the other.
+# Up-arrow away. zsh takes `print -rs`, bash takes `history -s`, and the one
+# that is not there fails harmlessly into the other.
 _SEED = "print -rs -- %s 2>/dev/null || history -s %s 2>/dev/null"
 
 
 def open_terminal(command, cwd=None, run=None) -> Dict[str, Any]:
-    """Open a terminal with *command* waiting in it, unrun.
+    """Open a terminal with *command* waiting in its history, unrun.
 
-    Waiting rather than run: the reader presses the key. What is about to
+    Waiting rather than run: the reader presses the keys. What is about to
     happen is visible before it happens, which is the difference between a
     tool that helps and a tool that does things to your machine.
 
-    Two ways in, and which one is available decides what the reader is told.
-    Where this process may type into a window, the command is typed and the
-    note says Return. Where it may not -- the usual case, since Accessibility
-    is granted per application -- the command is put in the new shell's
-    history instead and the note says Up then Return. Either way exactly one
-    window opens, and it has the command in it.
+    Put in the shell's history rather than typed into the window. Typing
+    means System Events, and System Events types into whatever is frontmost
+    -- which, on a machine where a browser and an editor are also open, is
+    not reliably the window that just opened. Measured: the first character
+    was swallowed while the shell was still starting, and once the keystroke
+    landed in an unrelated window that already had text in it. A tool that
+    fires this on its own cannot be a tool that sometimes types into your
+    editor.
+
+    So there is one path, and it is the same on every platform: open a
+    terminal, put the command in that shell's history, and print what it is
+    waiting for. Up, then Return. No permission is needed, nothing races,
+    and the window always has the command in it.
     """
     import shlex
     import subprocess
@@ -787,29 +774,16 @@ def open_terminal(command, cwd=None, run=None) -> Dict[str, Any]:
         return {"ok": False, "error": "that is not a command this can open"}
     here = str(Path(str(cwd)).expanduser()) if cwd else str(Path.home())
     quoted = shlex.quote(said)
-    seed = _SEED % (quoted, quoted)
+    # The window says for itself what it is waiting for: a terminal that
+    # opened with nothing visible in it is worse than not opening one.
+    inner = "cd %s; clear; %s; printf '\\n  %s\\n\\n'" % (
+        shlex.quote(here), _SEED % (quoted, quoted),
+        "press Up then Return to run: " + said)
     if sys.platform == "darwin":
-        typed = _system_events_ok(run)
-        if typed:
-            script = ('tell application "Terminal"\n'
-                      '  activate\n'
-                      '  do script "cd %s; clear"\n'
-                      'end tell\n'
-                      'delay 0.5\n'
-                      'tell application "System Events" to keystroke "%s"\n'
-                      ) % (shlex.quote(here).replace('"', '\\"'),
-                           said.replace('"', '\\"'))
-        else:
-            # No typing, so the window says for itself what it is waiting
-            # for: a terminal that opened with nothing in it and no
-            # explanation is worse than not opening one.
-            inner = ("cd %s; clear; %s; printf '\\n  %s\\n\\n'"
-                     % (shlex.quote(here), seed,
-                        "press Up then Return to run: " + said))
-            script = ('tell application "Terminal"\n'
-                      '  activate\n'
-                      '  do script "%s"\n'
-                      'end tell\n') % inner.replace("\\", "\\\\").replace('"', '\\"')
+        script = ('tell application "Terminal"\n'
+                  '  activate\n'
+                  '  do script "%s"\n'
+                  'end tell\n') % inner.replace("\\", "\\\\").replace('"', '\\"')
         try:
             done = run(("osascript", "-e", script), timeout=20,
                        capture_output=True, text=True)
@@ -818,8 +792,7 @@ def open_terminal(command, cwd=None, run=None) -> Dict[str, Any]:
         if getattr(done, "returncode", 1) != 0:
             return {"ok": False,
                     "error": "macOS did not allow a terminal to be opened"}
-        return {"ok": True, "typed": said,
-                "note": "return" if typed else "up"}
+        return {"ok": True, "typed": said, "note": "up"}
     for name, args in (("x-terminal-emulator", ("-e",)),
                        ("gnome-terminal", ("--",)),
                        ("konsole", ("-e",)),
@@ -829,11 +802,7 @@ def open_terminal(command, cwd=None, run=None) -> Dict[str, Any]:
             continue
         try:
             subprocess.Popen(
-                (found,) + args + ("bash", "-c",
-                                   "cd %s; %s; printf '\\n  %s\\n\\n';"
-                                   " exec bash"
-                                   % (shlex.quote(here), seed,
-                                      "press Up then Return to run: " + said)),
+                (found,) + args + ("bash", "-c", inner + "; exec bash"),
                 start_new_session=True)
         except (OSError, subprocess.SubprocessError):
             continue

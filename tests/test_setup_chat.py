@@ -656,44 +656,35 @@ class TerminalTests(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertIn("no terminal", out["error"])
 
-    def test_permission_is_asked_for_before_anything_is_opened(self):
-        # Finding out afterwards is how a reader ends up looking at a blank
-        # terminal being told a command was typed into it.
+    def test_nothing_is_ever_typed_at_a_window(self):
+        # System Events types into whatever is frontmost, which on a machine
+        # with a browser and an editor open is not reliably the window that
+        # just opened. Measured twice: a swallowed first character, and a
+        # keystroke landing in an unrelated window. A tool that fires this
+        # on its own cannot be a tool that sometimes types into your editor.
         calls = []
         class Done:
             returncode = 0
-        def run(args, **kw):
-            calls.append(args)
-            return Done()
         with mock.patch("sys.platform", "darwin"):
-            out = SC.open_terminal("claude", run=run)
+            out = SC.open_terminal("claude",
+                                   run=lambda a, **k: (calls.append(a), Done())[1])
         self.assertTrue(out["ok"])
-        self.assertIn("System Events", calls[0][-1])
-        self.assertNotIn("Terminal", calls[0][-1])
-        # Permitted, so the command is typed and Return is all that is left.
-        self.assertEqual("return", out["note"])
-        self.assertIn("keystroke", calls[1][-1])
+        script = calls[0][-1]
+        self.assertNotIn("keystroke", script)
+        self.assertNotIn("System Events", script)
 
-    def test_without_permission_the_window_still_has_the_command_in_it(self):
-        # Accessibility is granted per application and this one is a python
-        # in a managed runtime, so this is the ordinary case, not the edge.
+    def test_the_window_carries_the_command_and_says_which_keys(self):
         calls = []
         class Done:
-            def __init__(self, code):
-                self.returncode = code
-        def run(args, **kw):
-            calls.append(args)
-            return Done(1 if "System Events" in args[-1] else 0)
+            returncode = 0
         with mock.patch("sys.platform", "darwin"):
-            out = SC.open_terminal("claude", run=run)
-        self.assertTrue(out["ok"])
+            out = SC.open_terminal("claude",
+                                   run=lambda a, **k: (calls.append(a), Done())[1])
+        script = calls[0][-1]
+        self.assertIn("print -rs", script)      # zsh
+        self.assertIn("history -s", script)     # or bash
+        self.assertIn("press Up then Return", script)
         self.assertEqual("up", out["note"])
-        opened = calls[1][-1]
-        self.assertIn("print -rs", opened)      # zsh
-        self.assertIn("history -s", opened)     # or bash
-        self.assertIn("press Up then Return", opened)
-        # And nothing was typed at a window that would not have taken it.
-        self.assertNotIn("keystroke", opened)
 
     def test_a_terminal_that_refuses_to_open_is_not_reported_as_open(self):
         class Done:
