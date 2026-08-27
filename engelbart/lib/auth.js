@@ -132,6 +132,12 @@ async function fetchClaudeKey(base, token, options = {}) {
     budgetUsd: Number(value.budgetUsd) || 0,
     spendUsd: Number(value.spendUsd) || 0,
   };
+  // The deployment says outright whether this key is spendable. Dropping that
+  // and re-deriving it from two floats is how a blocked key reached a
+  // subprocess that then failed with a 401 nobody could read.
+  if (typeof value.status === 'string' && value.status.trim()) {
+    claude.status = value.status.trim();
+  }
   const models = Array.isArray(value.models)
     ? value.models.filter((item) => typeof item === 'string' && item.trim())
     : [];
@@ -143,8 +149,27 @@ async function fetchClaudeKey(base, token, options = {}) {
 // rather than reading it back off disk, because it is never on disk: this is
 // only ever built from what was just fetched, and printed to a terminal the
 // member is already looking at.
+
+// Money is floating point, so a key that has spent exactly its budget reads as
+// 24.999999999 as often as 25. The deployment's own word is taken first; the
+// arithmetic is the fallback for a deployment too old to send one.
+const SPENT = new Set(['exhausted', 'revoked', 'blocked']);
+const SPEND_EPSILON = 0.0001;
+
+function spent(claude) {
+  if (!claude) return true;
+  if (claude.status) return SPENT.has(String(claude.status));
+  const budget = Number(claude.budgetUsd) || 0;
+  if (budget <= 0) return false;
+  return (Number(claude.spendUsd) || 0) >= budget - SPEND_EPSILON;
+}
+
 function claudeEnv(claude) {
   if (!claude || !claude.apiKey || !claude.baseUrl) return '';
+  // Handing over a key the pool has stopped honouring is worse than handing
+  // over nothing: an exported ANTHROPIC_AUTH_TOKEN outranks a saved claude.ai
+  // login, so a dead one takes the member's own account away too.
+  if (spent(claude)) return '';
   return `export ANTHROPIC_BASE_URL="${claude.baseUrl}"\n`
     + `export ANTHROPIC_AUTH_TOKEN="${claude.apiKey}"\n`;
 }
@@ -156,11 +181,13 @@ function claudeEnv(claude) {
 // place for it to leak from and a first place for it to go stale.
 function claudeRecord(claude) {
   if (!claude || !claude.baseUrl) return null;
-  return {
+  const record = {
     baseUrl: String(claude.baseUrl),
     budgetUsd: Number(claude.budgetUsd) || 0,
     spendUsd: Number(claude.spendUsd) || 0,
   };
+  if (claude.status) record.status = String(claude.status);
+  return record;
 }
 
 // The opposite of `claudeEnv`, and the reason this file is still written at all
@@ -502,6 +529,7 @@ module.exports = {
   POLL_CEILING_SECONDS,
   apiBase,
   claudeEnv,
+  spent,
   claudeRecord,
   establish,
   claudeUnset,
