@@ -1399,6 +1399,20 @@ class Run:
         # is left waiting, and the counter starts again from there.
         if not waiting:
             self._bank()
+        # A finished run is a boundary worth skipping the debounce for: the
+        # rows have reached the state they are going to stay in, and this is
+        # the moment someone else looking at the shared project most wants
+        # to be current. Runs that are only pausing to ask keep the normal
+        # schedule -- their rows are still moving.
+        if not waiting:
+            try:
+                from . import project_autosync
+                project_autosync.flush_soon(
+                    self.root,
+                    project_autosync.project_of(self.session_id, self.root),
+                    "build finished")
+            except Exception:                            # noqa: BLE001
+                pass
         # Rows that queued up behind this run go out now -- unless the run
         # stopped on a question, whose answer resumes this same session
         # first; they stay queued and leave with the resumed run's finish.

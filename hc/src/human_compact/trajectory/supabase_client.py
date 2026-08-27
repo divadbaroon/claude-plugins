@@ -1005,13 +1005,18 @@ def read_shared(code: str) -> Dict[str, Any]:
     return out
 
 
-def sync_project(root: Optional[Path], cwd) -> Dict[str, Any]:
+def sync_project(root: Optional[Path], cwd,
+                 files: Optional[bool] = None) -> Dict[str, Any]:
     """One project, up to Supabase: build the rows, then hand them over.
 
     The whole project goes in one call. ``hc_sync_project`` upserts what is
     here and deletes the rows of this project that are not, which is only
     correct if it sees the complete set -- so this is deliberately not
     batched.
+
+    *files* decides whether the file provenance goes too: True always, False
+    never, None -- the default, and what autosave uses -- only if it has not
+    gone recently. See ``_files_due``.
     """
     if not cwd:
         raise SupabaseError("this chat has no project directory")
@@ -1032,11 +1037,39 @@ def sync_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     # reader is waiting on, and a project whose git tree is enormous or
     # whose repository is in a strange state should not be able to fail the
     # part that was already built and correct.
-    try:
-        out["files"] = sync_files(root, cwd, session=session, config=config)
-    except (SupabaseError, OSError, ValueError) as exc:
-        out["files"] = {"ok": False, "error": str(exc)[:200]}
+    if _files_due(cwd, files):
+        try:
+            out["files"] = sync_files(root, cwd, session=session,
+                                      config=config)
+            _FILES_SENT[str(cwd)] = time.monotonic()
+        except (SupabaseError, OSError, ValueError) as exc:
+            out["files"] = {"ok": False, "error": str(exc)[:200]}
+    else:
+        out["files"] = {"ok": True, "skipped": "sent recently"}
     return out
+
+
+# When each project's file provenance last went up. Building it walks the
+# working tree and asks git a dozen questions; the goal rows do neither.
+_FILES_SENT: Dict[str, float] = {}
+# Autosave can fire every few seconds under a steady hand. Goals should go
+# every time -- they are what a collaborator is reading -- but the file
+# graph moving at that rate would spend more time in `git diff` than the
+# workspace spends serving pages, and file metadata is not what anyone is
+# waiting on. Once a minute is current enough for what it describes.
+FILES_MIN_INTERVAL = 60.0
+
+
+def _files_due(cwd, files: Optional[bool]) -> bool:
+    """Whether this sync should carry the file half as well.
+
+    *files* True forces it (the button, a boundary), False forbids it, and
+    None -- what autosave passes -- means "if it has been long enough".
+    """
+    if files is not None:
+        return bool(files)
+    last = _FILES_SENT.get(str(cwd))
+    return last is None or (time.monotonic() - last) >= FILES_MIN_INTERVAL
 
 
 def sync_files(root: Optional[Path], cwd, session: Optional[Dict] = None,

@@ -1784,6 +1784,20 @@ def save_goals(
     # lock, and imported here rather than at the top: it reads this module.
     from . import project_store
     project_store.refresh_for_session(session_id, root)
+    # And the remote, on the same reasoning: this is where every goal and
+    # TODO write in the workspace ends up -- the pane's edits, a build
+    # moving a row to done, inference filling in notes -- so it is the one
+    # place that knows something worth sending has happened. Marking is a
+    # counter and a notify; the sending is somewhere else entirely, and
+    # several seconds later.
+    try:
+        from . import project_autosync
+        project_autosync.mark_dirty(
+            root, project_autosync.project_of(session_id, root), "goals")
+    except Exception:                                    # noqa: BLE001
+        # A save that succeeded must not be reported as failed because the
+        # scheduler was unhappy. The next write marks it again anyway.
+        pass
     return True
 
 

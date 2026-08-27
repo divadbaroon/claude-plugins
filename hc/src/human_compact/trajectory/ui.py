@@ -19,6 +19,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
+from . import project_autosync as AS
 from . import project_store as PS
 from . import secure_io as SIO
 
@@ -275,8 +276,26 @@ def _save_goals(trajdir, goals, important, chat_scoped):
         session_id, root = _chat_identity(trajdir)
         if not CS.save_goals(session_id, goals, important, root):
             raise RuntimeError("chat goal state changed during save")
+        # Marking dirty is CS.save_goals's own job: every writer of the goal
+        # tree passes through it, and only some of them pass through here.
         return
     GM.save(trajdir, goals, important)
+
+
+def _touched(root, cwd, reason=""):
+    """This project changed; Supabase should hear about it shortly.
+
+    Every goal and TODO write in the workspace passes through here, which is
+    why it must never raise and never wait: autosave is a convenience laid
+    over saving, and a save that fails because the remote is unhappy would
+    be a far worse thing than a remote that lags.
+    """
+    if not cwd:
+        return
+    try:
+        AS.mark_dirty(root, cwd, reason)
+    except Exception:                                    # noqa: BLE001
+        pass
 
 
 # --- linked chats: other sessions whose prompts join this workspace --------
@@ -806,7 +825,19 @@ def _manifest_cwd(session_id, root):
 PROJECT_OBJECTIVE_LIMIT = PS.PROJECT_OBJECTIVE_LIMIT
 _project_path = PS.project_path
 _load_project = PS.load_project
-_save_project = PS.save_project
+
+
+def _save_project(root, cwd, record):
+    """Write the project's own record, and mark it for sending.
+
+    Wrapped here rather than in ``project_store`` on purpose: the sync path
+    itself writes to that file when it mints a project's uuid, and a save
+    that marks the project dirty would have every sync schedule the next
+    one -- a loop with a four-second period that never ends.
+    """
+    out = PS.save_project(root, cwd, record)
+    _touched(root, cwd, "project")
+    return out
 
 
 PROJECT_FILE_LIMIT = 256 * 1024
@@ -1662,7 +1693,7 @@ def clone_project(url, name="", root=None):
     trouble = _clone(address, home)
     if trouble:
         return {"ok": False, "error": trouble}
-    PS.save_project(root, str(home), {"name": text})
+    _save_project(root, str(home), {"name": text})
     return _made(root, str(home), text, cloned=address)
 
 
@@ -2398,11 +2429,18 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error": "this chat has no project directory"}
             from . import supabase_client as SB
             try:
-                return SB.sync_project(root, who["cwd"])
+                # Pressed by hand, so it sends everything: the button is
+                # the fallback for when autosave has not, and a fallback
+                # that quietly skipped half the payload would be a poor one.
+                out = SB.sync_project(root, who["cwd"], files=True)
             except SB.SupabaseError as exc:
                 return {"ok": False, "error": str(exc)}
             except (OSError, ValueError) as exc:
                 return {"ok": False, "error": f"could not send: {exc}"}
+            # The button sends the same snapshot autosave would have, so the
+            # schedule counts it as the send it was waiting to make.
+            AS.note_external_sync(root, who["cwd"])
+            return out
         if kind in ("link_chat", "unlink_chat"):
             if not chat_scoped:
                 return {"ok": False, "error": "chat scope only"}
@@ -3529,6 +3567,19 @@ def run(port=8765, open_browser=True, trajdir=None, ready_callback=None,
             owner = _read_registry(trajdir)
             if isinstance(owner, dict) and owner.get("pid") == os.getpid():
                 _registry_path(trajdir).unlink(missing_ok=True)
+        # The last boundary there is. A workspace that closes with unsent
+        # work would leave the remote a version behind until the next time
+        # someone opened it -- which for a chat workspace, opened per
+        # session, can be never.
+        #
+        # After the socket is released, deliberately: this can take a few
+        # seconds against a slow network, and a replacement server waiting
+        # to bind the same port should not wait them out. Bounded for the
+        # same reason -- closing must not hang on a network not answering.
+        try:
+            AS.drain(timeout=6.0)
+        except Exception:                                # noqa: BLE001
+            pass
         if idle_thread is not None and idle_thread is not threading.current_thread():
             idle_thread.join(timeout=1)
 
