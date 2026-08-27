@@ -410,6 +410,53 @@ class SubgoalTests(unittest.TestCase):
         self.assertEqual(1, len([g for g in goals if g.get("parent_goal_id")]))
 
 
+class UnwrappedTests(unittest.TestCase):
+    """A reply that is the card itself, with no envelope around it.
+
+    Told "on this reply you write the plan: this card is the plan and
+    nothing else", the model sometimes takes that literally and returns
+    {description, unsure} at the top level -- no `say`, no `card`. It has
+    answered; only the wrapper is missing, and throwing the answer away for
+    that is how a reader ends up watching a card that never comes.
+    """
+
+    def test_a_bare_plan_is_read_as_the_plan(self):
+        out = SC.normalize_card(
+            {"description": "Move uploads off the API",
+             "unsure": ["which bucket"]}, due="plan")
+        self.assertEqual("plan", out["card"])
+        self.assertEqual("Move uploads off the API", out["plan"]["description"])
+        self.assertEqual(["which bucket"], out["plan"]["unsure"])
+
+    def test_a_bare_question_set_is_read_as_questions(self):
+        out = SC.normalize_card(
+            {"items": [{"id": "a", "type": "free", "title": "Who for?"}]},
+            due="questions")
+        self.assertEqual("questions", out["card"])
+
+    def test_a_bare_list_of_goals_is_read_as_goals(self):
+        out = SC.normalize_card([{"label": "Signed uploads", "why": "first"}],
+                                due="goals")
+        self.assertEqual("goals", out["card"])
+        self.assertEqual(["Signed uploads"],
+                         [g["label"] for g in out["goals"]])
+
+    def test_a_payload_named_but_the_card_not_is_still_read(self):
+        # The other half of the same slip: the envelope is there, the card
+        # name is not, and exactly one payload key says what it is.
+        out = SC.normalize_card({"say": "here it is",
+                                 "plan": {"description": "x"}})
+        self.assertEqual("plan", out["card"])
+        self.assertEqual("here it is", out["say"])
+
+    def test_a_bare_card_that_is_not_the_one_due_is_not_invented(self):
+        # Guessing across kinds would let the discard be walked around: a
+        # plan-shaped reply when questions are due stays a plan, and the
+        # stage check refuses it.
+        out = SC.normalize_card({"description": "early"}, due="questions")
+        self.assertEqual("plan", out["card"])
+
+
 class AnswerTests(unittest.TestCase):
     """What the reader picked, on its way back into the conversation."""
 

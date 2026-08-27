@@ -382,7 +382,45 @@ def _normalize_subgoals(value) -> List[Dict[str, Any]]:
     return out
 
 
-def normalize_card(value) -> Dict[str, Any]:
+def _named(value, due) -> Dict[str, Any]:
+    """Whatever came back, with the envelope put back around it.
+
+    Told "this card is the plan and nothing else", the model sometimes
+    takes that literally and returns the payload at the top level -- no
+    `say`, no `card`. It has answered; only the wrapper is missing, and
+    throwing the answer away for that is how a reader ends up watching a
+    card that never comes.
+
+    Read by shape, never by hope: the kind is taken from the keys that are
+    actually there, so a plan-shaped reply is a plan even when a plan is
+    not what was due -- and the stage check is what refuses it. Guessing
+    *toward* the due card would let the discard be walked around.
+    """
+    if isinstance(value, list):
+        # A bare list is only ever the two lists this asks for, and the
+        # rows in them tell which: a goal carries a label.
+        rows = [r for r in value if isinstance(r, dict)]
+        if rows and any("label" in r or "title" in r for r in rows):
+            return {"card": "goals", "goals": value}
+        return {"card": "todos", "todos": value}
+    if not isinstance(value, dict):
+        return {}
+    if value.get("card"):
+        return value
+    # The envelope is there and the card is not: exactly one payload key
+    # says what it was.
+    for name in ("questions", "plan", "goals", "todos", "subgoals"):
+        if value.get(name):
+            return dict(value, card="todos" if name == "subgoals" else name)
+    # No envelope at all: the object IS the payload.
+    if "items" in value:
+        return {"card": "questions", "questions": value}
+    if "description" in value or "unsure" in value:
+        return {"card": "plan", "plan": value}
+    return value
+
+
+def normalize_card(value, due="") -> Dict[str, Any]:
     """Whatever came back, as the one shape the rail draws.
 
     A card the reader cannot act on is not a card: questions with nothing
@@ -390,6 +428,7 @@ def normalize_card(value) -> Dict[str, Any]:
     as ``none`` so the reply stands as prose alone rather than opening an
     empty box under it.
     """
+    value = _named(value, due)
     value = value if isinstance(value, dict) else {}
     card = str(value.get("card") or "").strip().lower()
     if card not in CARDS:
@@ -653,7 +692,7 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
     except Exception:                                    # noqa: BLE001
         return {"ok": False,
                 "error": "setup could not reach Claude (is the CLI on PATH?)"}
-    card = normalize_card(raw)
+    card = normalize_card(raw, due)
     # A card out of turn is not drawn. What it said is kept -- it is talking
     # to the reader, and dropping that would leave a silent round -- but the
     # card itself is refused, because drawing it is what skips the step.
@@ -672,7 +711,7 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
                         " card." % (card["card"], due, due)])) + "\n")
             except Exception:                            # noqa: BLE001
                 raw = {}
-            card = normalize_card(raw)
+            card = normalize_card(raw, due)
         if card["card"] != due:
             card = dict(card, card="none",
                         questions={"eyebrow": "", "items": []},
