@@ -279,7 +279,8 @@ async function run(deps = {}) {
     } else if (account && account.reused && auth.claudeEnv(account.stored)) {
       // A fresh pairing prints this itself; a reused one has to be told, or a
       // second install looks like it forgot the key it is already holding.
-      output.write('\nRun this once here so `claude` uses your credit:\n\n    eval "$(engelbart env)"\n');
+      output.write('\nRun this once here so `claude` uses your credit:\n\n    source '
+        + `${auth.envPath(managedRoot)}\n`);
     }
     return 0;
   } catch (error) {

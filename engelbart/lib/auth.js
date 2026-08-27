@@ -11,6 +11,7 @@ const DEFAULT_API_BASE = 'https://berkeley.mathetic.com';
 const CREDENTIALS_SCHEMA = 1;
 const CREDENTIALS_FILE = 'auth.json';
 const CREDENTIALS_ENDPOINT = '/api/engelbart-credentials';
+const ENV_FILE = 'env.sh';
 const POLL_CEILING_SECONDS = 30;
 
 // A token minted against a development deployment must not be replayed at
@@ -59,6 +60,9 @@ function writeCredentials(managedRoot, value) {
 function clearCredentials(managedRoot) {
   try {
     fs.rmSync(credentialsPath(managedRoot), { force: true });
+    // The exports outlive the token otherwise, and a sourced profile would keep
+    // pointing `claude` at a key this machine is no longer entitled to.
+    fs.rmSync(envPath(managedRoot), { force: true });
     return true;
   } catch (error) {
     return false;
@@ -134,6 +138,30 @@ function claudeEnv(stored) {
   if (!stored || !stored.claude || !stored.claude.apiKey) return '';
   return `export ANTHROPIC_BASE_URL="${stored.claude.baseUrl}"\n`
     + `export ANTHROPIC_AUTH_TOKEN="${stored.claude.apiKey}"\n`;
+}
+
+function envPath(managedRoot) {
+  return path.join(validateManagedRoot(managedRoot), ENV_FILE);
+}
+
+// `npx engelbart-cli` leaves no `engelbart` on PATH -- the installer puts only
+// `hc` there -- so telling the member to run `engelbart env` names a command
+// they do not have. A file next to the token is always reachable, costs no
+// network, and is cheap enough to source from a shell profile.
+function writeEnvFile(managedRoot, stored) {
+  const lines = claudeEnv(stored);
+  if (!lines) {
+    try {
+      fs.rmSync(envPath(managedRoot), { force: true });
+    } catch (error) { /* nothing to remove */ }
+    return '';
+  }
+  const root = validateManagedRoot(managedRoot);
+  establishOwnership(root);
+  const body = '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
+    + `${lines}`;
+  atomicWrite(path.join(root, ENV_FILE), body, 0o600);
+  return envPath(managedRoot);
 }
 
 // Best effort by design: a machine with no browser still has the URL and the
@@ -214,7 +242,9 @@ async function login(options = {}) {
       if (claude) {
         const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
         output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
-        output.write(`\nRun this once here so \`claude\` uses it:\n\n    eval "$(engelbart env)"\n`);
+        const written = writeEnvFile(managedRoot, stored);
+        output.write(`\nRun this once here so \`claude\` uses it:\n\n    source ${written}\n`);
+        output.write('\nAdd that line to your shell profile and every new terminal picks it up.\n');
       } else {
         output.write(`Could not read this account's Claude key: ${keyError}\n`);
       }
@@ -278,7 +308,9 @@ module.exports = {
   apiBase,
   claudeEnv,
   clearCredentials,
+  ENV_FILE,
   credentialsPath,
+  envPath,
   fetchClaudeKey,
   login,
   logout,
@@ -288,4 +320,5 @@ module.exports = {
   readCredentials,
   whoami,
   writeCredentials,
+  writeEnvFile,
 };
