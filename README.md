@@ -36,6 +36,20 @@ Opens this chat's goal workspace; Claude says nothing.
 
 Stops analysis and injection for this chat.
 
+## Develop onboarding
+
+Run the production onboarding UI against a fresh, disposable vault:
+
+```bash
+python3 scripts/onboarding_sim.py
+```
+
+The simulator opens both paths: creating a project and resuming one of two
+seeded projects. It reads the working tree's real UI and server code, never the
+installed copy, and writes nothing to `~/.claude-vault`. Refresh the browser
+after a browser-side edit; server-side edits restart the simulator process in
+place. `Ctrl-C` deletes every simulated project and resets the workflow.
+
 **Workspace** — goal tree, one markdown document per goal, linked prompts, assembled prompt. Per chat, on a local port.
 
 **Injection** — after the first `/goals-ui`, the goals document goes back into the chat: whole file on session start and after compaction, a diff afterwards. Subagents and tool batches read it too.
