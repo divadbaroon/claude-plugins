@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import project_store as PS  # noqa: E402
 from human_compact.trajectory import setup_chat as SC  # noqa: E402
+from human_compact.trajectory import ui  # noqa: E402
 
 
 class OpeningTests(unittest.TestCase):
@@ -77,33 +78,34 @@ class CardTests(unittest.TestCase):
                 {"id": "done", "type": "free", "title": "Done means?",
                  "placeholder": "uploads never touch the API"},
                 {"id": "story", "type": "open", "title": "What happened?"},
-                {"id": "which", "type": "best", "title": "Which is right?",
-                 "candidates": [{"label": "signed URLs", "why": "no proxy"},
-                                {"label": "proxy route"}]}]}})
+                {"id": "which", "type": "mcq", "title": "Which is right?",
+                 "options": [{"label": "signed URLs", "why": "no proxy"},
+                             {"label": "proxy route"}]}]}})
         items = out["questions"]["items"]
-        self.assertEqual(["mcq", "select_all", "free", "open", "best"],
+        self.assertEqual(["mcq", "select_all", "free", "open", "mcq"],
                          [q["type"] for q in items])
-        self.assertEqual(["me", "a team"], items[0]["options"])
+        self.assertEqual(["me", "a team"],
+                         [o["label"] for o in items[0]["options"]])
         self.assertEqual("pick any", items[1]["subtitle"])
         self.assertEqual("uploads never touch the API", items[2]["placeholder"])
-        # A proposal carries the argument for it; that is what makes "which
-        # is best" a different question from "pick one".
+        # An option may carry the argument for it -- that is how one shape
+        # asks both "which is true" and "which of these is right".
         self.assertEqual([{"label": "signed URLs", "why": "no proxy"},
                           {"label": "proxy route", "why": ""}],
-                         items[4]["candidates"])
+                         items[4]["options"])
+        # A plain choice carries labels and no arguments.
+        self.assertEqual(["", ""], [o["why"] for o in items[0]["options"]])
         # And the kinds that are not choices carry no options at all.
         self.assertEqual([], items[3]["options"])
-        self.assertEqual([], items[3]["candidates"])
 
-    def test_best_written_as_plain_options_is_still_askable(self):
-        # A model that names the kind and fills the wrong key still gets a
+    def test_proposals_written_under_candidates_are_still_askable(self):
+        # A model that fills the key the old shape used has still asked a
         # question the reader can answer.
         out = SC.normalize_card({"card": "questions", "questions": {
-            "items": [{"id": "w", "type": "best", "title": "Which?",
-                       "options": ["a", "b"]}]}})
+            "items": [{"id": "w", "type": "mcq", "title": "Which?",
+                       "candidates": [{"label": "a", "why": "cheap"}]}]}})
         q = out["questions"]["items"][0]
-        self.assertEqual("best", q["type"])
-        self.assertEqual(["a", "b"], [c["label"] for c in q["candidates"]])
+        self.assertEqual([{"label": "a", "why": "cheap"}], q["options"])
 
     def test_a_question_of_no_known_kind_is_asked_as_one_line(self):
         # Better a box to type in than a question the reader cannot answer.
@@ -112,7 +114,7 @@ class CardTests(unittest.TestCase):
         self.assertEqual("free", out["questions"]["items"][0]["type"])
 
     def test_a_choice_with_nothing_to_choose_from_becomes_one_too(self):
-        for kind in ("mcq", "select_all", "best"):
+        for kind in ("mcq", "select_all"):
             out = SC.normalize_card({"card": "questions", "questions": {
                 "items": [{"id": "q", "type": kind, "title": "?",
                            "options": []}]}})
@@ -231,7 +233,7 @@ class AccountTests(unittest.TestCase):
     def test_what_comes_back_is_the_card_the_model_named(self):
         class Stub:
             def generate_json(self, prompt):
-                assert "mcq" in prompt and "best" in prompt
+                assert "mcq" in prompt and "select_all" in prompt
                 return {"say": "Two questions.", "card": "questions",
                         "questions": {"items": [
                             {"id": "a", "type": "mcq", "title": "Who for?",
@@ -392,6 +394,31 @@ class CommitTests(unittest.TestCase):
         out = SC.commit(self.root, "Empty", {"head": ""}, [], "", [])
         self.assertFalse(out["ok"])
         self.assertEqual([], PS.list_projects(self.root))
+
+
+class RouteTests(unittest.TestCase):
+    """The two ops, and where they run."""
+
+    def test_saying_something_runs_outside_the_state_lock(self):
+        # `say` spawns a claude subprocess and waits on it. A request that
+        # held the state lock for three minutes is a workspace nobody else
+        # can save into, which is why the build ops escape the same way.
+        out = ui._apply_locked({"op": "setup_say", "transcript": []},
+                               trajdir=None, chat_scoped=False)
+        self.assertIn("__deferred__", out)
+        self.assertEqual("setup_say", out["__deferred__"][0])
+
+    def test_a_transcript_that_is_not_a_list_is_refused_at_the_door(self):
+        out = ui._apply_locked({"op": "setup_say", "transcript": "words"},
+                               trajdir=None, chat_scoped=False)
+        self.assertFalse(out["ok"])
+        self.assertIn("transcript", out["error"])
+
+    def test_committing_runs_outside_the_lock_as_well(self):
+        # It writes goals, and save_goals takes the same lock for itself.
+        out = ui._apply_locked({"op": "setup_commit", "name": "x"},
+                               trajdir=None, chat_scoped=False)
+        self.assertEqual("setup_commit", out["__deferred__"][0])
 
 
 if __name__ == "__main__":

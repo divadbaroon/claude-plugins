@@ -51,18 +51,17 @@ MAX_TODOS = 20
 
 CARDS = ("questions", "plan", "goals", "todos", "none")
 
-# The five ways a question can be put. Named for what the reader does, not
-# for the control that does it: "select which is best" is a different act
-# from "pick one", even though both end in one answer -- the options are
-# proposals to judge rather than facts to state, so each carries the reason
-# it is worth choosing and the reader is choosing between arguments.
+# The four ways a question can be put, named for what the reader does
+# rather than for the control that does it. An option may carry the reason
+# it is worth choosing, which is what lets one shape ask both "which is
+# true" and "which of these proposals is right" -- the second is the first
+# with an argument under each row, not a different act.
 MCQ = "mcq"                 # one of several
 SELECT_ALL = "select_all"   # any of several
 FREE = "free"               # one line
 PARA = "open"               # a paragraph
-BEST = "best"               # which of these proposals is the right one
-KINDS = (MCQ, SELECT_ALL, FREE, PARA, BEST)
-CHOICES = (MCQ, SELECT_ALL, BEST)   # kinds that carry options
+KINDS = (MCQ, SELECT_ALL, FREE, PARA)
+CHOICES = (MCQ, SELECT_ALL)         # kinds that carry options
 WRITTEN = (FREE, PARA)              # kinds the reader types into
 
 # Sonnet, named rather than inherited: the setup conversation is the first
@@ -118,12 +117,12 @@ FORM = [
     '   "questions": {"eyebrow": "<two or three words>",',
     '                 "items": [{"id": "<short slug>",',
     '                            "type": "mcq" | "select_all" | "free"',
-    '                                    | "open" | "best",',
+    '                                    | "open",',
     '                            "title": "<the question>",',
     '                            "subtitle": "<optional, e.g. pick any>",',
-    '                            "options": ["<mcq and select_all>"],',
-    '                            "candidates": [{"label": "<best: a proposal>",',
-    '                                            "why": "<what it buys>"}],',
+    '                            "options": [{"label": "<the choice>",',
+    '                                        "why": "<optional: what it',
+    '                                                buys them>"}],',
     '                            "placeholder": "<free and open>"}]},',
     '   "plan": {"head": "<one line: what this project is>",',
     '            "lines": [{"k": "the work", "v": "..."},',
@@ -148,9 +147,12 @@ FORM = [
     "  select_all  any number of them -- say so in the subtitle",
     "  free        one line they have to write; give a placeholder",
     "  open        a paragraph: the story, the constraint nobody wrote down",
-    "  best        several proposals of yours, and which one is right --",
-    "              each candidate carries what it buys them, and they are",
-    "              choosing between arguments rather than stating a fact",
+    "",
+    "An option may carry a `why`. Use it when the options are proposals of",
+    "yours rather than facts of theirs -- \"which of these is the right one",
+    "to start on\" is an mcq whose rows each say what that choice buys them,",
+    "so they are choosing between arguments instead of guessing what you",
+    "meant. Leave `why` out when the answer is simply something they know.",
     "",
     "How many is your judgement, not a rule. Two or three in a round reads",
     "as a conversation; six reads as a form and people abandon forms. If one",
@@ -234,12 +236,11 @@ def _normalize_questions(value) -> Dict[str, Any]:
         if not title:
             continue
         kind = str(row.get("type") or "").strip().lower()
-        # "select which is best" is asked of proposals, so its options carry
-        # the reason each one is worth choosing; the other choices are facts
-        # and carry only themselves. Both are read here so a model that
-        # names one and fills the other still gets a drawable question.
-        candidates = _candidates(row.get("candidates") or row.get("options"))
-        options = [c["label"] for c in candidates]
+        # An option is a label and, where the model is proposing rather
+        # than asking, the argument for it. Read from either key: a model
+        # that writes its proposals under "candidates" has still asked a
+        # question the reader can answer.
+        options = _candidates(row.get("options") or row.get("candidates"))
         # A kind nobody can draw, and a choice with nothing to choose from,
         # are both answered the same way: give them a box to type in. A
         # question the reader cannot answer is worse than an open one.
@@ -251,8 +252,7 @@ def _normalize_questions(value) -> Dict[str, Any]:
         seen.add(qid)
         out.append({"id": qid, "type": kind, "title": title,
                     "subtitle": _one(row.get("subtitle"), 80),
-                    "options": options if kind in (MCQ, SELECT_ALL) else [],
-                    "candidates": candidates if kind == BEST else [],
+                    "options": options if kind in CHOICES else [],
                     "placeholder": _one(row.get("placeholder"), MAX_TITLE)})
         if len(out) >= MAX_QUESTIONS:
             break

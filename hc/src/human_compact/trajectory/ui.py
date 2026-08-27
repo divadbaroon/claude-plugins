@@ -21,6 +21,7 @@ from pathlib import Path
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
 from . import project_store as PS
 from . import secure_io as SIO
+from . import setup_chat as SETUP
 
 
 DEFAULT_CHAT_IDLE_SECONDS = 8 * 60 * 60
@@ -2475,6 +2476,12 @@ def _apply(op, trajdir=None, chat_scoped=None):
         return result
     from . import build as BUILD
     kind, session_id, root, goal_id, op = deferred
+    if kind == "setup_say":
+        return SETUP.ask(op.get("transcript"), root=root)
+    if kind == "setup_commit":
+        return SETUP.commit(root, op.get("name"), op.get("plan"),
+                            op.get("goals"), op.get("chosen"),
+                            op.get("todos"))
     if kind == "reopen_session":
         return BUILD.reopen(session_id, root)
     if kind == "build_log":
@@ -2745,6 +2752,24 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 root = None
             return project_setup(op.get("cwd"), op.get("objective"),
                                  op.get("description"), root)
+        if kind in ("setup_say", "setup_commit"):
+            # The cold-start conversation. Its whole transcript comes from
+            # the browser and goes back to it: setup is not a chat of the
+            # vault's, it is a page, and nothing is written down until the
+            # reader approves what it produced.
+            #
+            # Handed back to _apply to run OUTSIDE this lock, for the reason
+            # the build ops are: `say` spawns a claude subprocess and waits
+            # on it, and a request holding the state lock for three minutes
+            # is a workspace nobody else can save into.
+            if kind == "setup_say" and not isinstance(op.get("transcript"),
+                                                      list):
+                return {"ok": False, "error": "transcript must be a list"}
+            try:
+                _sid, root = _chat_identity(trajdir)
+            except Exception:                                # noqa: BLE001
+                root = None
+            return {"__deferred__": (kind, "", root, None, op)}
         if kind == "set_project_objective":
             # What the project is for, in the reader's words: kept once per
             # project directory, so every chat in it reads the same line.
