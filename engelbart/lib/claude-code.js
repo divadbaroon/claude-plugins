@@ -64,6 +64,11 @@ function helperSource(credentialsFile, settingsFile, helperFile, baseUrl) {
 'use strict';
 // Written by \`engelbart auth\`. Claude Code runs this for its credential.
 //
+// The Claude key is not kept on this machine. It is fetched from the account
+// that owns it each time this runs, handed to Claude Code, and never written
+// down. What is on disk is a device token, which is revocable and buys nothing
+// on its own.
+//
 // To put Claude Code back on your own account, run this file with
 // --disconnect. That undoes exactly what \`engelbart auth\` wrote and nothing
 // else. It is spelled out here because the installer puts only \`hc\` on PATH:
@@ -217,22 +222,32 @@ async function main() {
     process.exit(disconnect());
   }
   const value = stored();
-  if (!value || !value.claude || !value.claude.apiKey) process.exit(1);
-  // Asking the server first is what lets a rotated, revoked or spent key take
-  // effect on the next Claude Code session instead of the next
-  // \`engelbart auth\`. The stored key is the answer when there is no network,
-  // which is the common case in a room full of laptops on conference wifi --
-  // but it is not the answer when the server answered and the answer was no.
+  // A device token and where to spend it. That is the whole of what this
+  // machine keeps: the key itself is fetched for each use and never written
+  // down, so what is at rest here is revocable and cannot be spent on its own.
+  if (!value || !value.token || !value.apiBase) process.exit(1);
   let response = null;
+  let unreachable = '';
   try {
     response = await fetch(value.apiBase + '/api/engelbart-credentials', {
       headers: { Accept: 'application/json', Authorization: 'Bearer ' + value.token },
       signal: AbortSignal.timeout(5000),
     });
   } catch (error) {
-    // Unreachable, not refused. Fall through to the stored key.
+    unreachable = String((error && error.message) || 'request failed');
   }
-  if (response && REFUSED.has(response.status)) {
+  // Unreachable is not refused, and the difference decides whether this
+  // machine stays wired. There is no cached key to fall back to any more, so
+  // an outage costs the session -- but it must not cost the wiring, because
+  // the account is fine and will be reachable again. Claude Code holds the
+  // last key in memory for its cache window, so a brief blip never gets here.
+  if (!response) {
+    process.stderr.write('Engelbart: could not reach ' + value.apiBase
+      + ' for a session key (' + unreachable + ').\\n');
+    process.stderr.write('Nothing is wrong with your account. Try again in a moment.\\n');
+    process.exit(1);
+  }
+  if (REFUSED.has(response.status)) {
     let detail = '';
     try {
       const body = await response.json();
@@ -240,11 +255,11 @@ async function main() {
     } catch (error) { /* the status is enough */ }
     return refuse(value, detail || 'this account has no spendable Claude credit right now.');
   }
-  if (response && response.ok) {
+  if (response.ok) {
     let fresh = null;
     try {
       fresh = await response.json();
-    } catch (error) { /* fall through to the stored key */ }
+    } catch (error) { /* handled as a bad answer below */ }
     // A key that exists but cannot be spent is worse than no key at all: it
     // buys a session that fails on its first request with a proxy error
     // Claude Code cannot explain.
@@ -256,7 +271,12 @@ async function main() {
       return;
     }
   }
-  process.stdout.write(String(value.claude.apiKey));
+  // Answered, but with nothing usable: a 5xx, or a body without a key. Same
+  // reasoning as unreachable -- temporary, and not the account's fault.
+  process.stderr.write('Engelbart: ' + value.apiBase + ' returned no session key ('
+    + response.status + ').\\n');
+  process.stderr.write('Nothing is wrong with your account. Try again in a moment.\\n');
+  process.exit(1);
 }
 
 main();

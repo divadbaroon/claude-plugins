@@ -442,9 +442,12 @@ test('env prints only the exports, and nothing else reaches stdout', async () =>
     output: output.stream,
     errorOutput: errors.stream,
     managedRoot: '/nonexistent/managed',
-    readCredentials: () => ({
-      token: 'egb_token',
-      claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+    // Stored credentials carry no key, so `env` has to go and get one. That
+    // also makes what it prints current rather than whatever was true at
+    // sign-in.
+    readCredentials: () => ({ token: 'egb_token', claude: { baseUrl: 'https://proxy.example.com' } }),
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4,
     }),
     install: async () => { throw new Error('installer must not run'); },
   });
@@ -481,6 +484,9 @@ test('env distinguishes a connected machine whose credit is not ready yet', asyn
     errorOutput: errors.stream,
     managedRoot: '/nonexistent/managed',
     readCredentials: () => ({ token: 'egb_token', claude: null }),
+    // The account is paired; the credit behind it is not ready. That is the
+    // server's answer to give, now that this machine keeps no key of its own.
+    fetchClaudeKey: async () => { throw new Error('that account has no Claude key yet'); },
   });
   assert.equal(code, 1);
   assert.equal(output.read(), '');

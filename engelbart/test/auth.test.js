@@ -346,7 +346,7 @@ test('a credential endpoint that refuses says why', async () => {
   );
 });
 
-test('signing in stores the Claude key beside the token', async () => {
+test('signing in stores the token and pointedly not the key', async () => {
   const root = temporaryRoot();
   const output = collector();
   const scripted = scriptedFetch([
@@ -372,8 +372,15 @@ test('signing in stores the Claude key beside the token', async () => {
   assert.equal(result.status, 'ready');
   const stored = auth.readCredentials(root, {});
   assert.equal(stored.token, 'egb_token');
-  assert.equal(stored.claude.apiKey, 'sk-abc');
   assert.match(output.text(), /\$21\.00 of \$25\.00 left/);
+
+  // The key is the account's, not this machine's. What is kept is where to
+  // spend it and how much is left -- enough to say something useful without a
+  // round trip, and useless to anyone who takes the file.
+  assert.equal(stored.claude.apiKey, undefined);
+  assert.equal(stored.claude.baseUrl, 'https://proxy.example.com');
+  assert.equal(stored.claude.budgetUsd, 25);
+  assert.equal(fs.readFileSync(auth.credentialsPath(root), 'utf8').includes('sk-abc'), false);
 
   // Claude Code is the reason the key exists, so signing in wires it directly
   // and the member is told to run `claude`, not a shell line.
@@ -484,10 +491,16 @@ test('an apiKeyHelper we did not write sends the member to the exports instead',
   });
 
   assert.match(output.text(), /Leaving your existing apiKeyHelper alone \(\/opt\/other-tool\/key\)/);
-  assert.match(output.text(), new RegExp(`source ${auth.envPath(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.equal(settings.apiKeyHelper, '/opt/other-tool/key');
   assert.equal(settings.env, undefined);
+
+  // The exports are printed to the terminal the member is already reading,
+  // not written to a file. Handing back a key we just went to the trouble of
+  // not storing would give it a home on disk by the back door.
+  assert.match(output.text(), /export ANTHROPIC_AUTH_TOKEN="sk-abc"/);
+  assert.match(output.text(), /not saved anywhere/);
+  assert.equal(fs.readFileSync(auth.envPath(root), 'utf8').includes('sk-abc'), false);
 });
 
 // Connecting an account is meant to be the only step, so the project `hc`
@@ -568,10 +581,18 @@ test('disconnecting takes the shell exports with it', () => {
   assert.equal(fs.existsSync(auth.credentialsPath(root)), false);
 });
 
-test('a connection with no Claude key writes no exports to source', () => {
+// The file is written to take exports away, never to give them. Members who
+// followed older instructions have `source .../env.sh` in a shell profile, and
+// that line has to keep working -- as a no-op.
+test('the exports file only ever unsets', () => {
   const root = temporaryRoot();
-  assert.equal(auth.writeEnvFile(root, { token: 'egb_secret' }), '');
-  assert.equal(fs.existsSync(auth.envPath(root)), false);
+  const written = auth.writeEnvFile(root);
+
+  assert.equal(written, auth.envPath(root));
+  const body = fs.readFileSync(written, 'utf8');
+  assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
+  assert.equal(/^export /m.test(body), false, 'no export statement, only prose about one');
+  assert.equal(fs.statSync(written).mode & 0o777, 0o600);
 });
 
 // Credits can lag the account. Losing the key must not lose the pairing too,
@@ -603,12 +624,28 @@ test('a missing Claude key still leaves the machine connected', async () => {
   assert.match(output.text(), /Could not read this account's Claude key: Credits are not ready/);
 });
 
+// It takes the fetched key, not the stored credentials, because there is no
+// key in the stored credentials to take.
 test('the shell exports are exactly two lines, and absent without a key', () => {
   assert.equal(auth.claudeEnv(null), '');
-  assert.equal(auth.claudeEnv({ token: 'egb_token' }), '');
+  assert.equal(auth.claudeEnv({ baseUrl: 'https://proxy.example.com' }), '');
+  assert.equal(auth.claudeEnv({ apiKey: 'sk-abc' }), '');
   assert.equal(
-    auth.claudeEnv({ claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' } }),
+    auth.claudeEnv({ apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' }),
     'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
       + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n',
+  );
+});
+
+// The record kept on disk, stated as a whole so that adding a key to it later
+// has to be a deliberate act that fails this test.
+test('what is stored about the key is where and how much, never the key', () => {
+  assert.equal(auth.claudeRecord(null), null);
+  assert.equal(auth.claudeRecord({ apiKey: 'sk-abc' }), null, 'a key alone is not a record');
+  assert.deepEqual(
+    auth.claudeRecord({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4,
+    }),
+    { baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 },
   );
 });

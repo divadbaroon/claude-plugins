@@ -244,12 +244,14 @@ function wiredMachine(apiBase) {
   // already holds files it did not write.
   const credentials = path.join(root, 'auth.json');
   const helper = claudeCode.writeHelper(root, credentials, settingsFile, BASE_URL);
+  // No apiKey: that is the point. What this machine keeps is a device token
+  // and where to spend it, and the key is fetched for each use.
   fs.writeFileSync(credentials, JSON.stringify({
     schema: 1,
     apiBase,
     token: 'egb_token',
     email: 'm@example.com',
-    claude: { apiKey: 'sk-stored', baseUrl: BASE_URL, budgetUsd: 25, spendUsd: 25 },
+    claude: { baseUrl: BASE_URL, budgetUsd: 25, spendUsd: 25 },
   }));
   connect(root, settingsFile);
   return { root, settingsFile, helper };
@@ -308,15 +310,19 @@ test('a 200 that reports an exhausted status is a refusal too', async () => {
   }
 });
 
-// The other half of the trade. Failing closed on a refusal is only safe if a
-// bad minute on conference wifi is never mistaken for one.
-test('an unreachable server still gets the stored key, and changes nothing', async () => {
+// The other half of the trade. Nothing is cached, so an outage does cost the
+// session -- but it must not cost the wiring: the account is fine, and a
+// machine that unwired itself over a bad minute would need reconnecting by
+// hand for no reason. Claude Code holds the last key in memory for its cache
+// window, so a brief blip never reaches here at all.
+test('an unreachable server yields no key and leaves the machine wired', async () => {
   const machine = wiredMachine('http://127.0.0.1:1');
   const result = await runHelper(machine.helper);
 
-  assert.equal(result.stdout, 'sk-stored');
-  assert.equal(result.code, 0);
-  assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper);
+  assert.equal(result.stdout, '', 'there is no cached key to fall back to');
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Nothing is wrong with your account/);
+  assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper, 'still wired');
 });
 
 test('a deployment having a bad minute is not a refusal', async () => {
@@ -325,9 +331,35 @@ test('a deployment having a bad minute is not a refusal', async () => {
     const machine = wiredMachine(stub.base);
     const result = await runHelper(machine.helper);
 
-    assert.equal(result.stdout, 'sk-stored');
-    assert.equal(result.code, 0);
-    assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper);
+    assert.equal(result.stdout, '');
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /Nothing is wrong with your account/);
+    assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper, 'still wired');
+  } finally {
+    await stub.close();
+  }
+});
+
+// The claim this whole change exists to make.
+test('nothing the helper reads or writes ever contains the key', async () => {
+  const stub = await stubServer(() => ({
+    status: 200,
+    body: { apiKey: 'sk-fresh', baseUrl: BASE_URL, status: 'active', budgetUsd: 25, spendUsd: 1 },
+  }));
+  try {
+    const machine = wiredMachine(stub.base);
+    const result = await runHelper(machine.helper);
+    assert.equal(result.stdout, 'sk-fresh', 'handed to Claude Code');
+
+    // ...and written nowhere. Every file this machine owns, checked.
+    const files = [
+      path.join(machine.root, 'auth.json'),
+      machine.helper,
+      machine.settingsFile,
+    ];
+    for (const file of files) {
+      assert.equal(fs.readFileSync(file, 'utf8').includes('sk-fresh'), false, file);
+    }
   } finally {
     await stub.close();
   }

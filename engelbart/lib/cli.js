@@ -144,11 +144,27 @@ async function runAccountCommand(command, authDeps, deps, errorOutput) {
   // a shell would choke on. Everything explanatory goes to stderr.
   if (command === 'env') {
     const stored = (deps.readCredentials || auth.readCredentials)(authDeps.managedRoot, authDeps.env);
-    const lines = auth.claudeEnv(stored);
+    if (!stored) {
+      errorOutput.write('Not connected. Run `engelbart auth` to connect this machine.\n');
+      return 1;
+    }
+    // Fetched, not read back: this machine does not keep the key. That also
+    // makes these exports current rather than whatever was true at sign-in.
+    let claude = null;
+    try {
+      claude = await (deps.fetchClaudeKey || auth.fetchClaudeKey)(
+        auth.apiBase(authDeps.env),
+        stored.token,
+        authDeps,
+      );
+    } catch (error) {
+      errorOutput.write(`Could not fetch this account's Claude key: ${error.message}\n`);
+      return 1;
+    }
+    const lines = auth.claudeEnv(claude);
     if (!lines) {
-      errorOutput.write(stored
-        ? 'This account has no Claude key yet. Run `engelbart auth` again once your credit is ready.\n'
-        : 'Not connected. Run `engelbart auth` to connect this machine.\n');
+      errorOutput.write('This account has no Claude key yet. Run `engelbart auth` again '
+        + 'once your credit is ready.\n');
       return 1;
     }
     output.write(lines);
@@ -281,21 +297,24 @@ async function run(deps = {}) {
     output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
     if (!options.dryRun && !(account && account.status === 'ready')) {
       output.write('Run `engelbart auth` to connect your Engelbart account and its Claude credits.\n');
-    } else if (account && account.reused && auth.claudeEnv(account.stored)) {
+    } else if (account && account.reused && account.stored
+        && account.stored.claude && account.stored.claude.baseUrl) {
       // A fresh pairing wires Claude Code itself; a reused one has to be
       // re-wired here, or upgrading the CLI would leave whatever helper the
-      // previous version installed in place -- including the one that could
-      // not tell a spent key from an unreachable server.
+      // previous version installed in place -- including the one that kept a
+      // copy of the key on disk and could not tell a spent one from an
+      // unreachable server.
       const wired = (deps.wireClaudeCode || auth.wireClaudeCode)(
         managedRoot,
         account.stored,
         authDeps,
       );
-      auth.writeEnvFile(managedRoot, account.stored, wired.changed);
+      // Rewritten every time, because this is what empties out the exports an
+      // older version of this CLI wrote and told people to put in a profile.
+      auth.writeEnvFile(managedRoot);
       output.write(wired.changed
         ? '\nClaude Code is set up to use your Engelbart credit. Just run `claude`.\n'
-        : '\nRun this in each terminal where you want `claude` to use your credit:'
-          + `\n\n    source ${auth.envPath(managedRoot)}\n`);
+        : '\nRun `npx engelbart-cli env` for exports to paste into a terminal.\n');
     }
     return 0;
   } catch (error) {

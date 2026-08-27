@@ -134,12 +134,28 @@ async function fetchClaudeKey(base, token, options = {}) {
   };
 }
 
-// Two lines, in the order a shell wants them, so `eval` is the whole install
-// step rather than a paragraph of instructions.
-function claudeEnv(stored) {
-  if (!stored || !stored.claude || !stored.claude.apiKey) return '';
-  return `export ANTHROPIC_BASE_URL="${stored.claude.baseUrl}"\n`
-    + `export ANTHROPIC_AUTH_TOKEN="${stored.claude.apiKey}"\n`;
+// Two lines, in the order a shell wants them. It takes the key as an argument
+// rather than reading it back off disk, because it is never on disk: this is
+// only ever built from what was just fetched, and printed to a terminal the
+// member is already looking at.
+function claudeEnv(claude) {
+  if (!claude || !claude.apiKey || !claude.baseUrl) return '';
+  return `export ANTHROPIC_BASE_URL="${claude.baseUrl}"\n`
+    + `export ANTHROPIC_AUTH_TOKEN="${claude.apiKey}"\n`;
+}
+
+// What the credentials file is allowed to remember about the Claude key: where
+// to spend it and how much is left, so `engelbart` can say something useful
+// without a round trip. Never the key. It lives in the account that issued it,
+// this machine fetches it per use, and a copy at rest would only be a second
+// place for it to leak from and a first place for it to go stale.
+function claudeRecord(claude) {
+  if (!claude || !claude.baseUrl) return null;
+  return {
+    baseUrl: String(claude.baseUrl),
+    budgetUsd: Number(claude.budgetUsd) || 0,
+    spendUsd: Number(claude.spendUsd) || 0,
+  };
 }
 
 // The opposite of `claudeEnv`, and the reason this file is still written at all
@@ -158,32 +174,21 @@ function envPath(managedRoot) {
   return path.join(validateManagedRoot(managedRoot), ENV_FILE);
 }
 
-// `npx engelbart-cli` leaves no `engelbart` on PATH -- the installer puts only
-// `hc` there -- so telling the member to run `engelbart env` names a command
-// they do not have. A file next to the token is always reachable and costs no
-// network.
-//
-// It is a fallback, never the recommended path. A static export cannot be
-// refreshed, rotated or revoked, so it is written with a key in it only when
-// Claude Code's own credential helper could not be wired -- which is to say,
-// only when the member has an apiKeyHelper of their own that we will not touch.
-function writeEnvFile(managedRoot, stored, wired = false) {
-  const lines = wired ? claudeUnset() : claudeEnv(stored);
-  if (!lines) {
-    try {
-      fs.rmSync(envPath(managedRoot), { force: true });
-    } catch (error) { /* nothing to remove */ }
-    return '';
-  }
+// This file no longer carries a key, and is written only to take one away.
+// Earlier versions exported ANTHROPIC_AUTH_TOKEN here and told members to
+// source it from a shell profile; those profiles are still out there, still
+// sourcing it, and an exported token outranks a saved claude.ai login. So the
+// file stays, emptied, and every run rewrites it -- that is what turns an old
+// profile line from a permanent pinned key into a no-op.
+function writeEnvFile(managedRoot) {
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
-  const body = wired
-    ? '# Written by `engelbart auth`. Claude Code now reads this account\'s key\n'
-      + '# from its own credential helper, which can refresh and revoke it; a static\n'
-      + '# export here could only go stale. Sourcing this is now a no-op by design.\n'
-      + `${lines}`
-    : '# Written by `engelbart auth`. Sourced by your shell; not meant to be edited.\n'
-      + `${lines}`;
+  const body = '# Written by `engelbart auth`. This file used to export your Claude key.\n'
+    + '# It no longer holds one: the key is fetched per use and never written to\n'
+    + '# this machine. Sourcing this is a no-op, kept so an older shell profile\n'
+    + '# that still sources it clears the exports it was given rather than\n'
+    + '# keeping them alive forever.\n'
+    + `${claudeUnset()}`;
   atomicWrite(path.join(root, ENV_FILE), body, 0o600);
   return envPath(managedRoot);
 }
@@ -310,7 +315,7 @@ async function login(options = {}) {
         email: result.email || '',
         label: machineLabel(options.hostname),
         createdAt: new Date(now()).toISOString(),
-        claude,
+        claude: claudeRecord(claude),
       });
       output.write(`\nSigned in as ${result.email || 'your Engelbart account'}.\n`);
       if (claude) {
@@ -330,7 +335,7 @@ async function login(options = {}) {
         // exports file is for: a no-op that repairs an older profile when the
         // helper is in place, and the fallback itself when it is not.
         const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
-        const written = writeEnvFile(managedRoot, stored, wired.changed);
+        writeEnvFile(managedRoot);
         if (wired.changed) {
           output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
           // Said at the moment the change is made, not only when something
@@ -338,11 +343,18 @@ async function login(options = {}) {
           // it back should not be something they have to come asking for --
           // especially since there is no `engelbart` on PATH to guess at.
           output.write(`\nTo undo that at any point:\n\n    ${wired.helper} --disconnect\n`);
-        } else if (wired.reason === 'foreign-helper') {
-          output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
-          output.write(`To use this credit in this terminal instead, run: source ${written}\n`);
         } else {
-          output.write(`\nRun this in each terminal where you want \`claude\` to use it:\n\n    source ${written}\n`);
+          // Printed, not written. These two lines carry the key itself, and
+          // the whole point of the helper is that the key is never put on this
+          // machine -- so the fallback hands it to a terminal the member is
+          // already reading and lets it scroll away, rather than leaving a
+          // file behind that outlives the credit it was minted against.
+          if (wired.reason === 'foreign-helper') {
+            output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
+          }
+          output.write('\nTo use this credit, paste these into the terminal where you run'
+            + ' `claude`.\nThey last for that shell only, and are not saved anywhere:\n\n'
+            + `${claudeEnv(claude).replace(/^/gm, '    ')}`);
         }
         // Said last so it is the line left on screen. A member who pairs a
         // second machine after the pool has run dry would otherwise read
@@ -422,6 +434,7 @@ module.exports = {
   POLL_CEILING_SECONDS,
   apiBase,
   claudeEnv,
+  claudeRecord,
   claudeUnset,
   clearCredentials,
   ENV_FILE,
