@@ -279,3 +279,115 @@ test('whoami on an unconnected machine reports it without a request', async () =
   });
   assert.deepEqual(result, { signedIn: false });
 });
+
+// The credential calls are not device calls: one is a POST with no body and
+// the other a GET, so they need a stub that does not assume JSON went out.
+function credentialFetch(responses) {
+  const calls = [];
+  return {
+    calls,
+    async fetchImpl(url, options = {}) {
+      calls.push({ url, method: options.method || 'GET', headers: options.headers });
+      const next = responses.shift();
+      if (!next) throw new Error(`unexpected request: ${options.method || 'GET'} ${url}`);
+      return {
+        ok: next.ok !== false,
+        status: next.status || 200,
+        async json() { return next.body; },
+      };
+    },
+  };
+}
+
+test('the Claude key is provisioned then read back', async () => {
+  const key = { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 };
+  const scripted = credentialFetch([{ body: { ready: true } }, { body: key }]);
+  const result = await auth.fetchClaudeKey('https://berkeley.mathetic.com', 'egb_token', {
+    fetchImpl: scripted.fetchImpl,
+  });
+
+  assert.deepEqual(result, { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 });
+  assert.equal(scripted.calls.length, 2);
+  assert.equal(scripted.calls[0].method, 'POST');
+  assert.equal(scripted.calls[1].method, 'GET');
+  for (const call of scripted.calls) {
+    assert.equal(call.url, 'https://berkeley.mathetic.com/api/engelbart-credentials');
+    assert.equal(call.headers.Authorization, 'Bearer egb_token');
+  }
+});
+
+test('a credential endpoint that refuses says why', async () => {
+  const scripted = credentialFetch([{ body: {} }, { ok: false, status: 409, body: { error: 'Credits are not ready' } }]);
+  await assert.rejects(
+    () => auth.fetchClaudeKey('https://berkeley.mathetic.com', 'egb_token', { fetchImpl: scripted.fetchImpl }),
+    /Credits are not ready/,
+  );
+});
+
+test('signing in stores the Claude key beside the token', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  const stored = auth.readCredentials(root, {});
+  assert.equal(stored.token, 'egb_token');
+  assert.equal(stored.claude.apiKey, 'sk-abc');
+  assert.match(output.text(), /\$21\.00 of \$25\.00 left/);
+  assert.match(output.text(), /eval "\$\(engelbart env\)"/);
+});
+
+// Credits can lag the account. Losing the key must not lose the pairing too,
+// or the member has to approve a second code to get back to the same place.
+test('a missing Claude key still leaves the machine connected', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_token', email: 'm@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => { throw new Error('Credits are not ready'); },
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.equal(auth.readCredentials(root, {}).token, 'egb_token');
+  assert.equal(auth.readCredentials(root, {}).claude, null);
+  assert.match(output.text(), /Could not read this account's Claude key: Credits are not ready/);
+});
+
+test('the shell exports are exactly two lines, and absent without a key', () => {
+  assert.equal(auth.claudeEnv(null), '');
+  assert.equal(auth.claudeEnv({ token: 'egb_token' }), '');
+  assert.equal(
+    auth.claudeEnv({ claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' } }),
+    'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
+      + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n',
+  );
+});

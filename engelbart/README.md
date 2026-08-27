@@ -25,8 +25,28 @@ cannot connect their terminal to your account.
 ```bash
 engelbart auth      # connect this machine (or reconnect it)
 engelbart whoami    # show which account this machine is connected to
+engelbart env       # print the exports that point Claude Code at your credit
 engelbart logout    # disconnect this machine and revoke its token
 ```
+
+## Using your Claude credit
+
+Approving the code also fetches the Claude key your account was allocated, so
+there is nothing to copy out of the browser. The key lands in the same
+owner-only file as the token; `engelbart env` prints the two lines a shell
+needs to reach it:
+
+```bash
+eval "$(engelbart env)"     # this terminal
+claude
+```
+
+Add that `eval` line to your shell profile to have every new terminal pick it
+up. `engelbart env` writes only the exports to stdout, so it is safe to run
+through `eval`; everything else it has to say goes to stderr.
+
+Credits can lag a new account. If the key is not ready when you approve the
+code, the machine still connects -- run `engelbart auth` again once it is.
 
 Connecting is skipped when there is no terminal to answer in -- a scripted or
 CI install never waits on a browser -- and `--no-login` skips it outright. The

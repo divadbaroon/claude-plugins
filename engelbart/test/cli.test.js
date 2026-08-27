@@ -433,3 +433,75 @@ test('reinstalling on a connected machine leaves the connection alone', async ()
   assert.match(result.output, /account {6}member@example\.com/);
   assert.doesNotMatch(result.output, /Run `engelbart auth`/);
 });
+
+// `eval "$(engelbart env)"` runs whatever reaches stdout, so anything that is
+// not a shell export has to leave by the other pipe.
+test('env prints only the exports, and nothing else reaches stdout', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({
+      token: 'egb_token',
+      claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+    }),
+    install: async () => { throw new Error('installer must not run'); },
+  });
+  assert.equal(code, 0);
+  assert.equal(
+    output.read(),
+    'export ANTHROPIC_BASE_URL="https://proxy.example.com"\n'
+      + 'export ANTHROPIC_AUTH_TOKEN="sk-abc"\n',
+  );
+  assert.equal(errors.read(), '');
+});
+
+test('env on an unconnected machine fails without printing a broken script', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => null,
+  });
+  assert.equal(code, 1);
+  assert.equal(output.read(), '');
+  assert.match(errors.read(), /engelbart auth/);
+});
+
+test('env distinguishes a connected machine whose credit is not ready yet', async () => {
+  const output = capture();
+  const errors = capture();
+  const code = await run({
+    argv: ['env'],
+    output: output.stream,
+    errorOutput: errors.stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({ token: 'egb_token', claude: null }),
+  });
+  assert.equal(code, 1);
+  assert.equal(output.read(), '');
+  assert.match(errors.read(), /no Claude key yet/);
+});
+
+test('a reinstall on an already-connected machine points at the stored key', async () => {
+  const output = capture();
+  const code = await run({
+    argv: ['--dry-run'],
+    output: output.stream,
+    errorOutput: capture().stream,
+    managedRoot: '/nonexistent/managed',
+    readCredentials: () => ({
+      email: 'm@example.com',
+      claude: { apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com' },
+    }),
+  });
+  assert.equal(code, 0);
+  // --dry-run never touches the account, so the reused-key line must not fire.
+  assert.doesNotMatch(output.read(), /engelbart env/);
+});

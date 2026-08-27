@@ -10,7 +10,7 @@ const {
 } = require('./installer');
 const auth = require('./auth');
 
-const COMMANDS = Object.freeze(['install', 'auth', 'login', 'logout', 'whoami']);
+const COMMANDS = Object.freeze(['install', 'auth', 'login', 'logout', 'whoami', 'env']);
 
 class UsageError extends Error {}
 class InputCancelled extends Error {}
@@ -24,6 +24,8 @@ Commands:
   auth, login           connect this machine to your Engelbart account
   logout                disconnect this machine and revoke its token
   whoami                show which account this machine is connected to
+  env                   print the shell exports that point Claude Code at your
+                        credit; use as: eval "$(engelbart env)"
 
 Options:
   --no-login            install without connecting an Engelbart account
@@ -136,6 +138,20 @@ async function runAccountCommand(command, authDeps, deps, errorOutput) {
         + '/engelbart and disconnect it there if this machine is not yours.\n');
     return 0;
   }
+  // Only the exports reach stdout, so `eval` gets a shell script and nothing
+  // a shell would choke on. Everything explanatory goes to stderr.
+  if (command === 'env') {
+    const stored = (deps.readCredentials || auth.readCredentials)(authDeps.managedRoot, authDeps.env);
+    const lines = auth.claudeEnv(stored);
+    if (!lines) {
+      errorOutput.write(stored
+        ? 'This account has no Claude key yet. Run `engelbart auth` again once your credit is ready.\n'
+        : 'Not connected. Run `engelbart auth` to connect this machine.\n');
+      return 1;
+    }
+    output.write(lines);
+    return 0;
+  }
   const result = await (deps.whoami || auth.whoami)(authDeps);
   if (result.signedIn) {
     output.write(`Connected as ${result.email}.\n`);
@@ -228,7 +244,7 @@ async function run(deps = {}) {
     if (!options.dryRun && !options.noLogin) {
       const stored = (deps.readCredentials || auth.readCredentials)(managedRoot, authDeps.env);
       if (stored) {
-        account = { status: 'ready', email: stored.email || '' };
+        account = { status: 'ready', email: stored.email || '', reused: true, stored };
         output.write(`  account      ${stored.email || 'connected'}\n`);
       } else if (canPrompt(deps)) {
         try {
@@ -260,6 +276,10 @@ async function run(deps = {}) {
     output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
     if (!options.dryRun && !(account && account.status === 'ready')) {
       output.write('Run `engelbart auth` to connect your Engelbart account and its Claude credits.\n');
+    } else if (account && account.reused && auth.claudeEnv(account.stored)) {
+      // A fresh pairing prints this itself; a reused one has to be told, or a
+      // second install looks like it forgot the key it is already holding.
+      output.write('\nRun this once here so `claude` uses your credit:\n\n    eval "$(engelbart env)"\n');
     }
     return 0;
   } catch (error) {

@@ -10,6 +10,7 @@ const { atomicWrite, establishOwnership, validateManagedRoot } = require('./inst
 const DEFAULT_API_BASE = 'https://berkeley.mathetic.com';
 const CREDENTIALS_SCHEMA = 1;
 const CREDENTIALS_FILE = 'auth.json';
+const CREDENTIALS_ENDPOINT = '/api/engelbart-credentials';
 const POLL_CEILING_SECONDS = 30;
 
 // A token minted against a development deployment must not be replayed at
@@ -97,6 +98,44 @@ async function postJson(base, body, options = {}) {
   return value;
 }
 
+// The token is not what the member came for -- the Claude key it can fetch is.
+// Reading it here is what lets `claude` run without copying two export lines
+// out of a browser by hand.
+async function fetchClaudeKey(base, token, options = {}) {
+  const fetchImpl = options.fetchImpl || global.fetch;
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('this Node build has no fetch; Node 18 or newer is required');
+  }
+  const headers = { Accept: 'application/json', Authorization: `Bearer ${token}` };
+  const url = `${base}${CREDENTIALS_ENDPOINT}`;
+  // POST provisions the key and is idempotent, so pairing a second machine
+  // reuses the first machine's key rather than minting a rival one.
+  await fetchImpl(url, { method: 'POST', headers });
+  const response = await fetchImpl(url, { headers });
+  let value = {};
+  try {
+    value = await response.json();
+  } catch (error) {
+    value = {};
+  }
+  if (!response.ok) throw new Error(value.error || `${base} answered ${response.status}`);
+  if (!value.apiKey || !value.baseUrl) throw new Error('that account has no Claude key yet');
+  return {
+    apiKey: String(value.apiKey),
+    baseUrl: String(value.baseUrl),
+    budgetUsd: Number(value.budgetUsd) || 0,
+    spendUsd: Number(value.spendUsd) || 0,
+  };
+}
+
+// Two lines, in the order a shell wants them, so `eval` is the whole install
+// step rather than a paragraph of instructions.
+function claudeEnv(stored) {
+  if (!stored || !stored.claude || !stored.claude.apiKey) return '';
+  return `export ANTHROPIC_BASE_URL="${stored.claude.baseUrl}"\n`
+    + `export ANTHROPIC_AUTH_TOKEN="${stored.claude.apiKey}"\n`;
+}
+
 // Best effort by design: a machine with no browser still has the URL and the
 // code printed above this call, which is the whole fallback path.
 function openBrowser(url, options = {}) {
@@ -152,16 +191,34 @@ async function login(options = {}) {
     await wait(interval);
     const result = await postJson(base, { action: 'poll', deviceCode: session.deviceCode }, options);
     if (result.status === 'ready') {
-      writeCredentials(managedRoot, {
+      // The key is fetched before the token is written, but a failure to get
+      // one never discards the pairing: the account is connected either way,
+      // and `engelbart auth` can be run again once credits are ready.
+      let claude = null;
+      let keyError = '';
+      try {
+        claude = await (options.fetchClaudeKey || fetchClaudeKey)(base, result.token, options);
+      } catch (error) {
+        keyError = error.message;
+      }
+      const stored = writeCredentials(managedRoot, {
         schema: CREDENTIALS_SCHEMA,
         apiBase: base,
         token: result.token,
         email: result.email || '',
         label: machineLabel(options.hostname),
         createdAt: new Date(now()).toISOString(),
+        claude,
       });
       output.write(`\nSigned in as ${result.email || 'your Engelbart account'}.\n`);
-      return { status: 'ready', email: result.email || '' };
+      if (claude) {
+        const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
+        output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
+        output.write(`\nRun this once here so \`claude\` uses it:\n\n    eval "$(engelbart env)"\n`);
+      } else {
+        output.write(`Could not read this account's Claude key: ${keyError}\n`);
+      }
+      return { status: 'ready', email: result.email || '', claude, stored };
     }
     if (result.status === 'denied') {
       output.write('\nThat code was rejected in the browser. Nothing was connected.\n');
@@ -213,13 +270,16 @@ async function whoami(options = {}) {
 }
 
 module.exports = {
+  CREDENTIALS_ENDPOINT,
   CREDENTIALS_FILE,
   CREDENTIALS_SCHEMA,
   DEFAULT_API_BASE,
   POLL_CEILING_SECONDS,
   apiBase,
+  claudeEnv,
   clearCredentials,
   credentialsPath,
+  fetchClaudeKey,
   login,
   logout,
   machineLabel,
