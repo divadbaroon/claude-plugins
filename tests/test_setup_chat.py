@@ -526,6 +526,28 @@ class FromChatTests(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertIn("nothing", out["error"])
 
+    def test_an_unexpected_failure_reports_itself_not_a_guess_about_path(self):
+        # The guess cost a reader an afternoon: their credit had run out, and
+        # the card sent them to check a PATH that was fine. Whatever actually
+        # went wrong is the only thing worth printing.
+        class Boom:
+            def generate_json(self, prompt):
+                raise RuntimeError("the gateway said 401")
+
+        out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
+        self.assertFalse(out["ok"])
+        self.assertIn("401", out["error"])
+        self.assertIn("RuntimeError", out["error"])
+        self.assertNotIn("PATH", out["error"])
+
+    def test_the_reported_failure_is_bounded(self):
+        class Boom:
+            def generate_json(self, prompt):
+                raise RuntimeError("x" * 5000)
+
+        out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
+        self.assertLessEqual(len(out["error"]), 240)
+
 
 class BindingTests(unittest.TestCase):
     """Adopting: the same commit, except this chat joins what it made."""
