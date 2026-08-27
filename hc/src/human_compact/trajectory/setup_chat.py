@@ -267,6 +267,23 @@ def normalize_focus(value) -> List[Dict[str, Any]]:
     return out
 
 
+def unexpected(exc) -> Dict[str, Any]:
+    """Report what actually went wrong, rather than guessing at PATH.
+
+    The guess was wrong in the case that mattered most. A reader whose Claude
+    credit had run out was told to check whether the CLI was on their PATH --
+    it was, and the real answer was on the other side of a bare ``except``.
+    They went looking for a broken install instead of a spent budget.
+
+    ``ProviderError`` already carries every failure this code anticipated,
+    including the CLI genuinely being absent, so anything arriving here is by
+    definition unanticipated and its own text is the most useful thing there
+    is to say about it.
+    """
+    detail = " ".join(f"{type(exc).__name__}: {exc}".split())[:200]
+    return {"ok": False, "error": f"setup could not reach Claude -- {detail}"}
+
+
 def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
     """Three things worth focusing on, read out of the conversation."""
     from . import providers as PROVIDERS
@@ -284,9 +301,8 @@ def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
         raw = engine.generate_json("\n".join(compose_chat(usable)) + "\n")
     except PROVIDERS.ProviderError as exc:
         return {"ok": False, "error": " ".join(str(exc).split())[:200]}
-    except Exception:                                    # noqa: BLE001
-        return {"ok": False,
-                "error": "setup could not reach Claude (is the CLI on PATH?)"}
+    except Exception as exc:                             # noqa: BLE001
+        return unexpected(exc)
     focus = normalize_focus(raw)
     if not focus:
         return {"ok": False, "error": "nothing came back to choose from"}
@@ -813,9 +829,8 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
         raw = engine.generate_json("\n".join(compose(transcript, extra)) + "\n")
     except PROVIDERS.ProviderError as exc:
         return {"ok": False, "error": " ".join(str(exc).split())[:200]}
-    except Exception:                                    # noqa: BLE001
-        return {"ok": False,
-                "error": "setup could not reach Claude (is the CLI on PATH?)"}
+    except Exception as exc:                             # noqa: BLE001
+        return unexpected(exc)
     card = normalize_card(raw, due)
     # A card out of turn is not drawn. What it said is kept -- it is talking
     # to the reader, and dropping that would leave a silent round -- but the
