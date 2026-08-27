@@ -110,6 +110,24 @@ class AutosyncTests(unittest.TestCase):
         settle()
         self.assertEqual(self.sent, ["/work/proj"])
 
+    def test_a_timer_already_waking_cannot_send_after_rearm(self):
+        entered = threading.Event()
+        release = threading.Event()
+        real_fire = AS._fire
+
+        def slow_fire(*args):
+            entered.set()
+            release.wait(2)
+            real_fire(*args)
+
+        with mock.patch.object(AS, "_fire", slow_fire):
+            AS.schedule(None, "/work/proj", _delay=0.001)
+            self.assertTrue(entered.wait(2))
+            AS.schedule(None, "/work/proj", _delay=TICK)
+            release.set()
+            settle()
+        self.assertEqual(self.sent, ["/work/proj"])
+
     def test_two_projects_each_get_their_own(self):
         AS.schedule(None, "/work/one", _delay=TICK)
         AS.schedule(None, "/work/two", _delay=TICK)

@@ -151,6 +151,11 @@ def _note(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
 
 def _fire(root, cwd, key: str) -> None:
     with _GUARD:
+        # ``Timer.cancel`` cannot stop a callback that has already begun.
+        # If an edit replaced this timer while its callback was waiting for
+        # the guard, it is stale and must leave the replacement armed.
+        if _TIMERS.get(key) is not threading.current_thread():
+            return
         _TIMERS.pop(key, None)
         if key in _SENDING:
             # Something is already sending this project. Remember that a
