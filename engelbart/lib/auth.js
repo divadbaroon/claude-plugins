@@ -265,6 +265,103 @@ async function shareProjectConfig(base, stored, options = {}) {
   });
 }
 
+// Everything that happens once this machine has a token it can use, whether
+// that token was just approved in a browser or has been sitting in auth.json
+// since the last time. Shared so a re-wire cannot drift from a fresh pairing.
+async function establish(base, token, email, options = {}) {
+  const output = options.output || process.stdout;
+  const now = options.now || Date.now;
+  const managedRoot = options.managedRoot;
+
+  // The key is fetched before the token is written, but a failure to get one
+  // never discards the pairing: the account is connected either way, and
+  // `engelbart auth` can be run again once credits are ready.
+  let claude = null;
+  let keyError = '';
+  try {
+    claude = await (options.fetchClaudeKey || fetchClaudeKey)(base, token, options);
+  } catch (error) {
+    keyError = error.message;
+  }
+  const stored = writeCredentials(managedRoot, {
+    schema: CREDENTIALS_SCHEMA,
+    apiBase: base,
+    token,
+    email: email || '',
+    label: machineLabel(options.hostname),
+    createdAt: new Date(now()).toISOString(),
+    claude: claudeRecord(claude),
+  });
+  output.write(`\nSigned in as ${email || 'your Engelbart account'}.\n`);
+  if (claude) {
+    const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
+    output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
+    // `hc` needs the same project this account lives in. Handing it over now
+    // is the difference between a member typing a password and a member
+    // hunting for an anon key, and a deployment that will not answer is not a
+    // reason to fail a sign-in that already succeeded.
+    try {
+      await (options.shareProjectConfig || shareProjectConfig)(base, stored, options);
+    } catch (error) { /* `hc supabase setup` still works by hand */ }
+
+    // Claude Code is the reason the key exists, so it gets told directly
+    // rather than being left to inherit a variable the member has to remember
+    // to export.
+    const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
+    writeEnvFile(managedRoot);
+    if (wired.changed) {
+      output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
+      // Said at the moment the change is made, not only when something goes
+      // wrong. This edits a file the member owns, and the way to put it back
+      // should not be something they have to come asking for -- especially
+      // since there is no `engelbart` on PATH to guess at.
+      output.write(`\nTo undo that at any point:\n\n    ${wired.helper} --disconnect\n`);
+    } else {
+      // Printed, not written. These two lines carry the key itself, and the
+      // whole point of the helper is that the key is never put on this machine
+      // -- so the fallback hands it to a terminal the member is already
+      // reading and lets it scroll away, rather than leaving a file behind
+      // that outlives the credit it was minted against.
+      if (wired.reason === 'foreign-helper') {
+        output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
+      }
+      output.write('\nTo use this credit, paste these into the terminal where you run'
+        + ' `claude`.\nThey last for that shell only, and are not saved anywhere:\n\n'
+        + `${claudeEnv(claude).replace(/^/gm, '    ')}`);
+    }
+    // Said last so it is the line left on screen. A member who pairs a second
+    // machine after the pool has run dry would otherwise read "Claude Code is
+    // set up to use it" and take the first failed request as the setup being
+    // broken.
+    if (left <= 0) {
+      output.write('\nThat credit is used up, so `claude` will keep using your own account\n'
+        + 'until it is topped up. Nothing else needs doing here.\n');
+    }
+  } else {
+    output.write(`Could not read this account's Claude key: ${keyError}\n`);
+  }
+  return { status: 'ready', email: email || '', claude, stored };
+}
+
+// Running out of credit unwires this machine, which is the only thing that
+// gives a member their own account back. Topping the pool up has to be able to
+// wire it again -- and making them approve a browser code to re-enable a
+// machine that never stopped being paired would be a strange price for having
+// spent the credit they were given. So a token the server still recognises is
+// enough, and the device flow is what happens when there is not one.
+async function rewire(base, options = {}) {
+  const existing = readCredentials(options.managedRoot, options.env || process.env);
+  if (!existing || !existing.token) return null;
+  try {
+    const result = await postJson(base, { action: 'whoami' }, { ...options, token: existing.token });
+    return await establish(base, existing.token, result.email || existing.email || '', options);
+  } catch (error) {
+    // Revoked, expired, or a server that cannot say. Either way this machine
+    // has to ask for a new pairing, which is exactly what login does next.
+    return null;
+  }
+}
+
 async function login(options = {}) {
   const env = options.env || process.env;
   const base = apiBase(env);
@@ -272,6 +369,11 @@ async function login(options = {}) {
   const wait = options.wait || sleep;
   const now = options.now || Date.now;
   const managedRoot = options.managedRoot;
+
+  if (options.forcePairing !== true) {
+    const reused = await (options.rewire || rewire)(base, options);
+    if (reused) return reused;
+  }
 
   const session = await postJson(base, {
     action: 'start',
@@ -298,76 +400,7 @@ async function login(options = {}) {
     await wait(interval);
     const result = await postJson(base, { action: 'poll', deviceCode: session.deviceCode }, options);
     if (result.status === 'ready') {
-      // The key is fetched before the token is written, but a failure to get
-      // one never discards the pairing: the account is connected either way,
-      // and `engelbart auth` can be run again once credits are ready.
-      let claude = null;
-      let keyError = '';
-      try {
-        claude = await (options.fetchClaudeKey || fetchClaudeKey)(base, result.token, options);
-      } catch (error) {
-        keyError = error.message;
-      }
-      const stored = writeCredentials(managedRoot, {
-        schema: CREDENTIALS_SCHEMA,
-        apiBase: base,
-        token: result.token,
-        email: result.email || '',
-        label: machineLabel(options.hostname),
-        createdAt: new Date(now()).toISOString(),
-        claude: claudeRecord(claude),
-      });
-      output.write(`\nSigned in as ${result.email || 'your Engelbart account'}.\n`);
-      if (claude) {
-        const left = Math.max(0, claude.budgetUsd - claude.spendUsd);
-        output.write(`Claude credit: $${left.toFixed(2)} of $${claude.budgetUsd.toFixed(2)} left.\n`);
-        // `hc` needs the same project this account lives in. Handing it over
-        // now is the difference between a member typing a password and a
-        // member hunting for an anon key, and a deployment that will not
-        // answer is not a reason to fail a sign-in that already succeeded.
-        try {
-          await (options.shareProjectConfig || shareProjectConfig)(base, stored, options);
-        } catch (error) { /* `hc supabase setup` still works by hand */ }
-
-        // Claude Code is the reason the key exists, so it gets told directly
-        // rather than being left to inherit a variable the member has to
-        // remember to export. Wiring comes first because it decides what the
-        // exports file is for: a no-op that repairs an older profile when the
-        // helper is in place, and the fallback itself when it is not.
-        const wired = (options.wireClaudeCode || wireClaudeCode)(managedRoot, stored, options);
-        writeEnvFile(managedRoot);
-        if (wired.changed) {
-          output.write('\nClaude Code is set up to use it. Just run `claude`.\n');
-          // Said at the moment the change is made, not only when something
-          // goes wrong. This edits a file the member owns, and the way to put
-          // it back should not be something they have to come asking for --
-          // especially since there is no `engelbart` on PATH to guess at.
-          output.write(`\nTo undo that at any point:\n\n    ${wired.helper} --disconnect\n`);
-        } else {
-          // Printed, not written. These two lines carry the key itself, and
-          // the whole point of the helper is that the key is never put on this
-          // machine -- so the fallback hands it to a terminal the member is
-          // already reading and lets it scroll away, rather than leaving a
-          // file behind that outlives the credit it was minted against.
-          if (wired.reason === 'foreign-helper') {
-            output.write(`\nLeaving your existing apiKeyHelper alone (${wired.helper}).\n`);
-          }
-          output.write('\nTo use this credit, paste these into the terminal where you run'
-            + ' `claude`.\nThey last for that shell only, and are not saved anywhere:\n\n'
-            + `${claudeEnv(claude).replace(/^/gm, '    ')}`);
-        }
-        // Said last so it is the line left on screen. A member who pairs a
-        // second machine after the pool has run dry would otherwise read
-        // "Claude Code is set up to use it" and take the first failed request
-        // as the setup being broken.
-        if (left <= 0) {
-          output.write('\nThat credit is used up, so `claude` will keep using your own account\n'
-            + 'until it is topped up. Nothing else needs doing here.\n');
-        }
-      } else {
-        output.write(`Could not read this account's Claude key: ${keyError}\n`);
-      }
-      return { status: 'ready', email: result.email || '', claude, stored };
+      return establish(base, result.token, result.email || '', options);
     }
     if (result.status === 'denied') {
       output.write('\nThat code was rejected in the browser. Nothing was connected.\n');
@@ -435,6 +468,7 @@ module.exports = {
   apiBase,
   claudeEnv,
   claudeRecord,
+  establish,
   claudeUnset,
   clearCredentials,
   ENV_FILE,
@@ -447,6 +481,7 @@ module.exports = {
   openBrowser,
   postJson,
   readCredentials,
+  rewire,
   shareProjectConfig,
   whoami,
   wireClaudeCode,

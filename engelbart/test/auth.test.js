@@ -649,3 +649,125 @@ test('what is stored about the key is where and how much, never the key', () => 
     { baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 4 },
   );
 });
+
+// ---------------------------------------------------------------------------
+// Coming back after the credit ran out.
+//
+// Exhaustion unwires the machine, which is the only thing that gives a member
+// their own account back. Topping the pool up has to be able to wire it again
+// -- and charging them a browser round trip to re-enable a machine that never
+// stopped being paired would be a strange price for having spent the credit
+// they were given.
+// ---------------------------------------------------------------------------
+
+// A machine that is still paired: token on disk, nothing wired.
+function pairedButUnwired(root, apiBase = 'https://berkeley.mathetic.com') {
+  auth.writeCredentials(root, {
+    schema: 1,
+    apiBase,
+    token: 'egb_token',
+    email: 'm@example.com',
+    label: 'laptop',
+    createdAt: '2026-08-27T00:00:00.000Z',
+    claude: { baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 25 },
+  });
+}
+
+test('a topped-up account re-wires without sending anyone to a browser', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  pairedButUnwired(root);
+  // Only whoami is scripted. A device-code flow would ask for `start` next and
+  // blow up on the empty script, which is the assertion.
+  const scripted = scriptedFetch([{ body: { email: 'm@example.com' } }]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: () => { throw new Error('no browser may be opened'); },
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 2,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(scripted.calls.map((call) => call.body.action), ['whoami']);
+  assert.doesNotMatch(output.text(), /Connect this machine/);
+  assert.doesNotMatch(output.text(), /code {3}/);
+  assert.match(output.text(), /\$23\.00 of \$25\.00 left/);
+
+  // And it is wired again, which is the whole point of running it.
+  const settings = JSON.parse(fs.readFileSync(settingsIn(root), 'utf8'));
+  assert.equal(settings.apiKeyHelper, path.join(root, 'bin', 'engelbart-key'));
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, 'https://proxy.example.com');
+});
+
+// The reuse must not become a way to get stuck. A token the server no longer
+// honours has to fall through to a fresh pairing rather than fail.
+test('a token the server rejects falls back to the device flow', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  pairedButUnwired(root);
+  const scripted = scriptedFetch([
+    { ok: false, status: 401, body: { error: 'that token was revoked' } },
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_fresh', email: 'm@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(scripted.calls.map((call) => call.body.action), ['whoami', 'start', 'poll']);
+  assert.match(output.text(), /Connect this machine/);
+  assert.equal(auth.readCredentials(root, {}).token, 'egb_fresh');
+});
+
+// Re-pairing a machine onto a different account has to stay possible, so the
+// reuse is a default and not a trap.
+test('pairing can be forced past a token that would otherwise be reused', async () => {
+  const root = temporaryRoot();
+  pairedButUnwired(root);
+  const scripted = scriptedFetch([
+    { body: { deviceCode: 'egb_dev', userCode: 'ABCD-2345', expiresInSeconds: 600, intervalSeconds: 1 } },
+    { body: { status: 'ready', token: 'egb_other', email: 'other@example.com' } },
+  ]);
+
+  const result = await auth.login({
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output: collector(),
+    fetchImpl: scripted.fetchImpl,
+    openUrl: false,
+    wait: async () => {},
+    now: () => 0,
+    hostname: 'laptop',
+    forcePairing: true,
+    fetchClaudeKey: async () => ({
+      apiKey: 'sk-abc', baseUrl: 'https://proxy.example.com', budgetUsd: 25, spendUsd: 0,
+    }),
+  });
+
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(scripted.calls.map((call) => call.body.action), ['start', 'poll']);
+  assert.equal(auth.readCredentials(root, {}).email, 'other@example.com');
+});
