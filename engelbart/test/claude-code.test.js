@@ -208,6 +208,31 @@ test('the credential helper is executable, self-contained, and owner-only', () =
   assert.equal(/require\('\.\.?\//.test(source), false);
 });
 
+test('a standalone install writes a credential helper that needs no Node or PATH', () => {
+  const root = temporaryRoot();
+  const runtime = path.join(root, 'runtimes', '0.20.0-test');
+  const python = path.join(runtime, 'bin', 'python');
+  fs.mkdirSync(path.dirname(python), { recursive: true });
+  fs.writeFileSync(python, 'managed python placeholder');
+  write(path.join(root, '.owner.json'), { owner: 'engelbart-cli', schema: 1 });
+  write(path.join(root, 'install.json'), {
+    owner: 'engelbart-cli',
+    schema: 1,
+    runtime,
+  });
+  const credentials = path.join(root, 'auth.json');
+  const settings = settingsIn(root);
+  const helper = claudeCode.writeHelper(root, credentials, settings, BASE_URL);
+  const source = fs.readFileSync(helper, 'utf8');
+
+  assert.match(source, /^#!\/bin\/sh/);
+  assert.ok(source.includes(`'${python}'`));
+  assert.match(source, /human_compact\.credential_helper/);
+  assert.ok(source.includes(`'${credentials}'`));
+  assert.ok(source.includes(`'${settings}'`));
+  assert.doesNotMatch(source, /env node|\bnode\b/i);
+});
+
 // ---------------------------------------------------------------------------
 // What the helper does when the pool runs dry.
 //

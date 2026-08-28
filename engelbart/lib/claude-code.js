@@ -9,7 +9,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { atomicWrite, establishOwnership, validateManagedRoot } = require('./installer');
+const {
+  atomicWrite,
+  establishOwnership,
+  loadOwnedInstall,
+  safeChild,
+  validateManagedRoot,
+} = require('./installer');
 const { invocation } = require('./invocation');
 
 const HELPER_FILE = 'engelbart-key';
@@ -49,6 +55,34 @@ function resolveTarget(options = {}) {
 
 function helperPath(managedRoot) {
   return path.join(validateManagedRoot(managedRoot), 'bin', HELPER_FILE);
+}
+
+function managedPython(managedRoot) {
+  const root = validateManagedRoot(managedRoot);
+  try {
+    const install = loadOwnedInstall(root);
+    if (!install || typeof install.runtime !== 'string') return '';
+    const runtime = safeChild(root, install.runtime);
+    const python = safeChild(root, path.join(runtime, 'bin', 'python'));
+    return fs.statSync(python, { throwIfNoEntry: false })?.isFile() ? python : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+function shellWord(value) {
+  return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+function managedHelperSource(python, credentialsFile, settingsFile, helperFile, baseUrl) {
+  const args = [
+    python, '-m', 'human_compact.credential_helper',
+    '--credentials', credentialsFile,
+    '--settings', settingsFile,
+    '--helper', helperFile,
+    '--base-url', baseUrl,
+  ].map(shellWord).join(' ');
+  return `#!/bin/sh\n# Written by Engelbart; runs on its managed runtime with no shell lookup.\nexec ${args} "$@"\n`;
 }
 
 // `npx engelbart-cli` leaves no installed copy of this package behind, so the
@@ -302,7 +336,14 @@ function writeHelper(managedRoot, credentialsFile, settingsFile, baseUrl) {
   const file = path.join(bin, HELPER_FILE);
   // The gateway URL is baked in as well as stored, so `--disconnect` still
   // knows which ANTHROPIC_BASE_URL was ours after the credentials file is gone.
-  atomicWrite(file, helperSource(credentialsFile, settingsFile, file, baseUrl), 0o700);
+  const python = managedPython(root);
+  const source = python
+    ? managedHelperSource(python, credentialsFile, settingsFile, file, baseUrl)
+    // An npm-only developer invocation may not have installed the managed
+    // runtime yet. It necessarily has Node, so retain the self-contained JS
+    // helper there; standalone installs always take the managed branch.
+    : helperSource(credentialsFile, settingsFile, file, baseUrl);
+  atomicWrite(file, source, 0o700);
   return file;
 }
 
@@ -396,6 +437,8 @@ module.exports = {
   disconnect,
   helperPath,
   helperSource,
+  managedHelperSource,
+  managedPython,
   ownsHelper,
   readSettings,
   resolveTarget,
