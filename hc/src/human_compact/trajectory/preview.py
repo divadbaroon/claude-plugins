@@ -9,7 +9,7 @@ that are deliberately kept apart::
 
     surface   web | terminal | artifact | instructions | empty
     status    unconfigured | ready | needs_user_action | starting
-              | running | finished | failed | stale
+              | running | finished | failed | stale | not_ready
 
 Collapsing those into one enum is what makes a preview pane grow a case per
 framework. Kept apart, ``web + running`` is an embedded page, ``terminal +
@@ -38,6 +38,11 @@ repository code because a page was opened. Every start is a click.
 has run out: what to do about a run that failed, and -- for the TODO being
 worked on -- what to look at once the thing is up. Both are cached; neither
 is on the path that draws the pane.
+
+``not_ready`` is the ending the Show UI button is allowed to have. That
+button promises something visual, so a project with nothing that serves, and
+a run started for a page that never produced one, both say exactly that
+rather than leaving a frame to stay empty while a spinner turns.
 
 What the surface is, is observed rather than declared. A profile says it
 expects to serve HTTP; the pane calls it web only once a URL has been printed
@@ -505,6 +510,13 @@ class Proc:
         self.healthy = False
         self.embeddable = True
         self.probed_at = 0.0
+        # Whether a page was the point. A run somebody started to see the
+        # program's output is doing its job when it prints; a run somebody
+        # pressed "Show UI" for and which never serves anything is not
+        # failing -- there is simply no UI here yet, and saying that is
+        # worth more than a terminal the reader did not ask for.
+        self.wanted_ui = False
+        self.steps: List[str] = []
 
     # -- lifecycle
     def spawn(self, env: Optional[Dict[str, str]] = None) -> None:
@@ -681,6 +693,7 @@ class Proc:
     def snapshot(self) -> Dict[str, Any]:
         self.probe()
         return {"command": self.profile.get("command", ""),
+                "wanted_ui": self.wanted_ui, "steps": list(self.steps),
                 "profile_id": self.profile.get("id", ""),
                 "profile_name": self.profile.get("name", ""),
                 "pid": self.process.pid if self.process else None,
@@ -744,6 +757,76 @@ def start(root: Optional[Path], cwd, profile: Dict[str, Any],
     with _RUNS_LOCK:
         _RUNS[where] = proc
     return {"ok": True, "run": proc.snapshot()}
+
+
+# How long a run started for its UI is given to produce one before the pane
+# stops calling it "starting". Longer than the plain grace: a cold Next build
+# compiles for a while before it says anything.
+UI_GRACE_S = 75.0
+
+
+def ui_profile(config: Dict[str, Any]) -> Dict[str, Any]:
+    """The profile that would put a page on screen, if this project has one.
+
+    The primary one when it serves; otherwise the best-ranked one that does.
+    A project whose only run target is a simulation has none, and that is an
+    answer rather than a failure.
+    """
+    primary = _primary(config)
+    if primary.get("serves"):
+        return primary
+    for item in config.get("profiles") or []:
+        if isinstance(item, dict) and item.get("serves"):
+            return item
+    return {}
+
+
+def show_ui(root: Optional[Path], cwd, session_id: str = "") -> Dict[str, Any]:
+    """Do whatever has to happen for there to be a page to look at.
+
+    One press, and the steps behind it are the project's own: install what
+    is missing, then start the thing that serves. They are composed into one
+    shell line rather than orchestrated here -- `a && b` is what a person
+    would type, the terminal streams both, and a failure in the first stops
+    the second without this module having to sequence anything.
+
+    A project with nothing that serves gets told so. That is the honest end
+    of this button, and pretending otherwise -- a spinner, a blank frame --
+    is how a preview pane teaches people to distrust it.
+    """
+    where = _resolved(cwd)
+    config = read_config(root, where)
+    profile = ui_profile(config)
+    if not profile:
+        return {"ok": False, "not_ready": True,
+                "reason": ("nothing in this project serves a page yet — what"
+                           " it has is " + (", ".join(
+                               str(p.get("name") or p.get("id"))
+                               for p in (config.get("profiles") or [])[:3])
+                               or "no run target at all"))}
+    held = running(where)
+    if held and held.alive():
+        return {"ok": True, "already": True, "run": held.snapshot()}
+    # The steps a file on disk proves are needed, in front of the run. Only
+    # the ones that are commands to run: copying a .env and filling it in is
+    # not something to chain a dev server behind.
+    steps = [b["command"] for b in blockers(where, profile)
+             if b.get("kind") == "run" and b.get("command")]
+    if not steps and session_id and dev_owns(where, profile):
+        out = start(root, where, profile, session_id=session_id)
+        if out.get("ok"):
+            out["ui"] = True
+        return out
+    composed = dict(profile)
+    composed["command"] = " && ".join(steps + [str(profile["command"])])
+    out = start(root, where, composed)
+    proc = running(where)
+    if out.get("ok") and proc:
+        proc.wanted_ui = True
+        proc.steps = steps + [str(profile["command"])]
+        out["run"] = proc.snapshot()
+    out["ui"] = True
+    return out
 
 
 def stop(cwd, root: Optional[Path] = None, session_id: str = "") -> Dict[str, Any]:
@@ -860,6 +943,8 @@ def _primary(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _surface(status: str, proc: Optional[Proc], produced: List[str]) -> str:
+    if status == "not_ready":
+        return "instructions"
     if status in ("running", "starting"):
         if proc and proc.url and proc.healthy:
             return "web"
@@ -908,6 +993,14 @@ def state(root: Optional[Path], cwd, intent: Optional[Dict[str, Any]] = None,
         status = proc.status()
         if status == "finished":
             produced = artifacts(where, proc.started_at)
+        # Asked for a page and still without one: a run that was started to
+        # show a UI and has been up a while with nothing serving is not
+        # "running" in any sense the reader cares about. Saying so beats a
+        # terminal they did not ask for and a frame that never fills.
+        if (proc.wanted_ui and status in ("running", "starting")
+                and not proc.url
+                and time.time() - proc.started_at > UI_GRACE_S):
+            status = "not_ready"
     elif not profiles:
         status = "unconfigured"
     else:
@@ -917,10 +1010,19 @@ def state(root: Optional[Path], cwd, intent: Optional[Dict[str, Any]] = None,
     if found and status in ("ready", "stale"):
         status = "needs_user_action"
 
+    serving = ui_profile(config)
     out: Dict[str, Any] = {
         "ok": True,
         "cwd": where,
         "configured": bool(profiles),
+        # Whether there is a page to be had at all, and what to say when
+        # there is not. Read by the pane's Show UI button, which is the one
+        # control that promises something visual.
+        "ui": {"available": bool(serving),
+               "profile_id": serving.get("id", ""),
+               "command": serving.get("command", ""),
+               "reason": ("" if serving else
+                          "nothing in this project serves a page yet")},
         "stale": stale,
         "status": status,
         "surface": _surface(status, proc, produced),

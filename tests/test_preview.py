@@ -269,14 +269,22 @@ class SupervisorTests(Fixture):
 
     def test_a_server_is_running_only_once_its_address_answers(self):
         port = 8951
+        # Bound before it is announced, the way a dev server does it: the
+        # line is the evidence, and evidence printed before the socket
+        # exists is what makes a pane say "running" over a refused
+        # connection.
         script = (f"import http.server, socketserver\n"
-                  f"print('Local:   http://localhost:{port}/')\n"
-                  f"socketserver.TCPServer(('127.0.0.1', {port}),"
-                  f" http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+                  f"srv = socketserver.TCPServer(('127.0.0.1', {port}),"
+                  f" http.server.SimpleHTTPRequestHandler)\n"
+                  f"print('Local:   http://127.0.0.1:{port}/')\n"
+                  f"srv.serve_forever()\n")
         self.write("serve.py", script)
         proc = self.start("python3 serve.py", until=lambda p: bool(p.url))
-        self.assertEqual(f"http://localhost:{port}/", proc.url)
-        proc.probe(force=True)
+        self.assertEqual(f"http://127.0.0.1:{port}/", proc.url)
+        deadline = time.time() + 5
+        while time.time() < deadline and not proc.healthy:
+            proc.probe(force=True)
+            time.sleep(0.1)
         self.assertTrue(proc.healthy)
         out = PV.state(self.root, self.project)
         self.assertEqual("running", out["status"])
@@ -625,15 +633,24 @@ class OneSupervisorTests(Fixture):
 
     def test_the_projects_own_dev_script_belongs_to_dev_server(self):
         self.write("package.json", {"scripts": {"dev": "vite"}})
+        (self.project / "node_modules").mkdir()
         self.assertTrue(PV.dev_owns(self.project, {"command": "npm run dev"}))
         # Everything else is this module's: a test suite, a simulation, a
         # python server -- none of which dev_server will run.
         self.assertFalse(PV.dev_owns(self.project, {"command": "npm run test"}))
         self.assertFalse(PV.dev_owns(self.project, {"command": "pytest"}))
+        # And a project whose dependencies are not installed is nobody's
+        # yet: dev_server refuses to run one, and the pane's own card for
+        # the missing install is what the reader needs first anyway.
+        bare = Path(self.tmp.name) / "bare"
+        bare.mkdir()
+        (bare / "package.json").write_text(json.dumps({"scripts": {"dev": "vite"}}))
+        self.assertFalse(PV.dev_owns(bare, {"command": "npm run dev"}))
         self.assertFalse(PV.dev_owns(self.project, {"command": "python sim.py"}))
 
     def test_a_project_with_no_dev_script_is_nobody_elses(self):
         self.write("package.json", {"scripts": {"test": "vitest"}})
+        (self.project / "node_modules").mkdir()
         self.assertFalse(PV.dev_owns(self.project, {"command": "npm run test"}))
 
     def test_a_dev_server_already_up_is_what_the_pane_shows(self):
@@ -673,3 +690,141 @@ class OneSupervisorTests(Fixture):
         self.assertEqual("starting", out["status"])
         self.assertEqual("terminal", out["surface"])
         self.assertEqual(["compiling…"], out["run"]["lines"])
+
+
+class BuildContractTests(Fixture):
+    """What a build is handed about the program it is changing.
+
+    Without this a build gets the change to make and nothing else: no
+    command that runs the project, no page to look at, no sentence saying
+    what should be true afterwards -- so "done" means "it compiled".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.session = "chat-contract"
+        paths = CS.paths(self.session, self.root)
+        paths.session_dir.mkdir(parents=True)
+        paths.manifest.write_text(json.dumps({"cwd": str(self.project)}))
+        self.paths = paths
+
+    def lines(self, rows):
+        from human_compact.trajectory import build as BUILD
+        return BUILD.execution_lines(self.session, self.root,
+                                     {"id": "g1", "title": "t"}, rows)
+
+    def test_a_project_with_no_run_config_adds_nothing(self):
+        self.assertEqual([], self.lines([{"id": "t1", "text": "do it"}]))
+
+    def test_the_run_command_reaches_the_build(self):
+        self.write("package.json", {"scripts": {"dev": "next dev"}})
+        PV.configure(self.root, self.project)
+        text = "\n".join(self.lines([{"id": "t1", "text": "do it"}]))
+        self.assertIn("npm run dev", text)
+        self.assertIn("Do not invent a different one", text)
+        # A command watched working says so: a build that has to choose
+        # between two plausible ones should know which was real.
+        self.assertNotIn("watched working", text)
+        PV.note_verified(self.root, self.project, "npm run dev")
+        self.assertIn("watched working",
+                      "\n".join(self.lines([{"id": "t1", "text": "do it"}])))
+
+    def test_what_the_reader_will_look_at_rides_with_the_row(self):
+        self.write("package.json", {"scripts": {"dev": "next dev"}})
+        PV.configure(self.root, self.project)
+        PV.save_intent(self.root, self.project, "t1", "Allow renaming",
+                       {"entrypoint": "/goals",
+                        "scenario": ["Open a goal", "Rename it"],
+                        "expected": "The new name survives a reload"})
+        text = "\n".join(self.lines([{"id": "t1", "text": "Allow renaming"}]))
+        self.assertIn("/goals", text)
+        self.assertIn("1. Open a goal", text)
+        self.assertIn("The new name survives a reload", text)
+        self.assertIn("not when the code compiles", text)
+
+    def test_an_intent_for_a_row_that_was_reworded_is_not_sent(self):
+        self.write("package.json", {"scripts": {"dev": "next dev"}})
+        PV.configure(self.root, self.project)
+        PV.save_intent(self.root, self.project, "t1", "Allow renaming",
+                       {"expected": "The new name survives a reload"})
+        text = "\n".join(self.lines([{"id": "t1", "text": "Allow deleting"}]))
+        self.assertNotIn("survives a reload", text)
+
+
+class ShowUiTests(Fixture):
+    """One press for "I want to see it", and the one honest ending it has.
+
+    The button promises something visual. A project with nothing that serves
+    is told that in a sentence rather than left with a spinner over a frame
+    that will never fill.
+    """
+
+    def test_a_project_with_nothing_that_serves_says_so(self):
+        self.write("main.py", "print('hello')\n")
+        PV.configure(self.root, self.project)
+        out = PV.show_ui(self.root, self.project)
+        self.assertFalse(out["ok"])
+        self.assertTrue(out["not_ready"])
+        self.assertIn("serves a page", out["reason"])
+        # Nothing was started to find that out.
+        self.assertIsNone(PV.running(self.project))
+        # And the pane knows before the press, so the button can say it.
+        state = PV.state(self.root, self.project)
+        self.assertFalse(state["ui"]["available"])
+        self.assertIn("serves a page", state["ui"]["reason"])
+
+    def test_the_serving_profile_is_the_one_the_button_runs(self):
+        # The primary profile is a test suite here; the button still finds
+        # the one that would put a page on screen.
+        self.write("index.html", "<h1>hi</h1>")
+        PV.configure(self.root, self.project)
+        PV.set_primary(self.root, self.project, "static")
+        config = PV.read_config(self.root, self.project)
+        self.assertEqual("static", PV.ui_profile(config)["id"])
+        self.assertTrue(PV.state(self.root, self.project)["ui"]["available"])
+
+    def test_the_steps_that_have_to_happen_first_ride_in_front_of_the_run(self):
+        self.write("package.json", {"scripts": {"dev": "echo serving"}})
+        PV.configure(self.root, self.project)
+        # node_modules is missing, so the install is chained ahead of the
+        # run rather than left as an errand the reader has to do first.
+        out = PV.show_ui(self.root, self.project)
+        self.assertTrue(out["ok"], out)
+        proc = PV.running(self.project)
+        self.assertIn("npm install &&", proc.profile["command"])
+        self.assertTrue(proc.wanted_ui)
+        self.assertEqual(["npm install", "npm run dev"], proc.steps)
+        proc.stop()
+
+    def test_a_run_asked_for_a_page_that_never_serves_one_is_not_ready(self):
+        self.write("index.html", "<h1>hi</h1>")
+        PV.configure(self.root, self.project)
+        out = PV.show_ui(self.root, self.project)
+        self.assertTrue(out["ok"], out)
+        proc = PV.running(self.project)
+        proc.lines.append("building…")
+        # Still up, still nothing serving, and past the grace: the pane says
+        # that rather than showing a terminal nobody asked for.
+        proc.started_at = time.time() - (PV.UI_GRACE_S + 5)
+        state = PV.state(self.root, self.project)
+        self.assertEqual("not_ready", state["status"])
+        self.assertEqual("instructions", state["surface"])
+        self.assertTrue(state["run"]["wanted_ui"])
+        # Inside the grace it is still starting up, not a verdict.
+        proc.started_at = time.time()
+        self.assertIn(PV.state(self.root, self.project)["status"],
+                      ("starting", "running"))
+        proc.stop()
+
+    def test_a_run_started_for_its_output_is_never_called_not_ready(self):
+        # The same process, minus the promise: a simulation printing away is
+        # doing exactly what was asked of it.
+        self.write("main.py", "print('x')\n")
+        PV.configure(self.root, self.project)
+        PV.start(self.root, self.project,
+                 {"id": "t", "command": "sleep 5", "serves": False})
+        proc = PV.running(self.project)
+        proc.started_at = time.time() - (PV.UI_GRACE_S + 5)
+        self.assertNotEqual("not_ready",
+                            PV.state(self.root, self.project)["status"])
+        proc.stop()

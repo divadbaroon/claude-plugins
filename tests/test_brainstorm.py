@@ -607,6 +607,127 @@ class PanelTests(BridgeTestCase):
             "  .map(function (c) { return [c[1].goal_id, c[1].todos]; });")
         self.assertEqual([["g11", ["Widen the tabs"]]], out)
 
+    # --- the picker that says where approved rows land ---------------------
+    #
+    # A native menu shows one line at a time, cannot be looked in, and drops
+    # the indent that is the only thing telling two goals of the same name
+    # apart. This is the goals rail's own search-then-choose instead.
+
+    def todos(self, tail):
+        return self.api(
+            "bs.open();"
+            "bs.state().card = {card: 'todos', todos: ['Widen the tabs']};"
+            "bs.draw();"
+            "var pick = bs.box().querySelector('.hc-bs-pick');"
+            "var rows = function (only) {"
+            "  return Array.prototype.slice.call("
+            "    pick.querySelector('.hc-bs-pick-list').children)"
+            "    .filter(function (r) {"
+            "      return r.getAttribute('data-hc-bs-goalpick') !== null"
+            "        && (!only || only(r)); })"
+            "    .map(function (r) {"
+            "      return r.getAttribute('data-hc-bs-goalpick'); });"
+            "};" + tail)
+
+    def test_where_rows_go_is_chosen_from_a_searched_list_not_a_menu(self):
+        out = self.todos(
+            "out = {menu: bs.box().querySelector('select') !== null,"
+            " field: pick.querySelector('.hc-bs-pick-input') !== null,"
+            " rows: rows(null)};")
+        self.assertFalse(out["menu"])
+        self.assertTrue(out["field"])
+        self.assertEqual(["g1", "g11"], out["rows"])
+
+    def test_typing_in_it_puts_away_the_goals_that_do_not_match(self):
+        # In place: the field being typed in is inside the column a redraw
+        # would throw away, caret and all.
+        out = self.todos(
+            "var field = pick.querySelector('.hc-bs-pick-input');"
+            "field.value = 'ui'; fire('input', field);"
+            "out = {same: bs.box().querySelector('.hc-bs-pick-input') === field,"
+            " shown: rows(function (r) { return r.style.display !== 'none'; })};")
+        self.assertTrue(out["same"])
+        self.assertEqual(["g11"], out["shown"])
+
+    def test_a_search_that_matches_nothing_says_so(self):
+        out = self.todos(
+            "var field = pick.querySelector('.hc-bs-pick-input');"
+            "field.value = 'zzz'; fire('input', field);"
+            "out = [rows(function (r) { return r.style.display !== 'none'; }),"
+            " pick.querySelector('[data-hc-bs-goalnone]').style.display];")
+        self.assertEqual([[], ""], out)
+
+    def test_what_was_typed_is_still_there_after_the_column_is_redrawn(self):
+        out = self.todos(
+            "var field = pick.querySelector('.hc-bs-pick-input');"
+            "field.value = 'ui'; fire('input', field);"
+            "bs.draw();"
+            "out = bs.box().querySelector('.hc-bs-pick-input').value;")
+        self.assertEqual("ui", out)
+
+    def test_the_goal_picked_in_it_is_the_one_rows_are_written_under(self):
+        out = self.todos(
+            "click(pick.querySelector('[data-hc-bs-goalpick=\"g11\"]'));"
+            "out = {id: bs.state().goalId, target: bs.target(),"
+            " marked: rows(function (r) {"
+            "   return r.getAttribute('data-hc-on') === '1'; })};")
+        self.assertEqual("g11", out["id"])
+        self.assertEqual("g11", out["target"])
+        self.assertEqual(["g11"], out["marked"])
+
+    # --- a card sent from what was typed into it ---------------------------
+
+    def asked(self, tail):
+        return self.api(
+            "bs.open();"
+            "bs.state().card = {card: 'questions', questions: {items: ["
+            "  {id: 'q1', type: 'open', title: 'What is it for?'}]}};"
+            "bs.draw();"
+            "var send = bs.box().querySelector('[data-hc-bs-act=\"answers\"]');"
+            "var field = bs.box().querySelector('[data-hc-bs-field]');" + tail)
+
+    def test_a_typed_answer_is_what_makes_the_card_sendable(self):
+        # A picked answer redraws the card and the button comes back armed;
+        # a typed one does not, and without arming it where it stands the
+        # card can never be sent however much is written in it.
+        out = self.asked(
+            "var before = send.getAttribute('disabled');"
+            "field.value = 'a rail nobody can read'; fire('input', field);"
+            "out = [before, send.getAttribute('disabled')];")
+        self.assertEqual(["disabled", None], out)
+
+    def test_taking_the_answer_back_out_makes_it_unsendable_again(self):
+        out = self.asked(
+            "field.value = 'something'; fire('input', field);"
+            "field.value = ''; fire('input', field);"
+            "out = send.getAttribute('disabled');")
+        self.assertEqual("disabled", out)
+
+    def test_pressing_it_sends_what_was_typed(self):
+        out = self.asked(
+            "field.value = 'a rail nobody can read'; fire('input', field);"
+            "click(send);"
+            "out = calls.filter(function (c) {"
+            "  return c[1] && c[1].op === 'brainstorm_say'; })"
+            "  .map(function (c) {"
+            "    var said = c[1].transcript;"
+            "    return said[said.length - 1].text; });")
+        self.assertEqual(1, len(out))
+        self.assertIn("a rail nobody can read", out[0])
+
+    def test_the_line_under_a_declined_offer_arms_its_send_the_same_way(self):
+        out = self.api(
+            "bs.open();"
+            "bs.state().card = {card: 'offer', offer: 'goals'};"
+            "bs.state().declined = true;"
+            "bs.draw();"
+            "var send = bs.box().querySelector('[data-hc-bs-act=\"no\"]');"
+            "var before = send.getAttribute('disabled');"
+            "var note = bs.box().querySelector('[data-hc-bs-note]');"
+            "note.value = 'it has not read the rail'; fire('input', note);"
+            "out = [before, send.getAttribute('disabled')];")
+        self.assertEqual(["disabled", None], out)
+
     def test_closing_it_leaves_the_conversation_where_it_was(self):
         out = self.api(
             "bs.open();"

@@ -170,6 +170,63 @@ def project_lines(session_id: str, root: Optional[Path]) -> List[str]:
     return lines
 
 
+def execution_lines(session_id: str, root: Optional[Path],
+                    goal: Dict[str, Any],
+                    rows: List[Dict[str, Any]]) -> List[str]:
+    """The run this project has, and what to look at once it is running.
+
+    Read from what the workspace already knows -- the run profile the
+    preview pane detected, and the intent stored for a row the reader asked
+    about. Nothing is derived here and nothing is asked of a model: a build
+    prompt is not the place to start discovering how a repository boots.
+    """
+    from . import preview as PREVIEW
+    from . import project_store as PS
+    cwd = str(CS.load_manifest(session_id, root).get("cwd") or "").strip()
+    if not cwd:
+        return []
+    record = PS.load_project(root, cwd)
+    where = str(record.get("working_dir") or "") or cwd
+    try:
+        config = PREVIEW.read_config(root, where)
+    except (OSError, ValueError):
+        return []
+    profile = PREVIEW._primary(config) if config else {}
+    intents = []
+    try:
+        for row in rows:
+            held = PREVIEW.intent_of(root, where, str(row.get("id") or ""),
+                                     str(row.get("text") or ""))
+            if held:
+                intents.append((row, held))
+    except (OSError, ValueError):
+        intents = []
+    if not profile and not intents:
+        return []
+    out = ["", "# How this project runs", ""]
+    if profile.get("command"):
+        out.append(f"{profile['command']}"
+                   + (f" — {profile['why']}" if profile.get("why") else ""))
+        if config.get("verified_command") == profile.get("command"):
+            out.append("That command has been watched working in this"
+                       " directory.")
+        out.append("Use it to check your work. Do not invent a different"
+                   " one, and do not add a build step the project does not"
+                   " have.")
+    for row, intent in intents:
+        out += ["", f"For \"{' '.join(str(row.get('text') or '').split())}\","
+                    " the reader is going to look at:"]
+        if intent.get("entrypoint"):
+            out.append(f"  where: {intent['entrypoint']}")
+        for n, step in enumerate(intent.get("scenario") or [], 1):
+            out.append(f"  {n}. {step}")
+        if intent.get("expected"):
+            out.append(f"  expected: {intent['expected']}")
+        out.append("  Your work is done when that is true, not when the code"
+                   " compiles.")
+    return out
+
+
 def compose_prompt(session_id: str, goals: Dict[str, Any],
                    important: Dict[str, Any], prompts: List[Dict[str, Any]],
                    goal: Dict[str, Any], rows: List[Dict[str, Any]],
@@ -211,6 +268,13 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
             note = " ".join(str(past.get("note") or "").split())
             lines.append(f"{indent}  (run {n} ended {past['state']}; the user"
                          f" reopened it: \"{note}\")")
+    # How to see the work, and what would count as it working. The build is
+    # otherwise handed the change to make and nothing about the program it
+    # is changing: no command that runs it, no page to look at, no sentence
+    # saying what should be true afterwards. That is the whole chain the
+    # workspace is for -- goal, row, change, run, observation -- and its
+    # last three links were being left to the session to guess at.
+    lines += execution_lines(session_id, root, goal, rows)
     # Screenshots pasted into the rows going out: each "[attachment #N]" a
     # row cites, resolved to the file it names, so the session can open it.
     shots = GM.render_attachments(rows).rstrip("\n")

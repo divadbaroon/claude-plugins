@@ -3204,6 +3204,27 @@
       ".hc-bs-field{display:block;width:100%;box-sizing:border-box;margin-top:8px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px/1.6 'Source Code Pro',monospace;padding:7px 9px;outline:none}",
       ".hc-bs-field::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-bs-field:focus{border-color:var(--acc,#a5492a)}",
+      // Where approved rows land: searched, not scrolled through. A native
+      // menu shows one line at a time, drops the indent that tells two goals
+      // of the same name apart, and cannot be looked in -- so this is the
+      // goals rail's own search-then-choose, sized to fit inside a card.
+      ".hc-bs-pick{margin-top:8px;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);overflow:hidden}",
+      ".hc-bs-pick:focus-within{border-color:var(--acc,#a5492a)}",
+      ".hc-bs-pick-field{display:flex;align-items:center;gap:8px;padding:0 9px;border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-bs-pick-glyph{flex:none;display:flex;align-items:center;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-pick:focus-within .hc-bs-pick-glyph{color:var(--acc,#a5492a)}",
+      ".hc-bs-pick-input{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;outline:none;background:transparent;color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:7px 0;-webkit-appearance:none;appearance:none}",
+      ".hc-bs-pick-input::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-pick-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:14px/1 'Source Code Pro',monospace;padding:2px}",
+      ".hc-bs-pick-clear:hover{color:var(--ink,#111)}",
+      ".hc-bs-pick-field[data-hc-typed] .hc-bs-pick-clear{display:block}",
+      ".hc-bs-pick-list{max-height:176px;overflow-y:auto;padding:4px}",
+      ".hc-bs-pick-row{display:flex;gap:9px;align-items:center;padding:6px 8px;border:1px solid transparent;border-radius:4px;cursor:pointer;user-select:none}",
+      ".hc-bs-pick-row:hover{background:var(--hov,#f2f2f2)}",
+      ".hc-bs-pick-row[data-hc-on=\"1\"]{border-color:var(--acc,#a5492a);background:var(--accbg,#f5e2d9)}",
+      ".hc-bs-pick-row .hc-bs-mark{margin-top:0}",
+      ".hc-bs-pick-title{flex:1 1 auto;min-width:0;color:var(--ink,#111);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".hc-bs-pick-none{padding:7px 9px;color:var(--fnt,#9b9b9b);font-size:10.5px}",
       ".hc-bs-acts{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:14px}",
       ".hc-bs-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:transparent;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:6px 11px}",
       ".hc-bs-btn:hover{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
@@ -4388,6 +4409,7 @@
     draft: "",
     goalId: "",        // where approved rows land; the selected goal by
                        // default, changed with the picker on the card
+    goalq: "",         // what is typed into that picker's search field
     say: "",           // what the last write reported
     bad: false
   };
@@ -4518,6 +4540,22 @@
                        Number(opt.getAttribute("data-hc-bs-i")));
         return;
       }
+      var goal = closestAttr(target, "data-hc-bs-goalpick");
+      if (goal) {
+        stopEvent(event);
+        bs.goalId = str(goal.getAttribute("data-hc-bs-goalpick"));
+        bsMarkGoal(bs.goalId);
+        return;
+      }
+      if (closestAttr(target, "data-hc-bs-goalclear")) {
+        stopEvent(event);
+        bs.goalq = "";
+        var field = brainstormBox
+          && brainstormBox.querySelector("[data-hc-bs-goalq]");
+        if (field) { field.value = ""; if (field.focus) field.focus(); }
+        bsFilterGoals();
+        return;
+      }
       var act = closestAttr(target, "data-hc-bs-act");
       if (!act || act.getAttribute("disabled") !== null) return;
       stopEvent(event);
@@ -4540,18 +4578,25 @@
         else if (send) send.setAttribute("disabled", "disabled");
         return;
       }
+      if (target.getAttribute("data-hc-bs-goalq") !== null) {
+        bs.goalq = str(target.value);
+        bsFilterGoals();
+        return;
+      }
       if (target.getAttribute("data-hc-bs-note") !== null) {
         bs.note = str(target.value);
+        // A declined offer is only useful when it says what is missing, so
+        // the line they are typing is what arms its Send.
+        bsArm("no", !!str(bs.note).trim());
         return;
       }
       var qid = target.getAttribute("data-hc-bs-field");
-      if (qid) bs.answers[qid] = str(target.value);
-    }, true);
-    document.addEventListener("change", function (event) {
-      var target = event && event.target;
-      if (!target || !target.getAttribute) return;
-      if (target.getAttribute("data-hc-bs-goal") !== null) {
-        bs.goalId = str(target.value);
+      if (qid) {
+        bs.answers[qid] = str(target.value);
+        // Typed answers, unlike picked ones, do not go through a redraw --
+        // without this the card stays unsendable however much is written in
+        // it, because the button was drawn back when nothing was.
+        bsArm("answers", !!brainstormAnswers() && !bs.thinking);
       }
     }, true);
     document.addEventListener("keydown", function (event) {
@@ -4824,6 +4869,21 @@
     return node;
   }
 
+  // A primary button drawn from a field's contents, brought up to date where
+  // it stands. Only for the two cards whose Send is decided by something
+  // typed: a redraw would rebuild the field mid-word and lose the caret, so
+  // the button has to be reached rather than redrawn.
+  function bsArm(act, ok) {
+    var node = brainstormBox && brainstormBox.querySelector
+      ? brainstormBox.querySelector("[data-hc-bs-act=\"" + act + "\"]")
+      : null;
+    if (!node) return false;
+    node.className = "hc-bs-btn" + (ok ? " hc-bs-btn-on" : "");
+    if (ok) node.removeAttribute("disabled");
+    else node.setAttribute("disabled", "disabled");
+    return true;
+  }
+
   function bsCard(col, eyebrow) {
     var card = el("div", "hc-bs-card");
     if (eyebrow) card.appendChild(el("div", "hc-bs-eyebrow", eyebrow));
@@ -5002,21 +5062,117 @@
     var target = brainstormTarget();
     var all = brainstormGoalRows();
     card.appendChild(el("div", "hc-bs-lbl", "put these under"));
-    var pickBox = el("select", "hc-bs-field");
-    pickBox.setAttribute("data-hc-bs-goal", "");
-    all.forEach(function (row) {
-      var option = el("option", "",
-                      new Array(row.depth + 1).join(" ") + row.title);
-      option.setAttribute("value", row.id);
-      if (row.id === target) option.setAttribute("selected", "selected");
-      pickBox.appendChild(option);
-    });
-    card.appendChild(pickBox);
+    bsGoalPicker(card, all, target);
     var acts = el("div", "hc-bs-acts");
     acts.appendChild(bsButton("Add these TODOs", "write-todos", true,
                               bs.thinking || !all.length));
     acts.appendChild(bsButton("No, keep talking", "dismiss", false));
     card.appendChild(acts);
+  }
+
+  // The goals a card's rows can be hung on, searched rather than scrolled.
+  // Built whole and filtered in place afterwards: what is typed here is
+  // never a reason to rebuild the column the field itself sits in.
+  function bsGoalPicker(card, rows, target) {
+    var wrap = el("div", "hc-bs-pick");
+    var field = el("div", "hc-bs-pick-field");
+    field.appendChild(bsSearchGlyph());
+    var input = el("input", "hc-bs-pick-input");
+    input.setAttribute("type", "text");
+    input.setAttribute("spellcheck", "false");
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("placeholder", "Search your goals");
+    input.setAttribute("aria-label", "Search your goals");
+    input.setAttribute("data-hc-bs-goalq", "");
+    input.value = str(bs.goalq);
+    field.appendChild(input);
+    var clear = el("span", "hc-bs-pick-clear", "×");
+    clear.setAttribute("role", "button");
+    clear.setAttribute("title", "Clear");
+    clear.setAttribute("aria-label", "Clear search");
+    clear.setAttribute("data-hc-bs-goalclear", "");
+    field.appendChild(clear);
+    wrap.appendChild(field);
+    var list = el("div", "hc-bs-pick-list");
+    rows.forEach(function (row) {
+      var line = el("div", "hc-bs-pick-row");
+      var on = row.id === target;
+      line.setAttribute("data-hc-bs-goalpick", row.id);
+      line.setAttribute("data-hc-on", on ? "1" : "0");
+      // The title, lowercased, kept on the node: the filter reads it rather
+      // than the text, which carries the indent that says where a goal sits.
+      line.setAttribute("data-hc-bs-goaltext", row.title.toLowerCase());
+      line.style.paddingLeft = (8 + row.depth * 14) + "px";
+      line.appendChild(el("span", "hc-bs-mark", on ? "●" : ""));
+      line.appendChild(el("span", "hc-bs-pick-title", row.title));
+      list.appendChild(line);
+    });
+    var none = el("div", "hc-bs-pick-none", "no goal by that name");
+    none.setAttribute("data-hc-bs-goalnone", "");
+    list.appendChild(none);
+    wrap.appendChild(list);
+    card.appendChild(wrap);
+    bsFilterGoals(wrap);
+    return wrap;
+  }
+
+  // The magnifier the goals rail's own search field carries, so the two read
+  // as the same control in two places.
+  function bsSearchGlyph() {
+    var glyph = el("span", "hc-bs-pick-glyph");
+    glyph.innerHTML = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\""
+      + " fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\">"
+      + "<circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle>"
+      + "<path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg>";
+    return glyph;
+  }
+
+  function bsPickBox() {
+    return brainstormBox && brainstormBox.querySelector
+      ? brainstormBox.querySelector(".hc-bs-pick") : null;
+  }
+
+  // Rows shown or hidden where they stand. A redraw would take the caret out
+  // of the field that decided the query, which is the same reason the
+  // composer's Send is toggled rather than rebuilt.
+  function bsFilterGoals(box) {
+    var wrap = box || bsPickBox();
+    if (!wrap) return false;
+    var want = str(bs.goalq).trim().toLowerCase();
+    var list = wrap.querySelector(".hc-bs-pick-list");
+    var shown = 0, none = null;
+    Array.prototype.slice.call((list && list.children) || [])
+      .forEach(function (row) {
+        if (row.getAttribute("data-hc-bs-goalnone") !== null) {
+          none = row;
+          return;
+        }
+        var text = str(row.getAttribute("data-hc-bs-goaltext"));
+        var hit = !want || text.indexOf(want) >= 0;
+        row.style.display = hit ? "" : "none";
+        if (hit) shown += 1;
+      });
+    if (none) none.style.display = shown ? "none" : "";
+    var field = wrap.querySelector(".hc-bs-pick-field");
+    if (field && want) field.setAttribute("data-hc-typed", "");
+    else if (field) field.removeAttribute("data-hc-typed");
+    return true;
+  }
+
+  // Which one is chosen, marked in place for the same reason.
+  function bsMarkGoal(id) {
+    var wrap = bsPickBox();
+    var list = wrap && wrap.querySelector(".hc-bs-pick-list");
+    if (!list) return false;
+    Array.prototype.slice.call(list.children || []).forEach(function (row) {
+      var which = row.getAttribute("data-hc-bs-goalpick");
+      if (which === null) return;
+      var on = which === id;
+      row.setAttribute("data-hc-on", on ? "1" : "0");
+      var mark = row.children && row.children[0];
+      if (mark) mark.textContent = on ? "●" : "";
+    });
+    return true;
   }
 
   // --- the project's sources ----------------------------------------------
@@ -8515,7 +8671,16 @@
       // 1px line, and none against the window.
       "[data-hc-launch] .hc-shell{gap:0!important;align-items:stretch!important;margin-top:0!important}",
       "[data-hc-launch] .hc-rail-left{position:relative;flex:0 0 var(--hc-left)!important;height:calc(100vh - var(--hc-top))!important;padding:0 0 6px!important;border-width:0 1px 0 0!important;border-radius:0!important}",
-      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border:0!important;border-radius:0!important;padding:14px 20px 18px!important}",
+      // The display is !important because the artifact writes one inline
+      // ({{ rightDisp }}), and a block pane cannot hand its height to the
+      // preview inside it.
+      "[data-hc-launch] .hc-main{display:flex!important;flex-direction:column;flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border:0!important;border-radius:0!important;padding:14px 20px 18px!important}",
+      // A column, so the preview can have what is left of it. Everything
+      // above the pane -- the title, the sources, the one tab -- keeps its
+      // own height; the preview takes the rest, which is what a running
+      // program needs to be looked at in.
+      "[data-hc-launch] .hc-main>*{flex:none}",
+      "[data-hc-launch] .hc-main>.hc-preview{flex:1 1 auto;min-height:320px}",
       "[data-hc-launch] .hc-rail-right{position:relative;order:3;flex:0 0 var(--hc-right);display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:solid var(--bd);border-width:0 0 0 1px;border-radius:0;background:transparent;padding:0 0 12px}",
       // Either rail can be hidden -- from the header toggles, or by
       // double-clicking its divider -- and the document takes the space.
@@ -8718,8 +8883,8 @@
       // something is printing, and a hole for the embedded page when one
       // is up -- the frame itself is positioned over that hole from
       // outside the artifact, so it survives a re-render.
-      "[data-hc-launch] .hc-preview{display:flex;flex-direction:column;margin-top:14px;min-height:0}",
-      "[data-hc-launch] .hc-preview-mount{display:flex;flex-direction:column;gap:14px;min-height:0}",
+      "[data-hc-launch] .hc-preview{display:flex;flex-direction:column;margin-top:14px;min-height:0;flex:1 1 auto}",
+      "[data-hc-launch] .hc-preview-mount{display:flex;flex-direction:column;gap:14px;min-height:0;flex:1 1 auto}",
       "[data-hc-launch] .hc-pv-cards{display:flex;flex-direction:column;gap:12px}",
       "[data-hc-launch] .hc-pv-card{border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:15px 17px 16px;display:flex;flex-direction:column;gap:9px;align-items:flex-start}",
       "[data-hc-launch] .hc-pv-kicker{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--mut)}",
@@ -9683,6 +9848,9 @@
       restart = todoRestartOf(runs[id]);
     }
     if (!id || !restart) return false;
+    // Read before writing: a second window on the same store may have put
+    // its own verdicts away since this page last looked.
+    restartHidden = null;
     var saved = loadRestartHidden();
     saved[id] = todoRestartStamp(restart);
     try { localStorage.setItem(RESTART_HIDE_KEY, JSON.stringify(saved)); } catch (e) {}
@@ -9740,6 +9908,7 @@
     why.className = "hc-todo-restart-why";
     why.appendChild(span("hc-todo-restart-warn", "⚠"));
     why.appendChild(span("hc-todo-restart-why-text", restart.why || RESTART_WHY));
+    why.appendChild(hideBtn());
     wrap.appendChild(why);
     // The prompt, boxed and labelled for where it goes, with a copy button
     // in the box's own corner: the whole point of the check is this text
@@ -11501,6 +11670,12 @@
         todoRestartCopy(copyFor);
         return;
       }
+      var hideFor = node.getAttribute("data-hc-todo-restart-hide");
+      if (hideFor !== null) {
+        event.preventDefault();
+        todoRestartHide(hideFor);
+        return;
+      }
       var termFor = node.getAttribute("data-hc-todo-term");
       if (termFor !== null) {
         node.textContent = "opening…";
@@ -12080,6 +12255,7 @@
         previewDo("preview_start", arg ? { command: arg } : {});
         return;
       }
+      if (what === "ui") { previewDo("preview_show_ui"); return; }
       if (what === "again") {
         previewDo("preview_forget").then(function () {
           previewDo("preview_start", arg ? { command: arg } : {});
@@ -12154,6 +12330,13 @@
     return box;
   }
 
+  function pvNumber(value) {
+    // str() answers "" for anything that is not a string, which is right
+    // everywhere else and wrong for an exit code: a run that ended 1 was
+    // reported as "exit ".
+    return (value === null || value === undefined) ? "?" : String(value);
+  }
+
   function pvElapsed(run) {
     var seconds = Math.max(0, Math.round((run && run.seconds) || 0));
     if (seconds < 90) return seconds + "s";
@@ -12209,14 +12392,31 @@
     return card;
   }
 
+  function pvUiOffer(state, card) {
+    // One press for "I want to see it": whatever has to happen first, then
+    // the thing that serves. Where nothing serves, the button is replaced
+    // by the sentence saying so -- a control that promises a page and
+    // cannot produce one is worse than no control.
+    var ui = state.ui || {};
+    if (ui.available) {
+      card.appendChild(pvButton(
+        previewBusy === "preview_show_ui" ? "building…" : "Show UI",
+        "ui", "", "go"));
+      return;
+    }
+    card.appendChild(el("div", "hc-pv-note",
+                        "UI not ready for preview — " + str(ui.reason)));
+  }
+
   function pvReady(state) {
     var profile = state.profile || {};
     var card = pvCard("RUN THIS PROJECT", str(profile.name) || "Run");
-    card.appendChild(pvCommand(str(profile.command), [
-      pvButton(previewBusy === "preview_start" ? "starting…" : "Run",
-               "run", "", "go"),
-      pvButton("Copy", "copy", str(profile.command))]));
+    var acts = [pvButton(previewBusy === "preview_start" ? "starting…" : "Run",
+                         "run", "", "go"),
+                pvButton("Copy", "copy", str(profile.command))];
+    card.appendChild(pvCommand(str(profile.command), acts));
     if (profile.why) card.appendChild(pvWhy(str(profile.why)));
+    pvUiOffer(state, card);
     if (state.verified_command === profile.command && state.verified_at) {
       card.appendChild(el("div", "hc-pv-note",
                           "This command has been watched working here."));
@@ -12249,7 +12449,17 @@
       }
       card.appendChild(pvCommand(str(blocker.command), acts));
       card.appendChild(pvWhy("Why: " + str(blocker.why)));
-      card.appendChild(pvButton("I did this", "recheck", "", "quiet"));
+      var foot = el("div", "hc-pv-alts");
+      foot.appendChild(pvButton("I did this", "recheck", "", "quiet"));
+      // The step and the run in one press, for the reader who wants the
+      // page rather than the errand.
+      if ((state.ui || {}).available && blocker.kind === "run") {
+        foot.appendChild(pvButton(
+          previewBusy === "preview_show_ui" ? "building…"
+                                            : "Do it and show me the UI",
+          "ui", "", "go"));
+      }
+      card.appendChild(foot);
       wrap.appendChild(card);
     });
     return wrap;
@@ -12305,9 +12515,8 @@
     var card = pvCard("FINISHED",
                       run.exit_code === 0 || run.exit_code === null
                         ? "It ran and ended." : "It ended.");
-    card.appendChild(pvWhy(str(run.command) + " · "
-                           + (run.exit_code === 0 ? "exit 0"
-                              : "exit " + str(run.exit_code))
+    card.appendChild(pvWhy(str(run.command) + " · exit "
+                           + pvNumber(run.exit_code)
                            + " · " + pvElapsed(run)));
     card.appendChild(pvCommand("", [
       pvButton("Run again", "again", "", "go")]).lastChild);
@@ -12330,7 +12539,7 @@
     var wrap = el("div", "hc-pv-live");
     var card = pvCard("PREVIEW FAILED", "It stopped instead of starting.");
     card.appendChild(pvWhy(str(run.command) + " · exit "
-                           + str(run.exit_code)));
+                           + pvNumber(run.exit_code)));
     if (previewFix && previewFix.reason) {
       card.appendChild(el("div", "hc-pv-fix", str(previewFix.reason)));
       if (previewFix.command) {
@@ -12351,6 +12560,27 @@
     return wrap;
   }
 
+  function pvNotReady(state) {
+    var run = state.run || {};
+    var wrap = el("div", "hc-pv-live");
+    var card = pvCard("UI NOT READY FOR PREVIEW",
+                      "It is running, but nothing is serving a page.");
+    card.appendChild(pvWhy(
+      (run.steps && run.steps.length > 1
+        ? "Ran: " + run.steps.join(" · ") + ". "
+        : str(run.command) + ". ")
+      + "No address has been printed, so there is nothing to embed yet."
+      + " The output is below — it may still be building, or this may not"
+      + " be something with a UI."));
+    var acts = el("div", "hc-pv-alts");
+    acts.appendChild(pvButton("Keep waiting", "recheck", "", "quiet"));
+    acts.appendChild(pvButton("Stop", "stop", "", "quiet"));
+    card.appendChild(acts);
+    wrap.appendChild(card);
+    wrap.appendChild(pvTerminal(run.lines, true));
+    return wrap;
+  }
+
   function pvEmpty(state) {
     var card = pvCard("", "Nothing to preview yet.");
     card.appendChild(pvWhy(str(state.reason)
@@ -12363,6 +12593,7 @@
     if (status === "unconfigured") {
       return state.surface === "empty" ? pvEmpty(state) : pvUnconfigured(state);
     }
+    if (status === "not_ready") return pvNotReady(state);
     if (status === "needs_user_action") return pvBlocked(state);
     if (status === "ready" || status === "stale") return pvReady(state);
     if (status === "running" && state.surface === "web") {
@@ -12420,6 +12651,7 @@
             (state.profiles || []).length,
             (state.blockers || []).map(function (b) { return b.id; }).join(","),
             (run.lines || []).length, run.exit_code, run.embeddable,
+            (state.ui || {}).available, (state.ui || {}).reason,
             state.stale, previewBusy, previewSaid,
             previewFix ? previewFix.reason : "",
             previewRow(), state.intent ? state.intent.expected : ""].join("|");
@@ -16153,6 +16385,8 @@
       restartOf: todoRestartOf,
       renderRestart: todoRestartPaint,
       copyRestart: todoRestartCopy,
+      hideRestart: todoRestartHide,
+      restartHidden: todoRestartHidden,
       openLog: function (goalId) {
         watchOpen[goalId] = true;
         todoLoadLog(goalId);

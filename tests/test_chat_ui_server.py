@@ -1215,10 +1215,11 @@ class ChatUiServerTests(unittest.TestCase):
                     "() => getComputedStyle(document.querySelector('.hc'))"
                     ".getPropertyValue('--ink').trim()")
                 self.assertTrue(ink)
-                # The pane under it is the document's preview -- the middle
-                # reads, the rail writes. The textbox pane both replaced is
-                # dormant, so none of its labels are on the page at all.
-                expect(page.locator(".hc-preview-body")).to_be_visible()
+                # The pane under it is the run preview -- what happens if
+                # you run what you have built -- and not a second copy of
+                # the document. The textbox pane both replaced is dormant,
+                # so none of its labels are on the page at all.
+                expect(page.locator(".hc-preview-mount")).to_be_visible()
                 expect(page.locator('[placeholder^="Write in markdown"]')
                        ).to_be_hidden()
                 self.open_notes(page)
@@ -1605,12 +1606,11 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(rail.locator(self.EDITOR)).to_have_count(1)
 
                 open_prompt_tab(page)
-                # Reading the prompt does not cost sight of what it was
-                # assembled from: the editor gives up the rail, and the
-                # middle is still drawing the same document.
+                # The rail's tabs take turns: reading the prompt puts the
+                # editor away. The middle is not one of the two -- it is
+                # the run preview, and it stays whichever tab is open.
                 expect(page.locator(self.EDITOR)).to_be_hidden()
-                expect(page.locator(".hc-preview-body")).to_contain_text(
-                    "Ship the document pane.")
+                expect(page.locator(".hc-preview-mount")).to_be_visible()
                 # The tab prints the prompt and offers no box to type in:
                 # what is on screen is the whole of what a build would send.
                 expect(rail.locator(".hc-rail-ctx-body")).to_have_count(1)

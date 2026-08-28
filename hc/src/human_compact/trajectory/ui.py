@@ -2554,6 +2554,11 @@ def _preview_op(op, trajdir, chat_scoped):
         if typed:
             profile["command"] = typed[:400]
         return PREVIEW.start(root, cwd, profile, session_id=session_id)
+    if kind == "preview_show_ui":
+        # One press for "I want to see it": the steps that have to happen
+        # first, then the thing that serves. It answers not_ready rather
+        # than starting something that cannot end in a page.
+        return PREVIEW.show_ui(root, cwd, session_id=_session_id)
     if kind == "preview_stop":
         return PREVIEW.stop(cwd, root, _session_id)
     if kind == "preview_forget":
@@ -2569,7 +2574,8 @@ def _preview_op(op, trajdir, chat_scoped):
 
 
 PREVIEW_OPS = ("preview_configure", "preview_pick", "preview_start",
-               "preview_stop", "preview_forget", "preview_explain")
+               "preview_show_ui", "preview_stop", "preview_forget",
+               "preview_explain")
 
 
 def _preview_state(trajdir, chat_scoped, goal_id="", todo_id=""):

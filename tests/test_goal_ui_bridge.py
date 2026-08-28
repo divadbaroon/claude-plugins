@@ -1149,7 +1149,10 @@ class BuildWatchTests(BridgeTestCase):
             "  copy: (function () { var c = box.querySelector('[data-hc-todo-restart-copy]');"
             "    return c ? [c.textContent, c.getAttribute('data-hc-todo-restart-copy')] : null; })(),"
             "  prompt: (function () { var p = box.querySelector('.hc-todo-restart-prompt');"
-            "    return p ? [p.tagName, p.textContent] : null; })() } : null;"
+            "    return p ? [p.tagName, p.textContent] : null; })(),"
+            "  hide: (function () { var h = box.querySelector('[data-hc-todo-restart-hide]');"
+            "    return h ? [h.textContent, h.getAttribute('data-hc-todo-restart-hide')] : null; })()"
+            "  } : null;"
             % json.dumps(restart))
 
     def test_the_check_in_progress_names_the_model_it_moved_to(self):
@@ -1186,11 +1189,52 @@ class BuildWatchTests(BridgeTestCase):
             self.assertIsNone(self.paint(dict(self.CHECK, status=status)), status)
         self.assertIsNone(self.paint(None))
 
+    def test_either_state_offers_a_way_to_put_the_notice_away(self):
+        # Waiting on the answer or holding it: both are the reader's to
+        # dismiss, and the button names the goal it is dismissing for.
+        self.assertEqual(["×", "g1"], self.paint(self.CHECK)["hide"])
+        self.assertEqual(["×", "g1"],
+                         self.paint(dict(self.CHECK, status="yes", prompt="p"))["hide"])
+
+    YES = {"status": "yes", "model": "sonnet", "effort": "high",
+           "from_model": "opus", "why": "a daemon holds the old code",
+           "prompt": "Restart the dev process.",
+           "at": "2026-08-26T06:37:00+00:00", "error": ""}
+
+    def test_a_dismissed_notice_stays_gone_until_the_next_build_asks_again(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var yes = %s, later = %s;"
+            "var paint = function (held, goalId) {"
+            "  var box = document.createElement('div');"
+            "  return !!L.renderRestart(box, L.restartOf({ restart: held }), goalId); };"
+            "var before = paint(yes, 'g1');"
+            "L.hideRestart('g1', L.restartOf({ restart: yes }));"
+            "out = { before: before, after: paint(yes, 'g1'),"
+            # A later build's verdict is news, and so is this one's own
+            # spinner turning into an answer.
+            "  again: paint(later, 'g1'),"
+            "  checking: paint({ status: 'checking', model: 'sonnet',"
+            "                    effort: 'high', at: yes.at }, 'g1'),"
+            # And it is this goal's notice that was put away, not every goal's.
+            "  elsewhere: paint(yes, 'g2'),"
+            "  saved: JSON.parse(localStorage.getItem('hc-restart-hidden-v1')) };"
+            % (json.dumps(self.YES),
+               json.dumps(dict(self.YES, at="2026-08-27T09:00:00+00:00"))))
+        self.assertTrue(out["before"])
+        self.assertFalse(out["after"])
+        self.assertTrue(out["again"])
+        self.assertTrue(out["checking"])
+        self.assertTrue(out["elsewhere"])
+        # Written down, so a reload does not bring back what was put away.
+        self.assertEqual({"g1": "yes@2026-08-26T06:37:00+00:00"}, out["saved"])
+
     def test_the_stylesheet_carries_the_check(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         for cls in (".hc-todo-restart{", ".hc-todo-restart-spin{", "hc-todo-spin",
                     ".hc-todo-restart-from{text-decoration:line-through",
-                    ".hc-todo-restart-copy{", ".hc-todo-restart-prompt{"):
+                    ".hc-todo-restart-copy{", ".hc-todo-restart-prompt{",
+                    ".hc-todo-restart-hide{"):
             self.assertIn(cls, css)
 
 
@@ -5318,9 +5362,14 @@ class LaunchSkinTests(BridgeTestCase):
                       "!important;height:calc(100vh - var(--hc-top))!important;"
                       "padding:0 0 6px!important;border-width:0 1px 0 0!important;"
                       "border-radius:0!important}", css)
-        self.assertIn(".hc-main{flex:1 1 auto!important;order:2;"
+        # A column, because the pane's one child is a preview that takes
+        # whatever height is left. The display is !important for the same
+        # reason the width is: the artifact writes one inline.
+        self.assertIn(".hc-main{display:flex!important;flex-direction:column;"
+                      "flex:1 1 auto!important;order:2;"
                       "height:calc(100vh - var(--hc-top))!important;top:0!important;"
                       "border:0!important;border-radius:0!important", css)
+        self.assertIn(".hc-main>.hc-preview{flex:1 1 auto", css)
         self.assertRegex(css, r"\.hc-rail-right\{[^}]*border-width:0 0 0 1px;"
                               r"border-radius:0;")
         # The header is a fixed height -- two rows of --hc-row -- and
