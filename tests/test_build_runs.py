@@ -1400,6 +1400,7 @@ class BuildSettingsTests(BuildRunTests):
         self.assertEqual(out["settings"], BUILD.load_settings(self.session, self.root))
         run = BUILD.Run(self.session, self.root, "g1", str(self.root), "sess")
         cmd = run._command("hi", resume=False)
+        self.assertEqual(str((self.bin / "claude").resolve()), cmd[0])
         self.assertEqual("claude-opus-5", cmd[cmd.index("--model") + 1])
         self.assertEqual("high", cmd[cmd.index("--effort") + 1])
         # One key at a time; nothing chosen is the CLI's own default.
@@ -1415,6 +1416,20 @@ class BuildSettingsTests(BuildRunTests):
         cmd = run._command("hi", resume=False)
         self.assertEqual("sonnet", cmd[cmd.index("--model") + 1])
         self.assertEqual("low", cmd[cmd.index("--effort") + 1])
+
+    def test_the_official_install_is_found_without_it_on_path(self):
+        home = self.root / "thin-session-home"
+        installed = home / ".local" / "bin" / "claude"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("#!/bin/sh\n")
+        installed.chmod(installed.stat().st_mode | stat.S_IXUSR)
+        old_path = os.environ["PATH"]
+        os.environ["PATH"] = "/usr/bin:/bin"
+        try:
+            self.assertEqual(installed.resolve(),
+                             BUILD._claude_executable(home))
+        finally:
+            os.environ["PATH"] = old_path
 
     def test_an_effort_the_cli_does_not_know_and_a_bad_model_id_are_refused(self):
         self.assertFalse(BUILD.save_settings(self.session, self.root,
