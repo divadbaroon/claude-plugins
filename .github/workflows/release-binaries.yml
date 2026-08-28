@@ -19,9 +19,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          registry-url: https://registry.npmjs.org
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
+      # A tag that disagrees with package.json ships nothing: fail here,
+      # before anything is built or published anywhere.
+      - if: github.ref_type == 'tag'
+        run: |
+          version=$(node -p "require('./engelbart/package.json').version")
+          if [ "engelbart-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package version $version" >&2
+            exit 1
+          fi
       - run: npm test
         working-directory: engelbart
       - run: scripts/build-binary.sh darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl
@@ -49,3 +59,17 @@ jobs:
             engelbart/dist/engelbart-* engelbart/scripts/install.sh
         env:
           GH_TOKEN: ${{ github.token }}
+      # The tag is the single release button: it ships the binaries and the
+      # npm package together, so the two channels cannot drift. A version
+      # already on npm is skipped, so re-running a tag build stays safe.
+      - if: github.ref_type == 'tag'
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if npm view "engelbart-cli@$version" version >/dev/null 2>&1; then
+            echo "engelbart-cli@$version is already on npm; skipping publish"
+          else
+            npm publish --ignore-scripts
+          fi
+        working-directory: engelbart
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
