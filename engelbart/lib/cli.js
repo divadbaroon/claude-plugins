@@ -450,6 +450,9 @@ function claudeOnPath(env, spawn) {
 
 function askYesNo(question, deps = {}) {
   if (deps.answer !== undefined) return Promise.resolve(Boolean(deps.answer));
+  // A question nobody can answer must not wait for one: readline on a piped
+  // or closed stdin blocks forever, so no TTY means the answer is no.
+  if (!process.stdin.isTTY) return Promise.resolve(false);
   const readline = require('readline');
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {

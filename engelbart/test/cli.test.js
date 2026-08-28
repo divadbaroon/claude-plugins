@@ -194,6 +194,7 @@ async function installOutput({ onPath, added, present, linked }, extra) {
         line: 'export PATH="$HOME/.human-compact/bin:$PATH"',
       }),
       interactive: true,
+    claudeOnPath: () => true,
       readCredentials: () => null,
       login: async () => ({
         status: 'ready',
@@ -474,6 +475,7 @@ test('a person at the terminal is offered the account connection once', async ()
   let logins = 0;
   const result = await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     login: async () => {
       logins += 1;
       return {
@@ -515,6 +517,7 @@ test('--no-login installs without asking about an account', async () => {
     install: async () => ({ launcher: path.join(root, 'managed', 'bin', 'hc') }),
     ensureLauncherOnPath: () => ({ onPath: true }),
     interactive: true,
+    claudeOnPath: () => true,
     login: async () => { logins += 1; return { status: 'ready' }; },
   });
   fs.rmSync(root, { recursive: true, force: true });
@@ -527,6 +530,7 @@ test('--no-login installs without asking about an account', async () => {
 test('a failed account connection reports itself without failing the install', async () => {
   const result = await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     login: async () => { throw new Error('berkeley.mathetic.com is unreachable'); },
   });
   assert.equal(result.code, 0);
@@ -540,6 +544,7 @@ test('reinstalling on a connected machine leaves the connection alone', async ()
   let rewires = 0;
   const result = await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     // What a connected machine actually has on disk: a token, and where to
     // spend the credit. Never the key.
     readCredentials: () => ({
@@ -572,6 +577,7 @@ test('a reinstall that cannot reach the pool withholds setup instead of guessing
   let opened = 0;
   const result = await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     readCredentials: () => ({
       token: 'egb_t',
       email: 'member@example.com',
@@ -590,6 +596,7 @@ test('a stored Supabase configuration failure still withholds setup on reinstall
   let opened = 0;
   const result = await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     readCredentials: () => ({
       token: 'egb_t',
       email: 'member@example.com',
@@ -644,6 +651,7 @@ test('setup is not handed a key the pool has stopped honouring', async () => {
   let passed = null;
   const result = await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     readCredentials: () => ({
       token: 'egb_t', email: 'member@example.com',
       claude: { baseUrl: 'https://proxy.example.com' },
@@ -670,6 +678,7 @@ test('setup still gets the key while there is credit left', async () => {
   let passed = null;
   await installWith({
     interactive: true,
+    claudeOnPath: () => true,
     readCredentials: () => ({
       token: 'egb_t', email: 'member@example.com',
       claude: { baseUrl: 'https://proxy.example.com' },
@@ -778,6 +787,7 @@ test('a missing Claude Code is offered interactively, and the accepted env reach
       platform: 'darwin',
       arch: 'arm64',
       interactive: true,
+    claudeOnPath: () => true,
       env: { PATH: '/usr/bin' },
       output: capture().stream,
       errorOutput: capture().stream,
