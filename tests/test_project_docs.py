@@ -54,10 +54,12 @@ class DocsPageTests(Saved, BridgeTestCase):
             "var last = page.children[page.children.length - 1];"
             "return JSON.stringify(["
             " texts(box, 'hc-docs-reach-where'),"
-            " texts(box, 'hc-docs-reach-at').length,"
+            " texts(box, 'hc-docs-reach-at'),"
             " String(last.className)]);")
-        self.assertEqual(["discord", "phone", "email"], got[0])
-        self.assertEqual(3, got[1])
+        self.assertEqual(["discord", "phone", "email", "email"], got[0])
+        self.assertEqual(["discord.com/invite/ACEK85XnR", "571-492-2873",
+                          "david@mathetic.com", "hudson@mathetic.com"],
+                         got[1])
         self.assertEqual("hc-docs-reach", got[2])
 
 

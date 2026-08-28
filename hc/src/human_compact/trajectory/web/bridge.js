@@ -3092,7 +3092,9 @@
       ".hc-docs-reach-row{display:flex;gap:14px;padding:9px 2px;border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-docs-reach-row:last-child{border-bottom:0}",
       ".hc-docs-reach-where{flex:none;width:64px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding-top:2px}",
-      ".hc-docs-reach-at{font-size:12px;color:var(--ink,#111);overflow-wrap:anywhere}",
+      ".hc-docs-reach-at{display:block;font-size:12px;color:var(--ink,#111);overflow-wrap:anywhere}",
+      "a.hc-docs-reach-at{color:var(--acc,#a5492a);text-decoration:none}",
+      "a.hc-docs-reach-at:hover{text-decoration:underline}",
       ".hc-docs-reach-note{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-top:1px}",
       ".hc-saved-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
       ".hc-saved-acts{display:flex;gap:9px;align-items:center;margin:0 2px 14px}",
@@ -4833,15 +4835,18 @@
   // when it is used up the fix is a person, not a setting -- which is why
   // the ways to reach one are the bottom of the page.
 
-  // Placeholders, all three: nothing in the repository records where the
-  // team actually answers. Swap these before anyone is pointed here.
   var DOCS_REACH = [
-    { where: "discord", at: "discord.gg/engelbart",
-      note: "Fastest. Post in #help and someone will pick it up." },
-    { where: "phone", at: "+1 (555) 010-0100",
+    { where: "discord", at: "discord.com/invite/ACEK85XnR",
+      href: "https://discord.com/invite/ACEK85XnR",
+      note: "Fastest. Post and someone will pick it up." },
+    { where: "phone", at: "571-492-2873",
       note: "If you are stuck mid-session and nothing else answers." },
-    { where: "email", at: "help@engelbart.dev",
+    { where: "email", at: "david@mathetic.com",
+      href: "mailto:david@mathetic.com",
       note: "For anything that can wait a day." },
+    { where: "email", at: "hudson@mathetic.com",
+      href: "mailto:hudson@mathetic.com",
+      note: "Same, if David is not answering." },
   ];
 
   var DOCS_FAQ = [
@@ -4905,7 +4910,15 @@
       var line = el("div", "hc-docs-reach-row");
       line.appendChild(el("span", "hc-docs-reach-where", row.where));
       var body = el("div", "hc-docs-reach-body");
-      body.appendChild(el("div", "hc-docs-reach-at", row.at));
+      if (row.href) {
+        var at = el("a", "hc-docs-reach-at", row.at);
+        at.setAttribute("href", row.href);
+        at.setAttribute("target", "_blank");
+        at.setAttribute("rel", "noreferrer noopener");
+        body.appendChild(at);
+      } else {
+        body.appendChild(el("div", "hc-docs-reach-at", row.at));
+      }
       body.appendChild(el("div", "hc-docs-reach-note", row.note));
       line.appendChild(body);
       reach.appendChild(line);
