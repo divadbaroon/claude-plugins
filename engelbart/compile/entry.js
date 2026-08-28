@@ -26,6 +26,11 @@ const manifest = require('./assets/manifest.json');
 const wheelAsset = require('./assets/backend.whl');
 
 const { run } = require('../lib/cli');
+const { setInvocation } = require('../lib/invocation');
+
+// This build is the standalone binary: its users have no npm, so every
+// "run this again" instruction must name the command they actually have.
+setInvocation('engelbart');
 
 function assetPath(asset) {
   // Bundlers differ on whether a file-loader require yields the path or a

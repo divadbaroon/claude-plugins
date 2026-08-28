@@ -774,8 +774,8 @@ test('a reinstall on an already-connected machine points at the stored key', asy
 
 // Claude Code is a hard requirement, but a blank machine deserves an offer,
 // not a dead end. The offer only exists where a person can answer it.
-test('a missing Claude Code is offered interactively, and the accepted env reaches install', async () => {
-  const { claudeOnPath, offerClaudeCode } = require('../lib/cli');
+test('a missing Claude Code is installed, and the extended env reaches install', async () => {
+  const { claudeOnPath, installClaudeCode } = require('../lib/cli');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
   try {
     fixturePackage(root);
@@ -792,20 +792,20 @@ test('a missing Claude Code is offered interactively, and the accepted env reach
       output: capture().stream,
       errorOutput: capture().stream,
       claudeOnPath: () => false,
-      offerClaudeCode: async ({ env }) => ({ ...env, PATH: `/home/x/.local/bin:${env.PATH}` }),
+      installClaudeCode: async ({ env }) => ({ ...env, PATH: `/home/x/.local/bin:${env.PATH}` }),
       install: async (options) => { installEnv = options.deps.env; return { launcher: null }; },
       readCredentials: () => null,
     });
     assert.equal(code, 0);
     assert.equal(installEnv.PATH, '/home/x/.local/bin:/usr/bin');
     assert.equal(typeof claudeOnPath, 'function');
-    assert.equal(typeof offerClaudeCode, 'function');
+    assert.equal(typeof installClaudeCode, 'function');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('no person, no offer: non-interactive installs never probe for Claude Code', async () => {
+test('no person, no auto-install: non-interactive installs never probe for Claude Code', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
   try {
     fixturePackage(root);
@@ -820,7 +820,7 @@ test('no person, no offer: non-interactive installs never probe for Claude Code'
       output: capture().stream,
       errorOutput: capture().stream,
       claudeOnPath: () => { probed = true; return false; },
-      offerClaudeCode: async () => { throw new Error('must not be offered'); },
+      installClaudeCode: async () => { throw new Error('must not be installed'); },
       install: async () => ({ launcher: null }),
     });
     assert.equal(probed, false);
@@ -829,40 +829,50 @@ test('no person, no offer: non-interactive installs never probe for Claude Code'
   }
 });
 
-test('the offer runs the official installer on yes and extends PATH; declining changes nothing', async () => {
-  const { offerClaudeCode } = require('../lib/cli');
+test('the installer runs with no question, says whose it is, and extends PATH', async () => {
+  const { installClaudeCode } = require('../lib/cli');
   const ran = [];
   const spawn = (command, args) => { ran.push([command, ...args]); return { status: 0 }; };
+  const said = capture();
   const env = { PATH: '/usr/bin' };
-  const accepted = await offerClaudeCode({
+  const result = await installClaudeCode({
     env,
-    output: capture().stream,
+    output: said.stream,
     errorOutput: capture().stream,
-    deps: { answer: true, spawn, homedir: '/home/x' },
+    deps: { spawn, homedir: '/home/x' },
   });
   assert.equal(ran.length, 1);
   assert.match(ran[0].join(' '), /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
-  assert.equal(accepted.PATH, `/home/x/.local/bin${path.delimiter}/usr/bin`);
-
-  const declined = await offerClaudeCode({
-    env,
-    output: capture().stream,
-    errorOutput: capture().stream,
-    deps: { answer: false, spawn: () => { throw new Error('must not run'); } },
-  });
-  assert.equal(declined, env);
+  assert.match(said.read(), /Anthropic's official installer/);
+  assert.doesNotMatch(said.read(), /\[Y\/n\]/);
+  assert.equal(result.PATH, `/home/x/.local/bin${path.delimiter}/usr/bin`);
 });
 
 test('an installer that fails leaves the env alone and says to install manually', async () => {
-  const { offerClaudeCode } = require('../lib/cli');
+  const { installClaudeCode } = require('../lib/cli');
   const errors = capture();
   const env = { PATH: '/usr/bin' };
-  const result = await offerClaudeCode({
+  const result = await installClaudeCode({
     env,
     output: capture().stream,
     errorOutput: errors.stream,
-    deps: { answer: true, spawn: () => ({ status: 1 }) },
+    deps: { spawn: () => ({ status: 1 }) },
   });
   assert.equal(result, env);
   assert.match(errors.read(), /install it manually/);
+});
+
+// The binary's users have no npm; every self-reference must name the command
+// they actually have. The npm default stays npx.
+test('the standalone binary speaks of itself as engelbart, npm as npx', () => {
+  const { invocation, setInvocation } = require('../lib/invocation');
+  assert.match(usage(), /Usage: npx engelbart-cli/);
+  const before = invocation();
+  try {
+    setInvocation('engelbart');
+    assert.match(usage(), /Usage: engelbart \[command\]/);
+    assert.doesNotMatch(usage(), /npx/);
+  } finally {
+    setInvocation(before);
+  }
 });

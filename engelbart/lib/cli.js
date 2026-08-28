@@ -9,6 +9,7 @@ const {
   supportedTarget,
 } = require('./installer');
 const auth = require('./auth');
+const { invocation } = require('./invocation');
 
 const COMMANDS = Object.freeze(['install', 'auth', 'login', 'logout', 'whoami', 'env']);
 
@@ -16,7 +17,7 @@ class UsageError extends Error {}
 class InputCancelled extends Error {}
 
 function usage() {
-  return `Usage: npx engelbart-cli [command] [options]
+  return `Usage: ${invocation()} [command] [options]
 
 Commands:
   install               install the runtime and connect this machine (default)
@@ -24,7 +25,7 @@ Commands:
   logout                disconnect this machine and revoke its token
   whoami                show which account this machine is connected to
   env                   print the shell exports that point Claude Code at your
-                        credit; use as: eval "$(npx engelbart-cli env)"
+                        credit; use as: eval "$(${invocation()} env)"
 
 Options:
   --local-only          install without connecting an Engelbart account
@@ -155,7 +156,7 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
     const setupEnv = setupEnvironment(result, authDeps.env);
     if (!setupEnv) {
       output.write('\nSetup is waiting for both Claude credits and Supabase sync. '
-        + 'Run `npx engelbart-cli auth` again after the missing connection is ready.\n');
+        + `Run \`${invocation()} auth\` again after the missing connection is ready.\n`);
       return 0;
     }
     const launcher = deps.launcher || path.join(authDeps.managedRoot, 'bin', 'hc');
@@ -188,7 +189,7 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
   if (command === 'env') {
     const stored = (deps.readCredentials || auth.readCredentials)(authDeps.managedRoot, authDeps.env);
     if (!stored) {
-      errorOutput.write('Not connected. Run `npx engelbart-cli auth` to connect this machine.\n');
+      errorOutput.write(`Not connected. Run \`${invocation()} auth\` to connect this machine.\n`);
       return 1;
     }
     // Fetched, not read back: this machine does not keep the key. That also
@@ -211,7 +212,7 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
       errorOutput.write(auth.spent(claude)
         ? 'Your Engelbart Claude credit is used up, so there is nothing to export. '
           + '`claude` will use your own account until it is topped up.\n'
-        : 'This account has no Claude key yet. Run `npx engelbart-cli auth` '
+        : `This account has no Claude key yet. Run \`${invocation()} auth\` `
           + 'again once your credit is ready.\n');
       return 1;
     }
@@ -224,8 +225,8 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
     return 0;
   }
   errorOutput.write(result.reason
-    ? `Not connected: ${result.reason}\nRun \`npx engelbart-cli auth\` to connect this machine.\n`
-    : 'Not connected. Run `npx engelbart-cli auth` to connect this machine.\n');
+    ? `Not connected: ${result.reason}\nRun \`${invocation()} auth\` to connect this machine.\n`
+    : `Not connected. Run \`${invocation()} auth\` to connect this machine.\n`);
   return 1;
 }
 
@@ -282,7 +283,7 @@ async function run(deps = {}) {
     // -- the requirement stays an error, exactly as before.
     if (!options.dryRun && canPrompt(deps)
         && !(deps.claudeOnPath || claudeOnPath)(env, deps.spawn)) {
-      env = await (deps.offerClaudeCode || offerClaudeCode)({
+      env = await (deps.installClaudeCode || installClaudeCode)({
         env, output, errorOutput, deps,
       });
       authDeps.env = env;
@@ -398,7 +399,7 @@ async function run(deps = {}) {
                                               output, spawn: deps.spawn })
       : null;
     if (!options.dryRun && !accountReady) {
-      output.write('\nNext: Run `npx engelbart-cli auth` to finish connecting your '
+      output.write(`\nNext: Run \`${invocation()} auth\` to finish connecting your `
         + 'Engelbart account, Claude credits, and Supabase sync. Setup starts '
         + 'after that.\n');
     } else {
@@ -448,36 +449,20 @@ function claudeOnPath(env, spawn) {
   }
 }
 
-function askYesNo(question, deps = {}) {
-  if (deps.answer !== undefined) return Promise.resolve(Boolean(deps.answer));
-  // A question nobody can answer must not wait for one: readline on a piped
-  // or closed stdin blocks forever, so no TTY means the answer is no.
-  if (!process.stdin.isTTY) return Promise.resolve(false);
-  const readline = require('readline');
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (line) => {
-      rl.close();
-      resolve(/^\s*(y|yes)?\s*$/i.test(line));
-    });
-  });
-}
-
-/* Run Anthropic's official Claude Code installer for someone who said yes.
+/* Run Anthropic's official Claude Code installer, no questions asked: the
+ * one command promises a working install, and Claude Code is part of what
+ * working means. Only interactive installs come here -- CI and pipes keep
+ * the hard error -- and the line below says what is happening and whose
+ * installer is doing it before anything runs.
  *
  * The installer wires new shells but not this process, so on success the
  * returned env reaches its ~/.local/bin directly; install()'s own preflight
- * then judges the result. Declining, or an installer that fails, returns the
- * env unchanged and the previous error path says what to do.
+ * then judges the result. An installer that fails returns the env
+ * unchanged and the previous error path says what to do.
  */
-async function offerClaudeCode({ env, output, errorOutput, deps = {} }) {
-  const yes = await askYesNo(
-    'Claude Code is required and was not found on this machine.\n'
-    + `Install it now with Anthropic's official installer (${CLAUDE_INSTALL_URL})? [Y/n] `,
-    deps,
-  );
-  if (!yes) return env;
-  output.write('\n');
+async function installClaudeCode({ env, output, errorOutput, deps = {} }) {
+  output.write('\nClaude Code is required and was not found -- installing it '
+    + `with Anthropic's official installer (${CLAUDE_INSTALL_URL})...\n\n`);
   const run = deps.spawn || require('child_process').spawnSync;
   const done = run('bash', ['-c', `curl -fsSL ${CLAUDE_INSTALL_URL} | bash`], {
     env,
@@ -528,7 +513,7 @@ module.exports = {
   UsageError,
   canPrompt,
   claudeOnPath,
-  offerClaudeCode,
+  installClaudeCode,
   numericChoice,
   openSetup,
   parseArgs,

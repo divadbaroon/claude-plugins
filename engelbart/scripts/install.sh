@@ -71,8 +71,15 @@ main() {
        say "    export PATH=\"$dest:\$PATH\"" ;;
   esac
 
-  # Hand off to the real installer; it explains everything from here.
-  "$dest/engelbart" install "$@"
+  # Hand off to the real installer; it explains everything from here. Under
+  # curl | sh, stdin is the pipe the script arrived on, so reattach the
+  # terminal where there is one -- the Claude Code install offer, and any
+  # future question, needs to hear its "y".
+  if [ -t 1 ] && [ -r /dev/tty ]; then
+    "$dest/engelbart" install "$@" < /dev/tty
+  else
+    "$dest/engelbart" install "$@"
+  fi
 }
 
 main "$@"

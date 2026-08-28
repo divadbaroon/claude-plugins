@@ -8,6 +8,7 @@ const { spawn } = require('child_process');
 const { atomicWrite, establishOwnership, validateManagedRoot } = require('./installer');
 const claudeCode = require('./claude-code');
 const vaultConfig = require('./vault-config');
+const { invocation } = require('./invocation');
 
 const DEFAULT_API_BASE = 'https://berkeley.mathetic.com';
 const CREDENTIALS_SCHEMA = 1;
@@ -222,7 +223,7 @@ function envPath(managedRoot) {
 function writeEnvFile(managedRoot) {
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
-  const body = '# Written by `npx engelbart-cli auth`. This file used to export your\n'
+  const body = `# Written by \`${invocation()} auth\`. This file used to export your\n`
     + '# Claude key. It no longer holds one: the key is fetched per use and never\n'
     + '# written to this machine. Sourcing this is a no-op, kept so an older shell\n'
     + '# profile that still sources it clears the exports it was given rather than\n'
