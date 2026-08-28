@@ -20,7 +20,7 @@ body{background:#fff;font-family:'Source Code Pro',ui-monospace,Menlo,monospace}
 .wrap{flex:1;overflow-y:auto}
 .col{max-width:820px;margin:0 auto;padding:0 32px 64px}
 .foot{flex:none;background:var(--bg)}
-.foot .col{padding:8px 32px 26px}
+.foot .col{padding:8px 32px 56px}
 
 /* --- the tracked micro-caps that label everything ---------------------- */
 .lbl{font:500 9px/1 'Source Code Pro',monospace;letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
@@ -41,6 +41,7 @@ body{background:#fff;font-family:'Source Code Pro',ui-monospace,Menlo,monospace}
 /* --- messages: theirs plain, yours a filled block ---------------------- */
 .msg{padding:16px 0 0}
 .msg-them .msg-body{margin-top:7px;font:13px/1.75 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;text-wrap:pretty}
+.msg-opening .msg-body{display:inline-block;max-width:100%;padding:10px 15px;border:1px solid var(--bd2);border-radius:999px;background:var(--tint)}
 .msg-you{display:flex;justify-content:flex-end}
 .msg-you .msg-body{max-width:74%;margin-top:7px;padding:11px 14px;background:var(--ink);color:var(--bg);border-radius:10px;font:12.5px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;text-wrap:pretty}
 
@@ -114,6 +115,8 @@ input.f.piece-name{font:500 13px/1.6 'Source Code Pro',monospace;color:var(--ink
 /* --- composer ----------------------------------------------------------- */
 .composer{display:flex;align-items:flex-end;gap:9px;padding:9px 9px 9px 15px;background:var(--panel);border:1px solid var(--bd2);border-radius:999px}
 .composer:focus-within{border-color:var(--ink)}
+.composer-first{border-color:var(--ink);background:var(--tint);box-shadow:0 4px 18px rgba(0,0,0,.07)}
+.composer-first textarea.f::placeholder{color:var(--mut)}
 .send{flex:none;width:27px;height:27px;display:flex;align-items:center;justify-content:center;padding:0;background:transparent;border:1px solid var(--bd);border-radius:50%;cursor:pointer;transition:all 120ms}
 .send-on{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .send[disabled]{opacity:.45;cursor:default}

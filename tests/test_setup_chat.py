@@ -1000,6 +1000,23 @@ class PageTests(unittest.TestCase):
         self.assertIn("claude -r", body)
         self.assertIn("/bart", body)
 
+    def test_resume_does_not_narrate_the_terminal_opening_twice(self):
+        with self.server() as base:
+            _status, body = self.get(base + "/setup.js")
+        self.assertNotIn(
+            "Then it is already yours. A terminal is opening for you.", body)
+
+    def test_the_opening_question_and_its_answer_field_are_pills(self):
+        with self.server() as base:
+            _status, script = self.get(base + "/setup.js")
+            _status, page = self.get(base + "/setup")
+        self.assertIn("msg-opening", script)
+        self.assertIn("composer-first", script)
+        self.assertIn("What are you working on? Describe it", script)
+        self.assertIn(".msg-opening .msg-body", page)
+        self.assertIn(".composer-first{", page)
+        self.assertIn("padding:8px 32px 56px", page)
+
 
 if __name__ == "__main__":
     unittest.main()

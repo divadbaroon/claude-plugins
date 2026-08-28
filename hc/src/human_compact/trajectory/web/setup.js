@@ -239,7 +239,7 @@
   // because a command someone retypes is a command someone mistypes.
   function drawResume() {
     var col = column(app);
-    hero(col, "Then it is already yours. A terminal is opening for you.");
+    hero(col, "");
     var card = el("div", "card rise");
     var head = el("div", "card-head");
     head.appendChild(el("span", "lbl", "resume a project"));
@@ -524,8 +524,10 @@
     var col = column(app);
     if (st.msgs.length <= 1 && !st.card) hero(col, "");
 
-    st.msgs.forEach(function (m) {
-      var box = el("div", "msg rise " + (m.role === "you" ? "msg-you" : "msg-them"));
+    st.msgs.forEach(function (m, index) {
+      var cls = "msg rise " + (m.role === "you" ? "msg-you" : "msg-them");
+      if (index === 0 && m.role !== "you" && m.text === OPEN) cls += " msg-opening";
+      var box = el("div", cls);
       box.appendChild(el("div", "lbl", m.role === "you" ? "you" : "engelbart"));
       box.appendChild(el("div", "msg-body", m.text));
       col.appendChild(box);
@@ -1001,12 +1003,15 @@
   function drawComposer(parent) {
     var foot = el("div", "foot");
     var col = el("div", "col");
-    var box = el("div", "composer");
+    var first = st.msgs.length <= 1;
+    var box = el("div", "composer" + (first ? " composer-first" : ""));
     var field = el("textarea", "f");
     field.setAttribute("rows", "1");
     field.setAttribute("spellcheck", "false");
-    field.setAttribute("placeholder", st.msgs.length <= 1
-      ? "describe it however it comes out…"
+    field.setAttribute("aria-label", first
+      ? "What are you working on?" : "Message Engelbart");
+    field.setAttribute("placeholder", first
+      ? "What are you working on? Describe it however it comes out…"
       : "or just talk — the card above still works");
     field.value = st.draft;
     on(field, "input", function () {
@@ -1047,7 +1052,7 @@
     parent.appendChild(foot);
 
     // The reader is mid-sentence far more often than not on a redraw.
-    if (document.activeElement === document.body && st.msgs.length > 1) {
+    if (document.activeElement === document.body) {
       try { field.focus(); } catch (e) { /* not focusable yet */ }
     }
   }
