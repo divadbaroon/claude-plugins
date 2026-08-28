@@ -219,13 +219,14 @@ class Saved:
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class SavedPageTests(Saved, BridgeTestCase):
 
-    def test_the_box_has_three_tabs_and_opens_on_the_overview(self):
+    def test_the_box_has_four_tabs_and_opens_on_the_overview(self):
         got = self.open(
             "return JSON.stringify([texts(box, 'hc-overview-tab'),"
             " P.overviewPage(),"
             " box.querySelector('.hc-overview-main').getAttribute('data-hc-on'),"
             " box.querySelector('.hc-saved').getAttribute('data-hc-on')]);")
-        self.assertEqual([["OVERVIEW", "SAVED", "GOALS"], "overview", "", None],
+        self.assertEqual([["OVERVIEW", "SAVED", "DOCS", "GOALS"],
+                          "overview", "", None],
                          got)
 
     def test_the_saved_tab_swaps_the_page_under_the_tabs(self):
