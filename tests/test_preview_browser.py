@@ -248,6 +248,41 @@ class PreviewBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_the_embedded_page_shows_only_on_the_goals_view(self):
+        """Off the Goals view, the frame stands down.
+
+        The frame is fixed over the pane's slot and stacked above the
+        overview and brainstorm panels, and the slot keeps its rectangle
+        while those panels are up -- so switching views has to take the
+        frame off the paint itself, and give it back with the click that
+        returns to Goals.
+        """
+        from playwright.sync_api import expect, sync_playwright
+        port = 8994
+        self.write("index.html", "<h1>the app</h1>")
+        self.write("main.py",
+                   "import http.server, socketserver\n"
+                   f"srv = socketserver.TCPServer(('127.0.0.1', {port}),"
+                   " http.server.SimpleHTTPRequestHandler)\n"
+                   f"print('http://127.0.0.1:{port}/')\n"
+                   "srv.serve_forever()\n")
+        with server_for(self.workspace()) as url, sync_playwright() as pw:
+            browser, page = self.open(pw, url)
+            try:
+                page.get_by_text("Find how to run it", exact=True).click()
+                self.assertTrue(self.wait_for(page, "ready"))
+                page.get_by_text("Show UI", exact=True).click()
+                self.assertTrue(self.wait_for(page, "running"))
+                frame = page.locator(".hc-pv-frame")
+                expect(frame).to_be_visible()
+                for other in ("overview", "brainstorm"):
+                    page.locator(f'[data-hc-viewtab="{other}"]').click()
+                    expect(frame).to_be_hidden()
+                    page.locator('[data-hc-viewtab="goals"]').click()
+                    expect(frame).to_be_visible()
+            finally:
+                browser.close()
+
 
 if __name__ == "__main__":
     unittest.main()

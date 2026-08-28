@@ -7372,6 +7372,9 @@
         else if (view === "brainstorm") openBrainstorm();
         else { closeBrainstorm(); closeOverview(); }
         renderViewTabs();
+        // The sweep would catch up in 700ms; the frame changing views with
+        // the click means the preview never floats over the wrong one.
+        renderPreview(true);
         return;
       }
       var sendUp = closestAttr(target, "data-hc-sync");
@@ -9305,12 +9308,14 @@
       // dark theme's fill is bright enough that only near-black does.
       "[data-hc-launch][data-hc-theme=\"dark\"] .hc-rail-copy{color:#08130c}",
       "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
-      // What the chat is actually being told, from /api/state.injection.
-      // Sources, as a chip rail above the document. The tabs under it are
-      // sticky and paint a 16px band of --bg upward to hide what scrolls
-      // behind them, so the rail keeps a bottom margin clear of that band --
-      // at 14px it cut the round bottom off every chip.
-      "[data-hc-launch] .hc-sources{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:12px 0 22px}",
+      // The strip between the title and the preview -- the sources rail,
+      // the status badge, and the one-tab bar reading PREVIEW -- said
+      // nothing the preview needs said: sources are attached and removed on
+      // the overview, status on the tree's rows. Off, so the pane is the
+      // title and then the preview. The rail's nodes are still built (the
+      // artifact and renderInheritedSources own them); only the paint goes.
+      "[data-hc-launch] .hc-sources{display:none!important}",
+      "[data-hc-launch] .hc-main [title=\"Click to change status\"]{display:none!important}",
       "[data-hc-launch] .hc-sources-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut);margin-right:2px}",
       "[data-hc-launch] .hc-src{display:inline-flex;align-items:center;gap:6px;max-width:280px;padding:3px 8px;border:1px solid var(--bd);border-radius:99px;background:var(--panel2);font:10.5px 'Source Code Pro',monospace;color:var(--dtxt)}",
       "[data-hc-launch] .hc-src-tag{font:600 8px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt)}",
@@ -9329,7 +9334,7 @@
       "[data-hc-launch] .hc-src-ctx:hover .hc-src-tag{color:var(--acc)}",
       "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-src-add:hover{color:var(--acc);border-color:var(--acc)}",
-      "[data-hc-launch] .hc-tabs{margin-top:14px!important}",
+      "[data-hc-launch] .hc-tabs{display:none!important}",
       // The session banner. Same nodes, same timers, same close button as
       // the toast it replaces -- a bar under the header rather than a card
       // in the corner, because it reports on the whole workspace.
@@ -12886,6 +12891,14 @@
   }
 
   function previewPlaceFrame(url) {
+    // The frame sits above the overview and brainstorm panels (its z-index
+    // has to clear the pane it is drawn over), and the slot it covers keeps
+    // its rectangle while those panels are up -- so being on another view
+    // has to hide it explicitly, or the preview floats over every view.
+    if (overviewShown() || brainstormShown() || homeShown()) {
+      previewHideFrame();
+      return;
+    }
     var slot = document.querySelector(".hc-pv-slot");
     if (!slot || !url) { previewHideFrame(); return; }
     var box = slot.getBoundingClientRect();
