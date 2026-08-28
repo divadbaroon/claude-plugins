@@ -1082,6 +1082,41 @@ RETRY_DELAY_S = 8.0
 REDIRECT_MIN_AGE_S = 4.0
 
 
+def _claude_candidates(home: Optional[Path] = None) -> List[str]:
+    """Where Claude Code can live, including the official install path.
+
+    The goals server may have been launched by a browser or session runner
+    whose PATH predates the Claude install.  Discovery therefore cannot stop
+    at ``which``; it must use the same stable locations the installer uses.
+    """
+    import shutil
+    home = Path.home() if home is None else Path(home)
+    named = os.environ.get("HC_CLAUDE_BINARY", "").strip()
+    if named:
+        return [named]
+    return [name for name in (
+        shutil.which("claude"),
+        str(home / ".local" / "bin" / "claude"),
+        str(home / ".claude" / "local" / "claude"),
+    ) if name]
+
+
+def _claude_executable(home: Optional[Path] = None) -> Optional[Path]:
+    """The executable the build should launch, resolved past symlinks."""
+    seen: set = set()
+    for name in _claude_candidates(home):
+        try:
+            real = Path(name).expanduser().resolve()
+        except OSError:
+            continue
+        if real in seen:
+            continue
+        seen.add(real)
+        if real.is_file() and os.access(real, os.X_OK):
+            return real
+    return None
+
+
 class Run:
     """One goal's build process, and the thread that reads what it prints."""
 
@@ -1143,7 +1178,9 @@ class Run:
 
     def _command(self, message: str, resume: bool, model: str = "",
                  effort: str = "") -> List[str]:
-        command = ["claude", "-p", message, "--output-format", "stream-json",
+        binary = _claude_executable()
+        command = [str(binary) if binary else "claude",
+                   "-p", message, "--output-format", "stream-json",
                    "--verbose", "--permission-mode",
                    os.environ.get("HC_BUILD_PERMISSION_MODE", "acceptEdits")]
         if resume:
@@ -2431,19 +2468,8 @@ def save_settings(session_id: str, root: Optional[Path],
 def _cli_binary() -> Optional[Path]:
     """The Claude Code binary itself, past any shim on PATH: the first
     candidate big enough to be a program rather than a wrapper script."""
-    import shutil
-    home = Path.home()
-    # HC_CLAUDE_BINARY names the binary outright, for an install the search
-    # below would not find -- and is then the only place looked.
-    named = os.environ.get("HC_CLAUDE_BINARY", "").strip()
-    candidates = [named] if named else [
-        shutil.which("claude"),
-        str(home / ".local" / "bin" / "claude"),
-        str(home / ".claude" / "local" / "claude")]
     seen: List[Path] = []
-    for name in candidates:
-        if not name:
-            continue
+    for name in _claude_candidates():
         try:
             real = Path(name).resolve()
             size = real.stat().st_size
