@@ -772,8 +772,7 @@ test('a reinstall on an already-connected machine points at the stored key', asy
   assert.doesNotMatch(output.read(), /engelbart env/);
 });
 
-// Claude Code is a hard requirement, but a blank machine deserves an offer,
-// not a dead end. The offer only exists where a person can answer it.
+// Claude Code is a hard requirement, and its installer asks no questions.
 test('a missing Claude Code is installed, and the extended env reaches install', async () => {
   const { claudeOnPath, installClaudeCode } = require('../lib/cli');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
@@ -787,7 +786,6 @@ test('a missing Claude Code is installed, and the extended env reaches install',
       platform: 'darwin',
       arch: 'arm64',
       interactive: true,
-    claudeOnPath: () => true,
       env: { PATH: '/usr/bin' },
       output: capture().stream,
       errorOutput: capture().stream,
@@ -805,12 +803,13 @@ test('a missing Claude Code is installed, and the extended env reaches install',
   }
 });
 
-test('no person, no auto-install: non-interactive installs never probe for Claude Code', async () => {
+test('a session without a TTY still installs missing Claude Code', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
   try {
     fixturePackage(root);
     let probed = false;
-    await run({
+    let installed = false;
+    const code = await run({
       argv: ['--local-only', '--non-interactive', '--no-open'],
       packageRoot: root,
       managedRoot: path.join(root, 'managed'),
@@ -820,9 +819,36 @@ test('no person, no auto-install: non-interactive installs never probe for Claud
       output: capture().stream,
       errorOutput: capture().stream,
       claudeOnPath: () => { probed = true; return false; },
+      installClaudeCode: async ({ env }) => { installed = true; return env; },
+      install: async () => ({ launcher: null }),
+    });
+    assert.equal(code, 0);
+    assert.equal(probed, true);
+    assert.equal(installed, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CI never bootstraps Claude Code', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
+  try {
+    fixturePackage(root);
+    let probed = false;
+    const code = await run({
+      argv: ['--local-only', '--non-interactive', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'linux',
+      arch: 'x64',
+      env: { CI: '1', PATH: '/usr/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeOnPath: () => { probed = true; return false; },
       installClaudeCode: async () => { throw new Error('must not be installed'); },
       install: async () => ({ launcher: null }),
     });
+    assert.equal(code, 0);
     assert.equal(probed, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
