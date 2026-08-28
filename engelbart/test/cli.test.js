@@ -816,6 +816,7 @@ test('a session without a TTY still installs missing Claude Code', async () => {
       platform: 'darwin',
       arch: 'arm64',
       interactive: false,
+      env: { PATH: '/usr/bin' },
       output: capture().stream,
       errorOutput: capture().stream,
       claudeOnPath: () => { probed = true; return false; },
