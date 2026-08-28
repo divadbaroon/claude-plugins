@@ -3276,6 +3276,24 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                                      who.get("cwd") or "",
                                      dict(op, __digest__=BRAIN.digest(
                                          goals, record)))}
+        if kind in ("brainstorm_chats", "brainstorm_save"):
+            # The conversations themselves, kept beside the tree they argue
+            # with. Neither op reaches a model or spawns anything, so both
+            # are answered here rather than deferred: a brainstorm reopened
+            # is a file read, and a round that has landed is a file written.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            if kind == "brainstorm_chats":
+                return {"ok": True, "chats": CS.load_brainstorms(session_id, root)}
+            if not isinstance(op.get("messages"), list):
+                return {"ok": False, "error": "messages must be a list"}
+            held = CS.save_brainstorm(session_id, str(op.get("id") or ""),
+                                      op.get("messages"), root)
+            if held is None:
+                return {"ok": False, "error": "nothing said yet"}
+            return {"ok": True, "id": held["id"], "title": held["title"],
+                    "updated_at": held["updated_at"]}
         if kind == "brainstorm_apply":
             # The one write this screen makes, and only when the reader has
             # said yes to what was on the card in front of them. Goals go in

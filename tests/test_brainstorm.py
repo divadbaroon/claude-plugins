@@ -347,6 +347,123 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(raw[:BS.CONDENSE_OVER], out)
 
 
+class StoreTests(unittest.TestCase):
+    """The conversations themselves, kept the way the goals are kept.
+
+    A brainstorm used to live in the browser and nowhere else: closing the
+    tab was the end of it, and the thinking that had gone into an idea was
+    gone before the idea was written down. It goes to a file beside the tree
+    it argues with now -- one per project, not one per chat, for the same
+    reason the goals are stored that way.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.session = "chat-store"
+        self.paths = CS.paths(self.session, self.root)
+        self.paths.session_dir.mkdir(parents=True)
+        self.paths.manifest.write_text(json.dumps({"cwd": str(self.root)}))
+
+    def said(self, *turns):
+        return [{"role": role, "text": text} for role, text in turns]
+
+    def talk(self):
+        return self.said(("engelbart", "What's on your mind?"),
+                         ("you", "the rail is unreadable"))
+
+    def test_a_conversation_is_written_beside_the_goals_of_its_chat(self):
+        held = CS.save_brainstorm(self.session, "", self.talk(), self.root)
+        self.assertTrue(self.paths.brainstorms.exists())
+        self.assertEqual(str(self.paths.session_dir / "brainstorms.json"),
+                         str(self.paths.brainstorms))
+        stored = CS.load_brainstorms(self.session, self.root)
+        self.assertEqual(1, len(stored))
+        self.assertEqual(held["id"], stored[0]["id"])
+        self.assertEqual(["What's on your mind?", "the rail is unreadable"],
+                         [m["text"] for m in stored[0]["messages"]])
+
+    def test_a_longer_version_replaces_the_conversation_it_grew_out_of(self):
+        first = CS.save_brainstorm(self.session, "", self.talk(), self.root)
+        CS.save_brainstorm(self.session, first["id"],
+                           self.talk() + self.said(("engelbart", "which part")),
+                           self.root)
+        stored = CS.load_brainstorms(self.session, self.root)
+        self.assertEqual(1, len(stored))
+        self.assertEqual(3, len(stored[0]["messages"]))
+
+    def test_a_conversation_with_no_id_starts_another_one_beside_it(self):
+        first = CS.save_brainstorm(self.session, "", self.talk(), self.root)
+        second = CS.save_brainstorm(
+            self.session, "", self.said(("you", "what about onboarding")),
+            self.root)
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertEqual(2, len(CS.load_brainstorms(self.session, self.root)))
+
+    def test_the_one_touched_last_is_the_one_read_first(self):
+        CS.save_brainstorm(self.session, "", self.talk(), self.root)
+        CS.save_brainstorm(self.session, "",
+                           self.said(("you", "what about onboarding")),
+                           self.root)
+        stored = CS.load_brainstorms(self.session, self.root)
+        self.assertEqual("what about onboarding", stored[0]["title"])
+
+    def test_a_screen_opened_and_left_is_not_a_conversation(self):
+        # The invitation is the same sentence every time. A file full of
+        # them would be a list of the times somebody looked at the screen.
+        self.assertIsNone(CS.save_brainstorm(self.session, "", [], self.root))
+        self.assertIsNone(CS.save_brainstorm(self.session, "", "words",
+                                             self.root))
+        self.assertEqual([], CS.load_brainstorms(self.session, self.root))
+
+    def test_a_conversation_is_named_by_the_first_thing_the_reader_said(self):
+        held = CS.save_brainstorm(self.session, "", self.talk(), self.root)
+        self.assertEqual("the rail is unreadable", held["title"])
+
+    def test_a_turn_from_nobody_this_screen_has_is_dropped(self):
+        held = CS.save_brainstorm(
+            self.session, "",
+            self.said(("you", "keep me"), ("system", "drop me"))
+            + [{"role": "you", "text": "   "}, "not even a turn"],
+            self.root)
+        self.assertEqual(["keep me"], [m["text"] for m in held["messages"]])
+
+    def test_the_file_holds_the_last_conversations_not_every_one_ever(self):
+        for i in range(CS.BRAINSTORM_LIMIT + 5):
+            CS.save_brainstorm(self.session, "",
+                               self.said(("you", "idea %d" % i)), self.root)
+        stored = CS.load_brainstorms(self.session, self.root)
+        self.assertEqual(CS.BRAINSTORM_LIMIT, len(stored))
+        self.assertEqual("idea %d" % (CS.BRAINSTORM_LIMIT + 4),
+                         stored[0]["title"])
+
+    def test_a_file_somebody_edited_by_hand_reads_as_what_is_left_of_it(self):
+        self.paths.brainstorms.write_text(json.dumps(
+            {"version": 1, "chats": ["not a chat", {"messages": []},
+                                     {"id": "b1", "messages": [
+                                         {"role": "you", "text": "kept"}]}]}))
+        stored = CS.load_brainstorms(self.session, self.root)
+        self.assertEqual(["b1"], [row["id"] for row in stored])
+        self.assertEqual("kept", stored[0]["title"])
+
+    def test_two_chats_of_one_project_brainstorm_into_the_same_file(self):
+        # The tree is the project's, so the arguments about it are too:
+        # picking up yesterday's thinking must not depend on reopening the
+        # same terminal window it happened in.
+        home = self.root / "app"
+        home.mkdir()
+        other = "chat-store-two"
+        CS.paths(other, self.root).session_dir.mkdir(parents=True)
+        CS.paths(other, self.root).manifest.write_text(json.dumps({}))
+        CS.bind_project(self.session, str(home), self.root)
+        CS.bind_project(other, str(home), self.root)
+        CS.save_brainstorm(self.session, "", self.talk(), self.root)
+        self.assertEqual(["the rail is unreadable"],
+                         [row["title"]
+                          for row in CS.load_brainstorms(other, self.root)])
+
+
 class WriteTests(unittest.TestCase):
     """What approving a card puts in the tree."""
 
@@ -488,11 +605,49 @@ class OpTests(unittest.TestCase):
         self.assertIn("goals must be a list", out["error"])
 
     def test_neither_op_is_offered_to_a_vault_with_no_chat_behind_it(self):
-        for kind in ("brainstorm_say", "brainstorm_apply"):
-            out = ui._apply_locked({"op": kind, "transcript": []},
+        for kind in ("brainstorm_say", "brainstorm_apply",
+                     "brainstorm_chats", "brainstorm_save"):
+            out = ui._apply_locked({"op": kind, "transcript": [],
+                                    "messages": []},
                                    trajdir=None, chat_scoped=False)
             self.assertFalse(out.get("ok"), kind)
             self.assertIn("chat scope", out["error"])
+
+    # --- the conversations themselves --------------------------------------
+
+    def test_a_round_that_landed_is_written_down_and_read_back(self):
+        out = self.op(op="brainstorm_save", id="", messages=[
+            {"role": "you", "text": "the rail is unreadable"},
+            {"role": "engelbart", "text": "which part of it"}])
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["id"])
+        self.assertEqual("the rail is unreadable", out["title"])
+        back = self.op(op="brainstorm_chats")
+        self.assertEqual([out["id"]], [row["id"] for row in back["chats"]])
+        self.assertEqual(2, len(back["chats"][0]["messages"]))
+
+    def test_a_later_round_of_the_same_conversation_replaces_it(self):
+        first = self.op(op="brainstorm_save", id="", messages=[
+            {"role": "you", "text": "the rail is unreadable"}])
+        self.op(op="brainstorm_save", id=first["id"], messages=[
+            {"role": "you", "text": "the rail is unreadable"},
+            {"role": "engelbart", "text": "which part of it"}])
+        back = self.op(op="brainstorm_chats")["chats"]
+        self.assertEqual(1, len(back))
+        self.assertEqual(2, len(back[0]["messages"]))
+
+    def test_a_conversation_that_is_not_a_list_is_refused_at_the_door(self):
+        out = self.op(op="brainstorm_save", messages="words")
+        self.assertFalse(out["ok"])
+        self.assertIn("messages", out["error"])
+
+    def test_nothing_said_yet_is_refused_rather_than_stored(self):
+        out = self.op(op="brainstorm_save", messages=[])
+        self.assertFalse(out["ok"])
+        self.assertIn("nothing said", out["error"])
+
+    def test_a_workspace_that_has_never_brainstormed_says_so_with_a_list(self):
+        self.assertEqual([], self.op(op="brainstorm_chats")["chats"])
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -566,7 +721,8 @@ class PanelTests(BridgeTestCase):
 
     def test_saying_something_posts_the_whole_conversation(self):
         # The transcript lives in the browser and goes out whole on every
-        # round: the server keeps no conversation of its own.
+        # round -- the server holds a copy of it, but never the argument
+        # about what to say next.
         out = self.api(
             "bs.open();"
             "bs.state().draft = 'the rail is unreadable';"
@@ -740,6 +896,150 @@ class PanelTests(BridgeTestCase):
     def test_a_workspace_with_no_project_has_nothing_to_brainstorm_about(self):
         self.assertFalse(self.api("out = bs.open();", project=False))
 
+    # --- the conversation, kept -------------------------------------------
+    #
+    # Closing the tab used to be the end of a brainstorm. It is written down
+    # after every round now, so reopening the screen is picking a thought
+    # back up rather than starting one over.
+
+    HELD = [{"id": "b1", "title": "the rail is unreadable", "messages": [
+        {"role": "you", "text": "the rail is unreadable"},
+        {"role": "engelbart", "text": "which part of it"}]}]
+
+    def served(self, chats=None, tail=""):
+        """The panel against a server that already has conversations in it."""
+        return self.api(
+            "fetch = function (url, opts) {"
+            "  var sent = opts && opts.body ? JSON.parse(opts.body) : null;"
+            "  calls.push([url, sent]);"
+            "  var body = {ok: true};"
+            "  if (sent && sent.op === 'brainstorm_chats')"
+            "    body = {ok: true, chats: %s};"
+            "  if (sent && sent.op === 'brainstorm_save')"
+            "    body = {ok: true, id: 'b9', title: 'saved'};"
+            "  return Promise.resolve({ok: true, json: function () {"
+            "    return Promise.resolve(body); }});"
+            "};" % json.dumps(self.HELD if chats is None else chats) + tail)
+
+    def sent(self, op):
+        return ("calls.filter(function (c) { return c[1] && c[1].op === '%s'; })"
+                "  .map(function (c) { return c[1]; })" % op)
+
+    def test_opening_it_picks_up_where_the_last_conversation_left_off(self):
+        out = self.served(tail=(
+            "bs.open();"
+            "later(function () { return {"
+            "  said: bs.state().msgs.map(function (m) { return m.text; }),"
+            "  id: bs.state().id,"
+            "  drawn: texts(bs.box(), 'hc-bs-body')}; });"))
+        self.assertEqual(["the rail is unreadable", "which part of it"],
+                         out["said"])
+        self.assertEqual("b1", out["id"])
+        self.assertEqual(["the rail is unreadable", "which part of it"],
+                         out["drawn"])
+
+    def test_a_project_with_no_conversations_opens_on_the_invitation(self):
+        out = self.served(chats=[], tail=(
+            "bs.open();"
+            "later(function () { return bs.state().msgs.map("
+            "  function (m) { return m.role; }); });"))
+        self.assertEqual(["engelbart"], out)
+
+    def test_the_file_is_read_once_however_often_the_screen_is_opened(self):
+        out = self.served(tail=(
+            "bs.open(); bs.close(); bs.open();"
+            "later(function () { bs.close(); bs.open();"
+            "  return later(function () { return %s.length; }); });"
+            % self.sent("brainstorm_chats")))
+        self.assertEqual(1, out)
+
+    def test_a_read_that_never_landed_is_asked_again_next_time(self):
+        # An empty file and an unreachable server look the same to the
+        # reader; only one of them is worth giving up on.
+        out = self.api(
+            "fetch = function (url, opts) {"
+            "  calls.push([url, opts && opts.body ? JSON.parse(opts.body)"
+            "    : null]);"
+            "  return Promise.resolve({ok: true, json: function () {"
+            "    return Promise.resolve({ok: false, error: 'down'}); }});"
+            "};"
+            "bs.open();"
+            "later(function () { bs.close(); bs.open();"
+            "  return later(function () { return %s.length; }); });"
+            % self.sent("brainstorm_chats"))
+        self.assertEqual(2, out)
+
+    def test_a_restore_that_lands_late_does_not_take_their_words_back_out(self):
+        # They opened the screen and started typing before the file came
+        # back. What they said outranks what was on disk.
+        out = self.served(tail=(
+            "bs.open();"
+            "bs.state().draft = 'forget the rail, onboarding is the thing';"
+            "bs.send();"
+            "later(function () { return bs.state().msgs.map("
+            "  function (m) { return m.text; }); });"))
+        self.assertIn("forget the rail, onboarding is the thing", out)
+        self.assertNotIn("which part of it", out)
+
+    def test_a_round_that_lands_is_written_down_whole(self):
+        out = self.served(chats=[], tail=(
+            "bs.open();"
+            "bs.state().draft = 'the rail is unreadable';"
+            "bs.send();"
+            "later(function () { return {saved: %s.map(function (s) {"
+            "  return [s.id, s.messages.map(function (m) { return m.text; })];"
+            "}), id: bs.state().id}; });" % self.sent("brainstorm_save")))
+        self.assertEqual(1, len(out["saved"]))
+        # No id on the first save: the server mints one and the panel keeps
+        # it, so the next round extends this conversation instead of
+        # starting a second one beside it.
+        self.assertEqual("", out["saved"][0][0])
+        self.assertIn("the rail is unreadable", out["saved"][0][1])
+        self.assertEqual("b9", out["id"])
+
+    def test_a_round_that_failed_still_keeps_what_they_said(self):
+        out = self.served(chats=[], tail=(
+            "fetch = function (url, opts) {"
+            "  var sent = opts && opts.body ? JSON.parse(opts.body) : null;"
+            "  calls.push([url, sent]);"
+            "  var body = sent && sent.op === 'brainstorm_say'"
+            "    ? {ok: false, error: 'no credit'} : {ok: true, id: 'b9'};"
+            "  return Promise.resolve({ok: true, json: function () {"
+            "    return Promise.resolve(body); }});"
+            "};"
+            "bs.open();"
+            "bs.state().draft = 'the rail is unreadable';"
+            "bs.send();"
+            "later(function () { return %s.map(function (s) {"
+            "  return s.messages.map(function (m) { return m.text; }); }); });"
+            % self.sent("brainstorm_save")))
+        self.assertEqual(1, len(out))
+        self.assertIn("the rail is unreadable", out[0])
+
+    def test_a_screen_opened_and_left_is_not_written_down(self):
+        out = self.served(chats=[], tail=(
+            "bs.open();"
+            "later(function () { return bs.store().then(function () {"
+            "  return %s.length; }); });" % self.sent("brainstorm_save")))
+        self.assertEqual(0, out)
+
+    def test_a_new_brainstorm_starts_beside_the_one_that_was_on_screen(self):
+        out = self.served(tail=(
+            "bs.open();"
+            "later(function () {"
+            "  var was = bs.state().id;"
+            "  click(bs.box().querySelector('[data-hc-bs-act=\"new\"]'));"
+            "  return {was: was, id: bs.state().id,"
+            "    said: bs.state().msgs.map(function (m) { return m.text; }),"
+            "    saves: %s.length}; });" % self.sent("brainstorm_save")))
+        self.assertEqual("b1", out["was"])
+        # Nothing is written by starting one: what it replaces on screen is
+        # already in the file, and the new one is stored on its first round.
+        self.assertEqual("", out["id"])
+        self.assertEqual(0, out["saves"])
+        self.assertEqual(1, len(out["said"]))
+        self.assertIn("on your mind", out["said"][0])
+
     def test_the_stylesheet_keeps_the_goals_rail_and_covers_the_rest(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         self.assertIn("--hc-bs-left:max(var(--hc-left),32vw)", css)
@@ -761,8 +1061,9 @@ class PanelTests(BridgeTestCase):
 class LiveTests(unittest.TestCase):
     """The whole way through, in a browser, against a real server.
 
-    The node harness holds the shapes; this holds the one thing it cannot:
-    that a card approved on screen ends up in the reader's goal file.
+    The node harness holds the shapes; this holds the two things it cannot:
+    that a card approved on screen ends up in the reader's goal file, and
+    that the conversation itself survives the page it was had on.
     """
 
     def setUp(self):
@@ -793,6 +1094,165 @@ class LiveTests(unittest.TestCase):
     def rows_on(self, gid):
         doc = CS.load_goals(self.session, self.root)[0]
         return [r["text"] for r in GM.by_id(doc, gid)["todo_items"]]
+
+    def serving(self):
+        """The workspace, on a port, for as long as the `with` block runs."""
+        import contextlib
+        import threading
+
+        @contextlib.contextmanager
+        def run():
+            server = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.H)
+            ui._configure_server(server, self.trajdir, True)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                yield "http://127.0.0.1:%d" % server.server_address[1]
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+        return run()
+
+    def test_a_conversation_outlives_the_page_it_was_had_on(self):
+        from playwright.sync_api import sync_playwright
+
+        def brainstorm(page, url=None):
+            if url:
+                page.goto(url)
+            page.wait_for_selector(".hc-viewtab", timeout=30000)
+            page.get_by_text("Brainstorm", exact=True).first.click()
+            page.wait_for_selector(".hc-brainstorm", state="visible",
+                                   timeout=10000)
+
+        with self.serving() as url:
+            with sync_playwright() as play:
+                browser = play.chromium.launch(executable_path=self.chrome)
+                page = browser.new_context(
+                    viewport={"width": 1400, "height": 900}).new_page()
+                brainstorm(page, url)
+                # The round the model would have answered, put on screen by
+                # hand: what is under test is what happens to it afterwards.
+                page.evaluate(
+                    "() => { var bs = window.__hcPromptUI.brainstorm;"
+                    "  bs.state().msgs.push({role: 'you',"
+                    "    text: 'the rail is unreadable'});"
+                    "  bs.state().msgs.push({role: 'engelbart',"
+                    "    text: 'which part of it'});"
+                    "  bs.draw(); return bs.store(); }")
+                page.reload()
+                brainstorm(page)
+                page.wait_for_function(
+                    "() => window.__hcPromptUI.brainstorm.state()"
+                    "  .msgs.length > 1", timeout=10000)
+                said = page.evaluate(
+                    "() => window.__hcPromptUI.brainstorm.state().msgs"
+                    "  .map(function (m) { return m.text; })")
+                browser.close()
+        held = CS.load_brainstorms(self.session, self.root)
+        self.assertEqual(1, len(held))
+        # The invitation the screen opens on is part of the conversation and
+        # is kept with it; the title is not, since every one starts that way.
+        self.assertEqual(["the rail is unreadable", "which part of it"],
+                         [m["text"] for m in held[0]["messages"]][1:])
+        self.assertEqual("the rail is unreadable", held[0]["title"])
+        # And what the file holds is what the second page opened on.
+        self.assertEqual([m["text"] for m in held[0]["messages"]], said)
+
+    def test_a_re_render_does_not_swallow_what_they_were_typing(self):
+        """The composer is drawn from the draft, not built once and left.
+
+        The artifact re-renders its own document whenever its state changes,
+        which takes this panel with it and rebuilds the whole thing. The
+        composer used to come back empty while the words stayed in state, so
+        the reader watched their sentence vanish and the Send beside it go
+        dead -- and no amount of pressing it did anything, because what
+        armed it was the field that no longer existed.
+        """
+        from playwright.sync_api import sync_playwright
+
+        with self.serving() as url:
+            with sync_playwright() as play:
+                browser = play.chromium.launch(executable_path=self.chrome)
+                page = browser.new_context(
+                    viewport={"width": 1400, "height": 900}).new_page()
+                page.goto(url)
+                page.wait_for_selector(".hc-viewtab", timeout=30000)
+                page.get_by_text("Brainstorm", exact=True).first.click()
+                page.wait_for_selector(".hc-brainstorm", state="visible",
+                                       timeout=10000)
+                box = page.locator("[data-hc-bs-input]")
+                box.click()
+                box.type("half an idea I want to keep")
+                page.wait_for_timeout(300)
+                self.assertIsNone(page.evaluate(
+                    "() => document.querySelector('[data-hc-bs-act=\"send\"]')"
+                    "  .getAttribute('disabled')"))
+                # What a re-render does to this panel, done to it directly.
+                page.evaluate(
+                    "() => { var n = document.querySelector('.hc-brainstorm');"
+                    "  n.parentNode.removeChild(n); }")
+                page.wait_for_selector(".hc-brainstorm", state="visible",
+                                       timeout=10000)
+                page.wait_for_timeout(1200)
+                after = page.evaluate(
+                    "() => [document.querySelector('[data-hc-bs-input]').value,"
+                    "  document.querySelector('[data-hc-bs-act=\"send\"]')"
+                    "    .getAttribute('disabled')]")
+                browser.close()
+        self.assertEqual(["half an idea I want to keep", None], after)
+
+    def test_send_takes_the_answer_typed_into_the_card(self):
+        """The big button at the bottom sends whatever is standing.
+
+        A reader with a question card on screen answers it in the card and
+        then presses the button that says Send, because that is the button
+        that says Send. It used to do nothing at all, which reads as broken
+        rather than as a rule about which box belongs to which button.
+        """
+        from playwright.sync_api import sync_playwright
+
+        card = {"ok": True, "card": "questions", "say": "One question.",
+                "questions": {"eyebrow": "one question", "items": [
+                    {"id": "what", "type": "open", "options": [],
+                     "title": "What does it stop you doing?",
+                     "subtitle": "", "placeholder": "the thing…"}]}}
+        with self.serving() as url:
+            with sync_playwright() as play:
+                browser = play.chromium.launch(executable_path=self.chrome)
+                page = browser.new_context(
+                    viewport={"width": 1400, "height": 900}).new_page()
+                page.goto(url)
+                page.wait_for_selector(".hc-viewtab", timeout=30000)
+                page.get_by_text("Brainstorm", exact=True).first.click()
+                page.wait_for_selector(".hc-brainstorm", state="visible",
+                                       timeout=10000)
+                page.evaluate(
+                    "(card) => { var bs = window.__hcPromptUI.brainstorm;"
+                    "  bs.state().card = card; bs.state().thinking = false;"
+                    "  bs.draw(); }", card)
+                page.wait_for_selector("textarea[data-hc-bs-field]",
+                                       timeout=10000)
+                field = page.locator("textarea[data-hc-bs-field]")
+                field.click()
+                field.type("it stops me reading the rail")
+                page.wait_for_timeout(300)
+                # Nothing is in the composer, and its Send is live anyway --
+                # what it would send is the answer above it.
+                armed = page.evaluate(
+                    "() => [window.__hcPromptUI.brainstorm.state().draft,"
+                    "  document.querySelector('[data-hc-bs-act=\"send\"]')"
+                    "    .getAttribute('disabled')]")
+                page.locator("[data-hc-bs-act=\"send\"]").click()
+                page.wait_for_timeout(800)
+                said = page.evaluate(
+                    "() => window.__hcPromptUI.brainstorm.state().msgs"
+                    "  .slice(-1)[0].text")
+                browser.close()
+        self.assertEqual(["", None], armed)
+        self.assertEqual(
+            "What does it stop you doing?: it stops me reading the rail", said)
 
     def test_a_card_approved_on_screen_lands_in_the_goal_file(self):
         import threading

@@ -965,7 +965,7 @@
   // The few operations that only read. Everything else is a write and is
   // stopped while a workspace is read-only.
   var READ_OPS = { list_shares: true, supabase_logout: true,
-                   prompt_preview: true };
+                   prompt_preview: true, brainstorm_chats: true };
 
   // Notes and the document pane are real editors; a caret that types and
   // saves nothing is worse than no caret. Turned off while read-only, and
@@ -3242,6 +3242,9 @@
       // The composer, held at the foot: a brainstorm is a conversation, and
       // the place to type in one does not scroll away from you.
       ".hc-bs-foot{flex:none;border-top:1px solid var(--bd,#e3e3e3);background:var(--bg,#fff);padding:12px 28px 16px}",
+      ".hc-bs-tools{max-width:720px;margin:0 auto 7px;display:flex;justify-content:flex-end}",
+      ".hc-bs-new{cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:2px 4px}",
+      ".hc-bs-new:hover{color:var(--acc,#a5492a)}",
       ".hc-bs-composer{max-width:720px;margin:0 auto;display:flex;gap:9px;align-items:flex-end;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);padding:8px 10px}",
       ".hc-bs-composer:focus-within{border-color:var(--acc,#a5492a)}",
       ".hc-bs-input{flex:1 1 auto;min-width:0;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12px/1.6 'Source Code Pro',monospace;max-height:160px}",
@@ -4398,6 +4401,10 @@
 
   var bs = {
     msgs: [],          // the conversation, whole, posted on every round
+    id: "",            // which stored conversation this is, once it has been
+                       // written down; empty until the first round lands
+    loaded: "",        // the project whose saved conversations have been read,
+                       // so reopening the screen is not a second fetch
     card: null,        // the card the model last named
     answers: {},       // per question id, for the card on screen
     pick: "",          // the option chosen on a focus card
@@ -4433,7 +4440,77 @@
     if (!bs.msgs.length) bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
     renderBrainstorm();
     drawBrainstorm();
+    // Where they left off, if they have been here before. Once per project:
+    // after that the conversation on screen is the newer of the two, and
+    // reading the file again could only put an older one over it.
+    if (bs.loaded !== str(who.cwd)) brainstormRestore(str(who.cwd));
     return true;
+  }
+
+  // A conversation held open with nothing carried into it: the cards, the
+  // answers half-given to them, and the line being typed under them all
+  // belong to the one being left behind.
+  function brainstormClear() {
+    bs.card = null;
+    bs.answers = {};
+    bs.pick = "";
+    bs.note = "";
+    bs.declined = false;
+    bs.error = "";
+    bs.say = "";
+    bs.bad = false;
+    bs.goalId = "";
+    bs.goalq = "";
+    bs.draft = "";
+  }
+
+  // Another one, beside the one that was on screen rather than over it: what
+  // was said is already written down, so starting again loses nothing.
+  function brainstormNew() {
+    bs.id = "";
+    bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
+    brainstormClear();
+    var field = brainstormBox
+      && brainstormBox.querySelector("[data-hc-bs-input]");
+    if (field) { field.value = ""; field.style.height = "auto"; }
+    return drawBrainstorm();
+  }
+
+  // The last conversation this project had, read back off the file it was
+  // written to. Anything the reader has already said here outranks it: a
+  // restore that landed late must never take their own words back out.
+  function brainstormRestore(cwd) {
+    bs.loaded = str(cwd);
+    return post({ op: "brainstorm_chats" }).then(function (out) {
+      // A read that never landed is not an empty file: leaving the mark off
+      // means the next time they open the screen it asks again.
+      if (!out || !out.ok) { bs.loaded = ""; return false; }
+      var held = array(out.chats)[0] || null;
+      var turns = held && array(held.messages);
+      if (!turns || !turns.length || bs.msgs.length > 1 || bs.thinking) {
+        return false;
+      }
+      bs.id = str(held.id);
+      bs.msgs = turns.map(function (m) {
+        return { role: str(m.role), text: str(m.text) };
+      });
+      drawBrainstorm();
+      return true;
+    });
+  }
+
+  // Written down where the goals are, after every round rather than at the
+  // end of one -- a brainstorm has no end, the reader just closes the tab.
+  function brainstormStore() {
+    // The invitation on its own is not a conversation. The server refuses to
+    // store one, so asking it to would be a round trip for nothing.
+    if (bs.msgs.length < 2) return Promise.resolve(false);
+    return post({ op: "brainstorm_save", id: bs.id, messages: bs.msgs })
+      .then(function (out) {
+        if (!out || !out.ok) return false;
+        bs.id = str(out.id);
+        return true;
+      });
   }
 
   function closeBrainstorm() {
@@ -4467,15 +4544,11 @@
       }
       brainstormBox = null;
       bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
-      bs.card = null;
-      bs.answers = {};
-      bs.pick = "";
-      bs.note = "";
-      bs.declined = false;
-      bs.error = "";
-      bs.say = "";
-      bs.goalId = "";
-      bs.draft = "";
+      // The other project's conversations are its own, and so is whichever
+      // of them was on screen: this one's are read when it is opened.
+      bs.id = "";
+      bs.loaded = "";
+      brainstormClear();
     }
     if (!brainstormBox || !inLiveDocument(brainstormBox)) {
       if (brainstormBox && brainstormBox.parentNode) {
@@ -4502,16 +4575,31 @@
     return box;
   }
 
-  // Built once and left alone, unlike the column above it: this is the node
-  // the reader is mid-sentence in for most of the screen's life.
+  // The node the reader is mid-sentence in for most of the screen's life --
+  // and not one that is built once, whatever this used to say. The artifact
+  // re-renders its own document whenever its state changes, which takes
+  // this panel with it and rebuilds the whole thing; a composer that came
+  // back empty left the reader looking at a vanished sentence and a Send
+  // that would not arm, because the words were still in bs.draft and the
+  // field they had been typed into no longer existed. So the field is drawn
+  // FROM the draft, every time, and the button follows it.
   function brainstormComposer() {
     var foot = el("div", "hc-bs-foot");
+    // Reopening the screen picks the last conversation back up, so this is
+    // the way to have a second one: without it the first brainstorm a
+    // project ever had would be the only one it could ever have.
+    var tools = el("div", "hc-bs-tools");
+    var fresh = el("button", "hc-bs-new", "New brainstorm");
+    fresh.setAttribute("data-hc-bs-act", "new");
+    tools.appendChild(fresh);
+    foot.appendChild(tools);
     var wrap = el("div", "hc-bs-composer");
     var field = el("textarea", "hc-bs-input");
     field.setAttribute("rows", "1");
     field.setAttribute("spellcheck", "false");
     field.setAttribute("placeholder", "say anything — or answer the card above");
     field.setAttribute("data-hc-bs-input", "");
+    field.value = str(bs.draft);
     var send = el("button", "hc-bs-send", "Send");
     send.setAttribute("data-hc-bs-act", "send");
     send.setAttribute("disabled", "disabled");
@@ -4519,6 +4607,37 @@
     wrap.appendChild(send);
     foot.appendChild(wrap);
     return foot;
+  }
+
+  // What the composer's Send is for, right now: the sentence in the box, or
+  // -- when the box is empty and a card is asking -- the answers typed into
+  // that card. The second is why this exists. A reader with a question card
+  // on screen answers it in the card and then presses the big button at the
+  // bottom, because that is the button that says Send; before this it did
+  // nothing at all, which reads as broken rather than as a rule about which
+  // button belongs to which box.
+  function bsSendable() {
+    if (bs.thinking) return "";
+    if (str(bs.draft).trim()) return "draft";
+    return brainstormAnswers() ? "answers" : "";
+  }
+
+  // That button's state, brought up to date wherever it stands, and the
+  // field's with it. Called after a draw as well as on a keystroke: a
+  // composer rebuilt by a re-render comes back disabled, and nothing else
+  // would put it right until the next character was typed.
+  function bsSyncSend() {
+    if (!brainstormBox || !brainstormBox.querySelector) return false;
+    var field = brainstormBox.querySelector("[data-hc-bs-input]");
+    if (field && field.value !== str(bs.draft)
+        && document.activeElement !== field) {
+      field.value = str(bs.draft);
+    }
+    var send = brainstormBox.querySelector("[data-hc-bs-act=\"send\"]");
+    if (!send) return false;
+    if (bsSendable()) send.removeAttribute("disabled");
+    else send.setAttribute("disabled", "disabled");
+    return true;
   }
 
   // Every control on this screen answers at the document, not on its own
@@ -4570,12 +4689,10 @@
           target.style.height = "auto";
           target.style.height = Math.min(target.scrollHeight || 0, 160) + "px";
         }
-        var send = brainstormBox
-          && brainstormBox.querySelector("[data-hc-bs-act=\"send\"]");
-        // Toggled in place rather than by redrawing: the reader is typing in
-        // the field that decides it, and a sweep would take the caret away.
-        if (send && bs.draft.trim() && !bs.thinking) send.removeAttribute("disabled");
-        else if (send) send.setAttribute("disabled", "disabled");
+        // Toggled in place rather than by redrawing: the reader is typing
+        // in the field that decides it, and a sweep would take the caret
+        // away.
+        bsSyncSend();
         return;
       }
       if (target.getAttribute("data-hc-bs-goalq") !== null) {
@@ -4597,6 +4714,9 @@
         // without this the card stays unsendable however much is written in
         // it, because the button was drawn back when nothing was.
         bsArm("answers", !!brainstormAnswers() && !bs.thinking);
+        // And the composer's Send with it: that is the button most readers
+        // reach for once they have written their answer.
+        bsSyncSend();
       }
     }, true);
     document.addEventListener("keydown", function (event) {
@@ -4644,6 +4764,7 @@
 
   function brainstormAct(what) {
     if (what === "send") return brainstormSend();
+    if (what === "new") return brainstormNew();
     if (what === "retry") return brainstormRound();
     if (what === "dismiss") { bs.card = null; return drawBrainstorm(); }
     if (what === "decline") { bs.declined = true; return drawBrainstorm(); }
@@ -4704,6 +4825,7 @@
   }
 
   function brainstormSend() {
+    if (bsSendable() === "answers") return brainstormAct("answers");
     var text = str(bs.draft).trim();
     if (!text || bs.thinking) return;
     brainstormSay("you", text);
@@ -4733,11 +4855,16 @@
         if (!out || !out.ok) {
           bs.error = (out && out.error) || "the brainstorm could not reach Claude";
           drawBrainstorm();
+          // Stored even so: what they said is theirs whether or not the
+          // model answered, and losing it to a failed round would be worse
+          // than the failed round.
+          brainstormStore();
           return false;
         }
         brainstormSay("engelbart", out.say);
         bs.card = out;
         drawBrainstorm();
+        brainstormStore();
         return true;
       });
   }
@@ -4805,6 +4932,9 @@
                  + (out.todos || 0) + " TODO rows";
         bs.bad = false;
         drawBrainstorm();
+        // What was approved is now a turn in the conversation, and the
+        // stored copy is what the next reader of it opens on.
+        brainstormStore();
         refreshState();
         return true;
       });
@@ -4815,6 +4945,10 @@
   function drawBrainstorm() {
     var col = brainstormColumn();
     if (!col) return false;
+    // The composer is not in this column and is not redrawn with it, but
+    // everything that decides its Send -- thinking, the card on screen, the
+    // answers in it -- changes here.
+    bsSyncSend();
     wipe(col);
     bs.msgs.forEach(function (m) {
       var box = el("div", "hc-bs-msg");
@@ -16481,6 +16615,9 @@
       round: brainstormRound,
       send: brainstormSend,
       write: brainstormWrite,
+      store: brainstormStore,
+      restore: brainstormRestore,
+      fresh: brainstormNew,
       answers: brainstormAnswers,
       goalRows: brainstormGoalRows,
       target: brainstormTarget,

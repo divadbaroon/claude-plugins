@@ -14,11 +14,14 @@ model may ask a question, propose nothing, or go straight to rows, and which
 of those is right is a judgement about the conversation rather than a step
 count. What setup enforces with ``stage_of``, this leaves alone.
 
-The second is that nothing is written until it is asked for. A brainstorm
-that quietly appended goals to a tree the reader has been keeping by hand
-would be the opposite of thinking out loud, so the model may only OFFER --
-"I think I have enough to write the goals, shall I?" -- and the reader
-answers yes, or answers no and says what is missing.
+The second is that nothing is written *into the tree* until it is asked for.
+A brainstorm that quietly appended goals to a tree the reader has been
+keeping by hand would be the opposite of thinking out loud, so the model may
+only OFFER -- "I think I have enough to write the goals, shall I?" -- and the
+reader answers yes, or answers no and says what is missing. The conversation
+itself is another matter: it is written down after every round, beside the
+goals it argues with, by ``chat_state.save_brainstorm``. Losing an hour of
+thinking to a closed tab is not restraint.
 
 Everything the cards are made of is setup's: the four question shapes, the
 coercion of each, the caps. They are imported rather than restated, so the
