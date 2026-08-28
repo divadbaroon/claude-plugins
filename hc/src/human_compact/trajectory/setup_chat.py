@@ -274,6 +274,60 @@ def normalize_focus(value) -> List[Dict[str, Any]]:
     return out
 
 
+# How long someone is made to watch "generating" before being told anything.
+# The provider default is three minutes, which is right for an agent turn
+# nobody is sitting in front of and wrong for the first card of setup: a
+# reader watching a spinner concludes the tool is broken long before it
+# concludes anything itself.
+SETUP_TIMEOUT_SECONDS = 90
+
+# The statuses the deployment uses for "this key buys nothing".
+SPENT_STATUS = ("exhausted", "revoked", "blocked")
+SPEND_EPSILON = 0.0001
+
+
+def credit_note(root=None) -> str:
+    """Whether this install spends pooled credit, and whether any is left.
+
+    Read before blaming the reader's machine. An install wired to Engelbart
+    spends a shared key through a gateway, and when that key is done the
+    account record says so -- so a failure here can say which account setup
+    was drawing on rather than leaving them to guess.
+
+    Deliberately not a refusal. A spent pool is not a dead end: setup drops
+    the key and runs on the reader's own Claude account, which works. Turning
+    "no credit" into an error would block the setups that recover by
+    themselves, so this only ever adds a sentence to a failure that already
+    happened.
+    """
+    try:
+        managed = Path(os.environ.get("HUMAN_COMPACT_HOME")
+                       or Path.home() / ".human-compact")
+        value = json.loads((managed / "auth.json").read_text(encoding="utf-8"))
+        claude = value.get("claude") if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return ""
+    # No record, or one that names no gateway: this machine is not spending
+    # pooled credit and nothing about the pool is worth saying.
+    if not isinstance(claude, dict) or not claude.get("baseUrl"):
+        return ""
+    status = claude.get("status")
+    try:
+        budget = float(claude.get("budgetUsd") or 0)
+        spend = float(claude.get("spendUsd") or 0)
+    except (TypeError, ValueError):
+        budget = spend = 0.0
+    if status:
+        spent = status in SPENT_STATUS
+    else:
+        spent = budget > 0 and spend >= budget - SPEND_EPSILON
+    if not spent:
+        return ""
+    return (f" Your Engelbart Claude credit is used up (${spend:.2f} of "
+            f"${budget:.2f}), so setup falls back to your own Claude account "
+            "-- check that Claude Code is signed in to it.")
+
+
 def unexpected(exc) -> Dict[str, Any]:
     """Report what actually went wrong, rather than guessing at PATH.
 
@@ -297,9 +351,8 @@ def unexpected(exc) -> Dict[str, Any]:
     # options, and nobody should conclude their install is broken over it.
     return {"ok": False, "error": (
         f"setup could not reach Claude -- {detail}. "
-        "Close this page and run `hc setup-ui` again. Setup falls back to "
-        "your own Claude account when your Engelbart credit is spent, so "
-        "running out of credit is not what stops it.")}
+        "Close this page and run `hc setup-ui` again."
+        + credit_note())}
 
 
 def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
@@ -315,10 +368,11 @@ def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
     try:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
-            setup_model(root))
+            setup_model(root), timeout=SETUP_TIMEOUT_SECONDS)
         raw = engine.generate_json("\n".join(compose_chat(usable)) + "\n")
     except PROVIDERS.ProviderError as exc:
-        return {"ok": False, "error": " ".join(str(exc).split())[:200]}
+        return {"ok": False,
+                "error": " ".join(str(exc).split())[:200] + credit_note()}
     except Exception as exc:                             # noqa: BLE001
         return unexpected(exc)
     focus = normalize_focus(raw)
@@ -843,10 +897,11 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
     try:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
-            setup_model(root))
+            setup_model(root), timeout=SETUP_TIMEOUT_SECONDS)
         raw = engine.generate_json("\n".join(compose(transcript, extra)) + "\n")
     except PROVIDERS.ProviderError as exc:
-        return {"ok": False, "error": " ".join(str(exc).split())[:200]}
+        return {"ok": False,
+                "error": " ".join(str(exc).split())[:200] + credit_note()}
     except Exception as exc:                             # noqa: BLE001
         return unexpected(exc)
     card = normalize_card(raw, due)

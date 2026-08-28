@@ -57,8 +57,11 @@ def _last_json_object(raw):
 
 class Base:
     kind = "base"
-    def __init__(self, model):
+    def __init__(self, model, timeout=None):
         self.model = model
+        # Callers with someone watching a spinner get to say how long that
+        # someone should be made to watch it. None means the module default.
+        self.timeout = timeout
     def identity(self):
         return f"{self.kind}:{self.model}"
     def generate(self, prompt: str) -> str:
@@ -126,7 +129,7 @@ class ClaudeCLI(Base):
              search=""):
         command = ["claude", "-p", "--safe-mode", "--model", self.model,
                    "--no-session-persistence"]
-        deadline = CLAUDE_TIMEOUT_SECONDS
+        deadline = self.timeout or CLAUDE_TIMEOUT_SECONDS
         if search:
             # The answer is somewhere in that directory and the call has to
             # find it, so the tools are the ones that find things and read
@@ -136,7 +139,7 @@ class ClaudeCLI(Base):
             command += ["--tools", SEARCH_TOOLS,
                         "--allowed-tools", SEARCH_TOOLS,
                         "--add-dir", str(search)]
-            deadline = CLAUDE_SEARCH_TIMEOUT_SECONDS
+            deadline = self.timeout or CLAUDE_SEARCH_TIMEOUT_SECONDS
         elif read is not None:
             # Opening the named files is the whole of this call, so the tool
             # set is Read and nothing else -- allowed as well as available,
@@ -284,6 +287,7 @@ DEFAULTS = {"claude": {"extract": "haiku", "synthesize": "sonnet"},
             "mock": {"extract": "mock", "synthesize": "mock"}}
 
 
-def make(kind, stage, model=None):
+def make(kind, stage, model=None, timeout=None):
     model = model or DEFAULTS[kind][stage]
-    return {"claude": ClaudeCLI, "ollama": Ollama, "mock": Mock}[kind](model)
+    return {"claude": ClaudeCLI, "ollama": Ollama,
+            "mock": Mock}[kind](model, timeout=timeout)
