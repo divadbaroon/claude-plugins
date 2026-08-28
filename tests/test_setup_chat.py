@@ -552,15 +552,16 @@ class FromChatTests(unittest.TestCase):
         self.assertLess(out["error"].count("x"), 250)
 
     def test_the_failure_says_what_to_do_next(self):
-        # Out of credit is not out of options, and a reader who cannot tell
-        # those apart concludes the install is broken.
+        # With no Engelbart account record, the failure can prescribe a retry
+        # but cannot claim which account paid for the failed request. The
+        # spent-credit case below carries that account context explicitly.
         class Boom:
             def generate_json(self, prompt):
                 raise RuntimeError("boom")
 
         out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
         self.assertIn("hc setup-ui", out["error"])
-        self.assertIn("your own Claude account", out["error"])
+        self.assertNotIn("your own Claude account", out["error"])
 
     def _account(self, claude):
         tmp = tempfile.TemporaryDirectory()
