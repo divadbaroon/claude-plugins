@@ -44,6 +44,11 @@ WRITE_OPS = frozenset({
     # The project's own record.
     "set_project_objective", "set_project_meta", "project_setup",
     "new_project",
+    # The canvas's own save. The web UI does not dispatch a rename or a
+    # typed note as an operation above: it posts the whole tree back to
+    # /api/import on every edit. That is the workspace's main write path,
+    # and without this name it was the one path that never sent.
+    "import_goals",
     # Work done to a goal by the build, which writes the goal back the same
     # way a hand would: a run that finishes is an edit nobody typed.
     "build_todos", "answer_todo", "cancel_todos", "reopen_todo",

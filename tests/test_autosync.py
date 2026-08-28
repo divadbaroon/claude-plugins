@@ -74,6 +74,13 @@ class AutosyncTests(unittest.TestCase):
         operation added to one and not the other is the bug this catches."""
         self.assertTrue(UI.GOAL_OPS <= AS.WRITE_OPS)
 
+    def test_the_canvas_save_path_is_a_write(self):
+        """The web UI posts every edit back as one imported tree rather
+        than dispatching operations. If that name leaves the set, the
+        workspace's main write path stops sending and only the button
+        does."""
+        self.assertIn("import_goals", AS.WRITE_OPS)
+
     def test_reading_the_workspace_never_sends_it(self):
         for kind in ("list_shares", "shared_projects", "prompt_preview",
                      "dev_log", "build_log", "open_project", "sync_supabase"):
@@ -244,6 +251,24 @@ class EditedGoalTests(unittest.TestCase):
 
     def test_asking_a_question_of_the_workspace_arms_nothing(self):
         UI._apply({"op": "list_shares"}, self.trajdir, True)
+        self.assertEqual(self.armed, [])
+
+    def test_saving_the_canvas_arms_the_send_for_this_project(self):
+        """The route the web UI actually saves through: the whole tree,
+        posted back after an edit. Landing it must arm the send."""
+        out = UI._import([{"id": "g1", "title": "Ship the router",
+                           "notes": "typed on the canvas"}],
+                         self.trajdir, True)
+        self.assertTrue(out.get("ok"), out)
+        self.assertEqual([str(Path(c).resolve()) for c in self.armed],
+                         [str(self.cwd.resolve())])
+
+    def test_a_conflicted_import_arms_nothing(self):
+        """A tree refused for a stale revision never touched disk, so
+        there is nothing new to send."""
+        out = UI._import([{"id": "g1", "title": "Ship the router"}],
+                         self.trajdir, True, expected_revision="stale")
+        self.assertTrue(out.get("conflict"), out)
         self.assertEqual(self.armed, [])
 
 

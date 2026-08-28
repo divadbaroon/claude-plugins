@@ -4463,8 +4463,13 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
         GM.sanitize(goals)
         _save_goals(trajdir, goals, important, chat_scoped)
         saved_goals, saved_important = _load_goals(trajdir, chat_scoped)
-        return {
+        result = {
             "ok": True,
             "goals": len(out),
             "revision": _goal_revision(saved_goals, saved_important),
         }
+    # Armed here rather than in the route, so any caller that lands a tree
+    # is covered. A refused or conflicted import returned above and arms
+    # nothing: the tree it carried never touched disk.
+    _arm_autosync({"op": "import_goals"}, result, trajdir, chat_scoped)
+    return result
