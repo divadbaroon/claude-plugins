@@ -1,6 +1,6 @@
 {
   "name": "engelbart-cli",
-  "version": "0.19.17",
+  "version": "0.19.18",
   "description": "Engelbart: one-command installer for /bart, chat-scoped goals for Claude Code.",
   "bin": {
     "engelbart": "bin/engelbart.js"
