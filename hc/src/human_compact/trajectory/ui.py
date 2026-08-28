@@ -3706,7 +3706,7 @@ class H(BaseHTTPRequestHandler):
                 who = _project_identity(trajdir, self.server.chat_scoped, session)
                 self._send(200, project_json(root, who["cwd"], full=full))
             elif self.path.split("?")[0] in ("/setup", "/setup/"):
-                # What opens after `npx engelbart-cli`, before there is a
+                # What opens after `engelbart install`, before there is a
                 # chat or a project to open anything else on. Served from
                 # this process because it is the one that answers the ops
                 # the page posts; it needs nothing else of the workspace.

@@ -14,13 +14,14 @@ https://github.com/user-attachments/assets/46b8eb80-ca27-43e9-a180-6515fc4ec2c4
 
 ## Install
 
-macOS or Linux, Node 18+, Claude Code 2.1.175+.
+macOS or Linux and Claude Code 2.1.175+.
 
 ```bash
-npx engelbart-cli
+curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh
 ```
 
-That one run installs Engelbart, opens the browser device-auth flow, retrieves
+That downloads the verified standalone binary—no Node, npm, Bun, or Python
+needed—and installs Engelbart. It opens the browser device-auth flow, retrieves
 the account's Claude credit, configures its Supabase connection, and opens the
 first-project onboarding page. Onboarding stays closed until both the Claude
 key and Supabase configuration are ready.

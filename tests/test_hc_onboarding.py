@@ -245,7 +245,43 @@ class HcOnboardingTests(unittest.TestCase):
             )
         response = json.loads(result.stdout)
         self.assertEqual("block", response["decision"])
-        self.assertIn("npx engelbart-cli", response["reason"])
+        self.assertIn(
+            "curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh",
+            response["reason"],
+        )
+        self.assertIn("then retry /bart", response["reason"])
+        self.assertNotIn("npx", response["reason"])
+
+    def test_missing_runtime_prefers_an_installed_standalone_repair(self):
+        script = (
+            HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /
+            "chat-hook.sh"
+        )
+        payload = json.dumps({
+            "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "hook_event_name": "UserPromptExpansion",
+        })
+        with tempfile.TemporaryDirectory() as empty_home:
+            installer = Path(empty_home) / ".local" / "bin" / "engelbart"
+            installer.parent.mkdir(parents=True)
+            installer.write_text("#!/bin/sh\nexit 0\n")
+            installer.chmod(0o700)
+            environment = {**os.environ, "PATH": "/usr/bin:/bin",
+                           "HOME": empty_home}
+            environment.pop("HC_EXECUTABLE", None)
+            result = subprocess.run(
+                ["/bin/bash", str(script)],
+                input=payload,
+                text=True,
+                capture_output=True,
+                env=environment,
+                check=True,
+            )
+
+        response = json.loads(result.stdout)
+        self.assertEqual("block", response["decision"])
+        self.assertIn("~/.local/bin/engelbart install", response["reason"])
+        self.assertNotIn("curl", response["reason"])
 
 
 class HcCommandGateTests(unittest.TestCase):
