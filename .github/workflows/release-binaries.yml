@@ -66,7 +66,9 @@ jobs:
       - if: github.ref_type == 'tag'
         run: |
           version=$(node -p "require('./package.json').version")
-          if npm view "engelbart-cli@$version" version >/dev/null 2>&1; then
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "no NPM_TOKEN secret; npm publish left as a manual step"
+          elif npm view "engelbart-cli@$version" version >/dev/null 2>&1; then
             echo "engelbart-cli@$version is already on npm; skipping publish"
           else
             npm publish --ignore-scripts
