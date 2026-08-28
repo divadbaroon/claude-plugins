@@ -277,11 +277,10 @@ async function run(deps = {}) {
     const target = supportedTarget(platform, arch, deps.processReport);
     const vendor = inspectVendor(packageRoot, packageJson.version);
 
-    // Claude Code is a hard requirement, but "go install it" is a dead end on
-    // a blank machine. Where there is a person to ask, offer to run
-    // Anthropic's official installer; everywhere else -- CI, pipes, dry runs
-    // -- the requirement stays an error, exactly as before.
-    if (!options.dryRun && canPrompt(deps)
+    // Claude Code is a hard requirement, and its official installer asks no
+    // questions. A pipe or session runner may remove the TTY even though this
+    // is a real install, so only CI and dry runs suppress the bootstrap.
+    if (!options.dryRun && !env.CI
         && !(deps.claudeOnPath || claudeOnPath)(env, deps.spawn)) {
       env = await (deps.installClaudeCode || installClaudeCode)({
         env, output, errorOutput, deps,
