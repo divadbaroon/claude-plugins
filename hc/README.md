@@ -1,16 +1,16 @@
 # hc
 
 Local goal state and conversation persistence for Claude Code. `hc` is the
-runtime; [`engelbart-cli`](../engelbart) is the npm package that installs it.
+runtime; [`engelbart`](../engelbart) is the standalone installer that owns it.
 
 ## Install
 
-Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
+Requirements: macOS or Linux and Claude Code 2.1.175+.
 Run the single installer from a terminal where that Claude Code version is
 installed:
 
 ```bash
-npx engelbart-cli
+curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh
 ```
 
 It installs a managed `hc` runtime plus the Claude Code hooks and the `/bart`
@@ -129,7 +129,7 @@ Everything below is present in this release but disconnected from it. Setting
 `trajectory`, `lens`, `goals`, `work`, `mark`, `status`, `refresh`, `analyze`,
 `worker`) and the HTTP routes and operations behind them; without it they exit
 2 or answer `experimental in this release; set HC_EXPERIMENTAL=1`. Installing
-with `HC_EXPERIMENTAL=1 npx engelbart-cli` additionally wires the global capture
+with `HC_EXPERIMENTAL=1 engelbart install` additionally wires the global capture
 hooks — a plain reinstall un-wires them, so a vault that was already enabled
 stops capturing until it is reinstalled with the flag.
 [`STASHED.md`](../STASHED.md) is the full inventory.

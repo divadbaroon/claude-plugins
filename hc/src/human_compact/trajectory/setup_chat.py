@@ -1,6 +1,6 @@
 """Setup: the conversation that stands where the blank goals screen was.
 
-A chat opened cold -- `npx engelbart-cli`, then `/bart`, with nothing said
+A chat opened cold -- `engelbart install`, then `/bart`, with nothing said
 in it yet -- has no transcript to read a goal out of. The workspace used to
 open on an empty tree, which is indistinguishable from a project with
 nothing in it, and said nothing about writing one. Setup is what opens

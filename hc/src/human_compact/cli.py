@@ -192,14 +192,14 @@ def _preflight_asset(source: Path, destination: Path, asset: str):
     if destination.is_symlink() or not destination.is_dir():
         raise RuntimeError(
             f"refusing to replace unmanaged Claude skill path: {destination}; "
-            "move it aside, then rerun npx engelbart-cli")
+            "move it aside, then rerun `engelbart install`")
     if _owned_asset(destination, asset):
         return "managed"
     if _legacy_asset(destination, source, asset):
         return "legacy"
     raise RuntimeError(
         f"refusing to replace unmanaged Claude skill directory: {destination}; "
-        "move it aside, then rerun npx engelbart-cli")
+        "move it aside, then rerun `engelbart install`")
 
 
 def _tighten_asset_modes(root: Path):
@@ -453,7 +453,7 @@ def _validate_claude_cli():
     executable = shutil.which("claude")
     if not executable:
         raise RuntimeError(
-            "Claude Code is required; install it, then rerun npx engelbart-cli")
+            "Claude Code is required; install it, then rerun `engelbart install`")
     try:
         result = subprocess.run([executable, "--version"], capture_output=True,
                                 text=True, timeout=20)
@@ -496,7 +496,7 @@ def _say_global_vault_state():
 
 
 def setup_main(argv=None):
-    """One noninteractive orchestration seam for the npm installer."""
+    """One noninteractive orchestration seam for the Engelbart installer."""
     ap = argparse.ArgumentParser(
         prog="hc setup",
         description="Install /bart and optionally initialize global Vault state.")
@@ -2106,7 +2106,7 @@ def bart_main(argv=None):
 
     ap = argparse.ArgumentParser(
         prog="bart",
-        description="Open Engelbart projects (account commands use engelbart-cli).")
+        description="Open Engelbart projects (account commands use engelbart).")
     ap.add_argument("action", nargs="?", default="status",
                     choices=("auth", "status", "token", "logout", "start"))
     args = ap.parse_args(said)
@@ -2121,14 +2121,14 @@ def bart_main(argv=None):
         record = {}
 
     if args.action in ("auth", "logout"):
-        print(f"bart: run `npx engelbart-cli {args.action}`; account changes "
+        print(f"bart: run `engelbart {args.action}`; account changes "
               "use the device-auth flow", file=sys.stderr)
         return 2
     claude = record.get("claude") if isinstance(record.get("claude"), dict) else {}
     if args.action == "token":
         key = str(claude.get("apiKey") or "")
         if not key:
-            print("bart: not connected; run `npx engelbart-cli auth`",
+            print("bart: not connected; run `engelbart auth`",
                   file=sys.stderr)
             return 1
         print(key)

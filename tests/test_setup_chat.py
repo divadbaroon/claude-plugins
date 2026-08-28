@@ -1,6 +1,6 @@
 """The cold start: a chat that has nothing to read a goal out of.
 
-A reader who runs `npx engelbart-cli` and then `/bart` in a blank chat has
+A reader who runs `engelbart install` and then `/bart` in a blank chat has
 no transcript to infer anything from, so the goals screen opens empty and
 says nothing about what to do with it. Setup is what stands in that place:
 a conversation that asks what they are working on, proposes a plan they

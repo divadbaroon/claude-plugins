@@ -32,10 +32,10 @@ fails closed rather than falling back off-device. The localhost server binds to
 
 ## Install
 
-Requirements: macOS or Linux, Node.js 18+, and Claude Code 2.1.175+.
+Requirements: macOS or Linux and Claude Code 2.1.175+.
 Install the managed Python runtime and Claude Code integration together:
 
-    npx engelbart-cli
+    curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh
 
 The installer takes no required options and asks no questions: it installs the
 runtime, the hooks, and `/bart`. Nothing is analyzed or injected until
@@ -47,7 +47,7 @@ No Homebrew, pipx, jq, shell-profile edit, or manual `hc` command is required.
 
 The global history layer is disconnected in this release: its capture hooks are
 not installed and `hc setup --global-vault yes` is refused unless
-`HC_EXPERIMENTAL=1` is set. Install with `HC_EXPERIMENTAL=1 npx engelbart-cli` to
+`HC_EXPERIMENTAL=1` is set. Install with `HC_EXPERIMENTAL=1 engelbart install` to
 wire those hooks; a plain reinstall un-wires them again, so a vault that was
 already enabled stops capturing until it is reinstalled with the flag. Legacy
 selective installs can still opt in per session with `CLAUDE_VAULT=1` or

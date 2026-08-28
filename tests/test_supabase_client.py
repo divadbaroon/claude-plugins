@@ -31,7 +31,7 @@ class VaultTests(unittest.TestCase):
         self.env = mock.patch.dict(os.environ, {
             "CLAUDE_VAULT_DIR": str(self.vault),
             # Never the machine's own. `current_session` falls back to the
-            # credentials `npx engelbart-cli auth` wrote, and a test that reads
+            # credentials `engelbart auth` wrote, and a test that reads
             # real ones does not merely leak state -- it spends a live token
             # on a live endpoint.
             "HUMAN_COMPACT_HOME": str(self.connected)}, clear=False)
@@ -227,7 +227,7 @@ class SessionTests(VaultTests):
         with self.assertRaises(SB.SupabaseError) as caught:
             SB.current_session()
         self.assertIn("hc supabase login", str(caught.exception))
-        self.assertIn("npx engelbart-cli auth", str(caught.exception))
+        self.assertIn("engelbart auth", str(caught.exception))
 
     def test_signing_out_removes_the_tokens(self):
         self.write()
@@ -341,7 +341,7 @@ class SendTests(VaultTests):
 
 
 class ConnectedMachineTests(VaultTests):
-    """A machine that ran `npx engelbart-cli auth` already proved who it is."""
+    """A machine that ran `engelbart auth` already proved who it is."""
 
     def setUp(self):
         super().setUp()
@@ -407,7 +407,7 @@ class ConnectedMachineTests(VaultTests):
         self.write()
         with self.assertRaises(SB.SupabaseError) as caught:
             SB.current_session()
-        self.assertIn("npx engelbart-cli auth", str(caught.exception))
+        self.assertIn("engelbart auth", str(caught.exception))
         self.assertIn("hc supabase login", str(caught.exception))
 
     def test_credentials_without_a_token_do_not_count_as_connected(self):

@@ -30,10 +30,10 @@ secret that never leaves your machine, so a pairing link someone else sends you
 cannot connect their terminal to your account.
 
 ```bash
-npx engelbart-cli auth      # connect this machine (or reconnect it)
-npx engelbart-cli whoami    # show which account this machine is connected to
-npx engelbart-cli env       # print exports for the issued Claude credit
-npx engelbart-cli logout    # disconnect this machine and revoke its token
+engelbart auth      # connect this machine (or reconnect it)
+engelbart whoami    # show which account this machine is connected to
+engelbart env       # print exports for the issued Claude credit
+engelbart logout    # disconnect this machine and revoke its token
 ```
 
 ## Using your Claude credit
@@ -49,21 +49,21 @@ claude
 ```
 
 Add that `source` line to your shell profile and every new terminal picks it
-up. The file is written by `npx engelbart-cli auth` and removed by
-`npx engelbart-cli logout`, so a disconnected machine stops pointing `claude`
+up. The file is written by `engelbart auth` and removed by
+`engelbart logout`, so a disconnected machine stops pointing `claude`
 at a key it no longer holds.
 
-`npx engelbart-cli env` prints the same two lines to stdout. Only the exports
-reach stdout, so `eval "$(npx engelbart-cli env)"` is safe; everything else
+`engelbart env` prints the same two lines to stdout. Only the exports
+reach stdout, so `eval "$(engelbart env)"` is safe; everything else
 goes to stderr.
 
 Credits can lag a new account. If the key is not ready when you approve the
-code, the machine still connects -- run `npx engelbart-cli auth` again once it
+code, the machine still connects -- run `engelbart auth` again once it
 is.
 
 Connecting is skipped when there is no terminal to answer in -- a scripted or
 CI install never waits on a browser -- and `--local-only` skips it outright. The
-install itself does not depend on it: run `npx engelbart-cli auth` whenever you
+install itself does not depend on it: run `engelbart auth` whenever you
 are ready. Set `ENGELBART_API_BASE` to point at a deployment other than
 `https://berkeley.mathetic.com`.
 
@@ -95,24 +95,23 @@ changed since your last message. Subagents and tool batches receive it too.
 `/bart disable` turns analysis and injection off again for that chat;
 `/bart` turns them back on.
 
-The Python backend is an exact wheel bundled in the npm release. It is
-installed into a managed private runtime under `~/.human-compact/`; the npm
-package does not fetch code from a mutable Git branch and does not run install
-lifecycle scripts.
+The Python backend is an exact wheel bundled in both the standalone and npm
+releases. It is installed into a managed private runtime under
+`~/.human-compact/`; neither installer fetches code from a mutable Git branch.
 
 ## Noninteractive installation
 
 Scripted or deliberately local installation skips browser authentication:
 
 ```bash
-npx engelbart-cli --local-only
+engelbart install --local-only
 ```
 
 `--non-interactive` is still accepted for compatibility and also skips browser
 authentication.
 `--dry-run` verifies the bundled wheel and prints the plan without installing.
 Neither form waits on a browser, so a scripted install finishes unattended and
-leaves the account to be connected later with `npx engelbart-cli auth`.
+leaves the account to be connected later with `engelbart auth`.
 
 ## Experimental (HC_EXPERIMENTAL=1)
 
@@ -123,10 +122,10 @@ capture hooks are installed only when the flag is set at install time:
 
 ```bash
 # Global Vault plus global goal inference
-HC_EXPERIMENTAL=1 npx engelbart-cli --non-interactive --global-vault 1 --goals 1
+HC_EXPERIMENTAL=1 engelbart install --non-interactive --global-vault 1 --goals 1
 
 # Global Vault without running goal inference now
-HC_EXPERIMENTAL=1 npx engelbart-cli --non-interactive --global-vault 1 --goals 2
+HC_EXPERIMENTAL=1 engelbart install --non-interactive --global-vault 1 --goals 2
 ```
 
 Values other than `1` and `2` are rejected, and `--goals 1` is invalid when the
@@ -140,13 +139,13 @@ See [`STASHED.md`](../STASHED.md) for the full inventory.
 ## Requirements and state
 
 - macOS or Linux
-- Node.js 18+
 - Claude Code 2.1.175+
+- `curl` for the standalone installer; Node.js 18+ only for the optional npm path
 
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
 runtimes live under `~/.human-compact/runtimes/`; and the stable launchers are
 `~/.human-compact/bin/hc` and `~/.human-compact/bin/bart`. Re-running the same
-npm version repairs the Claude integration and reuses a verified runtime.
+Engelbart version repairs the Claude integration and reuses a verified runtime.
 
 If `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` is already exported in the
 shell, unset it before launching Claude Code: shell variables take precedence

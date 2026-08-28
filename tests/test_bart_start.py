@@ -236,7 +236,7 @@ class BartAccountCompatibilityTests(unittest.TestCase):
         code, out, err = self.call("auth")
         self.assertEqual(2, code)
         self.assertEqual("", out)
-        self.assertIn("npx engelbart-cli auth", err)
+        self.assertIn("engelbart auth", err)
 
 
 if __name__ == "__main__":

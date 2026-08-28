@@ -1,6 +1,6 @@
 """Noninteractive global Vault setup and lifecycle capture.
 
-The npm installer owns a private Python runtime, so global capture cannot
+The Engelbart installer owns a private Python runtime, so global capture cannot
 depend on ``jq`` or on that runtime being present on the user's shell PATH.
 This module is called through the stable ``hc`` launcher resolved by the
 installed hook adapter.

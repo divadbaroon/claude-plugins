@@ -1,13 +1,16 @@
-#!/usr/bin/env bash
-# hc — compatibility redirect to the engelbart-cli npm installer
-#   curl -fsSL https://raw.githubusercontent.com/divadbaroon/claude-plugins/main/install.sh | bash
+#!/bin/sh
+# Compatibility entrypoint for the standalone Engelbart installer.
+#   curl -fsSL https://raw.githubusercontent.com/divadbaroon/claude-plugins/main/install.sh | sh
 set -eu
 
-if ! command -v npx >/dev/null 2>&1; then
-  printf '%s\n' 'hc now installs with npm. Install Node.js 18+ and run:' >&2
-  printf '%s\n' '  npx engelbart-cli' >&2
+URL="https://berkeley.mathetic.com/engelbart/install.sh"
+command -v curl >/dev/null 2>&1 || {
+  printf '%s\n' 'engelbart: curl is required' >&2
   exit 1
-fi
+}
 
-printf '%s\n' 'Redirecting to the engelbart-cli npm installer...'
-exec npx --yes engelbart-cli@latest
+printf '%s\n' 'Redirecting to the standalone Engelbart installer...' >&2
+tmp=$(mktemp "${TMPDIR:-/tmp}/engelbart-redirect.XXXXXX")
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+curl -fsSL "$URL" -o "$tmp"
+sh "$tmp" "$@"
