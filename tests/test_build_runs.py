@@ -1676,7 +1676,7 @@ class RestartCheckTests(BuildRunTests):
         # The shell can turn it off for every build a server starts.
         os.environ["HC_BUILD_RESTART_CHECK"] = "0"
         self.assertFalse(BUILD.check_enabled(self.session, self.root))
-        # And what the Builds tab is offered names the defaults.
+        # And what ``/api/models`` offers names the defaults.
         offered = BUILD.models(self.session, self.root)
         self.assertEqual({"model": "sonnet", "effort": "high"}, offered["check_defaults"])
         self.assertEqual(("haiku", "low", True),

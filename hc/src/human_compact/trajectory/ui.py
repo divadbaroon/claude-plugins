@@ -2568,7 +2568,7 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         return BUILD.note(session_id, root, goal_id,
                           str(op.get("id") or ""), str(op.get("note") or ""))
     if kind == "set_build_settings":
-        # The Builds tab: which model, at what effort -- for a build, and
+        # The build settings: which model, at what effort -- for a build, and
         # for the restart check that follows one. Vault-wide.
         return BUILD.save_settings(
             session_id, root,
@@ -3446,7 +3446,7 @@ class H(BaseHTTPRequestHandler):
                         self.server.trajdir, True, session_id).get("cwd")
                 self._send(200, _supabase_status(SB, root, cwd))
             elif self.path == "/api/models":
-                # What the Builds tab offers: the models the installed CLI
+                # What ``/api/models`` offers: the models the installed CLI
                 # names, the efforts, and what is chosen. Chat scope, since
                 # builds are.
                 if not self.server.chat_scoped:

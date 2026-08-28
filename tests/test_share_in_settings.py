@@ -162,8 +162,7 @@ class SettingsTabTests(BridgeTestCase):
             + "  return out; };"
             + "later(function () { " + tail + " });"))
 
-    ALL = ("cloud", "notifications", "builds", "supabase", "project",
-           "shared", "data")
+    ALL = ("notifications", "supabase", "project", "shared", "data")
 
     def only(self, *on):
         return dict((name, name in on) for name in self.ALL)
@@ -173,17 +172,9 @@ class SettingsTabTests(BridgeTestCase):
             "return JSON.stringify([tabs.map(function (t) { return t.textContent; }),"
             " tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([["Account", "Alerts", "Sharing", "Cloud", "Data", "Builds"],
-                          ["", None, None, None, None, None],
+        self.assertEqual([["Account", "Alerts", "Sharing", "Data"],
+                          ["", None, None, None],
                           self.only("supabase")], got)
-
-    def test_cloud_is_where_the_connection_is_settled(self):
-        got = self.panel(
-            "click(tabs[3]);"
-            "return JSON.stringify([secs(),"
-            " panel.querySelector('[data-hc-sb=\"url\"]') !== null,"
-            " panel.querySelector('[data-hc-sb=\"anon_key\"]') !== null]);")
-        self.assertEqual([self.only("cloud"), True, True], got)
 
     def test_data_is_the_record_this_machine_keeps(self):
         # Named and copied, not shown: a real project's record runs to
@@ -191,7 +182,7 @@ class SettingsTabTests(BridgeTestCase):
         # dump that stops a quarter of the way in reads as nothing. The
         # pane says where the file is and offers the copy.
         got = self.panel(
-            "click(tabs[4]);"
+            "click(tabs[3]);"
             "var pane = panel.querySelector('[data-hc-record]');"
             "return JSON.stringify([secs(), deepText(pane),"
             " pane.querySelector('.hc-settings-record') === null,"
@@ -255,7 +246,7 @@ class SettingsTabTests(BridgeTestCase):
             "click(tabs[2]);"
             "return JSON.stringify([tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([[None, None, "", None, None, None],
+        self.assertEqual([[None, None, "", None],
                           self.only("project", "shared")], got)
 
     def test_alerts_is_where_the_banner_settings_went(self):
@@ -265,23 +256,14 @@ class SettingsTabTests(BridgeTestCase):
             " panel.querySelector('[data-hc-alert-set=\"banners\"]') !== null]);")
         self.assertEqual([self.only("notifications"), True], got)
 
-    def test_the_cloud_tab_shows_the_keys_back_and_says_where_they_point(self):
+    def test_without_a_project_the_account_says_it_is_not_connected(self):
         got = self.panel(
-            "return JSON.stringify(["
-            " panel.querySelector('[data-hc-sb=\"url\"]').value,"
-            " panel.querySelector('[data-hc-sb=\"anon_key\"]').value,"
-            " panel.querySelector('[data-hc-cloud-say]').textContent]);")
-        self.assertEqual(["https://ref.supabase.co", "eyJabc",
-                          "connected to https://ref.supabase.co"], got)
-
-    def test_without_keys_the_cloud_tab_says_what_to_paste(self):
-        got = self.panel(
-            "return JSON.stringify([panel.querySelector('[data-hc-cloud-say]').textContent,"
-            " panel.querySelector('[data-hc-cloud-say]').getAttribute('data-hc-bad')]);",
+            "return JSON.stringify([panel.querySelector('[data-hc-sb-say]').textContent,"
+            " panel.querySelector('[data-hc-sb-say]').getAttribute('data-hc-bad')]);",
             supabase={"ok": True, "configured": False, "signed_in": False,
                       "config_path": "/vault/supabase.json"})
-        self.assertEqual(["not connected · paste the project URL and anon key,"
-                          " then Connect", None], got)
+        self.assertEqual(["not connected · no Supabase project is configured",
+                          None], got)
 
     def test_the_tab_it_was_left_on_is_the_tab_it_comes_back_to(self):
         got = self.panel(
@@ -291,10 +273,10 @@ class SettingsTabTests(BridgeTestCase):
             "  if (c.getAttribute('data-hc-settings-tab') !== null"
             "      && c.getAttribute('data-hc-on') !== null) on.push(c.textContent);"
             "  walk(c); }); })(back);"
-            "return JSON.stringify([on, P.gear.tab('cloud'),"
-            " back.querySelector('[data-hc-settings-sec=\"cloud\"]')"
+            "return JSON.stringify([on, P.gear.tab('data'),"
+            " back.querySelector('[data-hc-settings-sec=\"data\"]')"
             "   .getAttribute('data-hc-on')]);")
-        self.assertEqual([["Cloud"], True, ""], got)
+        self.assertEqual([["Data"], True, ""], got)
 
     def test_the_close_button_still_closes_rather_than_switching(self):
         got = self.panel(

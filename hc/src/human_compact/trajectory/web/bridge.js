@@ -2713,11 +2713,6 @@
     }, true);
     document.addEventListener("change", function (event) {
       var target = event && event.target;
-      var build = (target && target.getAttribute) ? str(target.getAttribute("data-hc-build-set")) : "";
-      if (build) {
-        settingsBuildSet(build, build === "check" ? !!target.checked : target.value);
-        return;
-      }
       if (target && target.getAttribute
           && target.getAttribute("data-hc-worktree") !== null) {
         setWorktree(str(target.value));
@@ -6463,7 +6458,7 @@
     var tabs = document.createElement("div");
     tabs.className = "hc-settings-tabs";
     [["account", "Account"], ["alerts", "Alerts"], ["sharing", "Sharing"],
-     ["cloud", "Cloud"], ["data", "Data"], ["builds", "Builds"]].forEach(function (spec) {
+     ["data", "Data"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -6508,71 +6503,9 @@
     sec.appendChild(l2);
     box.appendChild(sec);
 
-    // Builds: which model a TODO build runs on, and at what effort. The
-    // choices are read off the installed Claude Code binary when the panel
-    // opens -- it names every model it knows, so a CLI update is what adds
-    // the new ones -- and a change is kept by the server for every build
-    // after it. Nothing chosen is the CLI's own default, as before.
-    var builds = document.createElement("div");
-    builds.className = "hc-settings-sec";
-    builds.setAttribute("data-hc-settings-sec", "builds");
-    builds.setAttribute("data-hc-tab", "builds");
-    var bh = document.createElement("div");
-    bh.className = "hc-settings-sec-head";
-    bh.textContent = "TODO builds";
-    builds.appendChild(bh);
-    [["model", "Model"], ["effort", "Effort"]].forEach(function (spec) {
-      var field = document.createElement("label");
-      field.className = "hc-settings-field";
-      field.appendChild(text(spec[1]));
-      var pick = document.createElement("select");
-      pick.setAttribute("data-hc-build-set", spec[0]);
-      pick.setAttribute("aria-label", spec[1] + " for TODO builds");
-      field.appendChild(pick);
-      builds.appendChild(field);
-    });
-    // And the check that follows a finished build: whether to run it, and
-    // what it runs on -- a cheaper model at high effort unless chosen
-    // otherwise (the server names the defaults with the models).
-    var ch3 = document.createElement("label");
-    var c3 = document.createElement("input");
-    c3.type = "checkbox";
-    c3.setAttribute("type", "checkbox");
-    c3.setAttribute("data-hc-build-set", "check");
-    ch3.appendChild(c3);
-    ch3.appendChild(text("After a build, ask whether the program needs a local restart"));
-    builds.appendChild(ch3);
-    [["check_model", "Check model"], ["check_effort", "Check effort"]].forEach(function (spec) {
-      var field = document.createElement("label");
-      field.className = "hc-settings-field";
-      field.appendChild(text(spec[1]));
-      var pick = document.createElement("select");
-      pick.setAttribute("data-hc-build-set", spec[0]);
-      pick.setAttribute("aria-label", spec[1] + " for the restart check");
-      field.appendChild(pick);
-      builds.appendChild(field);
-    });
-    var bsay = document.createElement("div");
-    bsay.className = "hc-settings-hint";
-    bsay.setAttribute("data-hc-build-say", "");
-    bsay.textContent = "reading the installed Claude Code…";
-    builds.appendChild(bsay);
-    box.appendChild(builds);
-
-    // Supabase: where this workspace's projects are sent. The URL and the
-    // anon key are typed and kept; the password is typed and is not -- it
-    // buys a token on its way past and the field is emptied behind it.
-    // Where this workspace's projects go, and who they go as: two
-    // questions with two answers, and the first has to be settled before
-    // the second can be asked. A tab each.
-    var cloud = document.createElement("div");
-    cloud.className = "hc-settings-sec";
-    cloud.setAttribute("data-hc-settings-sec", "cloud");
-    cloud.setAttribute("data-hc-tab", "cloud");
-    var ch = document.createElement("div");
-    ch.className = "hc-settings-sec-head";
-    ch.textContent = "Supabase";
-    cloud.appendChild(ch);
+    // Who this workspace's projects are sent as: the password is typed
+    // and is not kept -- it buys a token on its way past and the field is
+    // emptied behind it. Which project they go to is the server's to say.
     var sb = document.createElement("div");
     sb.className = "hc-settings-sec";
     sb.setAttribute("data-hc-settings-sec", "supabase");
@@ -6581,7 +6514,7 @@
     sbh.className = "hc-settings-sec-head";
     sbh.textContent = "Account";
     sb.appendChild(sbh);
-    var field = function (label, name, type, placeholder, host) {
+    var field = function (label, name, type, placeholder) {
       var wrap = document.createElement("label");
       wrap.className = "hc-settings-field";
       wrap.appendChild(text(label));
@@ -6594,33 +6527,9 @@
       input.setAttribute("autocomplete", "off");
       input.setAttribute("autocapitalize", "off");
       wrap.appendChild(input);
-      (host || sb).appendChild(wrap);
+      sb.appendChild(wrap);
       return input;
     };
-    field("Project URL", "url", "text", "https://your-ref.supabase.co", cloud);
-    field("Anon (public) key", "anon_key", "text", "eyJ…", cloud);
-    var keyHint = document.createElement("div");
-    keyHint.className = "hc-settings-hint";
-    keyHint.textContent = "Project Settings → API. Use the anon key, never"
-      + " the service key.";
-    cloud.appendChild(keyHint);
-    var saveRow = document.createElement("div");
-    saveRow.className = "hc-settings-row";
-    var save = document.createElement("span");
-    save.className = "hc-settings-btn";
-    save.setAttribute("role", "button");
-    save.setAttribute("data-hc-sb-do", "save");
-    save.textContent = "Connect";
-    saveRow.appendChild(save);
-    cloud.appendChild(saveRow);
-    // The connection's own line, so the Cloud tab says whether it holds
-    // keys without sending the reader to another tab to find out.
-    var cloudSay = document.createElement("div");
-    cloudSay.className = "hc-settings-say";
-    cloudSay.setAttribute("data-hc-cloud-say", "");
-    cloudSay.textContent = "checking…";
-    cloud.appendChild(cloudSay);
-    box.appendChild(cloud);
     field("Display name", "display_name", "text", "David");
     var nameHint = document.createElement("div");
     nameHint.className = "hc-settings-hint";
@@ -6839,30 +6748,13 @@
       return settingsPanelBox.querySelector('[data-hc-sb="' + name + '"]');
     };
     var say = settingsPanelBox.querySelector("[data-hc-sb-say]");
-    var cloudSay = settingsPanelBox.querySelector("[data-hc-cloud-say]");
-    var onCloud = function (words, bad) {
-      if (!cloudSay) return;
-      cloudSay.textContent = words;
-      if (bad) cloudSay.setAttribute("data-hc-bad", "");
-      else cloudSay.removeAttribute("data-hc-bad");
-    };
     if (!say) return;
     if (!state || !state.ok) {
       say.setAttribute("data-hc-bad", "");
       say.textContent = "could not read the Supabase settings";
-      onCloud("could not read the Supabase settings", true);
       return;
     }
     say.removeAttribute("data-hc-bad");
-    // The keys are shown back so a reader can see which project this points
-    // at; the URL and the key are what this tab is about.
-    var url = at("url");
-    if (url && document.activeElement !== url) url.value = str(state.url);
-    var key = at("anon_key");
-    if (key && document.activeElement !== key) key.value = str(state.anon_key);
-    onCloud(state.configured
-      ? "connected to " + (str(state.url) || "your project")
-      : "not connected · paste the project URL and anon key, then Connect");
     var email = at("email");
     if (email && !email.value) email.value = str(state.email);
     var named = at("display_name");
@@ -6872,8 +6764,7 @@
     var pw = at("password");
     if (pw) pw.value = "";
     if (!state.configured) {
-      say.textContent = "not connected · paste the project URL and anon key,"
-        + " then Connect";
+      say.textContent = "not connected · no Supabase project is configured";
     } else if (!state.signed_in) {
       say.textContent = "connected · sign in to send projects";
     } else {
@@ -6986,11 +6877,7 @@
     if (button) button.setAttribute("data-hc-busy", "");
     if (say) { say.removeAttribute("data-hc-bad"); say.textContent = "working…"; }
     var body = { op: "supabase_logout" };
-    if (what === "save") {
-      body = { op: "set_supabase_config", url: at("url"),
-               anon_key: at("anon_key"), email: at("email"),
-               display_name: at("display_name") };
-    } else if (what === "login") {
+    if (what === "login") {
       var node = settingsPanelBox.querySelector('[data-hc-sb="password"]');
       body = { op: "supabase_login", email: at("email"),
                password: node ? String(node.value || "") : "",
@@ -7014,125 +6901,6 @@
       }
       settingsSupabaseFill(result);
       renderSyncStatus(result);
-    });
-    return true;
-  }
-
-  // --- the Builds tab: model and effort -------------------------------------
-
-  function settingsFillSelect(pick, pairs, chosen) {
-    // The options, redrawn; a chosen value the list does not carry (a
-    // model typed into the settings file by hand, an id the CLI no longer
-    // names) is kept as an option rather than silently reset.
-    while (pick.firstChild) pick.removeChild(pick.firstChild);
-    var seen = false;
-    pairs.forEach(function (pair) {
-      var option = document.createElement("option");
-      option.value = pair[0];
-      option.setAttribute("value", pair[0]);
-      option.textContent = pair[1];
-      if (pair[0] === chosen) seen = true;
-      pick.appendChild(option);
-    });
-    if (chosen && !seen) {
-      var extra = document.createElement("option");
-      extra.value = chosen;
-      extra.setAttribute("value", chosen);
-      extra.textContent = chosen;
-      pick.appendChild(extra);
-    }
-    pick.value = chosen;
-  }
-
-  function settingsBuildFill(state) {
-    if (!settingsPanelBox) return false;
-    var model = settingsPanelBox.querySelector('[data-hc-build-set="model"]');
-    var effort = settingsPanelBox.querySelector('[data-hc-build-set="effort"]');
-    var say = settingsPanelBox.querySelector("[data-hc-build-say]");
-    if (!model || !effort) return false;
-    var ok = !!(state && state.ok);
-    var chosen = (ok && state.settings && typeof state.settings === "object")
-      ? state.settings : {};
-    var pairs = [["", "CLI default"]];
-    array(ok && state.aliases).forEach(function (name) {
-      pairs.push([str(name), str(name) + " · latest"]);
-    });
-    array(ok && state.models).forEach(function (name) {
-      pairs.push([str(name), str(name)]);
-    });
-    settingsFillSelect(model, pairs, str(chosen.model));
-    var levels = [["", "CLI default"]];
-    array(ok && state.efforts).forEach(function (name) {
-      levels.push([str(name), str(name)]);
-    });
-    settingsFillSelect(effort, levels, str(chosen.effort));
-    // The restart check's own pair, and whether it runs at all. The blank
-    // choice is the check's default, which the server names.
-    var defaults = (ok && state.check_defaults && typeof state.check_defaults === "object")
-      ? state.check_defaults : {};
-    var checkModel = settingsPanelBox.querySelector('[data-hc-build-set="check_model"]');
-    var checkEffort = settingsPanelBox.querySelector('[data-hc-build-set="check_effort"]');
-    var check = settingsPanelBox.querySelector('[data-hc-build-set="check"]');
-    if (checkModel) {
-      settingsFillSelect(checkModel,
-        [["", "default · " + (str(defaults.model) || "sonnet")]].concat(pairs.slice(1)),
-        str(chosen.check_model));
-    }
-    if (checkEffort) {
-      settingsFillSelect(checkEffort,
-        [["", "default · " + (str(defaults.effort) || "high")]].concat(levels.slice(1)),
-        str(chosen.check_effort));
-    }
-    if (check) check.checked = ok ? chosen.check !== false : true;
-    if (say) {
-      say.removeAttribute("data-hc-bad");
-      if (!ok) {
-        say.setAttribute("data-hc-bad", "");
-        say.textContent = (state && state.error) || "could not read the models";
-      } else if (state.source && typeof state.source === "object") {
-        say.textContent = "models read from Claude Code"
-          + (state.source.version ? " " + str(state.source.version) : "")
-          + "; new ones appear when the CLI updates";
-      } else {
-        say.textContent = "the Claude Code binary was not found;"
-          + " the aliases still work";
-      }
-    }
-    return true;
-  }
-
-  function settingsBuildLoad() {
-    return fetchJSON("/api/models").then(settingsBuildFill);
-  }
-
-  var BUILD_SETTING_KEYS = { model: true, effort: true, check: true,
-                             check_model: true, check_effort: true };
-
-  function settingsBuildSet(key, value) {
-    if (!settingsPanelBox || !BUILD_SETTING_KEYS[key]) return false;
-    var patch = { op: "set_build_settings" };
-    patch[key] = key === "check" ? !!value : str(value);
-    var say = settingsPanelBox.querySelector("[data-hc-build-say]");
-    if (say) { say.removeAttribute("data-hc-bad"); say.textContent = "saving…"; }
-    post(patch).then(function (res) {
-      if (!say) return;
-      if (!res || !res.ok) {
-        say.setAttribute("data-hc-bad", "");
-        say.textContent = (res && res.error) || "the setting could not be saved";
-        return;
-      }
-      var now = res.settings || {};
-      if (key === "model" || key === "effort") {
-        say.textContent = "saved · builds run on "
-          + (str(now.model) || "the CLI's default model") + " at "
-          + (str(now.effort) ? str(now.effort) + " effort" : "the CLI's default effort");
-      } else if (now.check === false) {
-        say.textContent = "saved · no restart check after a build";
-      } else {
-        say.textContent = "saved · after a build, the restart check runs on "
-          + (str(now.check_model) || "sonnet") + " at "
-          + (str(now.check_effort) || "high") + " effort";
-      }
     });
     return true;
   }
@@ -7185,8 +6953,6 @@
     // Whether it is connected, and as whom: read when the panel opens, not
     // held from the last time it did.
     settingsSupabaseLoad();
-    // And which models the installed CLI names, the same way.
-    settingsBuildLoad();
     renderGear();
     return settingsPanelBox;
   }

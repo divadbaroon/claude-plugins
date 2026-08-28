@@ -64,7 +64,7 @@ window: following its log while it runs, resuming its session once it stops.
 Once a headless run has finished its rows on its own -- every row done, no
 question standing, nothing queued behind it -- the same session is resumed
 one more time, on a cheaper model at high effort (``CHECK_MODEL``,
-``CHECK_EFFORT``, or the Builds tab's choice), and asked one question: do the
+``CHECK_EFFORT``, or the vault's build settings), and asked one question: do the
 changes it made live in a process that is already running and keeps the old
 code until restarted? It answers ``{"restart": false}`` or ``{"restart": true,
 "why": ..., "prompt": ...}`` where ``prompt`` is the exact message to paste
@@ -945,8 +945,9 @@ def restart_in(text: str) -> Optional[Dict[str, Any]]:
 
 
 def check_enabled(session_id: str, root: Optional[Path]) -> bool:
-    """Whether a finished build is followed by the restart check: off in the
-    Builds tab, or by HC_BUILD_RESTART_CHECK=0 in the server's shell."""
+    """Whether a finished build is followed by the restart check: off in
+    the vault's build settings, or by HC_BUILD_RESTART_CHECK=0 in the
+    server's shell."""
     if os.environ.get("HC_BUILD_RESTART_CHECK", "").strip() == "0":
         return False
     return bool(load_settings(session_id, root).get("check", True))
@@ -2267,7 +2268,7 @@ def watch(session_id: str, root: Optional[Path], goal_id: str) -> Dict[str, Any]
 
 # ------------------------------------------- which model, at what effort
 #
-# The rail's Settings has a Builds tab: the model a build runs on and the
+# The vault's build settings say which model a build runs on and the
 # effort it runs at, both handed to ``claude -p`` as ``--model`` and
 # ``--effort``. One file for the whole vault, since it is a choice about the
 # reader's builds and not about one chat. Nothing chosen means the CLI's own
@@ -2446,7 +2447,7 @@ def _models_cache_path(session_id: str, root: Optional[Path]) -> Path:
 
 
 def models(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
-    """What the Builds tab offers: the aliases, the ids the installed CLI
+    """What ``/api/models`` offers: the aliases, the ids the installed CLI
     names, the efforts, and what is chosen now."""
     out: Dict[str, Any] = {"ok": True, "aliases": list(MODEL_ALIASES),
                            "models": [], "efforts": list(EFFORTS),
