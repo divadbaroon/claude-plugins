@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import project_store as PS  # noqa: E402
+from human_compact.trajectory import providers as PROVIDERS  # noqa: E402
 from human_compact.trajectory import setup_chat as SC  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
 
@@ -560,6 +561,78 @@ class FromChatTests(unittest.TestCase):
         out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
         self.assertIn("hc setup-ui", out["error"])
         self.assertIn("your own Claude account", out["error"])
+
+    def _account(self, claude):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        home = Path(tmp.name)
+        (home / "auth.json").write_text(
+            json.dumps({"schema": 1, "claude": claude}), encoding="utf-8")
+        previous = os.environ.get("HUMAN_COMPACT_HOME")
+        os.environ["HUMAN_COMPACT_HOME"] = str(home)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("HUMAN_COMPACT_HOME", None)
+            else:
+                os.environ["HUMAN_COMPACT_HOME"] = previous
+        self.addCleanup(restore)
+        return home
+
+    def test_a_spent_pool_is_named_in_the_failure(self):
+        self._account({"baseUrl": "https://proxy.example.com",
+                       "status": "exhausted",
+                       "budgetUsd": 25, "spendUsd": 25.96})
+        note = SC.credit_note()
+        self.assertIn("25.96", note)
+        self.assertIn("your own Claude account", note)
+
+    def test_a_pool_with_credit_left_says_nothing(self):
+        # Nothing to explain, and a sentence about money on a working setup is
+        # noise the reader has to decide about.
+        self._account({"baseUrl": "https://proxy.example.com",
+                       "status": "active", "budgetUsd": 25, "spendUsd": 4})
+        self.assertEqual("", SC.credit_note())
+
+    def test_an_install_spending_no_pooled_credit_says_nothing(self):
+        self._account({"budgetUsd": 0, "spendUsd": 0})
+        self.assertEqual("", SC.credit_note())
+
+    def test_an_old_deployment_that_sends_no_status_is_read_from_the_money(self):
+        # Belt and braces for a gateway too old to say `status`.
+        self._account({"baseUrl": "https://proxy.example.com",
+                       "budgetUsd": 25, "spendUsd": 25})
+        self.assertIn("used up", SC.credit_note())
+
+    def test_a_failure_carries_the_credit_context(self):
+        self._account({"baseUrl": "https://proxy.example.com",
+                       "status": "exhausted",
+                       "budgetUsd": 25, "spendUsd": 25.96})
+
+        class Boom:
+            def generate_json(self, prompt):
+                raise RuntimeError("boom")
+
+        out = SC.from_chat([{"role": "user", "text": "test"}], engine=Boom())
+        self.assertIn("used up", out["error"])
+
+    def test_setup_does_not_make_anyone_watch_a_spinner_for_three_minutes(self):
+        # The provider default is for agent turns nobody is watching. Setup is
+        # watched, so it gets its own, shorter deadline.
+        self.assertLess(SC.SETUP_TIMEOUT_SECONDS, PROVIDERS.CLAUDE_TIMEOUT_SECONDS)
+
+    def test_the_tighter_deadline_reaches_the_provider(self):
+        seen = {}
+        real = PROVIDERS.make
+
+        def spy(kind, stage, model=None, timeout=None):
+            seen["timeout"] = timeout
+            return real("mock", stage, model)
+
+        PROVIDERS.make = spy
+        self.addCleanup(setattr, PROVIDERS, "make", real)
+        SC.from_chat([{"role": "user", "text": "test"}])
+        self.assertEqual(SC.SETUP_TIMEOUT_SECONDS, seen["timeout"])
 
     def test_an_account_that_names_no_models_still_picks_a_model(self):
         # `.get` answers None for an absent key, and iterating that None is
