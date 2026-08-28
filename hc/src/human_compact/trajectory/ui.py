@@ -20,6 +20,8 @@ from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
 from . import autosync as AUTOSYNC
+from . import brainstorm as BRAIN
+from . import preview as PREVIEW
 from . import project_store as PS
 from . import secure_io as SIO
 from . import setup_chat as SETUP
@@ -2498,7 +2500,118 @@ def _apply(op, trajdir=None, chat_scoped=None):
     return result
 
 
+def _preview_where(trajdir, chat_scoped):
+    """The directory the preview runs in, and the vault root beside it.
+
+    The same directory a build would use: the worktree the reader chose for
+    this project when they chose one, the project itself when they did not.
+    A preview of a different checkout from the one the TODOs are built in
+    would be a preview of somebody else's work.
+    """
+    session_id, root = _chat_identity(_scope(trajdir))
+    who = _project_identity(_scope(trajdir), chat_scoped, session_id)
+    cwd = str(who.get("working_dir") or who.get("cwd") or "")
+    return session_id, root, cwd
+
+
+def _preview_op(op, trajdir, chat_scoped):
+    """The middle pane's own operations.
+
+    None of them read or write the goal tree, so none of them wait on the
+    lock that guards it -- a `npm run dev` starting must not be able to hold
+    up a save. What they touch instead is the project's run config, and the
+    processes this server started.
+    """
+    kind = str(op.get("op") or "")
+    if not chat_scoped:
+        return {"ok": False, "error": "chat scope only"}
+    try:
+        _session_id, root, cwd = _preview_where(trajdir, chat_scoped)
+    except (OSError, ValueError):
+        return {"ok": False, "error": "this workspace has no project"}
+    if not cwd:
+        return {"ok": False, "error": "this chat is not bound to a project"}
+    if kind == "preview_configure":
+        return PREVIEW.configure(root, cwd)
+    if kind == "preview_pick":
+        return PREVIEW.set_primary(root, cwd, str(op.get("profile_id") or ""))
+    if kind == "preview_start":
+        config = PREVIEW.read_config(root, cwd)
+        session_id = _session_id
+        wanted = str(op.get("profile_id") or "")
+        profiles = [p for p in (config.get("profiles") or [])
+                    if isinstance(p, dict)]
+        chosen = ([p for p in profiles if p.get("id") == wanted]
+                  or [p for p in profiles if p.get("id") == config.get("primary")]
+                  or profiles)
+        if not chosen:
+            return {"ok": False, "error": "nothing is configured to run"}
+        # A command the reader typed into the card wins over the stored one
+        # for this run only: the recovery card offers "try it on port 3001",
+        # and taking it must not rewrite what the project runs as.
+        profile = dict(chosen[0])
+        typed = str(op.get("command") or "").strip()
+        if typed:
+            profile["command"] = typed[:400]
+        return PREVIEW.start(root, cwd, profile, session_id=session_id)
+    if kind == "preview_stop":
+        return PREVIEW.stop(cwd, root, _session_id)
+    if kind == "preview_forget":
+        PREVIEW.forget(cwd)
+        return {"ok": True}
+    if kind == "preview_explain":
+        proc = PREVIEW.running(cwd)
+        if not proc:
+            return {"ok": False, "error": "there is no run to explain"}
+        return PREVIEW.explain_failure(cwd, proc.profile.get("command", ""),
+                                       list(proc.lines), proc.exit_code)
+    return {"ok": False, "error": "unknown preview operation"}
+
+
+PREVIEW_OPS = ("preview_configure", "preview_pick", "preview_start",
+               "preview_stop", "preview_forget", "preview_explain")
+
+
+def _preview_state(trajdir, chat_scoped, goal_id="", todo_id=""):
+    """What the middle pane draws, read on a sweep.
+
+    Everything here is already known -- the run config on disk, the process
+    this server started, whether the address it printed still answers. No
+    model, no lock, and nothing is started: a pane that ran the project
+    because somebody opened a page would be running arbitrary repository
+    code on a page load.
+    """
+    if not chat_scoped:
+        return {"ok": False, "error": "chat scope only"}
+    try:
+        _session_id, root, cwd = _preview_where(trajdir, chat_scoped)
+    except (OSError, ValueError):
+        return {"ok": True, "status": "unconfigured", "surface": "empty",
+                "configured": False, "profiles": [], "blockers": [],
+                "reason": "this workspace has no project yet"}
+    if not cwd:
+        return {"ok": True, "status": "unconfigured", "surface": "empty",
+                "configured": False, "profiles": [], "blockers": [],
+                "reason": "this chat is not bound to a project yet"}
+    # A run that has come up is the strongest thing anybody can say about how
+    # this project runs, so the stamp is written when it is seen rather than
+    # asked for later.
+    try:
+        PREVIEW.verify_running(root, cwd)
+    except OSError:
+        pass
+    intent = {}
+    if todo_id:
+        intent = PREVIEW.intent_of(root, cwd, todo_id)
+    out = PREVIEW.state(root, cwd, intent, session_id=_session_id)
+    out["goal_id"] = goal_id
+    out["todo_id"] = todo_id
+    return out
+
+
 def _apply_dispatch(op, trajdir=None, chat_scoped=None):
+    if str((op or {}).get("op") or "") in PREVIEW_OPS:
+        return _preview_op(op, trajdir, chat_scoped)
     result = _apply_locked(op, trajdir, chat_scoped)
     deferred = result.get("__deferred__") if isinstance(result, dict) else None
     if not deferred:
@@ -2521,6 +2634,37 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         except (OSError, ValueError):
             events = []
         return SETUP.from_chat(events, root=root)
+    if kind == "preview_intent":
+        # What is worth looking at in the preview, for the row being worked
+        # on. The row's words were read inside the lock; the model call is
+        # out here, where every other one is. Kept once it lands: the answer
+        # is about the row's words, and those are not changing while the
+        # reader watches the program run.
+        held = PREVIEW.intent_of(root, goal_id, op.get("todo_id") or "",
+                                 str(op.get("__text__") or ""))
+        if held and not op.get("again"):
+            return {"ok": True, "intent": held, "cached": True}
+        answer = PREVIEW.intent_for(goal_id, str(op.get("__goal__") or ""),
+                                    str(op.get("__text__") or ""),
+                                    PREVIEW._primary(
+                                        PREVIEW.read_config(root, goal_id)))
+        if answer.get("ok"):
+            PREVIEW.save_intent(root, goal_id, op.get("todo_id") or "",
+                                str(op.get("__text__") or ""), answer)
+            return {"ok": True, "intent": answer}
+        return answer
+    if kind == "brainstorm_say":
+        # The project's own screen for thinking out loud. The digest of the
+        # tree was rendered inside the lock (it reads the goals); condensing
+        # it and asking the model happen here, outside, for the reason every
+        # other model call does -- a request holding the state lock for a
+        # minute is a workspace nobody else can save into.
+        #
+        # `goal_id` carries the project directory rather than a goal: the
+        # condensed context belongs to the project, so every chat in it
+        # shares the one cache.
+        context = BRAIN.project_context(root, goal_id, op.get("__digest__"))
+        return BRAIN.ask(op.get("transcript"), context, root=root)
     if kind == "setup_commit":
         return SETUP.commit(root, op.get("name"), op.get("plan"),
                             op.get("goals"), op.get("chosen"),
@@ -3084,6 +3228,74 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             from . import build as BUILD
             cwd = BUILD._cwd_for(session_id, root, goals, g["id"] if g else "")
             return {"__deferred__": (kind, session_id, root, cwd, op)}
+        if kind == "preview_intent":
+            # The row's own words, read where rows are read. Everything else
+            # this needs -- the project, the run profile, the model -- is
+            # outside the lock, so this branch is the lookup and nothing more.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            cwd = str(who.get("working_dir") or who.get("cwd") or "")
+            if not cwd:
+                return {"ok": False,
+                        "error": "this chat is not bound to a project"}
+            wanted = str(op.get("todo_id") or "")
+            text = ""
+            for row in ((g or {}).get("todo_items") or []):
+                if isinstance(row, dict) and str(row.get("id")) == wanted:
+                    text = str(row.get("text") or "")
+                    break
+            if not text:
+                return {"ok": False, "error": "no such TODO row"}
+            return {"__deferred__": ("preview_intent", session_id, root, cwd,
+                                     dict(op, __text__=text,
+                                          __goal__=str((g or {}).get("title")
+                                                       or "")))}
+        if kind == "brainstorm_say":
+            # Thinking out loud against a project that already exists. What
+            # this side does is read the tree -- which is what the lock is
+            # for -- and render it; the model call is handed back to _apply
+            # to run outside, like every other one.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            if not isinstance(op.get("transcript"), list):
+                return {"ok": False, "error": "transcript must be a list"}
+            session_id, root = _chat_identity(trajdir)
+            who = _project_identity(trajdir, chat_scoped, session_id)
+            record = _load_project(root, who["cwd"]) if who["cwd"] else {}
+            record = dict(record or {})
+            record.setdefault("name", who.get("name") or "")
+            return {"__deferred__": ("brainstorm_say", session_id, root,
+                                     who.get("cwd") or "",
+                                     dict(op, __digest__=BRAIN.digest(
+                                         goals, record)))}
+        if kind == "brainstorm_apply":
+            # The one write this screen makes, and only when the reader has
+            # said yes to what was on the card in front of them. Goals go in
+            # as roots with their pieces under them; rows go onto a goal that
+            # already exists, named by the panel.
+            if not chat_scoped:
+                return {"ok": False, "error": "chat scope only"}
+            wanted = op.get("goals")
+            rows, pieces = op.get("todos"), op.get("subgoals")
+            if wanted is not None and not isinstance(wanted, list):
+                return {"ok": False, "error": "goals must be a list"}
+            if rows is not None and not isinstance(rows, list):
+                return {"ok": False, "error": "todos must be a list"}
+            made = BRAIN.apply_goals(goals, wanted or [])
+            written = 0
+            if rows or pieces:
+                target = str(op.get("goal_id") or "")
+                if not GM.by_id(goals, target):
+                    return {"ok": False, "error": "no such goal"}
+                written = BRAIN.apply_todos(goals, target, rows or [],
+                                            pieces or [])
+            if not made and not written:
+                return {"ok": False, "error": "nothing to write down"}
+            GM.sanitize(goals)
+            _save_goals(trajdir, goals, important, chat_scoped)
+            return {"ok": True, "goals": made, "todos": written}
         if kind in ("build_todos", "answer_todo", "cancel_todos",
                     "reopen_todo", "note_todo", "generate_prompt",
                     "prompt_preview", "reopen_session", "build_log",
@@ -3636,6 +3848,12 @@ class H(BaseHTTPRequestHandler):
                     goals, _ = GM.load(self.server.trajdir)
                     GM.sanitize(goals)
                     self._send(200, AE.review(self.server.trajdir, goals, goal_id))
+            elif self.path.startswith("/api/preview"):
+                from urllib.parse import urlparse, parse_qs
+                query = parse_qs(urlparse(self.path).query)
+                self._send(200, _preview_state(
+                    self.server.trajdir, self.server.chat_scoped,
+                    query.get("goal", [""])[0], query.get("todo", [""])[0]))
             elif self.path == "/api/health":
                 self._send(200, {
                     "ok": True,

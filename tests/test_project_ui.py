@@ -578,9 +578,10 @@ class ProjectMenuTests(BridgeTestCase):
 
     def test_the_view_tabs_are_drawn_into_the_header_as_words(self):
         # The tabs live in the header's own second row, under the brand,
-        # and read as the filter counts do -- "Overview", "Goals" -- not as
-        # a tracked strip of capitals. Nothing is parked on .hc for them,
-        # and the root carries no attribute for a strip that is not there.
+        # and read as the filter counts do -- "Overview", "Goals",
+        # "Brainstorm" -- not as a tracked strip of capitals. Nothing is
+        # parked on .hc for them, and the root carries no attribute for a
+        # strip that is not there.
         got = json.loads(self.run_js(
             PRELUDE + fetch_js() + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state()) +
             "P.renderViewTabs();"
@@ -590,8 +591,9 @@ class ProjectMenuTests(BridgeTestCase):
             " document.documentElement.getAttribute('data-hc-viewtabs'),"
             " document.querySelector('.hc-pillbar') === null,"
             " P.renderViewTabs(), tabs.children.length]);"))
-        self.assertEqual(["hc-subbar", True, ["Overview", "Goals"], "", None, True,
-                          False, 2], got)
+        self.assertEqual(["hc-subbar", True,
+                          ["Overview", "Goals", "Brainstorm"], "", None, True,
+                          False, 3], got)
 
     def test_remote_hrefs(self):
         got = json.loads(self.run_js(

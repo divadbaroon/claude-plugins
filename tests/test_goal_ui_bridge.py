@@ -4164,6 +4164,61 @@ class DocumentPaneTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         self.assertIn("showNotes: !!sel && paneTab === 'context'", out)
 
+    def test_a_chat_writes_the_document_in_the_rail_and_reads_it_in_the_middle(self):
+        """The writing moved to the rail; the middle draws it back.
+
+        A document is written about the TODOs beside it, so the editor is a
+        tab of the same column they are -- and the wide side, which used to
+        be a second place to look for the same box, prints what is being
+        typed instead.
+        """
+        out = self.patched_bundle("out;", scope="chat")
+        rail = out[out.index('class="hc-rail-notes"'):
+                   out.index('class="hc-rail-prompt"')]
+        # The editor is in the rail, and it is the only one on the page.
+        self.assertIn("{{ notesChange }}", rail)
+        self.assertEqual(1, out.count("{{ notesChange }}"))
+        self.assertIn("hc-notes-edit", rail)
+        # The prompts that fed it come with it: they are evidence for the
+        # document, and reading them a column away from it says nothing.
+        self.assertIn("RELATED PROMPTS", rail)
+        self.assertEqual(1, out.count('<sc-for list="{{ histRows }}" as="hr"'))
+        # And the middle is not a second copy of the document: it is the
+        # mount the run preview is drawn into, which the artifact's own
+        # state knows nothing about.
+        middle = out[out.index('class="hc-preview"'):]
+        self.assertIn('class="hc-preview-mount"', middle)
+        self.assertNotIn("{{ notesOverlay }}", middle)
+        self.assertNotIn("{{ notesChange }}", middle)
+
+    def test_the_rail_reads_in_the_order_the_work_does(self):
+        # Rows, then what they are for, then the prompt both are copied
+        # into. A document filed after the prompt it feeds would be read
+        # after the thing it explains.
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertLess(out.index('class="hc-todos"'),
+                        out.index('class="hc-rail-notes"'))
+        self.assertLess(out.index('class="hc-rail-notes"'),
+                        out.index('class="hc-rail-prompt"'))
+        self.assertLess(out.index('class="hc-rail-prompt"'),
+                        out.index('class="hc-rail-understand"'))
+
+    def test_the_middle_says_which_of_the_two_it_is(self):
+        # One tab is visible in a chat, so its word is the whole label the
+        # pane gets. It said CONTEXT while it held the editor.
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertIn(">PREVIEW</span>", out)
+        self.assertNotIn(">CONTEXT</span>", out)
+        self.assertIn(">CONTEXT</span>", self.patched_bundle("out;"))
+
+    def test_a_workspace_with_no_rail_keeps_the_document_where_it_was(self):
+        # The rail is a chat's. An artifact opened on its own has nowhere
+        # else to write, so nothing about its pane moves.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("hc-rail-notes", out)
+        self.assertNotIn("hc-preview", out)
+        self.assertEqual(1, out.count("{{ notesChange }}"))
+
     def test_the_textbox_pane_is_dormant_in_both_scopes(self):
         # Objective / code / document / decisions / blockers / built are no
         # longer reachable, in either scope. The markup and every handler
