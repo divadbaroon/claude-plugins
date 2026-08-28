@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 
 const { atomicWrite, establishOwnership, validateManagedRoot } = require('./installer');
+const { invocation } = require('./invocation');
 
 const HELPER_FILE = 'engelbart-key';
 const SETTINGS_FILE = path.join('.claude', 'settings.json');
@@ -60,9 +61,10 @@ function helperPath(managedRoot) {
 // member's own claude.ai login -- so a helper that keeps printing a dead key
 // does not degrade the session, it ends it.
 function helperSource(credentialsFile, settingsFile, helperFile, baseUrl) {
+  const reconnect = `${invocation()} auth`;
   return `#!/usr/bin/env node
 'use strict';
-// Written by \`npx engelbart-cli auth\`. Claude Code runs this for its credential.
+// Written by \`${reconnect}\`. Claude Code runs this for its credential.
 //
 // The Claude key is not kept on this machine. It is fetched from the account
 // that owns it each time this runs, handed to Claude Code, and never written
@@ -70,7 +72,7 @@ function helperSource(credentialsFile, settingsFile, helperFile, baseUrl) {
 // on its own.
 //
 // To put Claude Code back on your own account, run this file with
-// --disconnect. That undoes exactly what \`npx engelbart-cli auth\` wrote and
+// --disconnect. That undoes exactly what \`${reconnect}\` wrote and
 // nothing else. It is spelled out here because the installer puts only \`hc\` on
 // PATH: there is no \`engelbart\` command to reach for, and while apiKeyHelper
 // is set even \`/login\` cannot get past it.
@@ -198,7 +200,7 @@ function refuse(value, reason) {
   process.stderr.write(unwired
     ? 'Restart Claude Code and it will use your own account again.\\n'
       + 'This session already loaded the gateway, so it will keep failing until you do.\\n'
-      + 'Once your credit is topped up, reconnect with \`npx engelbart-cli auth\`.\\n'
+      + 'Once your credit is topped up, reconnect with \`${reconnect}\`.\\n'
     : 'To put Claude Code back on your own account, run:\\n\\n    '
       + HELPER + ' --disconnect\\n\\nThen restart Claude Code.\\n');
   process.exit(1);
@@ -215,7 +217,7 @@ function disconnect() {
   const value = stored();
   if (unwire(value && value.claude && value.claude.baseUrl, 3)) {
     process.stdout.write('Claude Code is back on your own account.\\n');
-    process.stdout.write('Reconnect with \`npx engelbart-cli auth\`.\\n');
+    process.stdout.write('Reconnect with \`${reconnect}\`.\\n');
     return 0;
   }
   process.stderr.write('Could not edit ' + SETTINGS + '.\\n');

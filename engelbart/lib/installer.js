@@ -611,10 +611,12 @@ async function install(options) {
   try {
     claude = runner('claude', ['--version'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
-    throw new Error(`Claude Code is required and was not found: ${error.message}`);
+    throw new Error('Claude Code is required and was not found: '
+      + `${error.message}\nInstall it with: curl -fsSL https://claude.ai/install.sh | bash`);
   }
   if (claude.status !== 0) {
-    throw new Error('Claude Code is required; install it and ensure `claude` is on PATH');
+    throw new Error('Claude Code is required; install it and ensure `claude` is on PATH.\n'
+      + 'Install it with: curl -fsSL https://claude.ai/install.sh | bash');
   }
   const claudeVersionOutput = String(claude.stdout || '').trim()
     || String(claude.stderr || '').trim();
