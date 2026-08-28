@@ -1,8 +1,9 @@
 name: release-binaries
 
-# Build the standalone engelbart binaries and attach them, with install.sh,
-# to the release for the pushed tag. install.sh downloads from
-# releases/latest/download/, so publishing the release is what ships them.
+# The engelbart release button: an engelbart-v* tag builds the standalone
+# binaries, attaches them with install.sh to the versioned release and the
+# rolling engelbart-latest release (the stable URL install.sh downloads
+# from), and publishes the npm package.
 on:
   push:
     tags: ['engelbart-v*']
