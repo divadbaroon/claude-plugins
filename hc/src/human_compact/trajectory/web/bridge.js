@@ -965,7 +965,7 @@
   // The few operations that only read. Everything else is a write and is
   // stopped while a workspace is read-only.
   var READ_OPS = { list_shares: true, supabase_logout: true,
-                   prompt_preview: true };
+                   prompt_preview: true, brainstorm_chats: true };
 
   // Notes and the document pane are real editors; a caret that types and
   // saves nothing is worse than no caret. Turned off while read-only, and
@@ -1782,7 +1782,11 @@
   }
 
   function paneTabBar() {
-    return rowHolding("CONTEXT", ["PROMPT", "AGENT", "REVIEW"]);
+    // PREVIEW is what the patch names it; CONTEXT is what the bundle ships
+    // with, and what is on screen if that patch ever misses its anchor. The
+    // tabs beside it have to be hidden either way.
+    return rowHolding("PREVIEW", ["PROMPT", "AGENT", "REVIEW"])
+      || rowHolding("CONTEXT", ["PROMPT", "AGENT", "REVIEW"]);
   }
 
   function headerNav() {
@@ -1819,10 +1823,12 @@
             + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
             + (renderOnboarding(false) ? 1 : 0)
             + (renderTodoRail(false) ? 1 : 0)
+            + (renderPreview(false) ? 1 : 0)
             + (applyPageTitle() ? 1 : 0)) > 0;
   }
 
   function watchChatSurface() {
+    previewWatchViewport();
     renderChatSurface();
     setInterval(renderChatSurface, 700);
   }
@@ -3176,7 +3182,91 @@
       ".hc-overview-share-x{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b)}",
       ".hc-overview-share-x:hover{color:var(--bad,#a12d2d)}",
       ".hc-overview-empty{color:var(--fnt,#9b9b9b)}",
-      ".hc-overview-more{color:var(--fnt,#9b9b9b);font-size:10.5px;margin-top:6px}"
+      ".hc-overview-more{color:var(--fnt,#9b9b9b);font-size:10.5px;margin-top:6px}",
+      // The brainstorm: the third view, and the only one that does not cover
+      // the whole window. It starts at the goals rail's right edge, because
+      // what is being thought about is on that rail and taking it away would
+      // leave the reader arguing with a tree they cannot see. What it does
+      // cover is the document and the TODO rail -- a brainstorm is not a
+      // place to be editing rows.
+      ".hc-brainstorm{display:none;position:fixed;top:var(--hc-top,37px);left:var(--hc-bs-left,300px);right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;box-sizing:border-box}",
+      "[data-hc-brainstorm] .hc-brainstorm{display:flex;flex-direction:column}",
+      ".hc-bs-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:22px 28px 8px}",
+      ".hc-bs-col{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:14px}",
+      ".hc-bs-msg{display:flex;flex-direction:column;gap:5px}",
+      ".hc-bs-who{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-body{white-space:pre-wrap;word-break:break-word;color:var(--mut,#575757);font-size:12.5px;line-height:1.75}",
+      ".hc-bs-msg[data-hc-role=\"you\"] .hc-bs-body{color:var(--ink,#111)}",
+      ".hc-bs-card{border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);padding:16px 18px}",
+      ".hc-bs-eyebrow{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt,#9b9b9b);margin-bottom:10px}",
+      ".hc-bs-title{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111);margin-bottom:4px}",
+      ".hc-bs-sub{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-bottom:8px}",
+      // A heading for a field further down the card, rather than the line
+      // under a title: it needs air above it, which a subtitle does not.
+      ".hc-bs-lbl{margin:17px 0 5px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-q{margin-bottom:16px}",
+      ".hc-bs-q:last-of-type{margin-bottom:0}",
+      // One row per choice, ticked in place. The `why` under a label is what
+      // turns "which is true" into "which of these proposals is right".
+      ".hc-bs-opt{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid transparent;border-radius:6px;cursor:pointer;user-select:none}",
+      ".hc-bs-opt:hover{background:var(--hov,#f2f2f2)}",
+      ".hc-bs-opt[data-hc-on=\"1\"]{border-color:var(--acc,#a5492a);background:var(--accbg,#f5e2d9)}",
+      ".hc-bs-mark{flex:none;width:12px;height:12px;margin-top:3px;border:1px solid var(--bd2,#d5d5d5);border-radius:50%;font:9px/12px 'Source Code Pro',monospace;text-align:center;color:var(--acc,#a5492a)}",
+      ".hc-bs-mark-many{border-radius:2px}",
+      ".hc-bs-opt[data-hc-on=\"1\"] .hc-bs-mark{border-color:var(--acc,#a5492a)}",
+      ".hc-bs-opt-label{display:block;color:var(--ink,#111);font-size:12px}",
+      ".hc-bs-opt-why{display:block;margin-top:2px;color:var(--fnt,#9b9b9b);font-size:10.5px;line-height:1.55}",
+      ".hc-bs-field{display:block;width:100%;box-sizing:border-box;margin-top:8px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px/1.6 'Source Code Pro',monospace;padding:7px 9px;outline:none}",
+      ".hc-bs-field::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-field:focus{border-color:var(--acc,#a5492a)}",
+      // Where approved rows land: searched, not scrolled through. A native
+      // menu shows one line at a time, drops the indent that tells two goals
+      // of the same name apart, and cannot be looked in -- so this is the
+      // goals rail's own search-then-choose, sized to fit inside a card.
+      ".hc-bs-pick{margin-top:8px;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);overflow:hidden}",
+      ".hc-bs-pick:focus-within{border-color:var(--acc,#a5492a)}",
+      ".hc-bs-pick-field{display:flex;align-items:center;gap:8px;padding:0 9px;border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-bs-pick-glyph{flex:none;display:flex;align-items:center;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-pick:focus-within .hc-bs-pick-glyph{color:var(--acc,#a5492a)}",
+      ".hc-bs-pick-input{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;outline:none;background:transparent;color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:7px 0;-webkit-appearance:none;appearance:none}",
+      ".hc-bs-pick-input::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-pick-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:14px/1 'Source Code Pro',monospace;padding:2px}",
+      ".hc-bs-pick-clear:hover{color:var(--ink,#111)}",
+      ".hc-bs-pick-field[data-hc-typed] .hc-bs-pick-clear{display:block}",
+      ".hc-bs-pick-list{max-height:176px;overflow-y:auto;padding:4px}",
+      ".hc-bs-pick-row{display:flex;gap:9px;align-items:center;padding:6px 8px;border:1px solid transparent;border-radius:4px;cursor:pointer;user-select:none}",
+      ".hc-bs-pick-row:hover{background:var(--hov,#f2f2f2)}",
+      ".hc-bs-pick-row[data-hc-on=\"1\"]{border-color:var(--acc,#a5492a);background:var(--accbg,#f5e2d9)}",
+      ".hc-bs-pick-row .hc-bs-mark{margin-top:0}",
+      ".hc-bs-pick-title{flex:1 1 auto;min-width:0;color:var(--ink,#111);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".hc-bs-pick-none{padding:7px 9px;color:var(--fnt,#9b9b9b);font-size:10.5px}",
+      ".hc-bs-acts{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:14px}",
+      ".hc-bs-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:transparent;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:6px 11px}",
+      ".hc-bs-btn:hover{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
+      ".hc-bs-btn-on{border-color:var(--acc,#a5492a);background:var(--acc,#a5492a);color:var(--onacc,#fff)}",
+      ".hc-bs-btn-on:hover{color:var(--onacc,#fff)}",
+      ".hc-bs-btn[disabled]{opacity:.45;cursor:default;border-color:var(--bd2,#d5d5d5);color:var(--fnt,#9b9b9b);background:transparent}",
+      ".hc-bs-kids{margin-top:6px;padding-left:14px;display:flex;flex-direction:column;gap:3px}",
+      ".hc-bs-kid{color:var(--mut,#575757);font-size:11.5px}",
+      ".hc-bs-piece{margin-top:12px;font:600 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-bs-say{margin-top:8px;font-size:10.5px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
+      ".hc-bs-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
+      ".hc-bs-think{display:flex;align-items:center;gap:9px;color:var(--fnt,#9b9b9b);font-size:11px}",
+      ".hc-bs-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--acc,#a5492a);opacity:.35;animation:hc-bs-pulse 1.1s infinite}",
+      "@keyframes hc-bs-pulse{0%,100%{opacity:.25}50%{opacity:1}}",
+      // The composer, held at the foot: a brainstorm is a conversation, and
+      // the place to type in one does not scroll away from you.
+      ".hc-bs-foot{flex:none;border-top:1px solid var(--bd,#e3e3e3);background:var(--bg,#fff);padding:12px 28px 16px}",
+      ".hc-bs-tools{max-width:720px;margin:0 auto 7px;display:flex;justify-content:flex-end}",
+      ".hc-bs-new{cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:2px 4px}",
+      ".hc-bs-new:hover{color:var(--acc,#a5492a)}",
+      ".hc-bs-composer{max-width:720px;margin:0 auto;display:flex;gap:9px;align-items:flex-end;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);padding:8px 10px}",
+      ".hc-bs-composer:focus-within{border-color:var(--acc,#a5492a)}",
+      ".hc-bs-input{flex:1 1 auto;min-width:0;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12px/1.6 'Source Code Pro',monospace;max-height:160px}",
+      ".hc-bs-input::placeholder{color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-send{flex:none;cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:4px 6px}",
+      ".hc-bs-send[disabled]{opacity:.4;cursor:default}",
+      ".hc-bs-send:not([disabled]){color:var(--acc,#a5492a)}"
   ].join("\n");
 
   var projectBound = false;
@@ -4079,6 +4169,7 @@
     if (!root || !root.setAttribute) return false;
     closeProjectMenu();
     closeOverview();
+    closeBrainstorm();
     homeGoing = "";
     homeTyped = "";
     homeSaid = "";
@@ -4301,6 +4392,936 @@
   function overviewShown() {
     var root = document.documentElement;
     return !!(root && root.getAttribute && root.getAttribute("data-hc-overview") !== null);
+  }
+
+  // --- the brainstorm screen -----------------------------------------------
+  //
+  // Setup's conversation, reopened inside a project that already exists. The
+  // same four question shapes, the same cards, drawn by the same kind of
+  // code -- but with no sequence to walk and nothing written down until the
+  // reader says so. What makes it a third view rather than a modal is what
+  // is beside it: the goals rail stays on screen, because a brainstorm is an
+  // argument with a tree and hiding the tree would make it an argument with
+  // nothing. The document and the TODO rail go, since neither is what the
+  // reader is doing here.
+
+  var brainstormBox = null;
+
+  var BS_OPEN = "What's on your mind? Say it however it comes out — half an"
+    + " idea is enough to start. I can see your goals and where their rows"
+    + " have got to.";
+  var BS_YES = "Yes -- generate them.";
+  var BS_NO = "Not yet.";
+  var BS_SKIP = "skip -- decide for me";
+
+  var bs = {
+    msgs: [],          // the conversation, whole, posted on every round
+    id: "",            // which stored conversation this is, once it has been
+                       // written down; empty until the first round lands
+    loaded: "",        // the project whose saved conversations have been read,
+                       // so reopening the screen is not a second fetch
+    card: null,        // the card the model last named
+    answers: {},       // per question id, for the card on screen
+    pick: "",          // the option chosen on a focus card
+    note: "",          // the line they added to a focus card or a declined
+                       // offer -- the "and one more thing" both cards carry
+    declined: false,   // an offer they said no to, so the box is open
+    thinking: false,
+    error: "",
+    draft: "",
+    goalId: "",        // where approved rows land; the selected goal by
+                       // default, changed with the picker on the card
+    goalq: "",         // what is typed into that picker's search field
+    say: "",           // what the last write reported
+    bad: false
+  };
+
+  function brainstormShown() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute
+              && root.getAttribute("data-hc-brainstorm") !== null);
+  }
+
+  function openBrainstorm() {
+    var who = projectInfo();
+    var root = document.documentElement;
+    if (!who || !root || !root.setAttribute) return false;
+    closeProjectMenu();
+    closeHome();
+    closeOverview();
+    ensureProjectStyles();
+    bindBrainstorm();
+    root.setAttribute("data-hc-brainstorm", "");
+    if (!bs.msgs.length) bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
+    renderBrainstorm();
+    drawBrainstorm();
+    // Where they left off, if they have been here before. Once per project:
+    // after that the conversation on screen is the newer of the two, and
+    // reading the file again could only put an older one over it.
+    if (bs.loaded !== str(who.cwd)) brainstormRestore(str(who.cwd));
+    return true;
+  }
+
+  // A conversation held open with nothing carried into it: the cards, the
+  // answers half-given to them, and the line being typed under them all
+  // belong to the one being left behind.
+  function brainstormClear() {
+    bs.card = null;
+    bs.answers = {};
+    bs.pick = "";
+    bs.note = "";
+    bs.declined = false;
+    bs.error = "";
+    bs.say = "";
+    bs.bad = false;
+    bs.goalId = "";
+    bs.goalq = "";
+    bs.draft = "";
+  }
+
+  // Another one, beside the one that was on screen rather than over it: what
+  // was said is already written down, so starting again loses nothing.
+  function brainstormNew() {
+    bs.id = "";
+    bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
+    brainstormClear();
+    var field = brainstormBox
+      && brainstormBox.querySelector("[data-hc-bs-input]");
+    if (field) { field.value = ""; field.style.height = "auto"; }
+    return drawBrainstorm();
+  }
+
+  // The last conversation this project had, read back off the file it was
+  // written to. Anything the reader has already said here outranks it: a
+  // restore that landed late must never take their own words back out.
+  function brainstormRestore(cwd) {
+    bs.loaded = str(cwd);
+    return post({ op: "brainstorm_chats" }).then(function (out) {
+      // A read that never landed is not an empty file: leaving the mark off
+      // means the next time they open the screen it asks again.
+      if (!out || !out.ok) { bs.loaded = ""; return false; }
+      var held = array(out.chats)[0] || null;
+      var turns = held && array(held.messages);
+      if (!turns || !turns.length || bs.msgs.length > 1 || bs.thinking) {
+        return false;
+      }
+      bs.id = str(held.id);
+      bs.msgs = turns.map(function (m) {
+        return { role: str(m.role), text: str(m.text) };
+      });
+      drawBrainstorm();
+      return true;
+    });
+  }
+
+  // Written down where the goals are, after every round rather than at the
+  // end of one -- a brainstorm has no end, the reader just closes the tab.
+  function brainstormStore() {
+    // The invitation on its own is not a conversation. The server refuses to
+    // store one, so asking it to would be a round trip for nothing.
+    if (bs.msgs.length < 2) return Promise.resolve(false);
+    return post({ op: "brainstorm_save", id: bs.id, messages: bs.msgs })
+      .then(function (out) {
+        if (!out || !out.ok) return false;
+        bs.id = str(out.id);
+        return true;
+      });
+  }
+
+  function closeBrainstorm() {
+    var root = document.documentElement;
+    if (!root || !root.removeAttribute) return false;
+    var was = brainstormShown();
+    root.removeAttribute("data-hc-brainstorm");
+    return was;
+  }
+
+  // The sweep's half: the box exists, is parented, and wears the theme. It
+  // never rebuilds what is inside -- the reader is typing in there, and a
+  // redraw twice a second would take the caret with it. Everything that
+  // changes what is drawn calls drawBrainstorm() for itself.
+  function renderBrainstorm() {
+    if (!brainstormShown()) return false;
+    var who = projectInfo();
+    if (!who || serverState.scope !== "chat") {
+      closeBrainstorm();
+      return false;
+    }
+    ensureProjectStyles();
+    // A brainstorm is about one project: the model was given that project's
+    // tree, and carrying the conversation into another one would be arguing
+    // about goals nobody in the room can see. Switching projects starts a
+    // new one rather than continuing the old somewhere it does not belong.
+    if (brainstormBox
+        && brainstormBox.getAttribute("data-hc-cwd") !== str(who.cwd)) {
+      if (brainstormBox.parentNode) {
+        brainstormBox.parentNode.removeChild(brainstormBox);
+      }
+      brainstormBox = null;
+      bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
+      // The other project's conversations are its own, and so is whichever
+      // of them was on screen: this one's are read when it is opened.
+      bs.id = "";
+      bs.loaded = "";
+      brainstormClear();
+    }
+    if (!brainstormBox || !inLiveDocument(brainstormBox)) {
+      if (brainstormBox && brainstormBox.parentNode) {
+        brainstormBox.parentNode.removeChild(brainstormBox);
+      }
+      brainstormBox = brainstormNode();
+      brainstormBox.setAttribute("data-hc-cwd", str(who.cwd));
+      (document.body || document.documentElement).appendChild(brainstormBox);
+      syncProjectTheme(brainstormBox);
+      drawBrainstorm();
+      return true;
+    }
+    return syncProjectTheme(brainstormBox);
+  }
+
+  function brainstormNode() {
+    var box = el("div", "hc-brainstorm");
+    box.setAttribute("role", "region");
+    box.setAttribute("aria-label", "Brainstorm");
+    var scroll = el("div", "hc-bs-scroll");
+    scroll.appendChild(el("div", "hc-bs-col"));
+    box.appendChild(scroll);
+    box.appendChild(brainstormComposer());
+    return box;
+  }
+
+  // The node the reader is mid-sentence in for most of the screen's life --
+  // and not one that is built once, whatever this used to say. The artifact
+  // re-renders its own document whenever its state changes, which takes
+  // this panel with it and rebuilds the whole thing; a composer that came
+  // back empty left the reader looking at a vanished sentence and a Send
+  // that would not arm, because the words were still in bs.draft and the
+  // field they had been typed into no longer existed. So the field is drawn
+  // FROM the draft, every time, and the button follows it.
+  function brainstormComposer() {
+    var foot = el("div", "hc-bs-foot");
+    // Reopening the screen picks the last conversation back up, so this is
+    // the way to have a second one: without it the first brainstorm a
+    // project ever had would be the only one it could ever have.
+    var tools = el("div", "hc-bs-tools");
+    var fresh = el("button", "hc-bs-new", "New brainstorm");
+    fresh.setAttribute("data-hc-bs-act", "new");
+    tools.appendChild(fresh);
+    foot.appendChild(tools);
+    var wrap = el("div", "hc-bs-composer");
+    var field = el("textarea", "hc-bs-input");
+    field.setAttribute("rows", "1");
+    field.setAttribute("spellcheck", "false");
+    field.setAttribute("placeholder", "say anything — or answer the card above");
+    field.setAttribute("data-hc-bs-input", "");
+    field.value = str(bs.draft);
+    var send = el("button", "hc-bs-send", "Send");
+    send.setAttribute("data-hc-bs-act", "send");
+    send.setAttribute("disabled", "disabled");
+    wrap.appendChild(field);
+    wrap.appendChild(send);
+    foot.appendChild(wrap);
+    return foot;
+  }
+
+  // What the composer's Send is for, right now: the sentence in the box, or
+  // -- when the box is empty and a card is asking -- the answers typed into
+  // that card. The second is why this exists. A reader with a question card
+  // on screen answers it in the card and then presses the big button at the
+  // bottom, because that is the button that says Send; before this it did
+  // nothing at all, which reads as broken rather than as a rule about which
+  // button belongs to which box.
+  function bsSendable() {
+    if (bs.thinking) return "";
+    if (str(bs.draft).trim()) return "draft";
+    return brainstormAnswers() ? "answers" : "";
+  }
+
+  // That button's state, brought up to date wherever it stands, and the
+  // field's with it. Called after a draw as well as on a keystroke: a
+  // composer rebuilt by a re-render comes back disabled, and nothing else
+  // would put it right until the next character was typed.
+  function bsSyncSend() {
+    if (!brainstormBox || !brainstormBox.querySelector) return false;
+    var field = brainstormBox.querySelector("[data-hc-bs-input]");
+    if (field && field.value !== str(bs.draft)
+        && document.activeElement !== field) {
+      field.value = str(bs.draft);
+    }
+    var send = brainstormBox.querySelector("[data-hc-bs-act=\"send\"]");
+    if (!send) return false;
+    if (bsSendable()) send.removeAttribute("disabled");
+    else send.setAttribute("disabled", "disabled");
+    return true;
+  }
+
+  // Every control on this screen answers at the document, not on its own
+  // node. The column is rebuilt on every card, so a listener hung on a
+  // button would be thrown away with the button that carried it -- which is
+  // the same reason the header's own controls are bound this way.
+  var brainstormBound = false;
+
+  function bindBrainstorm() {
+    if (brainstormBound || !document.addEventListener) return false;
+    brainstormBound = true;
+    document.addEventListener("click", function (event) {
+      var target = event && event.target;
+      if (!target || !brainstormShown()) return;
+      var opt = closestAttr(target, "data-hc-bs-opt");
+      if (opt) {
+        stopEvent(event);
+        brainstormPick(opt.getAttribute("data-hc-bs-opt"),
+                       Number(opt.getAttribute("data-hc-bs-i")));
+        return;
+      }
+      var goal = closestAttr(target, "data-hc-bs-goalpick");
+      if (goal) {
+        stopEvent(event);
+        bs.goalId = str(goal.getAttribute("data-hc-bs-goalpick"));
+        bsMarkGoal(bs.goalId);
+        return;
+      }
+      if (closestAttr(target, "data-hc-bs-goalclear")) {
+        stopEvent(event);
+        bs.goalq = "";
+        var field = brainstormBox
+          && brainstormBox.querySelector("[data-hc-bs-goalq]");
+        if (field) { field.value = ""; if (field.focus) field.focus(); }
+        bsFilterGoals();
+        return;
+      }
+      var act = closestAttr(target, "data-hc-bs-act");
+      if (!act || act.getAttribute("disabled") !== null) return;
+      stopEvent(event);
+      brainstormAct(act.getAttribute("data-hc-bs-act"));
+    }, true);
+    document.addEventListener("input", function (event) {
+      var target = event && event.target;
+      if (!target || !target.getAttribute) return;
+      if (target.getAttribute("data-hc-bs-input") !== null) {
+        bs.draft = str(target.value);
+        if (target.style) {
+          target.style.height = "auto";
+          target.style.height = Math.min(target.scrollHeight || 0, 160) + "px";
+        }
+        // Toggled in place rather than by redrawing: the reader is typing
+        // in the field that decides it, and a sweep would take the caret
+        // away.
+        bsSyncSend();
+        return;
+      }
+      if (target.getAttribute("data-hc-bs-goalq") !== null) {
+        bs.goalq = str(target.value);
+        bsFilterGoals();
+        return;
+      }
+      if (target.getAttribute("data-hc-bs-note") !== null) {
+        bs.note = str(target.value);
+        // A declined offer is only useful when it says what is missing, so
+        // the line they are typing is what arms its Send.
+        bsArm("no", !!str(bs.note).trim());
+        return;
+      }
+      var qid = target.getAttribute("data-hc-bs-field");
+      if (qid) {
+        bs.answers[qid] = str(target.value);
+        // Typed answers, unlike picked ones, do not go through a redraw --
+        // without this the card stays unsendable however much is written in
+        // it, because the button was drawn back when nothing was.
+        bsArm("answers", !!brainstormAnswers() && !bs.thinking);
+        // And the composer's Send with it: that is the button most readers
+        // reach for once they have written their answer.
+        bsSyncSend();
+      }
+    }, true);
+    document.addEventListener("keydown", function (event) {
+      if (!event || event.key !== "Enter" || event.shiftKey) return;
+      var target = event.target;
+      if (!target || !target.getAttribute) return;
+      if (target.getAttribute("data-hc-bs-input") === null) return;
+      stopEvent(event);
+      brainstormSend();
+    }, true);
+    return true;
+  }
+
+  function stopEvent(event) {
+    if (event && event.preventDefault) event.preventDefault();
+    if (event && event.stopPropagation) event.stopPropagation();
+  }
+
+  // A choice taken: which question (or the focus card, which has one), and
+  // which row of it. By index rather than by label, because a label is the
+  // model's prose and may hold anything at all.
+  function brainstormPick(which, index) {
+    if (which === "focus") {
+      var options = array(bs.card && bs.card.focus && bs.card.focus.options);
+      var chosen = options[index];
+      if (!chosen) return;
+      bs.pick = bs.pick === chosen.label ? "" : chosen.label;
+      drawBrainstorm();
+      return;
+    }
+    var items = array(bs.card && bs.card.questions && bs.card.questions.items);
+    var q = items.filter(function (row) { return row.id === which; })[0];
+    var option = q && array(q.options)[index];
+    if (!q || !option) return;
+    if (q.type === "select_all") {
+      var held = (bs.answers[q.id] || []).slice();
+      var at = held.indexOf(option.label);
+      if (at >= 0) held.splice(at, 1); else held.push(option.label);
+      bs.answers[q.id] = held;
+    } else {
+      bs.answers[q.id] = bs.answers[q.id] === option.label ? "" : option.label;
+    }
+    drawBrainstorm();
+  }
+
+  function brainstormAct(what) {
+    if (what === "send") return brainstormSend();
+    if (what === "new") return brainstormNew();
+    if (what === "retry") return brainstormRound();
+    if (what === "dismiss") { bs.card = null; return drawBrainstorm(); }
+    if (what === "decline") { bs.declined = true; return drawBrainstorm(); }
+    if (what === "skip") {
+      brainstormSay("you", BS_SKIP);
+      return brainstormRound();
+    }
+    if (what === "answers") {
+      var said = brainstormAnswers();
+      if (!said) return false;
+      brainstormSay("you", said);
+      return brainstormRound();
+    }
+    if (what === "focus") {
+      var focus = bs.pick;
+      if (!focus) return false;
+      if (str(bs.note).trim()) focus += "\n\n" + str(bs.note).trim();
+      brainstormSay("you", focus);
+      return brainstormRound();
+    }
+    if (what === "yes") {
+      brainstormSay("you", BS_YES);
+      return brainstormRound();
+    }
+    if (what === "no") {
+      var missing = BS_NO;
+      if (!str(bs.note).trim()) return false;
+      missing += "\n\n" + str(bs.note).trim();
+      brainstormSay("you", missing);
+      return brainstormRound();
+    }
+    if (what === "write-goals") {
+      var goals = array(bs.card && bs.card.goals);
+      if (!goals.length) return false;
+      return brainstormWrite({ goals: goals },
+        "Added those goals: " + goals.map(function (g) {
+          return str(g.label);
+        }).join("; "));
+    }
+    if (what === "write-todos") {
+      var target = bs.goalId || brainstormTarget();
+      if (!target) return false;
+      return brainstormWrite(
+        { goal_id: target, todos: array(bs.card && bs.card.todos),
+          subgoals: array(bs.card && bs.card.subgoals) },
+        "Added those rows.");
+    }
+    return false;
+  }
+
+  function brainstormColumn() {
+    return brainstormBox && brainstormBox.querySelector(".hc-bs-col");
+  }
+
+  function brainstormSay(role, text) {
+    if (!str(text).trim()) return;
+    bs.msgs.push({ role: role, text: str(text) });
+  }
+
+  function brainstormSend() {
+    if (bsSendable() === "answers") return brainstormAct("answers");
+    var text = str(bs.draft).trim();
+    if (!text || bs.thinking) return;
+    brainstormSay("you", text);
+    bs.draft = "";
+    var field = brainstormBox
+      && brainstormBox.querySelector("[data-hc-bs-input]");
+    if (field) { field.value = ""; field.style.height = "auto"; }
+    brainstormRound();
+  }
+
+  // One round: the whole conversation out, one card back. The card that
+  // comes replaces whatever was on screen -- a question already answered is
+  // not a thing to go back to.
+  function brainstormRound() {
+    bs.thinking = true;
+    bs.error = "";
+    bs.say = "";
+    bs.card = null;
+    bs.answers = {};
+    bs.pick = "";
+    bs.note = "";
+    bs.declined = false;
+    drawBrainstorm();
+    return post({ op: "brainstorm_say", transcript: bs.msgs })
+      .then(function (out) {
+        bs.thinking = false;
+        if (!out || !out.ok) {
+          bs.error = (out && out.error) || "the brainstorm could not reach Claude";
+          drawBrainstorm();
+          // Stored even so: what they said is theirs whether or not the
+          // model answered, and losing it to a failed round would be worse
+          // than the failed round.
+          brainstormStore();
+          return false;
+        }
+        brainstormSay("engelbart", out.say);
+        bs.card = out;
+        drawBrainstorm();
+        brainstormStore();
+        return true;
+      });
+  }
+
+  // What the reader picked, written as the turn they took: the next call
+  // reads the conversation, and a question answered is a thing they said.
+  function brainstormAnswers() {
+    var items = (bs.card && bs.card.questions && bs.card.questions.items) || [];
+    var said = [];
+    items.forEach(function (q) {
+      var got = bs.answers[q.id];
+      if (Array.isArray(got)) got = got.join(" · ");
+      got = str(got).trim();
+      if (got) said.push(q.title + ": " + got);
+    });
+    return said.join("\n");
+  }
+
+  // Every goal in the tree, flattened, so rows can be hung on one of them.
+  // Indented by depth: two goals called "UI Changes" under different parents
+  // are told apart by where they sit, which is the only thing that tells
+  // them apart.
+  function brainstormGoalRows() {
+    var out = [];
+    (function walk(list, depth) {
+      array(list).forEach(function (node) {
+        if (!node || typeof node.id !== "string") return;
+        out.push({ id: node.id, title: str(node.title) || "Untitled",
+                   depth: depth });
+        walk(node.children, depth + 1);
+      });
+    })(readLocalGoals(), 0);
+    return out;
+  }
+
+  function brainstormTarget() {
+    var rows = brainstormGoalRows();
+    var want = bs.goalId || str(selectedGoalId());
+    var found = rows.filter(function (r) { return r.id === want; })[0];
+    return found ? found.id : (rows.length ? rows[0].id : "");
+  }
+
+  function brainstormWrite(body, said) {
+    if (bs.thinking) return Promise.resolve(false);
+    bs.thinking = true;
+    bs.say = "";
+    bs.bad = false;
+    drawBrainstorm();
+    var sending = { op: "brainstorm_apply" };
+    Object.keys(body || {}).forEach(function (key) { sending[key] = body[key]; });
+    return post(sending)
+      .then(function (out) {
+        bs.thinking = false;
+        if (!out || !out.ok) {
+          bs.say = (out && out.error) || "that could not be written down";
+          bs.bad = true;
+          drawBrainstorm();
+          return false;
+        }
+        // Said back into the conversation as their turn, so the next round
+        // knows what is already in the tree and does not propose it again.
+        brainstormSay("you", said);
+        bs.card = null;
+        bs.say = "written into your goals · " + (out.goals || 0) + " goals, "
+                 + (out.todos || 0) + " TODO rows";
+        bs.bad = false;
+        drawBrainstorm();
+        // What was approved is now a turn in the conversation, and the
+        // stored copy is what the next reader of it opens on.
+        brainstormStore();
+        refreshState();
+        return true;
+      });
+  }
+
+  // --- drawing --------------------------------------------------------------
+
+  function drawBrainstorm() {
+    var col = brainstormColumn();
+    if (!col) return false;
+    // The composer is not in this column and is not redrawn with it, but
+    // everything that decides its Send -- thinking, the card on screen, the
+    // answers in it -- changes here.
+    bsSyncSend();
+    wipe(col);
+    bs.msgs.forEach(function (m) {
+      var box = el("div", "hc-bs-msg");
+      box.setAttribute("data-hc-role", str(m.role));
+      box.appendChild(el("div", "hc-bs-who", m.role === "you" ? "you" : "engelbart"));
+      box.appendChild(el("div", "hc-bs-body", str(m.text)));
+      col.appendChild(box);
+    });
+    if (bs.thinking) {
+      var wait = el("div", "hc-bs-think");
+      for (var i = 0; i < 3; i += 1) {
+        var dot = el("span", "hc-bs-dot", "");
+        dot.style.animationDelay = (i * 160) + "ms";
+        wait.appendChild(dot);
+      }
+      wait.appendChild(el("span", "", "thinking"));
+      col.appendChild(wait);
+    }
+    if (bs.error) {
+      var bad = el("div", "hc-bs-card");
+      var line = el("div", "hc-bs-say", bs.error);
+      line.setAttribute("data-hc-bad", "");
+      bad.appendChild(line);
+      var acts = el("div", "hc-bs-acts");
+      acts.appendChild(bsButton("Try again", "retry", true));
+      bad.appendChild(acts);
+      col.appendChild(bad);
+    }
+    var kind = bs.card && bs.card.card;
+    if (!bs.thinking && kind === "questions") drawBsQuestions(col);
+    if (!bs.thinking && kind === "focus") drawBsFocus(col);
+    if (!bs.thinking && kind === "offer") drawBsOffer(col);
+    if (!bs.thinking && kind === "goals") drawBsGoals(col);
+    if (!bs.thinking && kind === "todos") drawBsTodos(col);
+    if (bs.say) {
+      var note = el("div", "hc-bs-say", bs.say);
+      if (bs.bad) note.setAttribute("data-hc-bad", "");
+      col.appendChild(note);
+    }
+    // The last thing said is the thing to be looking at.
+    var scroll = brainstormBox
+      && brainstormBox.querySelector(".hc-bs-scroll");
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    return true;
+  }
+
+  function bsButton(label, act, primary, off) {
+    var node = el("button", "hc-bs-btn" + (primary && !off ? " hc-bs-btn-on" : ""),
+                  label);
+    node.setAttribute("data-hc-bs-act", act);
+    if (off) node.setAttribute("disabled", "disabled");
+    return node;
+  }
+
+  // A primary button drawn from a field's contents, brought up to date where
+  // it stands. Only for the two cards whose Send is decided by something
+  // typed: a redraw would rebuild the field mid-word and lose the caret, so
+  // the button has to be reached rather than redrawn.
+  function bsArm(act, ok) {
+    var node = brainstormBox && brainstormBox.querySelector
+      ? brainstormBox.querySelector("[data-hc-bs-act=\"" + act + "\"]")
+      : null;
+    if (!node) return false;
+    node.className = "hc-bs-btn" + (ok ? " hc-bs-btn-on" : "");
+    if (ok) node.removeAttribute("disabled");
+    else node.setAttribute("disabled", "disabled");
+    return true;
+  }
+
+  function bsCard(col, eyebrow) {
+    var card = el("div", "hc-bs-card");
+    if (eyebrow) card.appendChild(el("div", "hc-bs-eyebrow", eyebrow));
+    col.appendChild(card);
+    return card;
+  }
+
+  // A box for the line they want to add. What is typed in it is taken at
+  // the document, so nothing here is redrawn on a keystroke -- a sweep
+  // would take the caret out of the field being typed in.
+  function bsNoteField(card, placeholder) {
+    var field = el("textarea", "hc-bs-field");
+    field.setAttribute("rows", "3");
+    field.setAttribute("spellcheck", "false");
+    field.setAttribute("placeholder", placeholder);
+    field.setAttribute("data-hc-bs-note", "");
+    field.value = bs.note;
+    card.appendChild(field);
+    return field;
+  }
+
+  function drawBsQuestions(col) {
+    var set = bs.card.questions || {};
+    var items = array(set.items);
+    var card = bsCard(col, str(set.eyebrow) || "a few questions");
+    items.forEach(function (q) {
+      var box = el("div", "hc-bs-q");
+      box.appendChild(el("div", "hc-bs-title", str(q.title)));
+      if (q.subtitle) box.appendChild(el("div", "hc-bs-sub", str(q.subtitle)));
+      else if (q.type === "select_all") {
+        box.appendChild(el("div", "hc-bs-sub", "select all that apply"));
+      }
+      if (q.type === "mcq" || q.type === "select_all") {
+        box.appendChild(bsOptions(q));
+      } else {
+        var long = q.type === "open";
+        var field = el(long ? "textarea" : "input", "hc-bs-field");
+        if (long) field.setAttribute("rows", "3");
+        else field.setAttribute("type", "text");
+        field.setAttribute("spellcheck", "false");
+        if (q.placeholder) field.setAttribute("placeholder", str(q.placeholder));
+        field.setAttribute("data-hc-bs-field", str(q.id));
+        field.value = str(bs.answers[q.id]);
+        box.appendChild(field);
+      }
+      card.appendChild(box);
+    });
+    var ready = items.some(function (q) {
+      var got = bs.answers[q.id];
+      return Array.isArray(got) ? got.length : str(got).trim();
+    });
+    var acts = el("div", "hc-bs-acts");
+    acts.appendChild(bsButton("Send answers", "answers", true, !ready));
+    acts.appendChild(bsButton("Skip", "skip", false));
+    card.appendChild(acts);
+  }
+
+  function bsOptions(q) {
+    var many = q.type === "select_all";
+    var list = el("div", "");
+    array(q.options).forEach(function (o, at) {
+      var picked = many
+        ? (bs.answers[q.id] || []).indexOf(o.label) >= 0
+        : bs.answers[q.id] === o.label;
+      list.appendChild(bsOptionRow(o, picked, many, str(q.id), at));
+    });
+    return list;
+  }
+
+  // The row carries which question it belongs to and its place in that
+  // question's list, rather than a handler: a label is the model's prose and
+  // is no kind of key, and the column this row sits in is rebuilt whole on
+  // the next card.
+  function bsOptionRow(o, picked, many, which, at) {
+    var row = el("div", "hc-bs-opt");
+    row.setAttribute("data-hc-on", picked ? "1" : "0");
+    row.setAttribute("data-hc-bs-opt", which);
+    row.setAttribute("data-hc-bs-i", String(at));
+    row.appendChild(el("span", "hc-bs-mark" + (many ? " hc-bs-mark-many" : ""),
+                       picked ? (many ? "✓" : "●") : ""));
+    var text = el("span", "");
+    text.appendChild(el("span", "hc-bs-opt-label", str(o.label)));
+    if (o.why) text.appendChild(el("span", "hc-bs-opt-why", str(o.why)));
+    row.appendChild(text);
+    return row;
+  }
+
+  // The focus card: which reading of the work they mean, and the line they
+  // want to add to it. Both go back as one turn -- the choice is the answer
+  // and the line is what the choice did not say.
+  function drawBsFocus(col) {
+    var focus = bs.card.focus || {};
+    var card = bsCard(col, "focus");
+    card.appendChild(el("div", "hc-bs-title",
+                        str(focus.title) || "What should we focus on?"));
+    array(focus.options).forEach(function (o, at) {
+      card.appendChild(bsOptionRow(o, bs.pick === o.label, false, "focus", at));
+    });
+    card.appendChild(el("div", "hc-bs-lbl", "anything else it should know"));
+    bsNoteField(card, "constraints, what to leave alone, where to start…");
+    var acts = el("div", "hc-bs-acts");
+    acts.appendChild(bsButton("Continue", "focus", true, !bs.pick));
+    card.appendChild(acts);
+  }
+
+  // The offer: it thinks it has enough, and asks. Yes writes nothing by
+  // itself -- it asks for the card, which the reader then approves. No opens
+  // the same box the focus card carries, because "not yet" is only useful
+  // when it comes with what is missing.
+  function drawBsOffer(col) {
+    var what = str(bs.card.offer) === "goals" ? "goals" : "TODOs";
+    var card = bsCard(col, "ready when you are");
+    card.appendChild(el("div", "hc-bs-title",
+      "I think I have enough to generate " + what + ". Shall I?"));
+    if (bs.declined) {
+      card.appendChild(el("div", "hc-bs-lbl", "what am I missing?"));
+      bsNoteField(card, "what it has not understood yet…");
+      var more = el("div", "hc-bs-acts");
+      more.appendChild(bsButton("Send", "no", true, !str(bs.note).trim()));
+      card.appendChild(more);
+      return;
+    }
+    var acts = el("div", "hc-bs-acts");
+    acts.appendChild(bsButton("Yes, generate " + what, "yes", true));
+    acts.appendChild(bsButton("Not yet", "decline", false));
+    card.appendChild(acts);
+  }
+
+  function drawBsGoals(col) {
+    var goals = array(bs.card.goals);
+    var card = bsCard(col, goals.length === 1 ? "1 goal" : goals.length + " goals");
+    goals.forEach(function (g) {
+      card.appendChild(el("div", "hc-bs-piece", str(g.label)));
+      if (g.why) card.appendChild(el("div", "hc-bs-sub", str(g.why)));
+      if (array(g.subgoals).length) {
+        var kidsBox = el("div", "hc-bs-kids");
+        array(g.subgoals).forEach(function (k) {
+          kidsBox.appendChild(el("div", "hc-bs-kid",
+                                 "· " + str(k && k.label ? k.label : k)));
+        });
+        card.appendChild(kidsBox);
+      }
+    });
+    var acts = el("div", "hc-bs-acts");
+    acts.appendChild(bsButton("Add to my goals", "write-goals", true,
+                              bs.thinking));
+    acts.appendChild(bsButton("No, keep talking", "dismiss", false));
+    card.appendChild(acts);
+  }
+
+  function drawBsTodos(col) {
+    var pieces = array(bs.card.subgoals);
+    var rows = array(bs.card.todos);
+    var count = pieces.length
+      ? pieces.reduce(function (n, p) { return n + array(p.todos).length; }, 0)
+      : rows.length;
+    var card = bsCard(col, count === 1 ? "1 row" : count + " rows");
+    pieces.forEach(function (p) {
+      card.appendChild(el("div", "hc-bs-piece", str(p.label)));
+      var kidsBox = el("div", "hc-bs-kids");
+      array(p.todos).forEach(function (t) {
+        kidsBox.appendChild(el("div", "hc-bs-kid", "· " + str(t)));
+      });
+      card.appendChild(kidsBox);
+    });
+    if (!pieces.length) {
+      var flat = el("div", "hc-bs-kids");
+      rows.forEach(function (t) {
+        flat.appendChild(el("div", "hc-bs-kid", "· " + str(t)));
+      });
+      card.appendChild(flat);
+    }
+    // Which goal they hang on. A brainstorm proposes work, not a place to
+    // put it: the reader says where, and the goal they had selected is the
+    // guess this starts from.
+    var target = brainstormTarget();
+    var all = brainstormGoalRows();
+    card.appendChild(el("div", "hc-bs-lbl", "put these under"));
+    bsGoalPicker(card, all, target);
+    var acts = el("div", "hc-bs-acts");
+    acts.appendChild(bsButton("Add these TODOs", "write-todos", true,
+                              bs.thinking || !all.length));
+    acts.appendChild(bsButton("No, keep talking", "dismiss", false));
+    card.appendChild(acts);
+  }
+
+  // The goals a card's rows can be hung on, searched rather than scrolled.
+  // Built whole and filtered in place afterwards: what is typed here is
+  // never a reason to rebuild the column the field itself sits in.
+  function bsGoalPicker(card, rows, target) {
+    var wrap = el("div", "hc-bs-pick");
+    var field = el("div", "hc-bs-pick-field");
+    field.appendChild(bsSearchGlyph());
+    var input = el("input", "hc-bs-pick-input");
+    input.setAttribute("type", "text");
+    input.setAttribute("spellcheck", "false");
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("placeholder", "Search your goals");
+    input.setAttribute("aria-label", "Search your goals");
+    input.setAttribute("data-hc-bs-goalq", "");
+    input.value = str(bs.goalq);
+    field.appendChild(input);
+    var clear = el("span", "hc-bs-pick-clear", "×");
+    clear.setAttribute("role", "button");
+    clear.setAttribute("title", "Clear");
+    clear.setAttribute("aria-label", "Clear search");
+    clear.setAttribute("data-hc-bs-goalclear", "");
+    field.appendChild(clear);
+    wrap.appendChild(field);
+    var list = el("div", "hc-bs-pick-list");
+    rows.forEach(function (row) {
+      var line = el("div", "hc-bs-pick-row");
+      var on = row.id === target;
+      line.setAttribute("data-hc-bs-goalpick", row.id);
+      line.setAttribute("data-hc-on", on ? "1" : "0");
+      // The title, lowercased, kept on the node: the filter reads it rather
+      // than the text, which carries the indent that says where a goal sits.
+      line.setAttribute("data-hc-bs-goaltext", row.title.toLowerCase());
+      line.style.paddingLeft = (8 + row.depth * 14) + "px";
+      line.appendChild(el("span", "hc-bs-mark", on ? "●" : ""));
+      line.appendChild(el("span", "hc-bs-pick-title", row.title));
+      list.appendChild(line);
+    });
+    var none = el("div", "hc-bs-pick-none", "no goal by that name");
+    none.setAttribute("data-hc-bs-goalnone", "");
+    list.appendChild(none);
+    wrap.appendChild(list);
+    card.appendChild(wrap);
+    bsFilterGoals(wrap);
+    return wrap;
+  }
+
+  // The magnifier the goals rail's own search field carries, so the two read
+  // as the same control in two places.
+  function bsSearchGlyph() {
+    var glyph = el("span", "hc-bs-pick-glyph");
+    glyph.innerHTML = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\""
+      + " fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\">"
+      + "<circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle>"
+      + "<path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg>";
+    return glyph;
+  }
+
+  function bsPickBox() {
+    return brainstormBox && brainstormBox.querySelector
+      ? brainstormBox.querySelector(".hc-bs-pick") : null;
+  }
+
+  // Rows shown or hidden where they stand. A redraw would take the caret out
+  // of the field that decided the query, which is the same reason the
+  // composer's Send is toggled rather than rebuilt.
+  function bsFilterGoals(box) {
+    var wrap = box || bsPickBox();
+    if (!wrap) return false;
+    var want = str(bs.goalq).trim().toLowerCase();
+    var list = wrap.querySelector(".hc-bs-pick-list");
+    var shown = 0, none = null;
+    Array.prototype.slice.call((list && list.children) || [])
+      .forEach(function (row) {
+        if (row.getAttribute("data-hc-bs-goalnone") !== null) {
+          none = row;
+          return;
+        }
+        var text = str(row.getAttribute("data-hc-bs-goaltext"));
+        var hit = !want || text.indexOf(want) >= 0;
+        row.style.display = hit ? "" : "none";
+        if (hit) shown += 1;
+      });
+    if (none) none.style.display = shown ? "none" : "";
+    var field = wrap.querySelector(".hc-bs-pick-field");
+    if (field && want) field.setAttribute("data-hc-typed", "");
+    else if (field) field.removeAttribute("data-hc-typed");
+    return true;
+  }
+
+  // Which one is chosen, marked in place for the same reason.
+  function bsMarkGoal(id) {
+    var wrap = bsPickBox();
+    var list = wrap && wrap.querySelector(".hc-bs-pick-list");
+    if (!list) return false;
+    Array.prototype.slice.call(list.children || []).forEach(function (row) {
+      var which = row.getAttribute("data-hc-bs-goalpick");
+      if (which === null) return;
+      var on = which === id;
+      row.setAttribute("data-hc-on", on ? "1" : "0");
+      var mark = row.children && row.children[0];
+      if (mark) mark.textContent = on ? "●" : "";
+    });
+    return true;
   }
 
   // --- the project's sources ----------------------------------------------
@@ -6115,6 +7136,10 @@
     if (!who || !root || !root.setAttribute) return false;
     closeProjectMenu();
     closeHome();
+    // Every way into the overview is a way out of the brainstorm, and there
+    // are more of them than the tab -- a source chip, the project menu, the
+    // hash. Taken here rather than at each of those.
+    closeBrainstorm();
     root.setAttribute("data-hc-overview", "");
     renderOverview();
     // A reopened overview keeps the box it drew before, whose record is as
@@ -6340,8 +7365,12 @@
       var viewTab = closestByClass(target, "hc-viewtab");
       if (viewTab) {
         stop();
-        if (viewTab.getAttribute("data-hc-viewtab") === "overview") openOverview();
-        else closeOverview();
+        var view = viewTab.getAttribute("data-hc-viewtab");
+        // Each opener closes the other two, so the three tabs are three
+        // states of one screen rather than two overlays that can stack.
+        if (view === "overview") { closeBrainstorm(); openOverview(); }
+        else if (view === "brainstorm") openBrainstorm();
+        else { closeBrainstorm(); closeOverview(); }
         renderViewTabs();
         return;
       }
@@ -6515,6 +7544,20 @@
         // takes it, and leaves the projects behind it where they were.
         if (homeGoing) { homeCancel(); return; }
         if (homeShown()) { closeHome(); return; }
+        // Escape out of the brainstorm leaves the conversation where it is:
+        // the tab brings it back with everything still said. From inside one
+        // of its fields it lets go of the field first -- Escape at a caret
+        // is the reader getting out of the box, not out of the screen.
+        if (brainstormShown()) {
+          if (target && closestByClass(target, "hc-brainstorm")
+              && typeof target.blur === "function") {
+            target.blur();
+            return;
+          }
+          closeBrainstorm();
+          renderViewTabs();
+          return;
+        }
         if (overviewShown()) closeOverview();
         return;
       }
@@ -7818,6 +8861,17 @@
       // Counts describe the tree, and the overview is not the tree. The
       // artifact writes the row's display inline, so this has to shout.
       "[data-hc-launch][data-hc-overview] .hc-titlerow{display:none!important}",
+      // The brainstorm keeps the goals rail and covers everything right of
+      // it, so the counts -- which are fixed to the window's right edge --
+      // would float over the conversation. They go with the rest of it.
+      "[data-hc-launch][data-hc-brainstorm] .hc-titlerow{display:none!important}",
+      // How much of the screen the tree gets while brainstorming: about a
+      // third, or the reader's own rail width where they have already
+      // dragged it wider. Written as the rail's flex-basis AND as where the
+      // panel starts, from the one variable, so the two cannot disagree.
+      // Taken off the moment the panel closes -- their own width is theirs.
+      "[data-hc-launch]{--hc-bs-left:max(var(--hc-left),32vw)}",
+      "[data-hc-launch][data-hc-brainstorm] .hc-rail-left{flex:0 0 var(--hc-bs-left)!important}",
       // Read-only: the controls that write are taken off the page rather
       // than left to fail. Anything that only reads -- folding, selecting,
       // the search, the panes -- is untouched.
@@ -7875,7 +8929,16 @@
       // 1px line, and none against the window.
       "[data-hc-launch] .hc-shell{gap:0!important;align-items:stretch!important;margin-top:0!important}",
       "[data-hc-launch] .hc-rail-left{position:relative;flex:0 0 var(--hc-left)!important;height:calc(100vh - var(--hc-top))!important;padding:0 0 6px!important;border-width:0 1px 0 0!important;border-radius:0!important}",
-      "[data-hc-launch] .hc-main{flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border:0!important;border-radius:0!important;padding:14px 20px 18px!important}",
+      // The display is !important because the artifact writes one inline
+      // ({{ rightDisp }}), and a block pane cannot hand its height to the
+      // preview inside it.
+      "[data-hc-launch] .hc-main{display:flex!important;flex-direction:column;flex:1 1 auto!important;order:2;height:calc(100vh - var(--hc-top))!important;top:0!important;border:0!important;border-radius:0!important;padding:14px 20px 18px!important}",
+      // A column, so the preview can have what is left of it. Everything
+      // above the pane -- the title, the sources, the one tab -- keeps its
+      // own height; the preview takes the rest, which is what a running
+      // program needs to be looked at in.
+      "[data-hc-launch] .hc-main>*{flex:none}",
+      "[data-hc-launch] .hc-main>.hc-preview{flex:1 1 auto;min-height:320px}",
       "[data-hc-launch] .hc-rail-right{position:relative;order:3;flex:0 0 var(--hc-right);display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:solid var(--bd);border-width:0 0 0 1px;border-radius:0;background:transparent;padding:0 0 12px}",
       // Either rail can be hidden -- from the header toggles, or by
       // double-clicking its divider -- and the document takes the space.
@@ -8038,6 +9101,8 @@
       "[data-hc-launch] .hc-todo-restart-send-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;border-bottom:1px solid var(--bd);font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
       "[data-hc-launch] .hc-todo-restart-copy{flex:none;font-weight:600;color:var(--hc-blue, #58a6ff);cursor:pointer}",
       "[data-hc-launch] .hc-todo-restart-copy:hover{text-decoration:underline}",
+      "[data-hc-launch] .hc-todo-restart-hide{flex:none;margin-left:auto;padding:0 3px;font:600 13px/1.2 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-todo-restart-hide:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-todo-restart-prompt{margin:0;padding:8px 10px;font:11.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
@@ -8050,12 +9115,85 @@
       "[data-hc-launch] .hc-rail-select{margin-left:auto;font:500 10px 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-select:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
-      // Three tabs now, and the widest of them is a word: the row they sit in
+      // Four tabs now, and the widest of them is a word: the row they sit in
       // is only as wide as the rail. They keep their whole names and the save
       // stamp beside them gives way instead -- it is the one thing in that
-      // row that says nothing the reader has to be able to read in full.
-      "[data-hc-launch] .hc-rail-tabs{flex:none;gap:11px}",
+      // row that says nothing the reader has to be able to read in full. On a
+      // rail dragged narrow the four wrap to a second line rather than one of
+      // them being cut in half.
+      "[data-hc-launch] .hc-rail-tabs{flex:0 1 auto;gap:9px;flex-wrap:wrap}",
       "[data-hc-launch] .hc-rail-saved{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      // The Notes tab. The goal's document, written where the TODOs it is
+      // about are -- between them and the prompt they are copied into, so the
+      // rail reads in the order the work does. The editor is the artifact's
+      // own overlay trick: rendered markdown in the flow, a transparent
+      // textarea laid over it, so the caret sits on the drawn text. The box
+      // takes the column's spare height and then grows with the writing.
+      "[data-hc-launch] .hc-rail-notes{flex:1 1 auto;min-height:0;overflow-y:auto;display:none;flex-direction:column;gap:14px;padding:13px 14px 16px}",
+      "[data-hc-launch] .hc-notes-box{position:relative;flex:1 1 auto;min-height:260px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)}",
+      "[data-hc-launch] .hc-notes-render{min-height:100%;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-notes-edit{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-notes-head{flex:none;display:flex;align-items:baseline;justify-content:space-between;gap:12px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
+      // The prompts scroll inside their own box rather than pushing the
+      // document off the top of the column.
+      "[data-hc-launch] .hc-notes-prompts{flex:none;max-height:240px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)}",
+      // The middle. Cards when there is something to do, a terminal when
+      // something is printing, and a hole for the embedded page when one
+      // is up -- the frame itself is positioned over that hole from
+      // outside the artifact, so it survives a re-render.
+      "[data-hc-launch] .hc-preview{display:flex;flex-direction:column;margin-top:14px;min-height:0;flex:1 1 auto}",
+      "[data-hc-launch] .hc-preview-mount{display:flex;flex-direction:column;gap:14px;min-height:0;flex:1 1 auto}",
+      "[data-hc-launch] .hc-pv-cards{display:flex;flex-direction:column;gap:12px}",
+      "[data-hc-launch] .hc-pv-card{border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:15px 17px 16px;display:flex;flex-direction:column;gap:9px;align-items:flex-start}",
+      "[data-hc-launch] .hc-pv-kicker{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-pv-head{font:600 14px/1.5 'Source Code Pro',monospace;color:var(--ink)}",
+      "[data-hc-launch] .hc-pv-why{font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);max-width:70ch}",
+      "[data-hc-launch] .hc-pv-note{font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-pv-fix{font:12.5px/1.7 'Source Code Pro',monospace;color:var(--ink);max-width:70ch}",
+      "[data-hc-launch] .hc-pv-err{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--del)}",
+      // The command, and the two things anybody does with one.
+      "[data-hc-launch] .hc-pv-cmd{align-self:stretch;display:flex;align-items:center;gap:12px;flex-wrap:wrap}",
+      "[data-hc-launch] .hc-pv-cmd-text{flex:1 1 260px;min-width:0;border:1px solid var(--bd);border-radius:2px;background:var(--bg);padding:9px 12px;font:12.5px/1.6 'Source Code Pro',monospace;color:var(--ink);white-space:pre-wrap;word-break:break-all}",
+      "[data-hc-launch] .hc-pv-cmd-text:empty{display:none}",
+      "[data-hc-launch] .hc-pv-cmd-acts{flex:none;display:flex;gap:8px}",
+      "[data-hc-launch] .hc-pv-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2);border-radius:3px;padding:6px 13px;font:600 11px 'Source Code Pro',monospace;color:var(--mut);background:var(--panel)}",
+      "[data-hc-launch] .hc-pv-btn:hover{color:var(--ink);border-color:var(--ink)}",
+      "[data-hc-launch] .hc-pv-go{background:var(--acc);border-color:var(--acc);color:var(--onacc,#fff)}",
+      "[data-hc-launch] .hc-pv-go:hover{filter:brightness(1.08);color:var(--onacc,#fff);border-color:var(--acc)}",
+      "[data-hc-launch] .hc-pv-quiet{border-color:transparent;background:transparent;padding:6px 4px;color:var(--fnt)}",
+      "[data-hc-launch] .hc-pv-quiet:hover{border-color:transparent;color:var(--acc)}",
+      "[data-hc-launch] .hc-pv-alts{display:flex;align-items:center;gap:6px;flex-wrap:wrap}",
+      "[data-hc-launch] .hc-pv-alts-label{font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
+      // What is running, along the top of the pane: the address or the
+      // command, and the way to stop it.
+      "[data-hc-launch] .hc-pv-live{display:flex;flex-direction:column;gap:10px;min-height:0;flex:1 1 auto}",
+      "[data-hc-launch] .hc-pv-bar{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:7px 11px}",
+      "[data-hc-launch] .hc-pv-grow{flex:1 1 auto}",
+      "[data-hc-launch] .hc-pv-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--hc-ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--hc-ok) 22%,transparent)}",
+      "[data-hc-launch] .hc-pv-url{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-pv-term{flex:1 1 auto;min-height:120px;max-height:46vh;overflow-y:auto;border:1px solid var(--bd);border-radius:3px;background:var(--bg);padding:10px 13px}",
+      "[data-hc-launch] .hc-pv-term-tall{min-height:280px}",
+      "[data-hc-launch] .hc-pv-term-body{margin:0;font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-pv-files{display:flex;flex-direction:column;gap:4px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:11px 13px}",
+      "[data-hc-launch] .hc-pv-file{font:12px 'Source Code Pro',monospace;color:var(--dtxt)}",
+      // The hole the embedded page is drawn over. It has a ground of its
+      // own so the pane does not flash the workspace behind it while the
+      // frame is loading.
+      "[data-hc-launch] .hc-pv-slot{flex:1 1 auto;min-height:340px;border:1px solid var(--bd);border-radius:3px;background:#fff}",
+      // Gated like every other rule even though the frame hangs off
+      // documentElement: that is where the skin's own attribute is set,
+      // so the frame is inside it.
+      "[data-hc-launch] .hc-pv-frame{position:fixed;z-index:20;border:0;border-radius:3px;background:#fff;display:none}",
+      // What this preview is for: the row being worked on, and what to
+      // look at once it is up.
+      "[data-hc-launch] .hc-pv-intent{display:flex;flex-direction:column;gap:5px;border-left:2px solid var(--acc);padding:2px 0 2px 11px}",
+      "[data-hc-launch] .hc-pv-intent-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}",
+      "[data-hc-launch] .hc-pv-intent-kicker{flex:none;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--acc)}",
+      "[data-hc-launch] .hc-pv-intent-todo{font:600 12.5px/1.55 'Source Code Pro',monospace;color:var(--ink)}",
+      "[data-hc-launch] .hc-pv-intent-where{font:11.5px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-pv-step{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-pv-expect{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--acc)}",
+      "[data-hc-launch] .hc-pv-stale{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--bd2);border-radius:3px;padding:7px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--mut)}",
       // The Understanding tab: the scenario the goal's work is for, and the
       // questions asked about it. Boxes to type in, unlike the Prompt tab
       // beside it, so it is laid out as the goal document is -- a heading,
@@ -8930,16 +10068,74 @@
   var RESTART_WHY = "the running instance keeps the old code until restarted.";
   var todoRestartCopied = "";   // the goal whose prompt was just copied
 
+  // Putting it away. The check's answer is a message about one build -- the
+  // prompt has been carried over, or it is not wanted -- so the dismissal is
+  // remembered against that answer, the goal and the moment it was stamped,
+  // and not against the goal alone: a later build asks the question again,
+  // and what it answers is news. Nothing is left behind in the panel; the
+  // block goes, rather than folding to a header the reader has to look past.
+  var RESTART_HIDE_KEY = "hc-restart-hidden-v1";
+  var restartHidden = null;
+
+  function loadRestartHidden() {
+    if (restartHidden) return restartHidden;
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(RESTART_HIDE_KEY) || "null"); }
+    catch (e) { saved = null; }
+    restartHidden = (saved && typeof saved === "object") ? saved : {};
+    return restartHidden;
+  }
+
+  // What is being dismissed: the verdict's own stamp, with its status in it
+  // so that hiding the spinner does not also hide the answer it turns into.
+  function todoRestartStamp(restart) {
+    if (!restart) return "";
+    return restart.status + "@" + (restart.at || str(restart.prompt).slice(0, 64));
+  }
+
+  function todoRestartHidden(goalId, restart) {
+    var id = str(goalId);
+    if (!id || !restart) return false;
+    return loadRestartHidden()[id] === todoRestartStamp(restart);
+  }
+
+  function todoRestartHide(goalId, restart) {
+    var id = str(goalId);
+    if (!restart) {
+      var runs = serverState.buildRuns || {};
+      restart = todoRestartOf(runs[id]);
+    }
+    if (!id || !restart) return false;
+    // Read before writing: a second window on the same store may have put
+    // its own verdicts away since this page last looked.
+    restartHidden = null;
+    var saved = loadRestartHidden();
+    saved[id] = todoRestartStamp(restart);
+    try { localStorage.setItem(RESTART_HIDE_KEY, JSON.stringify(saved)); } catch (e) {}
+    renderTodoRail(true);
+    return true;
+  }
+
   function todoRestartPaint(box, restart, goalId) {
     // Nothing until a finished build has been asked, and nothing on a no.
     if (!restart || (restart.status !== "checking" && restart.status !== "yes")) {
       return null;
     }
+    // Nothing, either, once this same answer has been put away by hand.
+    if (todoRestartHidden(goalId, restart)) return null;
     var span = function (cls, words) {
       var s = document.createElement("span");
       s.className = cls;
       s.textContent = words;
       return s;
+    };
+    var hideBtn = function () {
+      var x = span("hc-todo-restart-hide", "×");
+      x.setAttribute("data-hc-todo-restart-hide", str(goalId));
+      x.setAttribute("role", "button");
+      x.setAttribute("aria-label", "hide this restart notice");
+      x.title = "hide this — the next build asks the question again";
+      return x;
     };
     var wrap = document.createElement("div");
     wrap.className = "hc-todo-restart";
@@ -8957,6 +10153,7 @@
       model.appendChild(span("hc-todo-restart-arrow", "→"));
       model.appendChild(span("hc-todo-restart-to",
                              restart.model + " · effort " + restart.effort));
+      model.appendChild(hideBtn());
       wrap.appendChild(model);
       var busy = document.createElement("div");
       busy.className = "hc-todo-restart-busy";
@@ -8969,6 +10166,7 @@
     why.className = "hc-todo-restart-why";
     why.appendChild(span("hc-todo-restart-warn", "⚠"));
     why.appendChild(span("hc-todo-restart-why-text", restart.why || RESTART_WHY));
+    why.appendChild(hideBtn());
     wrap.appendChild(why);
     // The prompt, boxed and labelled for where it goes, with a copy button
     // in the box's own corner: the whole point of the check is this text
@@ -10730,6 +11928,12 @@
         todoRestartCopy(copyFor);
         return;
       }
+      var hideFor = node.getAttribute("data-hc-todo-restart-hide");
+      if (hideFor !== null) {
+        event.preventDefault();
+        todoRestartHide(hideFor);
+        return;
+      }
       var termFor = node.getAttribute("data-hc-todo-term");
       if (termFor !== null) {
         node.textContent = "opening…";
@@ -10760,7 +11964,8 @@
         return;
       }
       var name = node.getAttribute("data-hc-rail-tab");
-      if (name !== "todos" && name !== "prompt" && name !== "understand") return;
+      if (name !== "todos" && name !== "notes"
+          && name !== "prompt" && name !== "understand") return;
       railTab = name;
       renderTodoRail(true);
     }, true);
@@ -11222,6 +12427,543 @@
     });
   }
 
+  // --- the middle: what happens if you run what you have built -------------
+  //
+  // The pane is not a browser. It answers one question -- if I run this
+  // project right now, what do I see? -- and the answer is a page only when
+  // the thing being built happens to serve HTTP. So what is drawn is a
+  // projection of two things the server keeps apart: a SURFACE (web,
+  // terminal, artifact, instructions) and a STATUS (unconfigured, ready,
+  // needs_user_action, starting, running, finished, failed). Every card
+  // below is one pairing of those, and none of them knows what a Next.js is.
+  //
+  // Nothing here starts anything. A pane that ran `npm run dev` because a
+  // page was opened would be a pane that ran arbitrary repository code
+  // because a page was opened; every run is a press.
+  var previewState = null;      // the last answer from /api/preview
+  var previewAt = 0;            // when it came back
+  var previewBusy = "";         // the press being waited on, if any
+  var previewSaid = "";         // what the last press said, if it failed
+  var previewFix = null;        // the model's word on a failed run
+  var previewWired = false;
+  var previewFrame = null;      // the embedded page, kept out of the artifact
+  var previewShown = "";        // the address that frame is on
+  var PREVIEW_EVERY_MS = 1200;
+
+  function previewGoal() {
+    var goal = todoSelectedGoal();
+    return goal ? str(goal.id) : "";
+  }
+
+  function previewRow() {
+    // The row the reader has picked, if they have picked one: what the pane
+    // is being asked to be relevant TO. Nothing is picked most of the time,
+    // and the pane is fine without it.
+    var picked = todoPickedIds();
+    return picked.length ? str(picked[0]) : "";
+  }
+
+  function previewRead(force) {
+    var now = Date.now();
+    if (!force && now - previewAt < PREVIEW_EVERY_MS) return;
+    previewAt = now;
+    fetch("/api/preview?goal=" + encodeURIComponent(previewGoal())
+          + "&todo=" + encodeURIComponent(previewRow()), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (body && typeof body === "object") previewState = body;
+      })
+      .catch(function () { /* the server going away is the banner's news */ });
+  }
+
+  function previewDo(op, extra) {
+    previewBusy = op;
+    previewSaid = "";
+    renderPreview(true);
+    return post(Object.assign({ op: op }, extra || {})).then(function (res) {
+      previewBusy = "";
+      if (!res || res.ok === false) {
+        previewSaid = str((res && res.error) || "that did not work");
+      }
+      if (op === "preview_explain" && res && res.ok) previewFix = res;
+      if (op === "preview_start") previewFix = null;
+      previewAt = 0;
+      previewRead(true);
+      renderPreview(true);
+      return res;
+    });
+  }
+
+  function previewDelegate() {
+    if (previewWired) return;
+    previewWired = true;
+    document.addEventListener("click", function (event) {
+      var node = closestAttr(event.target, "data-hc-pv");
+      if (!node) return;
+      event.preventDefault();
+      event.stopPropagation();
+      var what = str(node.getAttribute("data-hc-pv"));
+      var arg = str(node.getAttribute("data-hc-pv-arg"));
+      if (what === "detect") { previewDo("preview_configure"); return; }
+      if (what === "pick") {
+        previewDo("preview_pick", { profile_id: arg });
+        return;
+      }
+      if (what === "run") {
+        previewDo("preview_start", arg ? { command: arg } : {});
+        return;
+      }
+      if (what === "ui") { previewDo("preview_show_ui"); return; }
+      if (what === "again") {
+        previewDo("preview_forget").then(function () {
+          previewDo("preview_start", arg ? { command: arg } : {});
+        });
+        return;
+      }
+      if (what === "stop") { previewDo("preview_stop"); return; }
+      if (what === "explain") { previewDo("preview_explain"); return; }
+      if (what === "intent") {
+        var row = previewRow();
+        if (!row) return;
+        previewDo("preview_intent", { goal_id: previewGoal(), todo_id: row,
+                                      again: arg === "again" });
+        return;
+      }
+      if (what === "recheck") { previewAt = 0; previewRead(true); return; }
+      if (what === "open") { if (arg) window.open(arg, "_blank"); return; }
+      if (what === "reload") {
+        // A different port is a different origin, so the frame cannot be
+        // told to reload itself: it is sent to the address again.
+        if (previewFrame) previewFrame.src = previewFrame.src;
+        return;
+      }
+      if (what === "copy") {
+        var say = node;
+        handoffToClipboard(arg).then(function (ok) {
+          say.textContent = ok ? "copied ✓" : "copy failed";
+          setTimeout(function () { renderPreview(true); }, 1400);
+        });
+      }
+    }, true);
+  }
+
+  // --- the pieces every card is made of ------------------------------------
+
+  function pvButton(label, what, arg, kind) {
+    var node = el("span", "hc-pv-btn" + (kind ? " hc-pv-" + kind : ""), label);
+    node.setAttribute("data-hc-pv", what);
+    if (arg) node.setAttribute("data-hc-pv-arg", arg);
+    return node;
+  }
+
+  function pvCommand(command, actions) {
+    var wrap = el("div", "hc-pv-cmd");
+    wrap.appendChild(el("code", "hc-pv-cmd-text", command));
+    var row = el("div", "hc-pv-cmd-acts");
+    (actions || []).forEach(function (b) { row.appendChild(b); });
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  function pvCard(kicker, headline) {
+    var card = el("div", "hc-pv-card");
+    if (kicker) card.appendChild(el("div", "hc-pv-kicker", kicker));
+    if (headline) card.appendChild(el("div", "hc-pv-head", headline));
+    return card;
+  }
+
+  function pvWhy(text) {
+    return el("div", "hc-pv-why", text);
+  }
+
+  function pvTerminal(lines, tall) {
+    var box = el("div", "hc-pv-term" + (tall ? " hc-pv-term-tall" : ""));
+    var body = el("pre", "hc-pv-term-body",
+                  (lines || []).join("\n") || "no output yet");
+    box.appendChild(body);
+    // Live output is read at its end: a pane that kept the top of an
+    // hour-old log on screen would be showing what the program was doing
+    // when it started.
+    setTimeout(function () { box.scrollTop = box.scrollHeight; }, 0);
+    return box;
+  }
+
+  function pvNumber(value) {
+    // str() answers "" for anything that is not a string, which is right
+    // everywhere else and wrong for an exit code: a run that ended 1 was
+    // reported as "exit ".
+    return (value === null || value === undefined) ? "?" : String(value);
+  }
+
+  function pvElapsed(run) {
+    var seconds = Math.max(0, Math.round((run && run.seconds) || 0));
+    if (seconds < 90) return seconds + "s";
+    return Math.round(seconds / 60) + "m";
+  }
+
+  // --- the header: what this preview is FOR --------------------------------
+
+  function pvIntent(state) {
+    var row = previewRow();
+    if (!row) return null;
+    var head = el("div", "hc-pv-intent");
+    var intent = state.intent || null;
+    var text = str((intent && intent.todo_text) || "");
+    var line = el("div", "hc-pv-intent-top");
+    line.appendChild(el("span", "hc-pv-intent-kicker", "CHECKING"));
+    line.appendChild(el("span", "hc-pv-intent-todo", text || "the picked row"));
+    head.appendChild(line);
+    if (intent && (intent.expected || (intent.scenario || []).length)) {
+      if (intent.entrypoint) {
+        head.appendChild(el("div", "hc-pv-intent-where",
+                            "Where: " + intent.entrypoint));
+      }
+      (intent.scenario || []).forEach(function (step, i) {
+        head.appendChild(el("div", "hc-pv-step", (i + 1) + ". " + step));
+      });
+      if (intent.expected) {
+        head.appendChild(el("div", "hc-pv-expect",
+                            "Expect: " + intent.expected));
+      }
+      head.appendChild(pvButton("ask again", "intent", "again", "quiet"));
+      return head;
+    }
+    head.appendChild(pvButton(
+      previewBusy === "preview_intent" ? "thinking…"
+                                       : "What should I look for?",
+      "intent", "", "quiet"));
+    return head;
+  }
+
+  // --- one card per pairing of surface and status --------------------------
+
+  function pvUnconfigured(state) {
+    var card = pvCard("NOTHING RUNNABLE FOUND YET",
+                      "I do not know how to run this project yet.");
+    card.appendChild(pvWhy(str(state.reason)
+      || "Nothing in this directory names a way to start it — no dev"
+         + " script, no Makefile target, no entry point I recognise."));
+    card.appendChild(pvCommand("", [pvButton(
+      previewBusy === "preview_configure" ? "looking…"
+                                          : "Find how to run it",
+      "detect", "", "go")]).lastChild);
+    return card;
+  }
+
+  function pvUiOffer(state, card) {
+    // One press for "I want to see it": whatever has to happen first, then
+    // the thing that serves. Where nothing serves, the button is replaced
+    // by the sentence saying so -- a control that promises a page and
+    // cannot produce one is worse than no control.
+    var ui = state.ui || {};
+    if (ui.available) {
+      card.appendChild(pvButton(
+        previewBusy === "preview_show_ui" ? "building…" : "Show UI",
+        "ui", "", "go"));
+      return;
+    }
+    card.appendChild(el("div", "hc-pv-note",
+                        "UI not ready for preview — " + str(ui.reason)));
+  }
+
+  function pvReady(state) {
+    var profile = state.profile || {};
+    var card = pvCard("RUN THIS PROJECT", str(profile.name) || "Run");
+    var acts = [pvButton(previewBusy === "preview_start" ? "starting…" : "Run",
+                         "run", "", "go"),
+                pvButton("Copy", "copy", str(profile.command))];
+    card.appendChild(pvCommand(str(profile.command), acts));
+    if (profile.why) card.appendChild(pvWhy(str(profile.why)));
+    pvUiOffer(state, card);
+    if (state.verified_command === profile.command && state.verified_at) {
+      card.appendChild(el("div", "hc-pv-note",
+                          "This command has been watched working here."));
+    }
+    var others = (state.profiles || []).filter(function (p) {
+      return p && p.id !== profile.id;
+    });
+    if (others.length) {
+      var row = el("div", "hc-pv-alts");
+      row.appendChild(el("span", "hc-pv-alts-label", "or"));
+      others.forEach(function (p) {
+        row.appendChild(pvButton(str(p.name), "pick", str(p.id), "quiet"));
+      });
+      card.appendChild(row);
+    }
+    return card;
+  }
+
+  function pvBlocked(state) {
+    var found = state.blockers || [];
+    var wrap = el("div", "hc-pv-cards");
+    found.forEach(function (blocker) {
+      var card = pvCard(found.length > 1 ? "ONE STEP NEEDED" : "ONE STEP NEEDED",
+                        str(blocker.text));
+      var acts = [pvButton("Copy", "copy", str(blocker.command))];
+      if (blocker.kind === "run") {
+        acts.unshift(pvButton(
+          previewBusy === "preview_start" ? "running…" : "Run this",
+          "run", str(blocker.command), "go"));
+      }
+      card.appendChild(pvCommand(str(blocker.command), acts));
+      card.appendChild(pvWhy("Why: " + str(blocker.why)));
+      var foot = el("div", "hc-pv-alts");
+      foot.appendChild(pvButton("I did this", "recheck", "", "quiet"));
+      // The step and the run in one press, for the reader who wants the
+      // page rather than the errand.
+      if ((state.ui || {}).available && blocker.kind === "run") {
+        foot.appendChild(pvButton(
+          previewBusy === "preview_show_ui" ? "building…"
+                                            : "Do it and show me the UI",
+          "ui", "", "go"));
+      }
+      card.appendChild(foot);
+      wrap.appendChild(card);
+    });
+    return wrap;
+  }
+
+  function pvRunningWeb(state) {
+    var wrap = el("div", "hc-pv-live");
+    var bar = el("div", "hc-pv-bar");
+    bar.appendChild(el("span", "hc-pv-dot", ""));
+    bar.appendChild(el("span", "hc-pv-url", str(state.url)));
+    bar.appendChild(el("span", "hc-pv-grow", ""));
+    bar.appendChild(pvButton("Reload", "reload", "", "quiet"));
+    bar.appendChild(pvButton("Open", "open", str(state.url), "quiet"));
+    bar.appendChild(pvButton("Stop", "stop", "", "quiet"));
+    wrap.appendChild(bar);
+    var run = state.run || {};
+    if (run.embeddable === false) {
+      var card = pvCard("", "This server will not be embedded in another"
+                            + " page.");
+      card.appendChild(pvWhy("It sends a header that forbids it. Open it in"
+                             + " a tab instead — the run keeps going."));
+      card.appendChild(pvCommand("", [pvButton("Open it", "open",
+                                               str(state.url), "go")]).lastChild);
+      wrap.appendChild(card);
+      return wrap;
+    }
+    // The frame itself lives outside this subtree; what goes here is the
+    // space it is drawn over. See previewPlaceFrame.
+    wrap.appendChild(el("div", "hc-pv-slot", ""));
+    return wrap;
+  }
+
+  function pvRunningTerminal(state) {
+    var run = state.run || {};
+    var wrap = el("div", "hc-pv-live");
+    var bar = el("div", "hc-pv-bar");
+    bar.appendChild(el("span", "hc-pv-dot", ""));
+    bar.appendChild(el("code", "hc-pv-url", str(run.command)));
+    bar.appendChild(el("span", "hc-pv-grow", ""));
+    bar.appendChild(el("span", "hc-pv-note", pvElapsed(run)));
+    bar.appendChild(pvButton("Stop", "stop", "", "quiet"));
+    wrap.appendChild(bar);
+    if (state.status === "starting" && !(run.lines || []).length) {
+      wrap.appendChild(pvWhy("Started. Waiting for it to say something."));
+    }
+    wrap.appendChild(pvTerminal(run.lines, true));
+    return wrap;
+  }
+
+  function pvFinished(state) {
+    var run = state.run || {};
+    var wrap = el("div", "hc-pv-live");
+    var card = pvCard("FINISHED",
+                      run.exit_code === 0 || run.exit_code === null
+                        ? "It ran and ended." : "It ended.");
+    card.appendChild(pvWhy(str(run.command) + " · exit "
+                           + pvNumber(run.exit_code)
+                           + " · " + pvElapsed(run)));
+    card.appendChild(pvCommand("", [
+      pvButton("Run again", "again", "", "go")]).lastChild);
+    wrap.appendChild(card);
+    var made = state.artifacts || [];
+    if (made.length) {
+      var box = el("div", "hc-pv-files");
+      box.appendChild(el("div", "hc-pv-kicker", "IT WROTE"));
+      made.forEach(function (name) {
+        box.appendChild(el("div", "hc-pv-file", name));
+      });
+      wrap.appendChild(box);
+    }
+    if ((run.lines || []).length) wrap.appendChild(pvTerminal(run.lines, !made.length));
+    return wrap;
+  }
+
+  function pvFailed(state) {
+    var run = state.run || {};
+    var wrap = el("div", "hc-pv-live");
+    var card = pvCard("PREVIEW FAILED", "It stopped instead of starting.");
+    card.appendChild(pvWhy(str(run.command) + " · exit "
+                           + pvNumber(run.exit_code)));
+    if (previewFix && previewFix.reason) {
+      card.appendChild(el("div", "hc-pv-fix", str(previewFix.reason)));
+      if (previewFix.command) {
+        card.appendChild(pvCommand(str(previewFix.command), [
+          pvButton("Run this", "again", str(previewFix.command), "go"),
+          pvButton("Copy", "copy", str(previewFix.command))]));
+      }
+      if (previewFix.why) card.appendChild(pvWhy(str(previewFix.why)));
+    } else {
+      card.appendChild(pvCommand("", [
+        pvButton(previewBusy === "preview_explain" ? "reading…"
+                                                   : "What went wrong?",
+                 "explain", "", "go"),
+        pvButton("Run again", "again", "")]).lastChild);
+    }
+    wrap.appendChild(card);
+    wrap.appendChild(pvTerminal(run.lines, false));
+    return wrap;
+  }
+
+  function pvNotReady(state) {
+    var run = state.run || {};
+    var wrap = el("div", "hc-pv-live");
+    var card = pvCard("UI NOT READY FOR PREVIEW",
+                      "It is running, but nothing is serving a page.");
+    card.appendChild(pvWhy(
+      (run.steps && run.steps.length > 1
+        ? "Ran: " + run.steps.join(" · ") + ". "
+        : str(run.command) + ". ")
+      + "No address has been printed, so there is nothing to embed yet."
+      + " The output is below — it may still be building, or this may not"
+      + " be something with a UI."));
+    var acts = el("div", "hc-pv-alts");
+    acts.appendChild(pvButton("Keep waiting", "recheck", "", "quiet"));
+    acts.appendChild(pvButton("Stop", "stop", "", "quiet"));
+    card.appendChild(acts);
+    wrap.appendChild(card);
+    wrap.appendChild(pvTerminal(run.lines, true));
+    return wrap;
+  }
+
+  function pvEmpty(state) {
+    var card = pvCard("", "Nothing to preview yet.");
+    card.appendChild(pvWhy(str(state.reason)
+      || "This workspace is not pointed at a project directory."));
+    return card;
+  }
+
+  function pvBody(state) {
+    var status = str(state.status);
+    if (status === "unconfigured") {
+      return state.surface === "empty" ? pvEmpty(state) : pvUnconfigured(state);
+    }
+    if (status === "not_ready") return pvNotReady(state);
+    if (status === "needs_user_action") return pvBlocked(state);
+    if (status === "ready" || status === "stale") return pvReady(state);
+    if (status === "running" && state.surface === "web") {
+      return pvRunningWeb(state);
+    }
+    if (status === "running" || status === "starting") {
+      return pvRunningTerminal(state);
+    }
+    if (status === "finished") return pvFinished(state);
+    if (status === "failed") return pvFailed(state);
+    return pvEmpty(state);
+  }
+
+  // --- the embedded page ----------------------------------------------------
+
+  function previewEnsureFrame() {
+    if (previewFrame && previewFrame.parentNode) return previewFrame;
+    // On documentElement rather than in the pane, for the reason the
+    // onboarding panel is: the artifact re-renders that subtree whenever
+    // anything in its state changes, and an iframe that is re-parented
+    // reloads. A preview that reloaded every time a TODO row was typed in
+    // would never be up long enough to look at.
+    previewFrame = document.createElement("iframe");
+    previewFrame.className = "hc-pv-frame";
+    previewFrame.setAttribute("title", "Live preview");
+    (document.documentElement || document.body).appendChild(previewFrame);
+    return previewFrame;
+  }
+
+  function previewHideFrame() {
+    if (previewFrame) previewFrame.style.display = "none";
+  }
+
+  function previewPlaceFrame(url) {
+    var slot = document.querySelector(".hc-pv-slot");
+    if (!slot || !url) { previewHideFrame(); return; }
+    var box = slot.getBoundingClientRect();
+    if (box.width < 40 || box.height < 40) { previewHideFrame(); return; }
+    var frame = previewEnsureFrame();
+    if (previewShown !== url) {
+      frame.src = url;
+      previewShown = url;
+    }
+    frame.style.display = "block";
+    frame.style.left = Math.round(box.left) + "px";
+    frame.style.top = Math.round(box.top) + "px";
+    frame.style.width = Math.round(box.width) + "px";
+    frame.style.height = Math.round(box.height) + "px";
+  }
+
+  function previewSig(state) {
+    var run = state.run || {};
+    return [state.status, state.surface, state.url || "",
+            (state.profile || {}).command || "",
+            (state.profiles || []).length,
+            (state.blockers || []).map(function (b) { return b.id; }).join(","),
+            (run.lines || []).length, run.exit_code, run.embeddable,
+            (state.ui || {}).available, (state.ui || {}).reason,
+            state.stale, previewBusy, previewSaid,
+            previewFix ? previewFix.reason : "",
+            previewRow(), state.intent ? state.intent.expected : ""].join("|");
+  }
+
+  function renderPreview(force) {
+    if (serverState.scope !== "chat") return false;
+    previewDelegate();
+    var mount = document.querySelector(".hc-preview-mount");
+    if (!mount) { previewHideFrame(); return false; }
+    previewRead(false);
+    var state = previewState;
+    if (!state) return false;
+    var sig = previewSig(state);
+    // The artifact re-rendering the pane hands back a fresh mount with no
+    // signature on it, which is the same thing as the signature changing:
+    // both mean what is on screen is not what this says.
+    if (force || mount.getAttribute("data-hc-pv-sig") !== sig) {
+      while (mount.firstChild) mount.removeChild(mount.firstChild);
+      var intent = pvIntent(state);
+      if (intent) mount.appendChild(intent);
+      if (state.stale && state.status !== "unconfigured") {
+        var banner = el("div", "hc-pv-stale",
+                        "The way this project runs may have changed.");
+        banner.appendChild(pvButton("Look again", "detect", "", "quiet"));
+        mount.appendChild(banner);
+      }
+      mount.appendChild(pvBody(state));
+      if (previewSaid) mount.appendChild(el("div", "hc-pv-err", previewSaid));
+      mount.setAttribute("data-hc-pv-sig", sig);
+    }
+    if (state.surface === "web" && state.url
+        && (state.run || {}).embeddable !== false) {
+      previewPlaceFrame(state.url);
+    } else {
+      previewHideFrame();
+    }
+    return true;
+  }
+
+  // The frame is positioned in page coordinates, so anything that moves the
+  // pane under it has to move it too -- and a sweep 700ms later is a frame
+  // sitting over the wrong part of the window in the meantime.
+  function previewWatchViewport() {
+    var again = function () {
+      if (previewState && previewState.surface === "web") {
+        previewPlaceFrame(previewState.url);
+      }
+    };
+    if (typeof window === "undefined" || !window.addEventListener) return;
+    window.addEventListener("resize", again, true);
+    window.addEventListener("scroll", again, true);
+  }
+
   function renderOnboarding(force) {
     onbDelegate();
     if (!onbNeeded()) { if (onbBox) onbClose(); return false; }
@@ -11272,6 +13014,7 @@
     var select = document.querySelector(".hc-rail-select");
     var promptBox = document.querySelector(".hc-rail-prompt");
     var understandBox = document.querySelector(".hc-rail-understand");
+    var notesBox = document.querySelector(".hc-rail-notes");
     if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
@@ -11320,9 +13063,14 @@
       }
     }
 
-    if (tabs.children.length !== 3 || force) {
+    if (tabs.children.length !== 4 || force) {
       while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
+      // In the order the work goes through them: the rows say what to do,
+      // the document says what it is for, the prompt is what both are
+      // copied into, and Understanding is where a question about any of it
+      // is asked.
       tabs.appendChild(todoTabSpan("todos", "TODOs"));
+      tabs.appendChild(todoTabSpan("notes", "Notes"));
       tabs.appendChild(todoTabSpan("prompt", "Prompt"));
       tabs.appendChild(todoTabSpan("understand", "Understanding"));
     }
@@ -11336,6 +13084,12 @@
       // With no goal selected there is no prompt and so no context to it;
       // the invitation to select one is the whole of the tab.
       if (!goal) promptCtxDrop(promptBox);
+    }
+    if (notesBox) {
+      // "flex" for the reason the two columns below it are: the stylesheet
+      // hides it with a display of its own, and an inline one is what beats
+      // that. The document and the prompts under it stack in the column.
+      notesBox.style.display = railTab === "notes" ? "flex" : "none";
     }
     if (understandBox) {
       // "flex" for the same reason the prompt column is: the stylesheet's
@@ -12611,15 +14365,21 @@
     }
     // The artifact re-materializes the header on render, so the slot is
     // refilled whenever it comes back empty.
-    if (!tabs.children || !tabs.children.length) {
-      [["overview", "Overview"], ["goals", "Goals"]].forEach(function (pair) {
+    // Three views now: what the project is, what its goals are, and the
+    // place to argue about them. Brainstorm sits last because it is where
+    // you go from the tree, not on the way to it.
+    if (!tabs.children || tabs.children.length !== 3) {
+      while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
+      [["overview", "Overview"], ["goals", "Goals"],
+       ["brainstorm", "Brainstorm"]].forEach(function (pair) {
         var tab = el("span", "hc-viewtab", pair[1]);
         tab.setAttribute("data-hc-viewtab", pair[0]);
         tab.setAttribute("role", "button");
         tabs.appendChild(tab);
       });
     }
-    var on = overviewShown() ? "overview" : "goals";
+    var on = brainstormShown() ? "brainstorm"
+      : (overviewShown() ? "overview" : "goals");
     var kids = tabs.children || [];
     var moved = false;
     for (var i = 0; i < kids.length; i += 1) {
@@ -13367,6 +15127,7 @@
       takeOverviewHash();
       renderHome();
       renderOverview();
+      renderBrainstorm();
       renderHandoff();
       renderBell();
       renderGear();
@@ -14014,7 +15775,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n<div class=\"hc-notes-head\"><span>RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div class=\"hc-notes-prompts\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's
@@ -14230,12 +15991,18 @@
       ["<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\">\n<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</sc-if>",
        chat ? "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RECOMMENDED PROMPT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">assembled from your goal document \u00b7 read-only</div>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" readonly=\"readonly\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n<div style=\"margin-top:10px;display:flex;justify-content:flex-end\"><span sc-camel-on-click=\"{{ copyPrompt }}\" style=\"padding:4px 11px;border:1px solid var(--bd2);border-radius:2px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);border-color:var(--acc)\">{{ copyPromptLabel }}</span></div>\n</sc-if>"
             : "<sc-if value=\"{{ showPrompt }}\" hint-placeholder-val=\"{{ true }}\"><div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">AGENT</div><div style=\"margin-top:5px;font:italic 11.5px/1.6 'Source Code Pro',monospace;color:var(--mut);max-width:62ch\">Run Claude Code on this goal with the self-contained context Vault has assembled. Progress appears in REVIEW.</div><details class=\"hc-promptbox\"><summary class=\"hc-promptsum\">RECOMMENDED PROMPT</summary>\n<div style=\"position:relative\"><textarea key=\"{{ selKey }}\" sc-camel-default-value=\"{{ draft }}\" ref=\"{{ draftRef }}\" sc-camel-on-input=\"{{ promptInput }}\" spellcheck=\"false\" style=\"display:block;width:100%;box-sizing:border-box;min-height:96px;max-height:300px;overflow-y:auto;resize:none;margin-top:8px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:9px 11px;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none\"></textarea>\n<span sc-camel-on-click=\"{{ gen }}\" title=\"Regenerate prompt\" style=\"position:absolute;right:8px;bottom:8px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:2px;font:13px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none\" style-hover=\"color:var(--acc);background:var(--hov)\">\u21bb</span>\n</div>\n</details></sc-if>"],
+      // The middle's one visible tab, renamed for what it now holds. The
+      // three beside it are hidden in a chat, so this word is the whole of
+      // what the reader is told the pane is.
+      [">CONTEXT</span>", chat ? ">PREVIEW</span>" : ">CONTEXT</span>"],
       // The notes box is the Context pane now: one markdown document per
       // goal, rendered as it is typed, with the prompts that fed it below.
       // The textbox pane it replaces -- objective, code, documents,
       // decisions, blockers, built -- goes dormant in BOTH scopes. Nothing
       // is deleted: every field, handler and getter behind it stays, so the
       // markup can be re-gated in one line if the document does not hold.
+      // In a chat the writing itself moved to the rail, beside the TODOs it
+      // is about; what this gate still opens there is the preview of it.
       ["showNotes: !!sel && paneTab === 'prompt'",
        "showNotes: !!sel && paneTab === 'context'"],
       ["showCtx: !!sel && paneTab === 'context',",
@@ -14247,8 +16014,17 @@
       // The pane, top to bottom: the goal's own document, then the prompts
       // it was written from. The heading rule above it went with the
       // "additional" framing -- this is not an addendum to anything.
+      //
+      // In a chat both of those sit in the rail instead -- writing belongs
+      // next to the TODOs it is about, not a column away from them -- and
+      // the middle is given over to the preview: what happens if you run
+      // what you have built. The pane is an empty mount here because what
+      // goes in it is a process's output, an address, a card saying which
+      // command has to be run first -- none of which the artifact's state
+      // knows anything about. renderPreview fills it on the sweep.
       ["<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ADDITIONAL NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:96px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>",
-       "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:360px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>"],
+       chat ? "<div class=\"hc-preview\"><div class=\"hc-preview-mount\"></div></div>"
+            : "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:360px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>"],
       // The section reports the run's state, not only a task list.
       [">AGENT TODOS</div>",
        ">AGENT STATUS</div>"],
@@ -14809,6 +16585,12 @@
                readSection: docSectionRead,
                writeSection: docSectionWrite },
     renderTodoRail: renderTodoRail,
+    renderPreview: renderPreview,
+    previewState: function () { return previewState; },
+    previewSeed: function (value) {
+      previewState = value;
+      previewAt = Date.now();
+    },
     railFields: railFields,
     todoFlushOnExit: todoFlushOnExit,
     installGoals: installGoals,
@@ -14861,6 +16643,8 @@
       restartOf: todoRestartOf,
       renderRestart: todoRestartPaint,
       copyRestart: todoRestartCopy,
+      hideRestart: todoRestartHide,
+      restartHidden: todoRestartHidden,
       openLog: function (goalId) {
         watchOpen[goalId] = true;
         todoLoadLog(goalId);
@@ -14946,6 +16730,25 @@
     overviewShown: overviewShown,
     showOverviewPage: showOverviewPage,
     overviewPage: overviewPage,
+    brainstorm: {
+      open: openBrainstorm,
+      close: closeBrainstorm,
+      shown: brainstormShown,
+      render: renderBrainstorm,
+      draw: drawBrainstorm,
+      round: brainstormRound,
+      send: brainstormSend,
+      write: brainstormWrite,
+      store: brainstormStore,
+      restore: brainstormRestore,
+      fresh: brainstormNew,
+      answers: brainstormAnswers,
+      goalRows: brainstormGoalRows,
+      target: brainstormTarget,
+      box: function () { return brainstormBox; },
+      state: function () { return bs; },
+      opening: function () { return BS_OPEN; }
+    },
     addSavedFiles: addSavedFiles,
     addSavedLink: addSavedLink,
     dropSaved: dropSaved,

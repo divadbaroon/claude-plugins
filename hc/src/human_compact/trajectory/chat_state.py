@@ -47,6 +47,16 @@ NOTICE_KINDS = ("session_stopped", "subagent_returned", "session_ended")
 # file the browser can be handed on every poll.
 NOTICE_LIMIT = 20
 _NOTICE_DETAIL = 160
+# Brainstorms are kept the way the goals are: a file beside the tree they
+# argue with, holding every conversation this project has had rather than the
+# one the browser happens to have on screen. The caps are what keeps that file
+# a file -- a conversation nobody ever started a second one of would otherwise
+# grow for as long as the project does.
+BRAINSTORM_LIMIT = 40
+BRAINSTORM_TURNS = 400
+_BRAINSTORM_TEXT = 20000
+_BRAINSTORM_TITLE = 120
+BRAINSTORM_ROLES = ("you", "engelbart")
 _SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 _COMMAND_TAG_RE = re.compile(
     r"<command-(name|message|args)>[\s\S]*?</command-\1>", re.IGNORECASE
@@ -71,6 +81,7 @@ class ChatPaths:
     goal_context: Path
     context_snapshot: Path
     notices: Path
+    brainstorms: Path
     lock_dir: Path
 
 
@@ -140,6 +151,7 @@ def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
         goal_context=session_dir / "goal_context.md",
         context_snapshot=session_dir / "context_snapshot.json",
         notices=session_dir / "notices.json",
+        brainstorms=session_dir / "brainstorms.json",
         lock_dir=session_dir / ".lock",
     )
 
@@ -1785,6 +1797,117 @@ def save_goals(
     from . import project_store
     project_store.refresh_for_session(session_id, root)
     return True
+
+
+def _brainstorm_title(messages: List[Dict[str, Any]]) -> str:
+    """What to call a conversation, taken from the first thing they said.
+
+    Never from the model's half: every brainstorm opens on the same
+    invitation, so titling by the first turn would name every conversation
+    the same thing.
+    """
+    for row in messages:
+        if row.get("role") == "you":
+            said = " ".join(str(row.get("text") or "").split())
+            if said:
+                return said[:_BRAINSTORM_TITLE]
+    return ""
+
+
+def _brainstorm_turns(value: Any) -> List[Dict[str, Any]]:
+    """The conversation, kept to the shape the panel draws.
+
+    A turn is a role this screen has and words under it; anything else came
+    from a hand-edited file or a browser that had drifted, and is dropped
+    rather than stored for the panel to trip over later.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or "")
+        text = str(row.get("text") or "")
+        if role not in BRAINSTORM_ROLES or not text.strip():
+            continue
+        out.append({"role": role, "text": text[:_BRAINSTORM_TEXT]})
+    # Bounded from the oldest end, like every other read of a conversation
+    # here: what a reader comes back to is the end of it.
+    return out[-BRAINSTORM_TURNS:]
+
+
+def load_brainstorms(
+    session_id: str, root: Optional[Path] = None
+) -> List[Dict[str, Any]]:
+    """Every brainstorm held against this chat's tree, newest first.
+
+    Read where the goals are read -- ``tree_session`` -- so the conversations
+    a project has had are the project's rather than one chat's, the same way
+    its goals are. Read without the lock for the reason ``load_notices`` is:
+    the file is only ever replaced whole.
+    """
+    p = paths(tree_session(session_id, root), root)
+    value = _read_json(p.brainstorms, {})
+    rows = value.get("chats") if isinstance(value, dict) else None
+    out: List[Dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not str(row.get("id") or ""):
+            continue
+        turns = _brainstorm_turns(row.get("messages"))
+        if not turns:
+            continue
+        out.append({
+            "id": str(row.get("id")),
+            "title": str(row.get("title") or "")[:_BRAINSTORM_TITLE]
+                     or _brainstorm_title(turns),
+            "created_at": str(row.get("created_at") or ""),
+            "updated_at": str(row.get("updated_at") or ""),
+            "messages": turns,
+        })
+    out.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+    return out
+
+
+def save_brainstorm(
+    session_id: str,
+    chat_id: str,
+    messages: Any,
+    root: Optional[Path] = None,
+    wait_s: float = 5.0,
+) -> Optional[Dict[str, Any]]:
+    """Write one brainstorm down, replacing the one it is a longer version of.
+
+    Called after each round rather than at the end of one, because there is
+    no end: the reader closes the tab. A conversation with nothing said in it
+    is not stored -- opening the screen and leaving is not a brainstorm.
+
+    ``chat_id`` names the conversation being extended; an empty one, or one
+    the file has never seen, starts a new record and the id it was given is
+    the caller's handle on it from then on.
+    """
+    turns = _brainstorm_turns(messages)
+    if not turns:
+        return None
+    session_id = tree_session(session_id, root)
+    with session_lock(session_id, root, wait_s=wait_s) as p:
+        held = load_brainstorms(session_id, root)
+        wanted = str(chat_id or "")
+        row = next((r for r in held if r["id"] == wanted), None) if wanted else None
+        now = _now_ms()
+        if row is None:
+            row = {"id": wanted or os.urandom(8).hex(), "created_at": now}
+        else:
+            held.remove(row)
+        row["messages"] = turns
+        row["title"] = _brainstorm_title(turns)
+        row["updated_at"] = now
+        # The one just written goes to the front before the sort rather than
+        # relying on it: two saves inside the same millisecond carry the same
+        # stamp, and a stable sort would leave the older of them first.
+        held.insert(0, row)
+        held.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        _atomic_json(p.brainstorms,
+                     {"version": 1, "chats": held[:BRAINSTORM_LIMIT]})
+    return dict(row)
 
 
 def _project_key(cwd: Path) -> str:

@@ -1149,7 +1149,10 @@ class BuildWatchTests(BridgeTestCase):
             "  copy: (function () { var c = box.querySelector('[data-hc-todo-restart-copy]');"
             "    return c ? [c.textContent, c.getAttribute('data-hc-todo-restart-copy')] : null; })(),"
             "  prompt: (function () { var p = box.querySelector('.hc-todo-restart-prompt');"
-            "    return p ? [p.tagName, p.textContent] : null; })() } : null;"
+            "    return p ? [p.tagName, p.textContent] : null; })(),"
+            "  hide: (function () { var h = box.querySelector('[data-hc-todo-restart-hide]');"
+            "    return h ? [h.textContent, h.getAttribute('data-hc-todo-restart-hide')] : null; })()"
+            "  } : null;"
             % json.dumps(restart))
 
     def test_the_check_in_progress_names_the_model_it_moved_to(self):
@@ -1186,11 +1189,52 @@ class BuildWatchTests(BridgeTestCase):
             self.assertIsNone(self.paint(dict(self.CHECK, status=status)), status)
         self.assertIsNone(self.paint(None))
 
+    def test_either_state_offers_a_way_to_put_the_notice_away(self):
+        # Waiting on the answer or holding it: both are the reader's to
+        # dismiss, and the button names the goal it is dismissing for.
+        self.assertEqual(["×", "g1"], self.paint(self.CHECK)["hide"])
+        self.assertEqual(["×", "g1"],
+                         self.paint(dict(self.CHECK, status="yes", prompt="p"))["hide"])
+
+    YES = {"status": "yes", "model": "sonnet", "effort": "high",
+           "from_model": "opus", "why": "a daemon holds the old code",
+           "prompt": "Restart the dev process.",
+           "at": "2026-08-26T06:37:00+00:00", "error": ""}
+
+    def test_a_dismissed_notice_stays_gone_until_the_next_build_asks_again(self):
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var yes = %s, later = %s;"
+            "var paint = function (held, goalId) {"
+            "  var box = document.createElement('div');"
+            "  return !!L.renderRestart(box, L.restartOf({ restart: held }), goalId); };"
+            "var before = paint(yes, 'g1');"
+            "L.hideRestart('g1', L.restartOf({ restart: yes }));"
+            "out = { before: before, after: paint(yes, 'g1'),"
+            # A later build's verdict is news, and so is this one's own
+            # spinner turning into an answer.
+            "  again: paint(later, 'g1'),"
+            "  checking: paint({ status: 'checking', model: 'sonnet',"
+            "                    effort: 'high', at: yes.at }, 'g1'),"
+            # And it is this goal's notice that was put away, not every goal's.
+            "  elsewhere: paint(yes, 'g2'),"
+            "  saved: JSON.parse(localStorage.getItem('hc-restart-hidden-v1')) };"
+            % (json.dumps(self.YES),
+               json.dumps(dict(self.YES, at="2026-08-27T09:00:00+00:00"))))
+        self.assertTrue(out["before"])
+        self.assertFalse(out["after"])
+        self.assertTrue(out["again"])
+        self.assertTrue(out["checking"])
+        self.assertTrue(out["elsewhere"])
+        # Written down, so a reload does not bring back what was put away.
+        self.assertEqual({"g1": "yes@2026-08-26T06:37:00+00:00"}, out["saved"])
+
     def test_the_stylesheet_carries_the_check(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         for cls in (".hc-todo-restart{", ".hc-todo-restart-spin{", "hc-todo-spin",
                     ".hc-todo-restart-from{text-decoration:line-through",
-                    ".hc-todo-restart-copy{", ".hc-todo-restart-prompt{"):
+                    ".hc-todo-restart-copy{", ".hc-todo-restart-prompt{",
+                    ".hc-todo-restart-hide{"):
             self.assertIn(cls, css)
 
 
@@ -4164,6 +4208,61 @@ class DocumentPaneTests(BridgeTestCase):
         out = self.patched_bundle("out;")
         self.assertIn("showNotes: !!sel && paneTab === 'context'", out)
 
+    def test_a_chat_writes_the_document_in_the_rail_and_reads_it_in_the_middle(self):
+        """The writing moved to the rail; the middle draws it back.
+
+        A document is written about the TODOs beside it, so the editor is a
+        tab of the same column they are -- and the wide side, which used to
+        be a second place to look for the same box, prints what is being
+        typed instead.
+        """
+        out = self.patched_bundle("out;", scope="chat")
+        rail = out[out.index('class="hc-rail-notes"'):
+                   out.index('class="hc-rail-prompt"')]
+        # The editor is in the rail, and it is the only one on the page.
+        self.assertIn("{{ notesChange }}", rail)
+        self.assertEqual(1, out.count("{{ notesChange }}"))
+        self.assertIn("hc-notes-edit", rail)
+        # The prompts that fed it come with it: they are evidence for the
+        # document, and reading them a column away from it says nothing.
+        self.assertIn("RELATED PROMPTS", rail)
+        self.assertEqual(1, out.count('<sc-for list="{{ histRows }}" as="hr"'))
+        # And the middle is not a second copy of the document: it is the
+        # mount the run preview is drawn into, which the artifact's own
+        # state knows nothing about.
+        middle = out[out.index('class="hc-preview"'):]
+        self.assertIn('class="hc-preview-mount"', middle)
+        self.assertNotIn("{{ notesOverlay }}", middle)
+        self.assertNotIn("{{ notesChange }}", middle)
+
+    def test_the_rail_reads_in_the_order_the_work_does(self):
+        # Rows, then what they are for, then the prompt both are copied
+        # into. A document filed after the prompt it feeds would be read
+        # after the thing it explains.
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertLess(out.index('class="hc-todos"'),
+                        out.index('class="hc-rail-notes"'))
+        self.assertLess(out.index('class="hc-rail-notes"'),
+                        out.index('class="hc-rail-prompt"'))
+        self.assertLess(out.index('class="hc-rail-prompt"'),
+                        out.index('class="hc-rail-understand"'))
+
+    def test_the_middle_says_which_of_the_two_it_is(self):
+        # One tab is visible in a chat, so its word is the whole label the
+        # pane gets. It said CONTEXT while it held the editor.
+        out = self.patched_bundle("out;", scope="chat")
+        self.assertIn(">PREVIEW</span>", out)
+        self.assertNotIn(">CONTEXT</span>", out)
+        self.assertIn(">CONTEXT</span>", self.patched_bundle("out;"))
+
+    def test_a_workspace_with_no_rail_keeps_the_document_where_it_was(self):
+        # The rail is a chat's. An artifact opened on its own has nowhere
+        # else to write, so nothing about its pane moves.
+        out = self.patched_bundle("out;")
+        self.assertNotIn("hc-rail-notes", out)
+        self.assertNotIn("hc-preview", out)
+        self.assertEqual(1, out.count("{{ notesChange }}"))
+
     def test_the_textbox_pane_is_dormant_in_both_scopes(self):
         # Objective / code / document / decisions / blockers / built are no
         # longer reachable, in either scope. The markup and every handler
@@ -5263,9 +5362,14 @@ class LaunchSkinTests(BridgeTestCase):
                       "!important;height:calc(100vh - var(--hc-top))!important;"
                       "padding:0 0 6px!important;border-width:0 1px 0 0!important;"
                       "border-radius:0!important}", css)
-        self.assertIn(".hc-main{flex:1 1 auto!important;order:2;"
+        # A column, because the pane's one child is a preview that takes
+        # whatever height is left. The display is !important for the same
+        # reason the width is: the artifact writes one inline.
+        self.assertIn(".hc-main{display:flex!important;flex-direction:column;"
+                      "flex:1 1 auto!important;order:2;"
                       "height:calc(100vh - var(--hc-top))!important;top:0!important;"
                       "border:0!important;border-radius:0!important", css)
+        self.assertIn(".hc-main>.hc-preview{flex:1 1 auto", css)
         self.assertRegex(css, r"\.hc-rail-right\{[^}]*border-width:0 0 0 1px;"
                               r"border-radius:0;")
         # The header is a fixed height -- two rows of --hc-row -- and

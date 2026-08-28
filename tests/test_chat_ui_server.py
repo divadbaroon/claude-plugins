@@ -836,8 +836,10 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
-                # The control is on the Context pane, under the document the
-                # prompts are evidence for. Chat scope used to be refused it.
+                # The control is on the Notes tab of the rail, under the
+                # document the prompts are evidence for. Chat scope used to
+                # be refused it.
+                self.open_notes(page)
                 trigger = page.locator(".hc-prompt-addbtn")
                 expect(trigger).to_be_visible(timeout=10_000)
                 overlay = page.locator(".hc-ask")
@@ -1170,7 +1172,7 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
-                expect(page.get_by_text("CONTEXT", exact=True)).to_be_visible(
+                expect(page.get_by_text("PREVIEW", exact=True)).to_be_visible(
                     timeout=10_000
                 )
                 for tab in ("AGENT", "REVIEW"):
@@ -1200,12 +1202,12 @@ class ChatUiServerTests(unittest.TestCase):
                     localStorage.setItem(key, JSON.stringify(saved));
                 }""")
                 page.reload(wait_until="domcontentloaded")
-                context_tab = page.get_by_text("CONTEXT", exact=True)
+                context_tab = page.get_by_text("PREVIEW", exact=True)
                 expect(context_tab).to_be_visible(timeout=10_000)
-                # What the reader sees, not what the store says: CONTEXT is
+                # What the reader sees, not what the store says: PREVIEW is
                 # the tab drawn selected -- in ink, with no accent underline
                 # (a lone tab has nothing to be underlined against) -- and
-                # the pane drawn under it is the Context pane.
+                # the pane drawn under it is the document's preview.
                 expect(context_tab).to_have_css(
                     "border-bottom-color", "rgba(0, 0, 0, 0)"
                 )
@@ -1213,13 +1215,24 @@ class ChatUiServerTests(unittest.TestCase):
                     "() => getComputedStyle(document.querySelector('.hc'))"
                     ".getPropertyValue('--ink').trim()")
                 self.assertTrue(ink)
-                # The Context pane is the goal's document, and the prompts
-                # it was written from. The textbox pane it replaced is
-                # dormant, so none of its labels are on the page at all.
+                # The pane under it is the run preview -- what happens if
+                # you run what you have built -- and not a second copy of
+                # the document. The textbox pane both replaced is dormant,
+                # so none of its labels are on the page at all.
+                expect(page.locator(".hc-preview-mount")).to_be_visible()
                 expect(page.locator('[placeholder^="Write in markdown"]')
-                       ).to_be_visible()
-                expect(page.get_by_text("RELATED PROMPTS", exact=True)
-                       ).to_be_visible()
+                       ).to_be_hidden()
+                self.open_notes(page)
+                # The writing is a tab of the rail now, between the rows it
+                # is about and the prompt it is copied into.
+                expect(page.locator('.hc-rail-right [placeholder^="Write in '
+                                    'markdown"]')).to_be_visible()
+                expect(page.locator(".hc-rail-right").get_by_text(
+                    "RELATED PROMPTS", exact=True)).to_be_visible()
+                tabs = page.locator(".hc-rail-tabs > *")
+                self.assertEqual(
+                    ["TODOs", "Notes", "Prompt", "Understanding"],
+                    tabs.all_inner_texts())
                 for gone in ("WHERE THIS SITS", "OBJECTIVE", "CODE CONTEXT",
                              "DOCUMENT CONTEXT", "DECISIONS", "ALREADY BUILT",
                              "BLOCKERS & OPEN QUESTIONS"):
@@ -1237,6 +1250,15 @@ class ChatUiServerTests(unittest.TestCase):
     DEFAULT_DOC = ""
 
     EDITOR = '[placeholder^="Write in markdown"]'
+
+    def open_notes(self, page):
+        """The document is written in the rail now, one tab over from the rows.
+
+        It sits between TODOs and Prompt -- what the rows are for, next to
+        the rows -- and the middle draws it back as a preview.
+        """
+        page.wait_for_selector(".hc-rail-tabs", timeout=15_000)
+        page.locator(".hc-rail-tabs").get_by_text("Notes", exact=True).click()
 
     def overlay_text(self, page):
         """What the reader sees rendered under their own caret."""
@@ -1268,6 +1290,7 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
                 editor = page.locator(self.EDITOR)
                 expect(editor).to_be_visible(timeout=10_000)
 
@@ -1331,6 +1354,7 @@ class ChatUiServerTests(unittest.TestCase):
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
                     page.goto(url, wait_until="domcontentloaded")
+                    self.open_notes(page)
                     editor = page.locator(self.EDITOR)
                     expect(editor).to_be_visible(timeout=10_000)
                     editor.fill(written)
@@ -1348,6 +1372,7 @@ class ChatUiServerTests(unittest.TestCase):
                     self.assertIn("\u2022 we chose sqlite", self.overlay_text(page))
 
                     page.reload(wait_until="domcontentloaded")
+                    self.open_notes(page)
                     expect(page.locator(self.EDITOR)).to_be_visible(
                         timeout=10_000)
                     self.assertEqual(written,
@@ -1365,6 +1390,7 @@ class ChatUiServerTests(unittest.TestCase):
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
                     page.goto(second, wait_until="domcontentloaded")
+                    self.open_notes(page)
                     expect(page.locator(self.EDITOR)).to_be_visible(
                         timeout=10_000)
                     self.assertEqual(written,
@@ -1405,6 +1431,7 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
                 expect(page.get_by_text(
                     "No prompts of yours are tied to this goal yet.",
                     exact=True)).to_be_visible(timeout=10_000)
@@ -1471,6 +1498,7 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
                 expect(page.get_by_text("new human prompt", exact=True)
                        ).to_be_visible(timeout=10_000)
 
@@ -1508,6 +1536,7 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
                 expect(page.get_by_text("new human prompt", exact=True)
                        ).to_be_visible(timeout=10_000)
                 expect(page.get_by_text("automatic", exact=True)
@@ -1529,12 +1558,13 @@ class ChatUiServerTests(unittest.TestCase):
         return links
 
     def test_the_prompt_rail_is_the_prompt_and_a_real_copy(self):
-        """The prompt is a column, not a tab.
+        """The prompt is a column of the rail, and the document is beside it.
 
-        It used to live behind PROMPT, which swapped the goal's document out
-        for it; the two are read together, so the rail shows both at once and
-        the tab is gone. The text is still the artifact's own assembly -- the
-        rail prints the same `draft` the pane did.
+        Both are the rail's now -- the document one tab over from the prompt
+        it feeds -- and neither swaps the other out of the middle: what the
+        middle draws is the document's preview, which stays legible while the
+        prompt tab is the one open. The text is still the artifact's own
+        assembly -- the rail prints the same `draft` the pane did.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1566,15 +1596,21 @@ class ChatUiServerTests(unittest.TestCase):
                 )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
-                # Both at once: the document stays editable while the prompt
-                # it assembles is on screen beside it.
+                # One editor, and it is the rail's.
                 rail = page.locator(".hc-rail-right")
                 expect(rail).to_be_visible()
                 expect(page.locator(self.EDITOR)).to_have_count(1)
+                expect(rail.locator(self.EDITOR)).to_have_count(1)
 
                 open_prompt_tab(page)
+                # The rail's tabs take turns: reading the prompt puts the
+                # editor away. The middle is not one of the two -- it is
+                # the run preview, and it stays whichever tab is open.
+                expect(page.locator(self.EDITOR)).to_be_hidden()
+                expect(page.locator(".hc-preview-mount")).to_be_visible()
                 # The tab prints the prompt and offers no box to type in:
                 # what is on screen is the whole of what a build would send.
                 expect(rail.locator(".hc-rail-ctx-body")).to_have_count(1)
@@ -1644,6 +1680,7 @@ class ChatUiServerTests(unittest.TestCase):
                 )
                 page = context.new_page()
                 page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
                 open_prompt_tab(page)
