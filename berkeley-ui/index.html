@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Berkeley Research Directory</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand"><span class="mark">Berkeley</span><span>Research Directory</span></div>
+  <nav class="tabs" id="tabs">
+    <button type="button" class="tab is-on" data-view="search">Search</button>
+    <button type="button" class="tab" data-view="browse">Browse</button>
+  </nav>
+  <div class="topbar-end">
+    <span class="counts" id="counts"></span>
+    <button type="button" class="ghost" id="settings-btn">Connection</button>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="panel notice" id="notice" hidden>
+    <h2 id="notice-title"></h2>
+    <p id="notice-body"></p>
+    <button type="button" class="primary" id="notice-action" hidden></button>
+  </section>
+
+  <section class="view" id="view-search">
+    <form class="searchbar" id="search-form" autocomplete="off">
+      <input type="search" id="q" placeholder="Ask for what you're looking for — &ldquo;machine learning for health&rdquo;, &ldquo;coral reef symbiosis&rdquo;">
+      <button type="submit" class="primary">Search</button>
+    </form>
+
+    <div class="filters">
+      <label class="field">
+        <span>Role</span>
+        <select id="f-role">
+          <option value="">Everyone</option>
+          <option value="professor">Professors</option>
+          <option value="student">PhD students</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Department</span>
+        <select id="f-dept"><option value="">All departments</option></select>
+      </label>
+      <label class="field grow">
+        <span>Research interest</span>
+        <input type="search" id="f-interest" placeholder="e.g. photonics">
+      </label>
+      <button type="button" class="ghost" id="f-clear">Clear</button>
+    </div>
+
+    <p class="status" id="search-status"></p>
+    <ul class="results" id="results"></ul>
+  </section>
+
+  <section class="view browse" id="view-browse" hidden>
+    <aside class="col">
+      <h2>Departments</h2>
+      <ul class="list" id="dept-list"></ul>
+    </aside>
+    <aside class="col wide">
+      <h2 id="people-head">People</h2>
+      <input type="search" class="col-filter" id="people-filter" placeholder="Filter by name">
+      <div id="people-list"></div>
+    </aside>
+  </section>
+
+</main>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="detail" id="detail" hidden aria-live="polite"></aside>
+
+<dialog id="settings">
+  <form method="dialog" class="settings-form" id="settings-form">
+    <h2>Supabase connection</h2>
+    <p class="hint">The anon (public) key only — never the service-role key.</p>
+    <label class="field">
+      <span>Project URL</span>
+      <input type="text" id="s-url" placeholder="https://yourproject.supabase.co" required>
+    </label>
+    <label class="field">
+      <span>Anon key</span>
+      <input type="text" id="s-key" placeholder="eyJhbGciOi..." required>
+    </label>
+    <div class="settings-actions">
+      <button type="button" class="ghost" id="s-cancel">Cancel</button>
+      <button type="submit" class="primary" id="s-save" value="save">Connect</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
