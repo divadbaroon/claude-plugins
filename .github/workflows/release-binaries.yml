@@ -1,0 +1,38 @@
+name: release-binaries
+
+# Build the standalone engelbart binaries and attach them, with install.sh,
+# to the release for the pushed tag. install.sh downloads from
+# releases/latest/download/, so publishing the release is what ships them.
+on:
+  push:
+    tags: ['engelbart-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: npm test
+        working-directory: engelbart
+      - run: scripts/build-binary.sh darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl
+        working-directory: engelbart
+      # The compiled binary must verify and plan from its embedded wheel alone.
+      - run: engelbart/dist/engelbart-linux-x64 install --dry-run
+      - if: github.ref_type == 'tag'
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Standalone engelbart binaries (no Node, npm, or Python required). Install with: curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh" \
+            engelbart/dist/engelbart-* engelbart/scripts/install.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
