@@ -11,7 +11,7 @@
 set -eu
 
 REPO="divadbaroon/claude-plugins"
-BASE="https://github.com/$REPO/releases/latest/download"
+BASE="https://github.com/$REPO/releases/download/engelbart-latest"
 
 say() { printf '%s\n' "$*" >&2; }
 fail() { say "engelbart: $*"; exit 1; }
