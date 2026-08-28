@@ -1172,22 +1172,22 @@ class ChatUiServerTests(unittest.TestCase):
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
                 page.goto(url, wait_until="domcontentloaded")
-                expect(page.get_by_text("PREVIEW", exact=True)).to_be_visible(
+                expect(page.locator(".hc-preview-mount")).to_be_visible(
                     timeout=10_000
                 )
-                for tab in ("AGENT", "REVIEW"):
-                    expect(page.get_by_text(tab, exact=True)).to_be_hidden()
-                # CONTEXT is the only tab left. The assembled prompt did not
-                # go away with the tab that used to hold it -- it is on
-                # screen the whole time now, in its own rail.
+                # One pane needs no tab to name it: the whole bar between the
+                # title and the preview is off the paint. The assembled
+                # prompt did not go away with the tab that used to hold it --
+                # it is on screen the whole time now, in its own rail.
                 #
-                # The tab bar is named by a template patch, so "PROMPT is
-                # hidden inside .hc-tabs" is also true of a page where the
-                # patch missed and .hc-tabs does not exist. Prove the bar is
-                # there before proving what is not in it.
+                # The tab bar is named by a template patch, so "the bar is
+                # hidden" is also true of a page where the patch missed and
+                # .hc-tabs does not exist. Prove the bar is there before
+                # proving none of it is on screen.
                 expect(page.locator(".hc-tabs")).to_have_count(1)
-                expect(page.locator(".hc-tabs").get_by_text(
-                    "PROMPT", exact=True)).to_be_hidden()
+                expect(page.locator(".hc-tabs")).to_be_hidden()
+                for tab in ("PREVIEW", "PROMPT", "AGENT", "REVIEW"):
+                    expect(page.get_by_text(tab, exact=True)).to_be_hidden()
                 expect(page.locator(".hc-rail-tabs").get_by_text(
                     "Prompt", exact=True)).to_be_visible()
                 expect(page.locator(".hc-rail-tabs").get_by_text(
@@ -1202,24 +1202,15 @@ class ChatUiServerTests(unittest.TestCase):
                     localStorage.setItem(key, JSON.stringify(saved));
                 }""")
                 page.reload(wait_until="domcontentloaded")
-                context_tab = page.get_by_text("PREVIEW", exact=True)
-                expect(context_tab).to_be_visible(timeout=10_000)
-                # What the reader sees, not what the store says: PREVIEW is
-                # the tab drawn selected -- in ink, with no accent underline
-                # (a lone tab has nothing to be underlined against) -- and
-                # the pane drawn under it is the document's preview.
-                expect(context_tab).to_have_css(
-                    "border-bottom-color", "rgba(0, 0, 0, 0)"
+                # The pane is the run preview -- what happens if you run
+                # what you have built -- and not a second copy of the
+                # document, with no tab bar over it either way. The textbox
+                # pane both replaced is dormant, so none of its labels are
+                # on the page at all.
+                expect(page.locator(".hc-preview-mount")).to_be_visible(
+                    timeout=10_000
                 )
-                ink = page.evaluate(
-                    "() => getComputedStyle(document.querySelector('.hc'))"
-                    ".getPropertyValue('--ink').trim()")
-                self.assertTrue(ink)
-                # The pane under it is the run preview -- what happens if
-                # you run what you have built -- and not a second copy of
-                # the document. The textbox pane both replaced is dormant,
-                # so none of its labels are on the page at all.
-                expect(page.locator(".hc-preview-mount")).to_be_visible()
+                expect(page.get_by_text("PREVIEW", exact=True)).to_be_hidden()
                 expect(page.locator('[placeholder^="Write in markdown"]')
                        ).to_be_hidden()
                 self.open_notes(page)
@@ -1838,13 +1829,13 @@ class ChatUiServerTests(unittest.TestCase):
                 browser.close()
 
     def test_a_source_added_here_outlives_the_page_and_the_server(self):
-        """SOURCES is one line naming the records, and a box that edits them.
+        """The record is the server's, not the tab's.
 
-        The pane that held these as three textboxes is dormant, and the rail
-        of pills it became is gone too: adding and removing happen in one
-        box, and the line under the title names what is attached. Nothing
-        new is written -- both lists are the artifact's own, so an edit
-        lands on set_sources by the path that was already there.
+        The chip rail that edited sources above the preview is off the
+        paint now -- the strip between the title and the preview is gone --
+        so the pane offers no source control. The record and its path
+        remain: set_sources lands on the same store the rail wrote to, and
+        a server that restarts reads it back.
         """
         try:
             from playwright.sync_api import expect, sync_playwright
@@ -1870,51 +1861,29 @@ class ChatUiServerTests(unittest.TestCase):
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
                     page.goto(url, wait_until="domcontentloaded")
-                    expect(page.locator(".hc-sources")).to_be_visible(
+                    expect(page.locator(".hc-preview-mount")).to_be_visible(
                         timeout=10_000)
-                    expect(page.locator(".hc-src")).to_have_count(0)
+                    # The rail's node is still built -- the artifact owns it
+                    # -- but none of it is on screen, the add control
+                    # included.
+                    expect(page.locator(".hc-sources")).to_have_count(1)
+                    expect(page.locator(".hc-sources")).to_be_hidden()
+                    expect(page.get_by_text("+ Add source", exact=True)
+                           ).to_be_hidden()
 
-                    page.get_by_text("+ Add source", exact=True).click()
-                    dialog = page.locator(".hc-ask-box")
-                    expect(dialog).to_be_visible()
-                    # Which kind, then the value: the store keeps three, and
-                    # a placeholder row is not one of them.
-                    dialog.get_by_text("GitHub repo", exact=True).click()
-                    dialog.locator("input").fill("owner/repo")
-                    page.keyboard.press("Enter")
-
-                    chip = page.locator(".hc-src")
-                    expect(chip).to_have_count(1)
-                    expect(chip.locator(".hc-src-tag")).to_have_text("GITHUB")
-                    expect(chip.locator(".hc-src-label")).to_have_text(
-                        "owner/repo")
-
-                    page.get_by_text("+ Add source", exact=True).click()
-                    page.locator(".hc-ask-box").get_by_text(
-                        "Document", exact=True).click()
-                    page.locator(".hc-ask-box input").fill("design.md")
-                    page.keyboard.press("Enter")
-                    expect(page.locator(".hc-src")).to_have_count(2)
-
-                    deadline = time.monotonic() + 6
-                    stored = []
-                    while time.monotonic() < deadline:
-                        stored = sources(url)
-                        if len(stored) == 2:
-                            break
-                        time.sleep(0.1)
+                    self.assertTrue(post_json(
+                        url + "/api/op",
+                        {"op": "set_sources", "goal_id": "a1", "sources": [
+                            {"type": "github", "label": "owner/repo"},
+                            {"type": "doc", "label": "design.md"},
+                        ]},
+                        {"Origin": url},
+                    )["ok"])
                     self.assertEqual(
                         [("github", "owner/repo"), ("doc", "design.md")],
-                        [(row["type"], row["label"]) for row in stored],
+                        [(row["type"], row["label"])
+                         for row in sources(url)],
                     )
-
-                    # A reload of the same page reads them back.
-                    page.reload(wait_until="domcontentloaded")
-                    expect(page.locator(".hc-src")).to_have_count(
-                        2, timeout=10_000)
-
-                    # And so does a browser that never saw the page that
-                    # wrote them: the record is the server's, not the tab's.
                     page.close()
 
                 with server_for(self.a) as second:
@@ -1923,27 +1892,16 @@ class ChatUiServerTests(unittest.TestCase):
                         [(row["type"], row["label"])
                          for row in sources(second)],
                     )
-                    fresh = browser.new_context(
-                        viewport={"width": 1400, "height": 900})
-                    page = fresh.new_page()
-                    page.goto(second, wait_until="domcontentloaded")
-                    expect(page.locator(".hc-src")).to_have_count(
-                        2, timeout=10_000)
-
                     # Removing one is the same round trip in reverse.
-                    page.locator(".hc-src").first.locator(
-                        ".hc-src-rm").click()
-                    expect(page.locator(".hc-src")).to_have_count(1)
-                    deadline = time.monotonic() + 6
-                    while time.monotonic() < deadline:
-                        stored = sources(second)
-                        if len(stored) == 1:
-                            break
-                        time.sleep(0.1)
+                    self.assertTrue(post_json(
+                        second + "/api/op",
+                        {"op": "set_sources", "goal_id": "a1",
+                         "sources": [{"type": "doc", "label": "design.md"}]},
+                        {"Origin": second},
+                    )["ok"])
                     self.assertEqual([("doc", "design.md")],
                                      [(row["type"], row["label"])
-                                      for row in stored])
-                    fresh.close()
+                                      for row in sources(second)])
             finally:
                 browser.close()
 
