@@ -4,8 +4,12 @@ Install `/bart` — chat-scoped goal workspaces for Claude Code — with one
 command:
 
 ```bash
-npx engelbart-cli
+curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh
 ```
+
+That downloads a standalone binary -- no Node, npm, or Python needed first --
+verifies it against its published SHA-256, and runs the installer. If you
+already have Node, `npx engelbart-cli` does exactly the same thing.
 
 The installer takes no required options. It installs the `hc` runtime, the
 Claude Code hooks, and the `/bart` command; connects this machine to your

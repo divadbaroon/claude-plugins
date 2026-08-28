@@ -239,7 +239,7 @@ async function run(deps = {}) {
       output.write(usage());
       return 0;
     }
-    const env = deps.env || process.env;
+    let env = deps.env || process.env;
     const homedir = deps.homedir || os.homedir();
     const managedRoot = path.resolve(
       deps.managedRoot
@@ -268,11 +268,25 @@ async function run(deps = {}) {
       output,
     });
     const packageRoot = deps.packageRoot || path.resolve(__dirname, '..');
-    const packageJson = require(path.join(packageRoot, 'package.json'));
+    // Injected by the compiled (bun --compile) entry, where __dirname points
+    // into the binary's virtual filesystem and a runtime require cannot work.
+    const packageJson = deps.packageJson || require(path.join(packageRoot, 'package.json'));
     const platform = deps.platform || process.platform;
     const arch = deps.arch || process.arch;
     const target = supportedTarget(platform, arch, deps.processReport);
     const vendor = inspectVendor(packageRoot, packageJson.version);
+
+    // Claude Code is a hard requirement, but "go install it" is a dead end on
+    // a blank machine. Where there is a person to ask, offer to run
+    // Anthropic's official installer; everywhere else -- CI, pipes, dry runs
+    // -- the requirement stays an error, exactly as before.
+    if (!options.dryRun && canPrompt(deps)
+        && !(deps.claudeOnPath || claudeOnPath)(env, deps.spawn)) {
+      env = await (deps.offerClaudeCode || offerClaudeCode)({
+        env, output, errorOutput, deps,
+      });
+      authDeps.env = env;
+    }
 
     let reach = null;
 
@@ -293,7 +307,7 @@ async function run(deps = {}) {
         processReport: deps.processReport,
         output,
         errorOutput,
-        deps: deps.installerDeps || {},
+        deps: { env, ...(deps.installerDeps || {}) },
       });
       // Only promise `hc` in this terminal once the shell can actually find it.
       const launcher = installed && installed.launcher;
@@ -413,6 +427,68 @@ async function run(deps = {}) {
   }
 }
 
+const CLAUDE_INSTALL_URL = 'https://claude.ai/install.sh';
+
+/* Does `claude` answer on this PATH? A throwing spawn and a nonzero exit both
+ * mean no; install() re-checks with the full version gate afterwards, so this
+ * only decides whether to offer, never whether to proceed.
+ */
+function claudeOnPath(env, spawn) {
+  const run = spawn || require('child_process').spawnSync;
+  try {
+    const done = run('claude', ['--version'], {
+      env,
+      encoding: 'utf8',
+      timeout: 20000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return Boolean(done && !done.error && done.status === 0);
+  } catch (error) {
+    return false;
+  }
+}
+
+function askYesNo(question, deps = {}) {
+  if (deps.answer !== undefined) return Promise.resolve(Boolean(deps.answer));
+  const readline = require('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (line) => {
+      rl.close();
+      resolve(/^\s*(y|yes)?\s*$/i.test(line));
+    });
+  });
+}
+
+/* Run Anthropic's official Claude Code installer for someone who said yes.
+ *
+ * The installer wires new shells but not this process, so on success the
+ * returned env reaches its ~/.local/bin directly; install()'s own preflight
+ * then judges the result. Declining, or an installer that fails, returns the
+ * env unchanged and the previous error path says what to do.
+ */
+async function offerClaudeCode({ env, output, errorOutput, deps = {} }) {
+  const yes = await askYesNo(
+    'Claude Code is required and was not found on this machine.\n'
+    + `Install it now with Anthropic's official installer (${CLAUDE_INSTALL_URL})? [Y/n] `,
+    deps,
+  );
+  if (!yes) return env;
+  output.write('\n');
+  const run = deps.spawn || require('child_process').spawnSync;
+  const done = run('bash', ['-c', `curl -fsSL ${CLAUDE_INSTALL_URL} | bash`], {
+    env,
+    stdio: 'inherit',
+  });
+  if (!done || done.error || done.status !== 0) {
+    errorOutput.write('\nThe Claude Code installer did not finish; install it '
+      + 'manually and re-run this command.\n');
+    return env;
+  }
+  const localBin = path.join(deps.homedir || os.homedir(), '.local', 'bin');
+  return { ...env, PATH: `${localBin}${path.delimiter}${env.PATH || ''}` };
+}
+
 /* Open the setup page for someone who has just installed.
  *
  * The launcher does the work -- minting a workspace, starting a server and
@@ -448,6 +524,8 @@ module.exports = {
   InputCancelled,
   UsageError,
   canPrompt,
+  claudeOnPath,
+  offerClaudeCode,
   numericChoice,
   openSetup,
   parseArgs,

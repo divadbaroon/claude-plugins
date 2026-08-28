@@ -762,3 +762,97 @@ test('a reinstall on an already-connected machine points at the stored key', asy
   // --dry-run never touches the account, so the reused-key line must not fire.
   assert.doesNotMatch(output.read(), /engelbart env/);
 });
+
+// Claude Code is a hard requirement, but a blank machine deserves an offer,
+// not a dead end. The offer only exists where a person can answer it.
+test('a missing Claude Code is offered interactively, and the accepted env reaches install', async () => {
+  const { claudeOnPath, offerClaudeCode } = require('../lib/cli');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
+  try {
+    fixturePackage(root);
+    let installEnv = null;
+    const code = await run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeOnPath: () => false,
+      offerClaudeCode: async ({ env }) => ({ ...env, PATH: `/home/x/.local/bin:${env.PATH}` }),
+      install: async (options) => { installEnv = options.deps.env; return { launcher: null }; },
+      readCredentials: () => null,
+    });
+    assert.equal(code, 0);
+    assert.equal(installEnv.PATH, '/home/x/.local/bin:/usr/bin');
+    assert.equal(typeof claudeOnPath, 'function');
+    assert.equal(typeof offerClaudeCode, 'function');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('no person, no offer: non-interactive installs never probe for Claude Code', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
+  try {
+    fixturePackage(root);
+    let probed = false;
+    await run({
+      argv: ['--local-only', '--non-interactive', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      interactive: false,
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeOnPath: () => { probed = true; return false; },
+      offerClaudeCode: async () => { throw new Error('must not be offered'); },
+      install: async () => ({ launcher: null }),
+    });
+    assert.equal(probed, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the offer runs the official installer on yes and extends PATH; declining changes nothing', async () => {
+  const { offerClaudeCode } = require('../lib/cli');
+  const ran = [];
+  const spawn = (command, args) => { ran.push([command, ...args]); return { status: 0 }; };
+  const env = { PATH: '/usr/bin' };
+  const accepted = await offerClaudeCode({
+    env,
+    output: capture().stream,
+    errorOutput: capture().stream,
+    deps: { answer: true, spawn, homedir: '/home/x' },
+  });
+  assert.equal(ran.length, 1);
+  assert.match(ran[0].join(' '), /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
+  assert.equal(accepted.PATH, `/home/x/.local/bin${path.delimiter}/usr/bin`);
+
+  const declined = await offerClaudeCode({
+    env,
+    output: capture().stream,
+    errorOutput: capture().stream,
+    deps: { answer: false, spawn: () => { throw new Error('must not run'); } },
+  });
+  assert.equal(declined, env);
+});
+
+test('an installer that fails leaves the env alone and says to install manually', async () => {
+  const { offerClaudeCode } = require('../lib/cli');
+  const errors = capture();
+  const env = { PATH: '/usr/bin' };
+  const result = await offerClaudeCode({
+    env,
+    output: capture().stream,
+    errorOutput: errors.stream,
+    deps: { answer: true, spawn: () => ({ status: 1 }) },
+  });
+  assert.equal(result, env);
+  assert.match(errors.read(), /install it manually/);
+});
