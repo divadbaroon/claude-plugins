@@ -3079,8 +3079,21 @@
       ".hc-overview-srcsay[data-hc-bad]{color:var(--bad,#a12d2d)}",
       // The two pages of the overview box. One is up at a time; which is
       // written on the box, so a redraw cannot lose the reader's place.
-      ".hc-overview-main,.hc-saved{display:none}",
-      ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on]{display:block}",
+      ".hc-overview-main,.hc-saved,.hc-docs{display:none}",
+      ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on],.hc-docs[data-hc-on]{display:block}",
+      ".hc-docs-list{display:flex;flex-direction:column;gap:12px;max-width:680px}",
+      ".hc-docs-card{border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:14px 18px}",
+      ".hc-docs-q{font:600 12px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-docs-a{margin-top:5px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
+      ".hc-docs-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-docs-steps{margin:8px 0 0;padding-left:18px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
+      ".hc-docs-step{margin-top:3px}",
+      ".hc-docs-reach{margin-top:22px;border-top:1px solid var(--bd,#e3e3e3);padding-top:14px;max-width:680px}",
+      ".hc-docs-reach-row{display:flex;gap:14px;padding:9px 2px;border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-docs-reach-row:last-child{border-bottom:0}",
+      ".hc-docs-reach-where{flex:none;width:64px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding-top:2px}",
+      ".hc-docs-reach-at{font-size:12px;color:var(--ink,#111);overflow-wrap:anywhere}",
+      ".hc-docs-reach-note{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-top:1px}",
       ".hc-saved-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
       ".hc-saved-acts{display:flex;gap:9px;align-items:center;margin:0 2px 14px}",
       ".hc-saved-link{flex:1 1 auto;width:auto;max-width:520px}",
@@ -4811,6 +4824,96 @@
     return page;
   }
 
+  // --- the docs: the questions a reader arrives with ----------------------
+  //
+  // A static page of the box, beside the shelf. Nothing here is fetched or
+  // saved -- the answers are the same for every project, so they are
+  // written here once. The one people come for is credit: inference and
+  // builds spend the Claude credit issued with an Engelbart account, and
+  // when it is used up the fix is a person, not a setting -- which is why
+  // the ways to reach one are the bottom of the page.
+
+  // Placeholders, all three: nothing in the repository records where the
+  // team actually answers. Swap these before anyone is pointed here.
+  var DOCS_REACH = [
+    { where: "discord", at: "discord.gg/engelbart",
+      note: "Fastest. Post in #help and someone will pick it up." },
+    { where: "phone", at: "+1 (555) 010-0100",
+      note: "If you are stuck mid-session and nothing else answers." },
+    { where: "email", at: "help@engelbart.dev",
+      note: "For anything that can wait a day." },
+  ];
+
+  var DOCS_FAQ = [
+    { q: "What is this workspace?",
+      a: "Your goals, plans, and problems, inferred from your Claude Code"
+         + " conversations and kept in front of the model while you build."
+         + " Nothing is analyzed until /goals-ui runs in a chat, and the"
+         + " document it builds is injected back as context." },
+    { q: "Where does my data live?",
+      a: "On this machine. Hooks record each chat's own prompts and events"
+         + " locally, owner-only; the server answers 127.0.0.1 and nobody"
+         + " else. Nothing leaves except the model calls your own claude"
+         + " CLI makes." },
+    { q: "Can I edit what it writes?",
+      a: "Yes -- every field on the overview and every goal is yours to"
+         + " retitle, rewrite, or delete. Inference appends under its own"
+         + " headings and never overwrites what you typed." },
+    { q: "What does Build do?",
+      a: "Picked TODO rows go to a fresh claude session in this project's"
+         + " checkout. A row that asks a question stops and waits in the"
+         + " rail; answer it there and the session continues." },
+    { q: "What if I run out of tokens?",
+      a: "Goal inference and builds spend the Claude credit issued with"
+         + " your Engelbart account. When it is used up they stop -- your"
+         + " goals and notes are safe on disk, and nothing is lost.",
+      steps: [
+        "Run engelbart auth in a terminal to see what is left of your"
+        + " credit.",
+        "If it reads used up, reach out to us below and we will top it up.",
+        "Keep working meanwhile: the workspace still opens, and everything"
+        + " you type is saved locally." ] },
+  ];
+
+  function docsNode() {
+    var page = el("div", "hc-docs");
+    page.setAttribute("data-hc-page", "docs");
+    var head = el("div", "hc-overview-ctxhead");
+    head.appendChild(el("div", "hc-overview-label", "docs"));
+    head.appendChild(el("span", "hc-docs-note",
+                        "the short answers · reach us at the bottom"));
+    page.appendChild(head);
+    var list = el("div", "hc-docs-list");
+    DOCS_FAQ.forEach(function (row) {
+      var card = el("div", "hc-docs-card");
+      card.appendChild(el("div", "hc-docs-q", row.q));
+      card.appendChild(el("div", "hc-docs-a", row.a));
+      if (row.steps) {
+        var steps = el("ol", "hc-docs-steps");
+        row.steps.forEach(function (step) {
+          steps.appendChild(el("li", "hc-docs-step", step));
+        });
+        card.appendChild(steps);
+      }
+      list.appendChild(card);
+    });
+    page.appendChild(list);
+    var reach = el("div", "hc-docs-reach");
+    reach.appendChild(el("div", "hc-overview-label",
+                         "out of tokens? reach us"));
+    DOCS_REACH.forEach(function (row) {
+      var line = el("div", "hc-docs-reach-row");
+      line.appendChild(el("span", "hc-docs-reach-where", row.where));
+      var body = el("div", "hc-docs-reach-body");
+      body.appendChild(el("div", "hc-docs-reach-at", row.at));
+      body.appendChild(el("div", "hc-docs-reach-note", row.note));
+      line.appendChild(body);
+      reach.appendChild(line);
+    });
+    page.appendChild(reach);
+    return page;
+  }
+
   // Posted whole, the way the sources are: one array in the record, so
   // there is no second place for a saved thing to half-exist.
   function saveShelf(rows, note) {
@@ -5195,11 +5298,17 @@
     var shelf = el("span", "hc-overview-tab", "SAVED");
     shelf.setAttribute("data-hc-overview-tab", "saved");
     shelf.setAttribute("role", "button");
+    // The docs sit before GOALS because GOALS is not a page -- it is the
+    // way back to the tree, and the exit reads best at the end of the row.
+    var docs = el("span", "hc-overview-tab", "DOCS");
+    docs.setAttribute("data-hc-overview-tab", "docs");
+    docs.setAttribute("role", "button");
     var goals = el("span", "hc-overview-tab", "GOALS");
     goals.setAttribute("data-hc-overview-tab", "goals");
     goals.setAttribute("role", "button");
     tabs.appendChild(over);
     tabs.appendChild(shelf);
+    tabs.appendChild(docs);
     tabs.appendChild(goals);
     box.appendChild(tabs);
     // Everything below the tabs that is the overview proper, so the shelf
@@ -5366,6 +5475,7 @@
     context.appendChild(repo);
     main.appendChild(context);
     box.appendChild(savedNode(who));
+    box.appendChild(docsNode());
     box.appendChild(addSourceModal());
     return box;
   }
@@ -5961,7 +6071,8 @@
 
   function showOverviewPage(which) {
     if (!overviewBox) return false;
-    var want = str(which) === "saved" ? "saved" : "overview";
+    var name = str(which);
+    var want = name === "saved" || name === "docs" ? name : "overview";
     overviewBox.setAttribute("data-hc-page-on", want);
     kids(overviewBox).forEach(function (child) {
       var page = child.getAttribute && child.getAttribute("data-hc-page");
