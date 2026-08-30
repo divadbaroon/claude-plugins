@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .secure_io import atomic_write_json, atomic_write_text, secure_dir
+from ..platform_compat import IS_WINDOWS
 
 RUNS_DIRNAME = "agent-runs"
 PENDING_NAME = "pending.json"
@@ -351,6 +352,54 @@ def _write_expect_launch(directory: Path, goal_id: str, command: List[str],
     return path
 
 
+def _write_windows_launch(directory: Path, goal_id: str, cwd: str,
+                          command: List[str], send: bool) -> Path:
+    """The Windows counterpart of the POSIX launch script: a .cmd batch file.
+
+    Windows has no ``expect`` and no zsh ``print -z``, so the "pre-fill the
+    composer but let the user press Enter" trick the mac path uses is not
+    reachable here. The honest fallbacks are the same two the POSIX non-zsh
+    branch already falls back to:
+
+      * ``send``    — run the session immediately (the run was asked for), then
+                      leave the shell open so its output stays on screen.
+      * not ``send`` — land in the project with the command printed, for the
+                      user to run themselves.
+
+    The command is written to a sidecar file and shown with ``type`` rather than
+    ``echo`` so no goal-derived value is ever parsed by cmd for display, and it
+    is run in ``send`` mode by cmd re-parsing the list2cmdline form (our tokens
+    carry no cmd metacharacters). ``cd /d`` also crosses drive letters, which a
+    bare ``cd`` on Windows will not.
+    """
+    import subprocess
+    line = subprocess.list2cmdline(command)   # tokens are our own, validated
+    path = directory / f"{goal_id}.cmd"
+    if send:
+        path.write_text(
+            "@echo off\r\n"
+            ":: Written by hc. Runs the goal's session immediately, because\r\n"
+            ":: the run was asked for in the Goals UI.\r\n"
+            f'cd /d "{cwd}" || exit /b 1\r\n'
+            f"{line}\r\n",
+            encoding="utf-8")
+        return path
+    cmdline = directory / f"{goal_id}.cmdline.txt"
+    cmdline.write_text(line + "\r\n", encoding="utf-8")
+    path.write_text(
+        "@echo off\r\n"
+        ":: Written by hc so a goal can be opened in its own project.\r\n"
+        ":: Nothing runs on its own: the command is printed, you run it.\r\n"
+        f'cd /d "{cwd}"\r\n'
+        "echo(\r\n"
+        "echo   run this to start the session:\r\n"
+        "echo(\r\n"
+        f'type "{cmdline}"\r\n'
+        "echo(\r\n",
+        encoding="utf-8")
+    return path
+
+
 def write_launch_script(trajdir: Path, goal_id: str, cwd: str,
                         command: List[str], prompt: str = "",
                         send: bool = False) -> Path:
@@ -370,6 +419,10 @@ def write_launch_script(trajdir: Path, goal_id: str, cwd: str,
         raise ValueError("invalid goal id")
     directory = runs_dir(trajdir) / "launch"
     secure_dir(directory, Path(trajdir).parent)
+
+    if IS_WINDOWS:
+        return _write_windows_launch(directory, goal_id, cwd, command, send)
+
     line = " ".join(shlex.quote(part) for part in command)
 
     if send:
@@ -515,6 +568,30 @@ end tell
 """
 
 
+def _open_windows_terminal(script: Path) -> str:
+    """Open *script* (a .cmd) in a new Windows terminal window, kept open.
+
+    Prefers Windows Terminal (``wt.exe``) when it is on PATH; otherwise falls
+    back to ``start`` opening a classic console. Either way the batch file runs
+    under ``cmd /k`` so the window survives the script — for a printed command
+    the user still has a prompt to run it in, and for an auto-run session the
+    output stays on screen after Claude exits. A fresh window on Windows comes
+    to the foreground on its own, so there is no window to raise or track.
+    """
+    import shutil
+    import subprocess
+    inner = ["cmd", "/k", str(script)]
+    wt = shutil.which("wt")
+    if wt:
+        # `wt <cmd>` opens a new tab/window running that command line.
+        subprocess.run([wt, *inner], check=True, timeout=15)
+        return "Windows Terminal"
+    # `start "" <cmd>` detaches a new console window; the empty title keeps
+    # `start` from treating a quoted first argument as the window title.
+    subprocess.run(["cmd", "/c", "start", "", *inner], check=True, timeout=15)
+    return "cmd"
+
+
 def open_terminal(script: Path, app: Optional[str] = None,
                   foreground: bool = True, opened_window=None) -> str:
     """Open *script* in one terminal window. Returns the app it used.
@@ -527,6 +604,8 @@ def open_terminal(script: Path, app: Optional[str] = None,
     import sys
     opened_window = opened_window if opened_window is not None else []
     app = app or terminal_app()
+    if IS_WINDOWS:
+        return _open_windows_terminal(script)
     if sys.platform != "darwin":
         raise RuntimeError("one-click launch currently supports macOS only")
     if app == "Terminal":
