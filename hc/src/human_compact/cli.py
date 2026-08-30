@@ -40,8 +40,8 @@ MANAGED_MARKER = ".human-compact-managed.json"
 _ASSET_FILES = {
     "vault": {
         ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
-        "hooks/hooks.experimental.json", "scripts/chat-hook.sh",
-        "scripts/vault-backfill.sh", "scripts/vault-hook.sh",
+        "hooks/hooks.experimental.json", "scripts/chat-hook.cjs",
+        "scripts/hc-runtime.cjs", "scripts/vault-hook.cjs",
     },
     "bart": {"SKILL.md"},
 }
