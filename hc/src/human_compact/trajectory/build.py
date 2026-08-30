@@ -21,7 +21,7 @@ picked rows -- each under an id the reader never sees -- and a small protocol:
   and after ESTIMATE_GRACE_S with no word the rail is given a stand-in from
   this chat's measured runs (``cost``) until the build's own arrives.
 
-Two things reach a running build from the reader, both through the same
+Three things reach a running build from the reader, all through the same
 door: the process is ended and its session resumed on a message, since a
 ``claude -p`` process reads no input once started (``Run.redirect``).
 
@@ -29,7 +29,11 @@ door: the process is ended and its session resumed on a message, since a
   told which rows are gone -- print nothing for them, not even their state
   -- and reminded of the rows still its own;
 * a note typed under a building row (Enter on the row opens the pane): the
-  session is told what the reader added, and carries on.
+  session is told what the reader added, and carries on;
+* more rows picked while the build is out (Build pressed again): they are
+  handed to the session doing the work rather than queued behind it, and
+  are ``building`` from the press -- one agent, one working directory, one
+  record, in the order the reader picked them (``_join``).
 
 Everything else the process prints is a log. Rows are ``building`` from the
 moment they are submitted, ``asking`` while a question stands, ``done`` on the
@@ -1150,9 +1154,13 @@ class Run:
         self.seconds = 0.0
         self.spawned_at = 0.0
         # A message the reader sent a running build -- a row deleted from
-        # under it, a note added to one -- waits here while the process is
-        # ended, and the session is resumed on it the moment it has.
+        # under it, a note added to one, more rows picked into it -- waits
+        # here while the process is ended, and the session is resumed on it
+        # the moment it has. The lock is what keeps two words that land
+        # together from becoming one word: the second rides along with the
+        # first rather than replacing it or missing the resume entirely.
         self.redirect_with = ""
+        self._word = threading.Lock()
         # What the process up right now is doing: building the rows, or --
         # once they are done -- checking whether the program needs a restart
         # (see RESTART_CHECK). The check is the same session, resumed on a
@@ -1313,7 +1321,14 @@ class Run:
         this is the one way a word reaches it mid-work; what the session had
         done stays done, since the resume picks its transcript back up. The
         reader thread does the resuming, in _finish, once the exit lands.
-        False when there is no live process to tell."""
+        A word that arrives while another is still in flight -- the process
+        ending, the session not yet resumed -- rides along with it: one
+        resume, both messages, in the order they were said. False when there
+        is no live process to tell."""
+        with self._word:
+            if self.redirect_with:
+                self.redirect_with += "\n\n" + message
+                return True
         if not self.alive():
             return False
         # A process only just started has not written its session yet, and
@@ -1324,9 +1339,16 @@ class Run:
             time.sleep(young)
             if not self.alive():
                 return False
-        self.redirect_with = message
+        with self._word:
+            # Someone spoke while this one waited the young process out.
+            if self.redirect_with:
+                self.redirect_with += "\n\n" + message
+                return True
+            self.redirect_with = message
         if not self.stop():
-            self.redirect_with = ""
+            with self._word:
+                if self.redirect_with == message:
+                    self.redirect_with = ""
             return False
         return True
 
@@ -1421,8 +1443,9 @@ class Run:
         self.phase = "rows"
         self.stopped = False
         self.error = ""
-        # Rows picked while the check was out waited behind it, as they
-        # would have behind the build.
+        # Rows an older runtime parked behind this run before the upgrade:
+        # nothing waits here any more (see _join), but what is on disk is
+        # still owed a build.
         held_rows = _pop_later(self.session_id, self.root, self.goal_id)
         if held_rows:
             start(self.session_id, self.root, self.goal_id, held_rows)
@@ -1450,16 +1473,22 @@ class Run:
         # Ended to be told something (see redirect): not a verdict on the
         # rows, which stay building; the session goes on from where its
         # transcript stopped, with the reader's word as its next message.
-        if self.redirect_with:
+        # Held across the resume, not just the read: a word that lands while
+        # the new process is starting must find a live run to speak to (see
+        # redirect), not the half-second where this one has ended and the
+        # next has not begun.
+        with self._word:
             message, self.redirect_with = self.redirect_with, ""
-            self.stopped = False
-            self.error = ""
-            self.record(status="redirecting")
-            try:
-                self.spawn(message, resume=True)
-                return
-            except (OSError, RuntimeError) as exc:
-                self.error = "could not resume the build: %s" % str(exc)[:120]
+            if message:
+                self.stopped = False
+                self.error = ""
+                self.record(status="redirecting")
+                try:
+                    self.spawn(message, resume=True)
+                    return
+                except (OSError, RuntimeError) as exc:
+                    self.error = ("could not resume the build: %s"
+                                  % str(exc)[:120])
         # A provider-side death (a 500, an overload, a dropped connection)
         # is not a verdict on the rows: resume the same session and keep
         # going, up to the retry limit, with rows left as building.
@@ -1507,9 +1536,10 @@ class Run:
         # is left waiting, and the counter starts again from there.
         if not waiting:
             self._bank()
-        # Rows that queued up behind this run go out now -- unless the run
-        # stopped on a question, whose answer resumes this same session
-        # first; they stay queued and leave with the resumed run's finish.
+        # Rows an older runtime parked behind this run go out now -- unless
+        # it stopped on a question, whose answer resumes this same session
+        # first; they leave with the resumed run's finish instead. Rows
+        # picked since the upgrade never wait: they joined the run itself.
         if not waiting:
             held = _pop_later(self.session_id, self.root, self.goal_id)
             if held:
@@ -1522,10 +1552,12 @@ class Run:
                 self._check()
 
 
-# A headless run takes one process per goal, and that process reads nothing
-# once started -- so rows picked while one is out wait their turn rather than
-# being turned away. They are marked "queued", remembered here, and started
-# the moment the running build ends.
+# A headless run takes one process per goal. Rows picked while one is out are
+# not parked behind it: they are handed to the session doing the work, which
+# takes them up in the same turn it is already in (see ``_join``). Nothing is
+# written here any more -- what these read is a later.json an older runtime
+# left behind, drained when the run it was waiting on ends so the rows in it
+# are not lost across an upgrade.
 
 def _later_path(session_id: str, root: Optional[Path]) -> Path:
     return _builds_dir(session_id, root) / "later.json"
@@ -1537,16 +1569,6 @@ def _load_later(session_id: str, root: Optional[Path]) -> Dict[str, List[str]]:
     except (OSError, ValueError):
         return {}
     return value if isinstance(value, dict) else {}
-
-
-def _push_later(session_id: str, root: Optional[Path], goal_id: str,
-                ids: List[str]) -> None:
-    later = _load_later(session_id, root)
-    held = [i for i in later.get(goal_id) or [] if isinstance(i, str)]
-    later[goal_id] = held + [i for i in ids if i not in held]
-    path = _later_path(session_id, root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(path, later)
 
 
 def _pop_later(session_id: str, root: Optional[Path], goal_id: str) -> List[str]:
@@ -1631,34 +1653,104 @@ def _run_for(session_id: str, root: Optional[Path], goal_id: str) -> Optional[Ru
         return _RUNS.get(f"{session_id}:{goal_id}")
 
 
+STAND_DOWN_S = 12.0
+
+
+def _stand_down(run: "Run") -> None:
+    """See a run out before another opens on the same goal.
+
+    A run whose process has ended is not finished with the goal: its reader
+    thread is still writing the record, and it may put the restart check up
+    on the way out. The check is about code the rows picked now will change,
+    so it is ended rather than waited for -- and either way the thread is
+    joined, so the record a new run opens onto is the last word of the old
+    one and not a write still in the air.
+    """
+    deadline = time.time() + STAND_DOWN_S
+    while time.time() < deadline:
+        if run.alive():
+            if run.phase != "check":
+                return
+            run.stop()
+        thread = run.thread
+        if thread is None or not thread.is_alive():
+            return
+        thread.join(timeout=max(0.0, deadline - time.time()))
+
+
+def _join(session_id: str, root: Optional[Path], goal_id: str, run: "Run",
+          ids: List[str]) -> Optional[Dict[str, Any]]:
+    """Give rows to a build already out, rather than queueing them behind it.
+
+    The process reads nothing once started, so the rows go in the way every
+    other word does: the process is ended and its session resumed on a
+    message naming them (see redirect). The session keeps its transcript,
+    so the rows land in a build that already holds this goal's context --
+    one agent, one working directory, one record -- and are ``building``
+    from the press, not ``queued`` until the first build is done.
+
+    None when the run would not take them: its process ended as the word was
+    going out, and the caller opens a fresh run on them instead.
+    """
+    with CS.session_lock(session_id, root, wait_s=5):
+        goals, important = CS.load_goals(session_id, root)
+        goal = GM.by_id(goals, goal_id)
+        if not goal:
+            return {"ok": False, "error": "goal not found"}
+        items = goal.get("todo_items") or []
+        known = {row["id"] for row in items}
+        ids = [i for i in ids if i in known]
+        if not ids:
+            return {"ok": False, "error": "those TODOs are not on this goal"}
+        rows = picked_with_children(items, ids)
+        for row in items:
+            if row["id"] in ids:
+                row["status"] = "building"
+                row["question"] = ""
+        if goal.get("status") == "active":
+            goal["status"] = "in_progress"
+        goal["updated_at"] = GM._now()
+        GM.sanitize(goals)
+        if not CS.save_goals(session_id, goals, important, root):
+            return {"ok": False, "error": "goal state changed; try again"}
+    note_activity(session_id, root, goal_id, "say",
+                  "you added %d row%s to this build"
+                  % (len(ids), "" if len(ids) == 1 else "s"))
+    if not run.redirect(joined_message(session_id, root, goal_id, ids)):
+        # The rows keep the status this set: the caller's fresh run writes
+        # it again under the lock, and a sweep by the run that just ended
+        # (see _finish) has to have landed before that -- which is what
+        # standing the old run down waits for.
+        return None
+    # One build now, for what it reports when it ends and for the rail's
+    # stand-in estimate, which is made of how many rows are out.
+    run.picked += [i for i in ids if i not in run.picked]
+    run.picked_chars += sum(len(str(row.get("text") or "")) for row in rows)
+    run.record(rows=len(run.picked))
+    return {"ok": True, "joined": True, "rows": ids,
+            "claude_session_id": run.claude_session}
+
+
 def start(session_id: str, root: Optional[Path], goal_id: str,
           row_ids: List[str]) -> Dict[str, Any]:
-    """Submit rows: mark them building, compose the prompt, spawn the run."""
+    """Submit rows: mark them building, compose the prompt, spawn the run --
+    or, when a build of this goal is already out, hand them to that one
+    rather than opening a second process on the same directory (``_join``)."""
     ids = [i for i in row_ids if isinstance(i, str)]
     if not ids:
         return {"ok": False, "error": "pick at least one TODO"}
     live = _run_for(session_id, root, goal_id)
-    if live and live.alive():
-        # The running process cannot take more work; these rows go next.
-        with CS.session_lock(session_id, root, wait_s=5):
-            goals, important = CS.load_goals(session_id, root)
-            goal = GM.by_id(goals, goal_id)
-            if not goal:
-                return {"ok": False, "error": "goal not found"}
-            known = {row["id"] for row in goal.get("todo_items") or []}
-            ids = [i for i in ids if i in known]
-            if not ids:
-                return {"ok": False, "error": "those TODOs are not on this goal"}
-            for row in goal.get("todo_items") or []:
-                if row["id"] in ids:
-                    row["status"] = "queued"
-                    row["question"] = ""
-            goal["updated_at"] = GM._now()
-            GM.sanitize(goals)
-            if not CS.save_goals(session_id, goals, important, root):
-                return {"ok": False, "error": "goal state changed; try again"}
-        _push_later(session_id, root, goal_id, ids)
-        return {"ok": True, "queued": True, "after_run": True, "rows": ids}
+    if live and live.alive() and mode() != "session":
+        if live.phase == "check":
+            # Only the restart check is out: it is asking about code these
+            # rows are about to change, so it is ended and asked again when
+            # they are done, rather than held in front of them.
+            _stand_down(live)
+        else:
+            joined = _join(session_id, root, goal_id, live, ids)
+            if joined is not None:
+                return joined
+            _stand_down(live)
     with CS.session_lock(session_id, root, wait_s=5):
         goals, important = CS.load_goals(session_id, root)
         goal = GM.by_id(goals, goal_id)
@@ -1846,6 +1938,36 @@ def note_message(session_id: str, root: Optional[Path], goal_id: str,
     return "\n".join(lines)
 
 
+def joined_message(session_id: str, root: Optional[Path], goal_id: str,
+                   added: List[str]) -> str:
+    """What a build is told when the reader picks more rows into it mid-work.
+
+    The rows are named the way the opening prompt named them, then what the
+    build already had is repeated under them: the order is the answer to
+    "which first", and a build told only about the new rows would have to
+    remember the old ones.
+    """
+    goal = _goal_for_message(session_id, root, goal_id)
+    mine = [row["id"] for row in goal.get("todo_items") or []
+            if str(row.get("status") or "") in ("building", "asking")
+            and row.get("id") not in added]
+    lines = ["[Engelbart] The user picked more TODO rows into the build you"
+             " are working on:", ""]
+    lines += _row_lines(goal, added) or ["- (rows no longer on the list)"]
+    lines += ["",
+              "They are yours as well now, under the same protocol as your"
+              " opening message: print {\"id\": \"<row id>\", \"state\":"
+              " \"DONE\"} when each is finished."]
+    if mine:
+        lines += ["", "Finish what you were already on first, in order:", ""]
+        lines += _row_lines(goal, mine)
+    lines += ["",
+              "Then print your estimate again -- {\"estimate\": {\"tokens\":"
+              " N, \"minutes\": N}} -- for what is left of the build now,"
+              " these rows included."]
+    return "\n".join(lines)
+
+
 def _push_pending(session_id: str, root: Optional[Path], goal_id: str,
                   message: str) -> None:
     record = load_run(session_id, root, goal_id) or {"goal_id": goal_id}
@@ -2000,7 +2122,8 @@ def reopen(session_id: str, root: Optional[Path], goal_id: str,
 # queued, building, asking, or failed, it returns to the active band with no
 # status. What "stop building it" means depends on where the row was:
 #
-# * waiting behind a headless run (later.json): it is dropped from the wait;
+# * left behind a headless run by an older runtime (later.json): it is
+#   dropped from the wait;
 # * queued for the connected session (queue.json): it leaves the queued
 #   build -- the prompt is recomposed around the rows that remain, and the
 #   build itself is dropped when none do;

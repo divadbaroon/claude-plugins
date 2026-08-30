@@ -77,6 +77,18 @@ with open(log, "a") as fh:
     fh.write(json.dumps({"args": args, "prompt": prompt, "cwd": os.getcwd(),
                          "resume": resume,
                          "api_key": os.environ.get("ANTHROPIC_API_KEY")}) + "\n")
+if resume and "picked more TODO rows" in prompt:
+    # More rows handed to a build already out: it finishes every row the
+    # message names, its own and the new ones, in the one session.
+    ids = [w.strip("[]") for w in prompt.split()
+           if w.startswith("[t") and w.endswith("]")]
+    for i in dict.fromkeys(ids):
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": json.dumps({"id": i, "state": "DONE"})}]}}),
+              flush=True)
+    print(json.dumps({"type": "result", "is_error": False, "result": "done",
+                      "usage": USAGE}))
+    raise SystemExit(0)
 def say(text):
     print(json.dumps({"type": "assistant", "message": {"content": [
         {"type": "text", "text": text}]}}), flush=True)
@@ -458,26 +470,83 @@ class ReopenTests(BuildRunTests):
                          self.history())
 
 
-class QueueBehindARunTests(BuildRunTests):
-    """Picks made while a build is out wait their turn, then go."""
+class JoinARunningBuildTests(BuildRunTests):
+    """Picks made while a build is out join it: they do not wait behind it."""
 
-    def test_more_picks_queue_and_start_when_the_run_ends(self):
+    def setUp(self):
+        super().setUp()
+        # The wait a redirect gives a young process to write its session:
+        # the stub writes none, and the test should not sit through it.
+        held, BUILD.REDIRECT_MIN_AGE_S = BUILD.REDIRECT_MIN_AGE_S, 0.05
+        self.addCleanup(setattr, BUILD, "REDIRECT_MIN_AGE_S", held)
+
+    def run_for(self):
+        return BUILD._run_for(self.session, self.root, "g1")
+
+    def under_way(self):
+        """Wait until the first build is really out. A process that has only
+        just been spawned is alive without having run a line of anything --
+        which is what REDIRECT_MIN_AGE_S is for, and what the stub's first
+        word stands in for here."""
+        self.assertTrue(self.wait_for(
+            lambda: self.log.exists() and self.log.read_text().strip()))
+
+    def test_more_picks_go_into_the_running_build_not_behind_it(self):
         os.environ["STUB_FINISH"] = "1"
-        os.environ["STUB_SLEEP"] = "0.8"
+        os.environ["STUB_HOLD"] = "4"
         first = BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
         self.assertTrue(first["ok"], first)
+        self.under_way()
         second = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
         self.assertTrue(second["ok"], second)
-        self.assertTrue(second.get("queued") and second.get("after_run"), second)
-        self.assertEqual("queued", self.rows()["taaaa0003"][0])
-        # Both done: the second went out by itself when the first ended.
+        self.assertTrue(second.get("joined"), second)
+        self.assertNotIn("queued", second)
+        # Building from the press, like any other row handed to a build.
+        self.assertEqual("building", self.rows()["taaaa0003"][0])
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0001"][0] == "done"
             and self.rows()["taaaa0003"][0] == "done", seconds=12),
             self.rows())
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(2, len(calls))
-        self.assertIn("[taaaa0003]", calls[1]["prompt"])
+        self.assertEqual(2, len(calls), "one session, told about the new rows")
+        self.assertIn("--resume", calls[1]["args"])
+        self.assertIn("picked more TODO rows", calls[1]["prompt"])
+        self.assertIn("- Update the docs [taaaa0003]", calls[1]["prompt"])
+        # And what it was already on is named again, ahead of them.
+        self.assertIn("- Add the route [taaaa0001]", calls[1]["prompt"])
+
+    def test_the_joined_rows_are_part_of_what_the_build_reports(self):
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_HOLD"] = "4"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        self.under_way()
+        BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertEqual(["taaaa0001", "taaaa0003"], self.run_for().picked)
+        # The rail's stand-in estimate is made of how many rows are out.
+        self.assertEqual(2, BUILD.load_run(self.session, self.root, "g1")["rows"])
+        self.assertTrue(self.wait_for(
+            lambda: self.rows()["taaaa0003"][0] == "done", seconds=12),
+            self.rows())
+        # One build of two rows, not two samples of one.
+        self.assertTrue(self.wait_for(
+            lambda: BUILD.cost(self.session, self.root)["samples"] == 1,
+            seconds=12))
+        self.assertEqual(2, BUILD._load_usage(self.session, self.root)[0]["rows"])
+
+    def test_two_words_landing_together_both_reach_the_session(self):
+        # The second press arrives while the first redirect is still in
+        # flight -- the process ended, the session not yet resumed. It rides
+        # along rather than replacing it or falling into the gap.
+        os.environ["STUB_FINISH"] = "1"
+        os.environ["STUB_HOLD"] = "4"
+        BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
+        run = self.run_for()
+        self.under_way()
+        run.redirect_with = "[Engelbart] first word"
+        out = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
+        self.assertTrue(out.get("joined"), out)
+        self.assertIn("first word", run.redirect_with)
+        self.assertIn("picked more TODO rows", run.redirect_with)
 
 
 class BuildCostTests(BuildRunTests):
@@ -674,21 +743,19 @@ class CancelTests(BuildRunTests):
             return []
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def test_a_row_waiting_behind_a_run_is_simply_dropped(self):
-        os.environ["STUB_FINISH"] = "1"
-        os.environ["STUB_SLEEP"] = "0.8"
-        self.assertTrue(BUILD.start(self.session, self.root, "g1", ["taaaa0001"])["ok"])
-        second = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
-        self.assertTrue(second.get("after_run"), second)
+    def test_a_row_an_older_runtime_left_waiting_is_dropped(self):
+        # Nothing waits behind a run any more -- picks join it -- but a
+        # later.json written before the upgrade is still honoured, and a row
+        # taken back leaves it rather than going out when the run ends.
+        path = BUILD._later_path(self.session, self.root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"g1": ["taaaa0003"]}))
+        BUILD._set_row(self.session, self.root, "g1", "taaaa0003", status="queued")
         out = BUILD.cancel(self.session, self.root, "g1", ["taaaa0003"])
         self.assertEqual(["taaaa0003"], out["cancelled"])
         self.assertEqual(("", ""), self.rows()["taaaa0003"])
         self.assertEqual({}, BUILD._load_later(self.session, self.root))
-        self.assertTrue(self.wait_for(
-            lambda: self.rows()["taaaa0001"][0] == "done", seconds=12))
-        time.sleep(0.3)
-        self.assertEqual(1, len(self.calls()), "nothing went out for the cancelled row")
-        self.assertEqual(("", ""), self.rows()["taaaa0003"])
+        self.assertEqual([], self.calls(), "nothing went out for the cancelled row")
 
     def test_cancelling_everything_a_run_is_doing_ends_the_process(self):
         os.environ["STUB_FINISH"] = "1"
@@ -1636,17 +1703,21 @@ class RestartCheckTests(BuildRunTests):
         self.assertTrue(self.checked(), self.live())
         self.assertEqual("no", self.restart()["status"])
 
-    def test_rows_picked_during_the_check_wait_behind_it(self):
-        self.on("no", hold=2)
+    def test_rows_picked_during_the_check_end_it_and_start(self):
+        # The check is asking whether what the last build changed is what is
+        # running; rows picked now are about to change it again. It is ended
+        # rather than held in front of them, and asked again when they land.
+        self.on("no", hold=4)
         self.build()
         self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
         out = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
-        self.assertTrue(out.get("after_run"), out)
-        self.assertEqual("queued", self.rows()["taaaa0003"][0])
+        self.assertTrue(out.get("started"), out)
+        self.assertEqual("building", self.rows()["taaaa0003"][0])
+        self.assertIn("the check was stopped", self.said())
         self.assertTrue(self.wait_for(
             lambda: self.rows()["taaaa0003"][0] == "done", seconds=15))
-        # build, check, build, check: the second build opened fresh, after
-        # the check had answered.
+        # build, check (stopped), build, check: the second build opened
+        # fresh, on the check's ruins rather than behind it.
         self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 4, seconds=12))
         self.assertNotIn("--resume", self.prompts()[2]["args"])
 
