@@ -6,6 +6,7 @@ const {
   ensureLauncherOnPath,
   install,
   inspectVendor,
+  spawnableLauncher,
   supportedTarget,
 } = require('./installer');
 const auth = require('./auth');
@@ -171,7 +172,10 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
         + `Run \`${invocation()} auth\` again after the missing connection is ready.\n`);
       return 0;
     }
-    const launcher = deps.launcher || path.join(authDeps.managedRoot, 'bin', 'hc');
+    // On Windows the stable bin\hc.cmd shim is not directly spawnable; resolve
+    // the runtime's real .exe. On POSIX this is the bin/hc symlink as before.
+    const launcher = deps.launcher
+      || spawnableLauncher(authDeps.managedRoot, 'hc', deps.platform || process.platform);
     const opened = options.noOpen
       ? null
       : await (deps.openSetup || openSetup)({
@@ -295,7 +299,7 @@ async function run(deps = {}) {
     if (!options.dryRun && !env.CI
         && !(deps.claudeOnPath || claudeOnPath)(env, deps.spawn)) {
       env = await (deps.installClaudeCode || installClaudeCode)({
-        env, output, errorOutput, deps,
+        env, output, errorOutput, platform, deps,
       });
       authDeps.env = env;
     }
@@ -323,12 +327,17 @@ async function run(deps = {}) {
       });
       // Only promise `hc` in this terminal once the shell can actually find it.
       const launcher = installed && installed.launcher;
-      launcherPath = launcher || '';
+      // PATH guidance points at the stable launcher's dir; spawning setup uses a
+      // directly-spawnable target (the runtime .exe on Windows, the symlink on POSIX).
+      launcherPath = launcher
+        ? spawnableLauncher(managedRoot, 'hc', platform)
+        : '';
       if (launcher) {
         reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
           launcherDir: path.dirname(launcher),
           env,
           homedir,
+          platform,
         });
       }
     }
@@ -402,7 +411,11 @@ async function run(deps = {}) {
       : '\nInstalled. Chats are recorded locally; nothing is analyzed or '
         + 'injected until you run /bart in a chat.\n');
     if (reach && !reach.onPath) {
-      output.write(reach.added
+      output.write(platform === 'win32'
+        // Windows PATH is a per-user registry value, not a profile file: setx
+        // writes it for new terminals; the caller still needs it in this one.
+        ? `\nAdd the launcher to your PATH (takes effect in new terminals):\n\n    ${reach.line}\n`
+        : reach.added
         ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`
         : reach.present
         ? `\nThis terminal predates ${reach.profile}. Run this once here:\n\n    ${reach.line}\n`
@@ -489,6 +502,7 @@ async function run(deps = {}) {
 }
 
 const CLAUDE_INSTALL_URL = 'https://claude.ai/install.sh';
+const CLAUDE_INSTALL_URL_PS1 = 'https://claude.ai/install.ps1';
 
 /* Does `claude` answer on this PATH? A throwing spawn and a nonzero exit both
  * mean no; install() re-checks with the full version gate afterwards, so this
@@ -520,19 +534,25 @@ function claudeOnPath(env, spawn) {
  * then judges the result. An installer that fails returns the env
  * unchanged and the previous error path says what to do.
  */
-async function installClaudeCode({ env, output, errorOutput, deps = {} }) {
+async function installClaudeCode({ env, output, errorOutput, platform = process.platform, deps = {} }) {
+  const windows = platform === 'win32';
+  const url = windows ? CLAUDE_INSTALL_URL_PS1 : CLAUDE_INSTALL_URL;
   output.write('\nClaude Code is required and was not found -- installing it '
-    + `with Anthropic's official installer (${CLAUDE_INSTALL_URL})...\n\n`);
+    + `with Anthropic's official installer (${url})...\n\n`);
   const run = deps.spawn || require('child_process').spawnSync;
-  const done = run('bash', ['-c', `curl -fsSL ${CLAUDE_INSTALL_URL} | bash`], {
-    env,
-    stdio: 'inherit',
-  });
+  // Windows ships no bash; its official installer is a PowerShell one-liner.
+  const [command, args] = windows
+    ? ['powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${url} | iex`]]
+    : ['bash', ['-c', `curl -fsSL ${url} | bash`]];
+  const done = run(command, args, { env, stdio: 'inherit' });
   if (!done || done.error || done.status !== 0) {
     errorOutput.write('\nThe Claude Code installer did not finish; install it '
       + 'manually and re-run this command.\n');
     return env;
   }
+  // The installer wires new shells, not this process. Point PATH at the dir it
+  // drops `claude` into so install()'s preflight can find it right away; the
+  // native installer uses ~/.local/bin on every platform, Windows included.
   const localBin = path.join(deps.homedir || os.homedir(), '.local', 'bin');
   return { ...env, PATH: `${localBin}${path.delimiter}${env.PATH || ''}` };
 }

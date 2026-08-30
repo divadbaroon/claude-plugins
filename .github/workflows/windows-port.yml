@@ -61,9 +61,8 @@ jobs:
       - name: It runs (--help)
         run: .\dist\engelbart-windows-x64.exe --help
         working-directory: engelbart
-      # Informational until the installer is ported: install --dry-run hits
-      # the platform gate that still rejects win32. Captured, not required.
-      - name: install --dry-run (informational)
-        continue-on-error: true
+      # The installer now accepts win32: --dry-run resolves the Windows target
+      # and verifies the bundled backend without building, so this is required.
+      - name: install --dry-run
         run: .\dist\engelbart-windows-x64.exe install --dry-run
         working-directory: engelbart

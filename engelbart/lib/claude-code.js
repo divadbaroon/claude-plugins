@@ -12,7 +12,9 @@ const path = require('path');
 const {
   atomicWrite,
   establishOwnership,
+  isWindows,
   loadOwnedInstall,
+  runtimeExecutables,
   safeChild,
   validateManagedRoot,
 } = require('./installer');
@@ -53,17 +55,37 @@ function resolveTarget(options = {}) {
   return { file, real, permitted: !real || options.allowRealHome === true };
 }
 
-function helperPath(managedRoot) {
-  return path.join(validateManagedRoot(managedRoot), 'bin', HELPER_FILE);
+function helperFileName(platform) {
+  // Windows ignores shebangs, so the on-disk helper is a PowerShell script that
+  // Claude Code's shell (PowerShell, or Git-bash) can launch explicitly.
+  return isWindows(platform) ? `${HELPER_FILE}.ps1` : HELPER_FILE;
 }
 
-function managedPython(managedRoot) {
+// The helper's path on disk -- what writeHelper writes and disconnect removes.
+function helperFilePath(managedRoot, platform = process.platform) {
+  return path.join(validateManagedRoot(managedRoot), 'bin', helperFileName(platform));
+}
+
+// The value stored in `apiKeyHelper`. On POSIX Claude Code runs the file
+// directly, so the value *is* the path. On Windows the value must name an
+// interpreter: `powershell -File <script>` runs whether Claude Code dispatches
+// through PowerShell or Git-bash, since both resolve powershell.exe on PATH.
+function helperPath(managedRoot, platform = process.platform) {
+  const file = helperFilePath(managedRoot, platform);
+  if (isWindows(platform)) {
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${file}"`;
+  }
+  return file;
+}
+
+function managedPython(managedRoot, platform = process.platform) {
   const root = validateManagedRoot(managedRoot);
   try {
     const install = loadOwnedInstall(root);
     if (!install || typeof install.runtime !== 'string') return '';
     const runtime = safeChild(root, install.runtime);
-    const python = safeChild(root, path.join(runtime, 'bin', 'python'));
+    // The venv console-script layout differs by OS: bin/python vs Scripts\python.exe.
+    const python = safeChild(root, runtimeExecutables(runtime, platform).python);
     return fs.statSync(python, { throwIfNoEntry: false })?.isFile() ? python : '';
   } catch (error) {
     return '';
@@ -83,6 +105,31 @@ function managedHelperSource(python, credentialsFile, settingsFile, helperFile, 
     '--base-url', baseUrl,
   ].map(shellWord).join(' ');
   return `#!/bin/sh\n# Written by Engelbart; runs on its managed runtime with no shell lookup.\nexec ${args} "$@"\n`;
+}
+
+// A single-quoted PowerShell literal: '' is the only escape inside one.
+function pwshWord(value) {
+  return `'${String(value).replace(/'/g, `''`)}'`;
+}
+
+// The Windows counterpart of managedHelperSource: a .ps1 that runs the same
+// managed-runtime credential module. `helperValue` is the full apiKeyHelper
+// command (so the module's --disconnect instructions are runnable), `@args`
+// forwards --disconnect through, and the module's own stdout carries the key.
+function managedHelperSourcePwsh(python, credentialsFile, settingsFile, helperValue, baseUrl) {
+  const call = [
+    `& ${pwshWord(python)}`,
+    '-m', 'human_compact.credential_helper',
+    '--credentials', pwshWord(credentialsFile),
+    '--settings', pwshWord(settingsFile),
+    '--helper', pwshWord(helperValue),
+    '--base-url', pwshWord(baseUrl),
+    '@args',
+  ].join(' ');
+  return '# Written by Engelbart; runs on its managed runtime.\r\n'
+    + '$ErrorActionPreference = "Stop"\r\n'
+    + `${call}\r\n`
+    + 'exit $LASTEXITCODE\r\n';
 }
 
 // `npx engelbart-cli` leaves no installed copy of this package behind, so the
@@ -183,6 +230,9 @@ function unwireOnce(baseUrl) {
       fs.rmSync(temporary, { force: true });
       return false;
     }
+    // Windows rename fails onto an existing file; clear it first. This loses the
+    // crash-window atomicity POSIX rename gives, which Windows never offered.
+    if (process.platform === 'win32') { try { fs.rmSync(SETTINGS, { force: true }); } catch (e) {} }
     fs.renameSync(temporary, SETTINGS);
     return true;
   } catch (error) {
@@ -328,21 +378,41 @@ main();
 `;
 }
 
-function writeHelper(managedRoot, credentialsFile, settingsFile, baseUrl) {
+function writeHelper(managedRoot, credentialsFile, settingsFile, baseUrl, platform = process.platform) {
   const root = validateManagedRoot(managedRoot);
   establishOwnership(root);
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin, { recursive: true });
-  const file = path.join(bin, HELPER_FILE);
+  const file = helperFilePath(root, platform);
+  // The apiKeyHelper value is what the module quotes back in its --disconnect
+  // instructions, so bake in the runnable value, not the bare file path.
+  const value = helperPath(root, platform);
   // The gateway URL is baked in as well as stored, so `--disconnect` still
   // knows which ANTHROPIC_BASE_URL was ours after the credentials file is gone.
-  const python = managedPython(root);
-  const source = python
-    ? managedHelperSource(python, credentialsFile, settingsFile, file, baseUrl)
-    // An npm-only developer invocation may not have installed the managed
-    // runtime yet. It necessarily has Node, so retain the self-contained JS
-    // helper there; standalone installs always take the managed branch.
-    : helperSource(credentialsFile, settingsFile, file, baseUrl);
+  const python = managedPython(root, platform);
+  let source;
+  if (isWindows(platform)) {
+    if (python) {
+      source = managedHelperSourcePwsh(python, credentialsFile, settingsFile, value, baseUrl);
+    } else {
+      // npm-only dev on Windows with no managed runtime: keep the self-contained
+      // Node helper (as a .js sibling) and launch it from the .ps1 the value
+      // points at. Standalone Windows installs always take the managed branch.
+      const jsFile = path.join(bin, `${HELPER_FILE}.js`);
+      atomicWrite(jsFile, helperSource(credentialsFile, settingsFile, value, baseUrl), 0o700);
+      source = '# Written by Engelbart; launches the self-contained Node helper.\r\n'
+        + '$ErrorActionPreference = "Stop"\r\n'
+        + `& node ${pwshWord(jsFile)} @args\r\n`
+        + 'exit $LASTEXITCODE\r\n';
+    }
+  } else {
+    source = python
+      ? managedHelperSource(python, credentialsFile, settingsFile, file, baseUrl)
+      // An npm-only developer invocation may not have installed the managed
+      // runtime yet. It necessarily has Node, so retain the self-contained JS
+      // helper there; standalone installs always take the managed branch.
+      : helperSource(credentialsFile, settingsFile, file, baseUrl);
+  }
   atomicWrite(file, source, 0o700);
   return file;
 }
@@ -368,9 +438,10 @@ function ownsHelper(settings, helper) {
 // worse failure than printing one line and letting the member decide.
 function connect(options = {}) {
   const managedRoot = validateManagedRoot(options.managedRoot);
+  const platform = options.platform || process.platform;
   const { file, permitted } = resolveTarget(options);
   if (!permitted) return { changed: false, reason: 'unsafe-target', file };
-  const helper = helperPath(managedRoot);
+  const helper = helperPath(managedRoot, platform);
   const baseUrl = String(options.baseUrl || '');
   if (!baseUrl) return { changed: false, reason: 'no-base-url', file };
 
@@ -393,11 +464,14 @@ function connect(options = {}) {
 // Removes only what still matches what we wrote, so a member who pointed these
 // at something of their own keeps it.
 function disconnect(options = {}) {
+  const platform = options.platform || process.platform;
   const { file, permitted } = resolveTarget(options);
   if (!permitted) return { changed: false, reason: 'unsafe-target', file };
   let helper = '';
+  let helperFile = '';
   try {
-    helper = helperPath(options.managedRoot);
+    helper = helperPath(options.managedRoot, platform);
+    helperFile = helperFilePath(options.managedRoot, platform);
   } catch (error) {
     return { changed: false, reason: 'no-managed-root', file };
   }
@@ -424,7 +498,9 @@ function disconnect(options = {}) {
   if (!changed) return { changed: false, reason: 'not-ours', file };
   atomicWrite(file, `${JSON.stringify(next, null, 2)}\n`, 0o600);
   try {
-    fs.rmSync(helper, { force: true });
+    // Remove the on-disk script, never the (Windows) command-string value.
+    fs.rmSync(helperFile, { force: true });
+    if (isWindows(platform)) fs.rmSync(`${path.dirname(helperFile)}/${HELPER_FILE}.js`, { force: true });
   } catch (error) { /* the helper is already gone */ }
   return { changed: true, file };
 }
@@ -435,9 +511,12 @@ module.exports = {
   MARKER,
   connect,
   disconnect,
+  helperFileName,
+  helperFilePath,
   helperPath,
   helperSource,
   managedHelperSource,
+  managedHelperSourcePwsh,
   managedPython,
   ownsHelper,
   readSettings,

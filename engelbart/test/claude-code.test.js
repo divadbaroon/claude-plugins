@@ -587,3 +587,62 @@ test('a declined swap leaves no temporary file behind', async () => {
 test('the cache window is short enough to bound a spent key', () => {
   assert.ok(claudeCode.HELPER_TTL_MS <= 900000);
 });
+
+// --- Windows apiKeyHelper: platform injected so these run on any host. -------
+
+test('helper paths differ on Windows: a .ps1 file, a powershell command value', () => {
+  const root = temporaryRoot();
+  const file = claudeCode.helperFilePath(root, 'win32');
+  assert.ok(file.endsWith(`${path.sep}bin${path.sep}engelbart-key.ps1`));
+  const value = claudeCode.helperPath(root, 'win32');
+  assert.match(value, /^powershell -NoProfile -ExecutionPolicy Bypass -File "/);
+  assert.ok(value.includes(file));
+  // POSIX is unchanged: the value is exactly the file path.
+  assert.equal(claudeCode.helperPath(root, 'linux'), claudeCode.helperFilePath(root, 'linux'));
+});
+
+test('managedHelperSourcePwsh runs the managed module and forwards --disconnect', () => {
+  const src = claudeCode.managedHelperSourcePwsh(
+    'C:\\rt\\Scripts\\python.exe', 'C:\\cred.json', 'C:\\settings.json',
+    'powershell -File C:\\bin\\engelbart-key.ps1', 'https://proxy');
+  assert.match(src, /& 'C:\\rt\\Scripts\\python\.exe' -m human_compact\.credential_helper/);
+  assert.match(src, /@args/);
+  assert.match(src, /exit \$LASTEXITCODE/);
+  // Single quotes are the only PowerShell escape; a value with a quote doubles it.
+  const quoted = claudeCode.managedHelperSourcePwsh('py', 'c', 's', "it's", 'u');
+  assert.match(quoted, /--helper 'it''s'/);
+});
+
+test('connect (win32) stores the powershell command as the apiKeyHelper value', () => {
+  const root = temporaryRoot();
+  const file = settingsIn(root);
+  const result = claudeCode.connect({ managedRoot: root, settingsFile: file, baseUrl: BASE_URL, platform: 'win32' });
+  assert.equal(result.changed, true);
+  const settings = read(file);
+  assert.equal(settings.apiKeyHelper, claudeCode.helperPath(root, 'win32'));
+  assert.match(settings.apiKeyHelper, /^powershell .* -File ".*engelbart-key\.ps1"$/);
+});
+
+test('writeHelper (win32) with no managed runtime lays down a .ps1 that launches the Node helper', () => {
+  const root = temporaryRoot();
+  const written = claudeCode.writeHelper(root, path.join(root, 'auth.json'), settingsIn(root), BASE_URL, 'win32');
+  assert.ok(written.endsWith('engelbart-key.ps1'));
+  const ps1 = fs.readFileSync(written, 'utf8');
+  assert.match(ps1, /& node '.*engelbart-key\.js'/);
+  assert.match(ps1, /exit \$LASTEXITCODE/);
+  const js = fs.readFileSync(path.join(root, 'bin', 'engelbart-key.js'), 'utf8');
+  assert.match(js, /Claude Code runs this for its credential/);
+});
+
+test('disconnect (win32) clears the value and removes the .ps1 and .js on disk', () => {
+  const root = temporaryRoot();
+  const file = settingsIn(root);
+  claudeCode.writeHelper(root, path.join(root, 'auth.json'), file, BASE_URL, 'win32');
+  claudeCode.connect({ managedRoot: root, settingsFile: file, baseUrl: BASE_URL, platform: 'win32' });
+  assert.ok(fs.existsSync(claudeCode.helperFilePath(root, 'win32')));
+  const result = claudeCode.disconnect({ managedRoot: root, settingsFile: file, baseUrl: BASE_URL, platform: 'win32' });
+  assert.equal(result.changed, true);
+  assert.equal(read(file).apiKeyHelper, undefined);
+  assert.equal(fs.existsSync(claudeCode.helperFilePath(root, 'win32')), false);
+  assert.equal(fs.existsSync(path.join(root, 'bin', 'engelbart-key.js')), false);
+});

@@ -848,3 +848,22 @@ test('fetchPendingSetup claims the web payload and never fails an install', asyn
     fetchImpl: scriptedFetch([{ ok: false, status: 500, body: {} }]).fetchImpl,
   }), null);
 });
+
+test('openBrowser: Windows uses rundll32 so a query string is safe', () => {
+  const calls = [];
+  const spawnImpl = (cmd, args) => {
+    calls.push([cmd, args]);
+    return { unref() {}, on() {} };
+  };
+  const url = 'https://berkeley.mathetic.com/engelbart/setup?code=A&x=1';
+  assert.equal(auth.openBrowser(url, { platform: 'win32', spawnImpl }), true);
+  assert.deepEqual(calls, [['rundll32', ['url.dll,FileProtocolHandler', url]]]);
+});
+
+test('openBrowser: macOS uses open, Linux uses xdg-open', () => {
+  const calls = [];
+  const spawnImpl = (cmd, args) => { calls.push([cmd, args]); return { unref() {}, on() {} }; };
+  auth.openBrowser('https://x', { platform: 'darwin', spawnImpl });
+  auth.openBrowser('https://x', { platform: 'linux', spawnImpl });
+  assert.deepEqual(calls, [['open', ['https://x']], ['xdg-open', ['https://x']]]);
+});

@@ -876,6 +876,25 @@ test('the installer runs with no question, says whose it is, and extends PATH', 
   assert.equal(result.PATH, `/home/x/.local/bin${path.delimiter}/usr/bin`);
 });
 
+test('on Windows the installer is the PowerShell one-liner, not bash+curl', async () => {
+  const { installClaudeCode } = require('../lib/cli');
+  const ran = [];
+  const spawn = (command, args) => { ran.push([command, ...args]); return { status: 0 }; };
+  const said = capture();
+  const result = await installClaudeCode({
+    env: { PATH: 'C:\\Windows' },
+    output: said.stream,
+    errorOutput: capture().stream,
+    platform: 'win32',
+    deps: { spawn, homedir: 'C:\\Users\\x' },
+  });
+  assert.equal(ran[0][0], 'powershell');
+  assert.match(ran[0].join(' '), /irm https:\/\/claude\.ai\/install\.ps1 \| iex/);
+  assert.doesNotMatch(ran[0].join(' '), /bash|curl/);
+  assert.match(said.read(), /install\.ps1/);
+  assert.ok(result.PATH.startsWith(path.join('C:\\Users\\x', '.local', 'bin')));
+});
+
 test('an installer that fails leaves the env alone and says to install manually', async () => {
   const { installClaudeCode } = require('../lib/cli');
   const errors = capture();
