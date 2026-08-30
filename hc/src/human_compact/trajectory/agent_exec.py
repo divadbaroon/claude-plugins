@@ -584,12 +584,19 @@ def _open_windows_terminal(script: Path) -> str:
     wt = shutil.which("wt")
     if wt:
         # `wt <cmd>` opens a new tab/window running that command line.
-        subprocess.run([wt, *inner], check=True, timeout=15)
-        return "Windows Terminal"
-    # `start "" <cmd>` detaches a new console window; the empty title keeps
-    # `start` from treating a quoted first argument as the window title.
-    subprocess.run(["cmd", "/c", "start", "", *inner], check=True, timeout=15)
-    return "cmd"
+        argv, app = [wt, *inner], "Windows Terminal"
+    else:
+        # `start "" <cmd>` detaches a new console window; the empty title keeps
+        # `start` from treating a quoted first argument as the window title.
+        argv, app = ["cmd", "/c", "start", "", *inner], "cmd"
+    # Report a failed launch the way the darwin branch does -- a RuntimeError
+    # the ui/build callers already catch -- rather than letting a
+    # CalledProcessError escape their (OSError, RuntimeError, ValueError) guard.
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
+    if result.returncode != 0:
+        raise RuntimeError(
+            (result.stderr or f"could not open {app}").strip()[:200])
+    return app
 
 
 def open_terminal(script: Path, app: Optional[str] = None,

@@ -998,9 +998,11 @@ def open_terminal(command, cwd=None, run=None) -> Dict[str, Any]:
             'echo   run this to start the session: && echo( && '
             'echo     %s && echo(' % (here, said))
         try:
-            run(("cmd", "/c", "start", "", "cmd", "/k", winner), timeout=20,
-                capture_output=True, text=True)
+            done = run(("cmd", "/c", "start", "", "cmd", "/k", winner),
+                       timeout=20, capture_output=True, text=True)
         except (OSError, subprocess.SubprocessError):
+            return {"ok": False, "error": "no terminal this could open"}
+        if getattr(done, "returncode", 1) != 0:
             return {"ok": False, "error": "no terminal this could open"}
         return {"ok": True, "typed": said, "note": "shown"}
     quoted = shlex.quote(said)
