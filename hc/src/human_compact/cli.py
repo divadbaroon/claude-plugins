@@ -388,19 +388,16 @@ def install_shim():
 
 
 def run_backfill(assume_yes=False):
-    script = SKILLS_DIR / "scripts" / "vault-backfill.sh"
-    dry = subprocess.run(["bash", str(script), "--dry-run"],
-                         capture_output=True, text=True)
-    if dry.returncode != 0:
-        raise RuntimeError(dry.stderr.strip() or dry.stdout.strip() or
-                           "Vault backfill preview failed")
-    tail = (dry.stdout.strip().splitlines() or ["backfill: nothing found"])[-1]
-    say(f"preview: {tail}")
-    if "0 imported" in tail or "nothing found" in tail:
+    # Import through the runtime's own idempotent backfill rather than a bash
+    # script: it needs no jq/coreutils and so runs the same on every OS. The
+    # caller has already gathered consent for the retroactive import.
+    from . import global_vault
+    counts = global_vault.backfill()
+    if not counts["imported"] and not counts["skipped"]:
         say("nothing new to import")
         return
-    if assume_yes or ask("Import these now?"):
-        subprocess.run(["bash", str(script)], check=True)
+    say(f"history import: {counts['imported']} imported, "
+        f"{counts['skipped']} already present")
 
 
 def backup_main():
