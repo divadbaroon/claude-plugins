@@ -1865,6 +1865,13 @@
   NOTICE_KINDS.server_stale = true;
   NOTICE_KINDS.server_gone = true;
 
+  // What the Understanding tab says when an ask lands. Told apart from the
+  // builder's kinds because the answer is written under a different tab, and
+  // that is the tab clicking one of these opens.
+  var UNDERSTAND_KINDS = Object.create(null);
+  UNDERSTAND_KINDS.understood = true;
+  UNDERSTAND_KINDS.understand_failed = true;
+
   // Everything this page has already had its chance to show. The store keeps
   // its last twenty rows and state is polled every 1.5s, so without this the
   // same notice arrives again on every poll for the rest of the session.
@@ -2041,6 +2048,20 @@
   var ALERT_SECONDS_MAX = 120;
   var ALERT_DEFAULTS = { banners: true, seconds: 6 };
   var ALERT_OUT = { building: true, queued: true, asking: true };
+  // How long a builder's alert stays open to the rows still coming. A run
+  // writes its rows as it finishes them and this page polls, so one build of
+  // three rows arrives as three transitions -- three banners saying the same
+  // thing for the one job the reader asked for. Rows of a kind from a goal
+  // land in the alert already standing for them until nothing has joined it
+  // for this long; the next one after that is a separate finish and its own
+  // word. See raiseTodoAlerts.
+  var ALERT_JOIN_MS = 5000;
+  // The kinds that fold, apart from the hooks' and the Understanding tab's:
+  // these are the ones that stand for rows of a build.
+  var TODO_KINDS = Object.create(null);
+  TODO_KINDS.done = true;
+  TODO_KINDS.failed = true;
+  TODO_KINDS.asking = true;
   var ALERT_SAYS = Object.create(null);
   ALERT_SAYS.done = "TODO finished";
   ALERT_SAYS.failed = "TODO failed";
@@ -2049,6 +2070,11 @@
   // yes, and the prompt for the local chat is on the rail. Action needed,
   // so the banner stays up until it is read (see alertSticky).
   ALERT_SAYS.restart = "Restart needed — the prompt for your local Claude Code is on the rail";
+  // The Understanding tab's answers land the way a build's rows do: after the
+  // reader asked and went back to work. Same word, and clicking it opens the
+  // tab the answer is written under rather than the rows.
+  ALERT_SAYS.understood = "Understanding answered";
+  ALERT_SAYS.understand_failed = "Understanding could not be answered";
   // What a synced chat did, said in the same three lines a build gets.
   ALERT_SAYS.session_stopped = "Claude finished responding";
   ALERT_SAYS.subagent_returned = "A subagent returned";
@@ -2063,6 +2089,8 @@
       ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
       ".hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:var(--hc-warn,#9a6700)}",
+      ".hc-alert[data-hc-alert-kind=\"understood\"]{border-left-color:var(--hc-ok,#1a7f37)}",
+      ".hc-alert[data-hc-alert-kind=\"understand_failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
       ".hc-alert-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -2098,6 +2126,8 @@
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:#f85149}",
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:#d29922}",
       "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:#d29922}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"understood\"]{border-left-color:#3fb950}",
+      "[data-hc-theme=\"dark\"] .hc-alert[data-hc-alert-kind=\"understand_failed\"]{border-left-color:#f85149}",
       "[data-hc-theme=\"dark\"] .hc-alert-title,[data-hc-theme=\"dark\"] .hc-alert-center-head,[data-hc-theme=\"dark\"] .hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:#e6edf3}",
       "[data-hc-theme=\"dark\"] .hc-alert-detail,[data-hc-theme=\"dark\"] .hc-alert-close,[data-hc-theme=\"dark\"] .hc-alert-center-act,[data-hc-theme=\"dark\"] .hc-alert-center-empty,[data-hc-theme=\"dark\"] .hc-alert-row .hc-alert-title{color:#8b949e}",
       "[data-hc-theme=\"dark\"] .hc-alert-goal,[data-hc-theme=\"dark\"] .hc-alert-when{color:#6e7681}",
@@ -2249,10 +2279,18 @@
       return row && typeof row === "object" && typeof row.id === "string"
         && ALERT_SAYS[str(row.kind)];
     }).map(function (row) {
+      var at = (typeof row.at === "number") ? row.at : Date.parse(str(row.at)) || 0;
+      // An alert stands for every row that joined it, not only the one it was
+      // raised for; a log written before it could carries the one it named.
+      var ids = array(row.rowIds).filter(function (id) {
+        return typeof id === "string" && !!id;
+      });
+      if (!ids.length && str(row.rowId)) ids = [str(row.rowId)];
       return { id: row.id, kind: str(row.kind), goalId: str(row.goalId),
                goalTitle: str(row.goalTitle), rowId: str(row.rowId),
-               text: str(row.text), question: str(row.question),
-               at: (typeof row.at === "number") ? row.at : Date.parse(str(row.at)) || 0,
+               rowIds: ids, text: str(row.text), question: str(row.question),
+               at: at,
+               last: (typeof row.last === "number") ? row.last : at,
                read: !!row.read };
     }).slice(0, ALERT_LOG_MAX);
     return alertLog;
@@ -2377,11 +2415,12 @@
     var window_ms = alertSettings().seconds * 1000;
     var now = Date.now();
     var back = loadAlertLog().filter(function (entry) {
-      return !entry.read && (alertSticky(entry.kind) || now - entry.at < window_ms)
+      return !entry.read
+        && (alertSticky(entry.kind) || now - alertStamp(entry) < window_ms)
         && !alertBannerFor(entry.id);
     }).slice(0, NOTICE_MAX).reverse();
     back.forEach(function (entry) {
-      showAlertBanner(entry, window_ms - (now - entry.at));
+      showAlertBanner(entry, window_ms - (now - alertStamp(entry)));
     });
     return back.length;
   }
@@ -2390,7 +2429,91 @@
     if (!st || serverState.scope !== "chat" || !Array.isArray(st.goals)) return [];
     var diff = todoAlertsFrom(st.goals, alertPrev);
     alertPrev = diff.next;
-    return raiseAlerts(diff.fresh);
+    return raiseTodoAlerts(diff.fresh);
+  }
+
+  // What a folded alert is folded on: the goal whose build it reports, and
+  // the word it says. Two kinds from one build are two different pieces of
+  // news -- a reader told "TODO finished" has not been told one failed -- so
+  // they stand apart even when they land in the same poll.
+  function alertJoinKey(row) {
+    return str(row.goalId) + " " + str(row.kind);
+  }
+
+  // The last thing that happened to an alert: when it was raised, or when a
+  // row last joined it.
+  function alertStamp(entry) {
+    var last = (entry && typeof entry.last === "number") ? entry.last : 0;
+    var at = (entry && typeof entry.at === "number") ? entry.at : 0;
+    return last > at ? last : at;
+  }
+
+  function alertRowCount(entry) {
+    return array(entry && entry.rowIds).length || 1;
+  }
+
+  // One word per job, not per row: rows of one kind from one goal join the
+  // alert already standing for them, which comes back up with what it now
+  // counts and its clock restarted. Only while it is unread -- a reader who
+  // has been to the rail and back is owed the next finish as news -- and only
+  // while it is recent, so a run that goes quiet for ALERT_JOIN_MS and then
+  // finishes another row says so again rather than editing a card the reader
+  // has stopped watching.
+  function raiseTodoAlerts(fresh) {
+    if (!fresh || !fresh.length) return [];
+    var now = Date.now();
+    var log = reloadAlertLog();
+    var open = Object.create(null);
+    log.forEach(function (entry) {
+      if (!TODO_KINDS[entry.kind] || entry.read) return;
+      if (now - alertStamp(entry) > ALERT_JOIN_MS) return;
+      var key = alertJoinKey(entry);
+      if (!open[key]) open[key] = entry;
+    });
+    var made = [], grew = [];
+    fresh.forEach(function (row) {
+      var key = alertJoinKey(row);
+      var into = open[key];
+      if (!into) {
+        alertSeq += 1;
+        into = { id: "a" + now.toString(36) + "-" + alertSeq,
+                 kind: row.kind, goalId: row.goalId, goalTitle: row.goalTitle,
+                 rowId: row.rowId, rowIds: row.rowId ? [row.rowId] : [],
+                 text: row.text, question: row.question,
+                 at: now, last: now, read: false };
+        log.unshift(into);
+        open[key] = into;
+        made.push(into);
+        return;
+      }
+      if (row.rowId && into.rowIds.indexOf(row.rowId) < 0) into.rowIds.push(row.rowId);
+      into.last = now;
+      // A card raised in this same call carries its rows already; only one
+      // that was up before this poll has a banner to put right.
+      if (made.indexOf(into) < 0 && grew.indexOf(into) < 0) grew.push(into);
+    });
+    saveAlertLog();
+    if (alertSettings().banners) {
+      made.forEach(function (entry) { showAlertBanner(entry); });
+      grew.forEach(function (entry) { refreshAlertBanner(entry); });
+    }
+    renderBell();
+    renderAlertCenter();
+    applyPageTitle();
+    return made.concat(grew);
+  }
+
+  // A banner whose alert just grew says what it now counts and gets its full
+  // time over again -- the reader should not be left the last second of a card
+  // that changed under them -- and one whose time had run out comes back.
+  function refreshAlertBanner(entry) {
+    var box = alertBannerFor(entry.id);
+    if (!box) return showAlertBanner(entry);
+    var detail = box.querySelector(".hc-alert-detail");
+    var said = alertDetailOf(entry);
+    if (detail && said) detail.textContent = said;
+    armAlert(box);
+    return box;
   }
 
   // The build's last word on itself: whether what it changed is what is
@@ -2425,6 +2548,59 @@
     var diff = restartAlertsFrom(st.build_runs, st.goals, restartPrev);
     restartPrev = diff.next;
     return raiseAlerts(diff.fresh);
+  }
+
+  // The Understanding tab's asks, while they are out. A send puts every
+  // unanswered question to Claude at once and each comes back on its own, so
+  // what is counted here is the SEND, not the question: three answers landing
+  // together are one word, and one that lands a minute later on a follow-up
+  // is its own. Kept per goal -- a reader who asks here, moves to another
+  // goal and asks there has two jobs out, not one.
+  var understandOut = Object.create(null);
+
+  function understandAlertOut(goalId) {
+    var job = understandOut[goalId];
+    if (!job) {
+      job = understandOut[goalId] = { out: 0, answered: 0, failed: 0,
+                                      question: "" };
+    }
+    job.out += 1;
+    return job;
+  }
+
+  // One ask back. Nothing is said until the last of the batch lands: the
+  // banner reports the job, the way the reader sent it.
+  function understandAlertIn(goalId, ok, question) {
+    var job = understandOut[goalId];
+    if (!job) return [];
+    if (ok) job.answered += 1;
+    else job.failed += 1;
+    if (!job.question) {
+      job.question = str(question).replace(/\s+/g, " ").replace(/^ | $/g, "");
+    }
+    job.out -= 1;
+    if (job.out > 0) return [];
+    delete understandOut[goalId];
+    // One question named -- answered or not, it is the one the reader is
+    // waiting on. A batch counts itself instead: four questions will not fit
+    // on the one line a banner has.
+    var said = job.answered + job.failed === 1 && job.question
+      ? job.question
+      : [job.answered ? job.answered + (job.answered === 1 ? " answer" : " answers") : "",
+         job.failed ? job.failed + " failed" : ""]
+        .filter(function (part) { return !!part; }).join(", ");
+    return raiseAlerts([{ kind: job.answered ? "understood" : "understand_failed",
+                          goalId: str(goalId),
+                          goalTitle: alertGoalTitle(goalId), rowId: "",
+                          text: said, question: "" }]);
+  }
+
+  function alertGoalTitle(goalId) {
+    var title = "";
+    array(serverState.goals).forEach(function (goal) {
+      if (goal && goal.id === goalId) title = str(goal.title).trim();
+    });
+    return title || "Untitled";
   }
 
   function raiseAlerts(fresh) {
@@ -2474,14 +2650,27 @@
     return alertStackBox;
   }
 
+  // A folded alert names the row it was raised for and counts the rest: one
+  // line has room for what came back and how much of it there was, and the
+  // rail has the rest.
+  function alertAndMore(entry, said) {
+    var more = alertRowCount(entry) - 1;
+    return more > 0 ? said + " +" + more + " more" : said;
+  }
+
   function alertDetailOf(entry) {
-    if (entry.kind === "asking" && entry.question) return entry.question;
+    if (entry.kind === "asking" && entry.question) {
+      return alertAndMore(entry, entry.question);
+    }
     if (entry.kind === "restart") return entry.text || RESTART_WHY;
+    // The question that was answered, or what a batch of them came to. There
+    // is no row to fall back on naming.
+    if (UNDERSTAND_KINDS[entry.kind]) return entry.text;
     // A hook that carried nothing to quote gets a headline and no blank
     // line pretending there was something to say. A TODO always has a row
     // to name, so an empty one there is a bug worth seeing.
     if (NOTICE_KINDS[entry.kind]) return entry.text;
-    return entry.text || "(untitled TODO)";
+    return alertAndMore(entry, entry.text || "(untitled TODO)");
   }
 
   function alertBannerNode(entry) {
@@ -2590,7 +2779,10 @@
     // is the whole of it: moving the rail to a goal it never named would
     // take the reader off whatever they were working on.
     if (NOTICE_KINDS[entry.kind]) return true;
-    railTab = "todos";
+    // An answer is written under Understanding, not against a row: going to
+    // it means the tab it is in, or the reader lands on rows that say nothing
+    // about what they were told.
+    railTab = UNDERSTAND_KINDS[entry.kind] ? "understand" : "todos";
     if (entry.goalId) {
       if (typeof window !== "undefined" && typeof window.__hcSelectGoal === "function") {
         try { window.__hcSelectGoal(entry.goalId); } catch (e) {}
@@ -8879,7 +9071,7 @@
       // than left to fail. Anything that only reads -- folding, selecting,
       // the search, the panes -- is untouched.
       "[data-hc-launch][data-hc-readonly] [title=\"Delete goal\"]{display:none!important}",
-      "[data-hc-launch][data-hc-readonly] .hc-todo-build,[data-hc-launch][data-hc-readonly] .hc-todo-cancel,[data-hc-launch][data-hc-readonly] .hc-todo-copy,[data-hc-launch][data-hc-readonly] .hc-todo-reopen,[data-hc-launch][data-hc-readonly] .hc-todo-reply,[data-hc-launch][data-hc-readonly] .hc-rail-select{display:none!important}",
+      "[data-hc-launch][data-hc-readonly] .hc-todo-build,[data-hc-launch][data-hc-readonly] .hc-todo-cancel,[data-hc-launch][data-hc-readonly] .hc-todo-copy,[data-hc-launch][data-hc-readonly] .hc-todo-reopen,[data-hc-launch][data-hc-readonly] .hc-todo-reply,[data-hc-launch][data-hc-readonly] .hc-todos-top{display:none!important}",
       "[data-hc-launch][data-hc-readonly] .hc-src-rm,[data-hc-launch][data-hc-readonly] .hc-overview-objective{display:none!important}",
       // A guest may watch the build -- the log is the owner's account of what
       // their machine is doing -- but not open a window on that machine.
@@ -8953,13 +9145,19 @@
       "[data-hc-launch] .hc-rail-left::after{content:'';position:absolute;top:0;right:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}",
       "[data-hc-launch] .hc-rail-right::before{content:'';position:absolute;top:0;left:-4px;width:8px;height:100%;cursor:col-resize;z-index:6}",
       "[data-hc-launch][data-hc-dragging]{cursor:col-resize;user-select:none}",
+      // A frame swallows the pointer: the embedded preview sits over the
+      // middle pane, and once the pointer crossed onto it the document
+      // stopped hearing the drag -- the divider stuck where it was until
+      // the pointer came back. Nothing is clicked while a divider is
+      // being dragged, so the frames stand aside for the length of it.
+      "[data-hc-launch][data-hc-dragging] iframe{pointer-events:none}",
       // The two panel toggles in the header, before the theme switch.
       "[data-hc-launch] .hc-panels{order:-1;display:inline-flex;align-items:center;gap:8px;padding-right:8px;border-right:1px solid var(--bd);align-self:center}",
       "[data-hc-launch][data-hc-overview] .hc-panels{display:none}",
       "[data-hc-launch] .hc-panel{display:inline-flex;cursor:pointer;color:var(--fnt);user-select:none}",
       "[data-hc-launch] .hc-panel:hover,[data-hc-launch] .hc-panel-on{color:var(--ink)}",
       // Rail headings, shared by both rails.
-      "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd)}",
+      "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd);overflow:hidden}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
       // Two tabs and a save stamp, in place of the old single label.
       // The onboarding, over everything: until a chat says which project it
@@ -9065,6 +9263,8 @@
       "[data-hc-launch] .hc-todo-watch-meta{flex:1;min-width:0;font:500 10.5px/1.5 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--dtxt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}",
       "[data-hc-launch] .hc-todo-watch-btn{flex:none;padding:2px 7px;border:1px solid var(--bd2);border-radius:4px;font:600 10px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer}",
       "[data-hc-launch] .hc-todo-watch-btn:hover{color:var(--ink);border-color:var(--ink)}",
+      "[data-hc-launch] .hc-todo-watch-hide{flex:none;padding:0 3px;font:600 13px/1.2 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-todo-watch-hide:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-todo-watch-last{margin-top:5px;font:10.5px/1.5 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-todo-watch-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
       "[data-hc-launch] .hc-todo-watch-row{display:flex;gap:8px;font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere}",
@@ -9108,6 +9308,12 @@
       "[data-hc-launch] .hc-todo-restart-hide:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-todo-restart-prompt{margin:0;padding:8px 10px;font:11.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
+      // Copy sits at the top right of the list, above the rows rather than
+      // in the header: a control that comes and goes with the rows moved
+      // the four tabs onto a second line the moment a TODO was typed. This
+      // strip is there whether or not there is anything in the list, so
+      // nothing below it moves.
+      "[data-hc-launch] .hc-todos-top{flex:none;display:flex;justify-content:flex-end;padding:9px 12px 0}",
       "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-copy:hover{color:var(--ink);border-color:var(--ink)}",
       "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -9115,16 +9321,13 @@
       "[data-hc-launch] .hc-todo-reopen{color:var(--ink);cursor:pointer;text-decoration:underline;text-underline-offset:2px}",
       "[data-hc-launch] .hc-todo-build{margin-left:auto;padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
       "[data-hc-launch] .hc-todo-build[data-hc-todo-build=\"on\"]{color:#fff;background:#1f6feb;border-color:#1f6feb;cursor:pointer}",
-      "[data-hc-launch] .hc-rail-select{margin-left:auto;font:500 10px 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--fnt);cursor:pointer;user-select:none}",
-      "[data-hc-launch] .hc-rail-select:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
-      // Four tabs now, and the widest of them is a word: the row they sit in
-      // is only as wide as the rail. They keep their whole names and the save
-      // stamp beside them gives way instead -- it is the one thing in that
-      // row that says nothing the reader has to be able to read in full. On a
-      // rail dragged narrow the four wrap to a second line rather than one of
-      // them being cut in half.
-      "[data-hc-launch] .hc-rail-tabs{flex:0 1 auto;gap:9px;flex-wrap:wrap}",
+      // Four tabs, on one line and staying there. They are the rail's
+      // navigation: a row of them that reflows while the reader is typing
+      // moves the thing they were about to click. The save stamp beside
+      // them is what gives way -- it is the one thing in that row nobody
+      // has to read in full -- and the row clips rather than wraps.
+      "[data-hc-launch] .hc-rail-tabs{flex:0 0 auto;gap:9px;flex-wrap:nowrap;white-space:nowrap}",
       "[data-hc-launch] .hc-rail-saved{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       // The Notes tab. The goal's document, written where the TODOs it is
       // about are -- between them and the prompt they are copied into, so the
@@ -9203,7 +9406,12 @@
       // then the field under it. The headings say what the fields are and the
       // boxes say it again in their placeholders; a third line saying it a
       // third time was only ever in the way of the writing.
-      "[data-hc-launch] .hc-rail-understand{flex:1 1 auto;min-height:0;overflow-y:auto;display:none;flex-direction:column;gap:16px;padding:13px 16px 16px}",
+      // No padding under the column: the foot below carries it instead. A
+      // sticky foot pins to the bottom of its containing block, which is the
+      // content box -- so a bottom padding here left a strip of the column
+      // showing *under* the pinned foot, and the answer scrolling through it
+      // read as a hole torn in the prose.
+      "[data-hc-launch] .hc-rail-understand{flex:1 1 auto;min-height:0;overflow-y:auto;display:none;flex-direction:column;gap:16px;padding:13px 16px 0}",
       "[data-hc-launch] .hc-understand-sec{display:flex;flex-direction:column;gap:7px}",
       "[data-hc-launch] .hc-understand-head{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
       "[data-hc-launch] .hc-understand-scenario,[data-hc-launch] .hc-understand-ask,[data-hc-launch] .hc-understand-follow{display:block;width:100%;box-sizing:border-box;resize:none;overflow:hidden;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:8px 10px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none}",
@@ -9220,7 +9428,10 @@
       // It stays on the bottom edge while the column scrolls -- the reader
       // types their way down a growing list of questions, and the thing they
       // do next has to be where they can see it.
-      "[data-hc-launch] .hc-understand-foot{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;gap:10px;margin-top:auto;padding:10px 0 0;background:var(--panel);border-top:1px solid var(--bd)}",
+      // It carries the column's bottom padding so that its own box reaches
+      // the bottom of the scrollport: everything above it passes behind it
+      // and is gone, rather than reappearing in a strip below the button.
+      "[data-hc-launch] .hc-understand-foot{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;gap:10px;margin-top:auto;padding:10px 0 16px;background:var(--panel);border-top:1px solid var(--bd)}",
       "[data-hc-launch] .hc-understand-send{flex:none;margin-left:auto;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
       "[data-hc-launch] .hc-understand-send:hover{filter:brightness(1.08)}",
       "[data-hc-launch] .hc-understand-send[data-hc-busy]{cursor:default;filter:none;opacity:.55}",
@@ -9230,9 +9441,13 @@
       // question above it rather than as the next thing in the column.
       "[data-hc-launch] .hc-understand-thread{display:flex;flex-direction:column;gap:9px;margin:2px 0 0 3px;padding-left:10px;border-left:1px solid var(--bd)}",
       "[data-hc-launch] .hc-understand-followq{font:11px/1.55 'Source Code Pro',monospace;color:var(--mut)}",
-      // The answer, wrapped like the prose it is but keeping the breaks the
-      // model put in: its paragraphs are its own.
-      "[data-hc-launch] .hc-understand-answer{white-space:pre-wrap;font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt)}",
+      // The answer, drawn by the markdown reader: its own scroller taken
+      // away, since the column already has one, and its last block's margin
+      // with it -- the rule above the foot is close enough to a paragraph
+      // end without one.
+      "[data-hc-launch] .hc-understand-answer{font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-understand-answer .hc-md{max-height:none;overflow:visible;font:inherit;color:inherit}",
+      "[data-hc-launch] .hc-understand-answer .hc-md>*:last-child{margin-bottom:0}",
       // The lines a shaped scenario left blank, and what would fill them.
       "[data-hc-launch] .hc-understand-blanks{display:flex;flex-direction:column;gap:3px}",
       "[data-hc-launch] .hc-understand-blank-head{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
@@ -9541,7 +9756,7 @@
   // "[Image #1]" -- and the row remembers which file the marker names. N
   // counts up across the whole list and is never reused, so a marker means
   // the same file wherever the reader later moves it. Deleting the marker
-  // from the text un-cites the file: what leaves the rail (Copy TODOs, the
+  // from the text un-cites the file: what leaves the rail (Copy all, the
   // copied prompt, a Build) resolves only the markers still present in some
   // row, marker to path, so the session reading it can open them.
 
@@ -9636,7 +9851,7 @@
   }
 
   function todoCopyText(items, notes) {
-    // The body the Copy TODOs control puts on the clipboard: the rows with
+    // The body the Copy all control puts on the clipboard: the rows with
     // their states, and the goal's notes underneath as CONTEXT only -- the
     // notes describe the goal, and a session pasted this body must act on
     // the TODOs alone, never on changes the notes happen to mention.
@@ -9716,7 +9931,7 @@
   function todoParsePaste(text) {
     // What a pasted body means in rows. Bullet lines land one row each, at
     // their indent (four spaces or a tab to the level, "- ", "* " or "• "
-    // all bullets, a "[state]" from a Copy TODOs body dropped) -- and so
+    // all bullets, a "[state]" from a Copy all body dropped) -- and so
     // does a bulleted list whose newlines were lost ("- a- b- c"), where a
     // dash glued to the word before it opens the next bullet. A spaced
     // dash (" - ") is prose and stays. Plain lines land one row each too.
@@ -10170,7 +10385,13 @@
     var why = document.createElement("div");
     why.className = "hc-todo-restart-why";
     why.appendChild(span("hc-todo-restart-warn", "⚠"));
-    why.appendChild(span("hc-todo-restart-why-text", restart.why || RESTART_WHY));
+    // Claude's own sentence, and it names files and commands in backticks:
+    // read as markdown so those land as code chips. Only the reason -- the
+    // prompt below it is copied into another chat verbatim and is shown
+    // exactly as it will be sent.
+    ensureProjectStyles();
+    why.appendChild(mdInline(span("hc-todo-restart-why-text", ""),
+                             restart.why || RESTART_WHY));
     why.appendChild(hideBtn());
     wrap.appendChild(why);
     // The prompt, boxed and labelled for where it goes, with a copy button
@@ -10239,6 +10460,56 @@
   var watchFetched = {};     // goal id -> when that was
   var WATCH_REFETCH_MS = 2500;
 
+  // Putting the whole panel away. The log folds, but folding is not what a
+  // reader who has read the thing wants -- least of all when what it is
+  // holding is a warning to go and restart the program by hand, which they
+  // have just done. So the dismissal takes the panel itself, and is
+  // remembered against the RUN rather than the goal: the next build is news
+  // and brings the panel back, with its own state line and its own answer
+  // about restarting.
+  var WATCH_HIDE_KEY = "hc-watch-hidden-v1";
+  var watchHidden = null;
+
+  function loadWatchHidden() {
+    if (watchHidden) return watchHidden;
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(WATCH_HIDE_KEY) || "null"); }
+    catch (e) { saved = null; }
+    watchHidden = (saved && typeof saved === "object") ? saved : {};
+    return watchHidden;
+  }
+
+  function todoWatchStamp(run) {
+    // The run being put away: when it started, and how many rows it took,
+    // so a second build of the same goal is a different thing to hide.
+    if (!run || typeof run !== "object") return "";
+    return str(run.started_at) + "#" + (+run.rows || 0);
+  }
+
+  function todoWatchIsHidden(goalId, run) {
+    var id = str(goalId), stamp = todoWatchStamp(run);
+    if (!id || !stamp) return false;
+    return loadWatchHidden()[id] === stamp;
+  }
+
+  function todoWatchHide(goalId, run) {
+    var id = str(goalId);
+    if (!run) {
+      var runs = serverState.buildRuns || {};
+      run = runs[id];
+    }
+    var stamp = todoWatchStamp(run);
+    if (!id || !stamp) return false;
+    // Read before writing, as the restart dismissal does: another window on
+    // the same store may have put its own panels away since this one looked.
+    watchHidden = null;
+    var saved = loadWatchHidden();
+    saved[id] = stamp;
+    try { localStorage.setItem(WATCH_HIDE_KEY, JSON.stringify(saved)); } catch (e) {}
+    renderTodoRail(true);
+    return true;
+  }
+
   function todoWatchRun() {
     var runs = serverState.buildRuns || {};
     return (todoGoalId && runs[todoGoalId]) ? runs[todoGoalId] : null;
@@ -10251,6 +10522,25 @@
       watchLines[goalId] = (res && res.ok) ? array(res.lines) : [];
       if (todoGoalId === goalId) renderTodoRail(true);
     });
+  }
+
+  function todoTopSlot(host) {
+    // Copy, at the top right of the list. Made here as well as in the shell
+    // for the reason the watch panel below is: a workspace whose page was
+    // served by older code still gets the control.
+    var box = host.querySelector(".hc-todos-top");
+    if (box) return box;
+    box = document.createElement("div");
+    box.className = "hc-todos-top";
+    box.setAttribute("contenteditable", "false");
+    var copy = document.createElement("span");
+    copy.className = "hc-todo-copy";
+    copy.textContent = "Copy all";
+    box.appendChild(copy);
+    var list = host.querySelector(".hc-todos-list");
+    if (list && host.insertBefore) host.insertBefore(box, list);
+    else host.appendChild(box);
+    return box;
   }
 
   function todoWatchSlot(host) {
@@ -10270,7 +10560,19 @@
   function renderTodoWatch(host) {
     if (!host) return false;
     var box = todoWatchSlot(host);
-    var line = todoWatchLine(todoWatchRun());
+    var run = todoWatchRun();
+    // Dismissed: this run's panel is gone -- the line, the log, the terminal
+    // and the restart notice with them -- until the next build.
+    var line = todoWatchIsHidden(todoGoalId, run) ? null : todoWatchLine(run);
+    // A dismissed restart notice leaves the line here, before the key below
+    // is taken from it. Left in, the key would not move when the notice was
+    // put away -- and the panel of a build that has finished says the same
+    // thing on every poll forever after, so nothing else would move it
+    // either: the × would write down the dismissal and the notice would stay
+    // on the screen until the next build.
+    if (line && line.restart && todoRestartHidden(todoGoalId, line.restart)) {
+      line.restart = null;
+    }
     var open = !!watchOpen[todoGoalId];
     var logged = open ? array(watchLines[todoGoalId]) : [];
     // Redrawn only when it would say something different. A poll lands every
@@ -10320,6 +10622,17 @@
     log.title = "everything this build has done so far";
     log.setAttribute("data-hc-todo-log", str(todoGoalId));
     head.appendChild(log);
+    // And a way to be rid of it. Not a fold -- a folded panel is still a
+    // panel taking the foot of the rail, and what is being put away here has
+    // been read.
+    var hide = document.createElement("span");
+    hide.className = "hc-todo-watch-hide";
+    hide.textContent = "×";
+    hide.setAttribute("data-hc-todo-watch-hide", str(todoGoalId));
+    hide.setAttribute("role", "button");
+    hide.setAttribute("aria-label", "hide this build panel");
+    hide.title = "hide this — the next build brings it back";
+    head.appendChild(hide);
     box.appendChild(head);
     var last = document.createElement("div");
     last.className = "hc-todo-watch-last";
@@ -11055,8 +11368,9 @@
       }
       return;
     } else if (mod && event.key === "a") {
-      // Every pickable row, picked for the build -- the same toggle as the
-      // Select all control, not a text selection. Cmd+A again releases them.
+      // Every pickable row, picked for the build -- a selection for
+      // building, not a text selection. Cmd+A again releases them, which
+      // leaves the button back at the whole list, where it starts.
       // The caret stays where it was, so the next Cmd+A (or any key) still
       // lands on the list.
       event.preventDefault();
@@ -11287,9 +11601,22 @@
     });
   }
 
+  // A row a build could take: written, and not already out with one or done.
+  function todoOpenRow(row) {
+    return !!(row && str(row.text).trim()
+              && (!row.status || row.status === "failed"));
+  }
+
   function todoPickable() {
-    return array(todoItems).filter(function (row) {
-      return row.text.trim() && (!row.status || row.status === "failed");
+    return array(todoItems).filter(todoOpenRow);
+  }
+
+  function todoBuildable(items) {
+    // What Build takes when nothing is picked: the list. Pressing it with
+    // rows in front of you means those rows -- picking is for building SOME
+    // of them, and is never what the reader has to do first.
+    return array(items).filter(todoOpenRow).map(function (row) {
+      return row.id;
     });
   }
 
@@ -11313,20 +11640,6 @@
     var tag = (node && node.tagName) ? String(node.tagName).toUpperCase() : "";
     return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT"
       || !!(node && node.isContentEditable);
-  }
-
-  function todoSole(items) {
-    // The rows to build when nothing is picked and there is only one thing
-    // to pick: the list's one unsent family (a row, or a row and what is
-    // nested under it). Rows with no text are nothing to build and do not
-    // count; two unsent families are a choice, and nothing is chosen.
-    var rows = array(items), live = [];
-    rows.forEach(function (row, i) {
-      if (str(row.text).trim() && (!row.status || row.status === "failed")) live.push(i);
-    });
-    if (!live.length) return [];
-    var family = todoFamily(rows, live[0]);
-    return live.every(function (i) { return family.indexOf(i) >= 0; }) ? live : [];
   }
 
   function todoBlankAfter(items, sent) {
@@ -11393,10 +11706,9 @@
     // printed in its corner, where they read it before pressing.
     if (todoBuilding || !todoGoalId || !todoItems) return;
     var ids = todoPickedIds();
-    if (!ids.length) {
-      // Nothing picked and one thing to pick: that is the build.
-      ids = todoSole(todoItems).map(function (i) { return todoItems[i].id; });
-    }
+    // Nothing picked is not nothing to do: it is the whole list. Picking
+    // narrows a build; it is not the price of starting one.
+    if (!ids.length) ids = todoBuildable(todoItems);
     if (!ids.length) return;
     todoBuildNow(ids);
   }
@@ -11725,9 +12037,9 @@
         return;
       }
       // Cmd+Enter from anywhere that is not a place to type -- the Build
-      // control just clicked, Select all, the tree -- is the build, the
-      // same as from the list. Once: the reader should not have to click
-      // back into the list first.
+      // control just clicked, the tree -- is the build, the same as from
+      // the list. Once: the reader should not have to click back into the
+      // list first.
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter"
           && railTab === "todos" && todoItems && !todoTypingTarget(node)) {
         event.preventDefault();
@@ -11939,6 +12251,12 @@
         todoRestartHide(hideFor);
         return;
       }
+      var hideWatch = node.getAttribute("data-hc-todo-watch-hide");
+      if (hideWatch !== null) {
+        event.preventDefault();
+        todoWatchHide(hideWatch);
+        return;
+      }
       var termFor = node.getAttribute("data-hc-todo-term");
       if (termFor !== null) {
         node.textContent = "opening…";
@@ -11952,11 +12270,6 @@
       if (node.className === "hc-todo-copy") { todoCopyAll(); return; }
       if (node.className === "hc-todo-build" || node.getAttribute("data-hc-todo-build") !== null) {
         todoBuild(); return;
-      }
-      if (node.className === "hc-rail-select") {
-        todoToggleAll();
-        renderTodoRail(true);
-        return;
       }
       if (node.className === "hc-todo-reopen") {
         node.textContent = "opening…";
@@ -12114,7 +12427,11 @@
       ask.style.marginLeft = (row.depth * 20 + 22) + "px";
       var q = document.createElement("div");
       q.className = "hc-todo-question";
-      q.textContent = row.question || "Claude has a question about this one.";
+      // Claude asking, so it is read the way Claude's other lines here are:
+      // a path or a flag it quotes comes through as code rather than as
+      // backticks the reader has to look past.
+      ensureProjectStyles();
+      mdInline(q, row.question || "Claude has a question about this one.");
       ask.appendChild(q);
       var reply = document.createElement("div");
       reply.className = "hc-todo-reply";
@@ -12966,15 +13283,17 @@
   // The frame is positioned in page coordinates, so anything that moves the
   // pane under it has to move it too -- and a sweep 700ms later is a frame
   // sitting over the wrong part of the window in the meantime.
+  function previewReflow() {
+    if (previewState && previewState.surface === "web") {
+      previewPlaceFrame(previewState.url);
+    }
+    return true;
+  }
+
   function previewWatchViewport() {
-    var again = function () {
-      if (previewState && previewState.surface === "web") {
-        previewPlaceFrame(previewState.url);
-      }
-    };
     if (typeof window === "undefined" || !window.addEventListener) return;
-    window.addEventListener("resize", again, true);
-    window.addEventListener("scroll", again, true);
+    window.addEventListener("resize", previewReflow, true);
+    window.addEventListener("scroll", previewReflow, true);
   }
 
   function renderOnboarding(force) {
@@ -13024,7 +13343,6 @@
     var list = todoHost();
     var tabs = document.querySelector(".hc-rail-tabs");
     var stamp = document.querySelector(".hc-rail-saved");
-    var select = document.querySelector(".hc-rail-select");
     var promptBox = document.querySelector(".hc-rail-prompt");
     var understandBox = document.querySelector(".hc-rail-understand");
     var notesBox = document.querySelector(".hc-rail-notes");
@@ -13109,14 +13427,6 @@
       // display is the one this overrules, and the sections stack in it.
       understandBox.style.display = railTab === "understand" ? "flex" : "none";
     }
-    if (select) {
-      var pickable = goal && railTab === "todos" ? todoPickable() : [];
-      select.style.display = pickable.length ? "" : "none";
-      var every = pickable.length && pickable.every(function (row) {
-        return todoPicked[row.id];
-      });
-      select.textContent = every ? "Deselect all" : "Select all";
-    }
     if (railTab === "understand") renderUnderstandTab(goal);
     if (goal && railTab === "prompt") renderPromptTab(goal);
     // The rows are priced off the same preview the Prompt tab prints, so the
@@ -13130,17 +13440,25 @@
     }
     if (railTab !== "todos") return true;
 
+    var top = todoTopSlot(host);
+    if (top) {
+      top.style.display = goal ? "" : "none";
+      var copyAll = top.querySelector(".hc-todo-copy");
+      if (copyAll) copyAll.textContent = todoCopied ? "copied ✓" : "Copy all";
+    }
     var actions = host.querySelector(".hc-todos-actions");
     if (actions) {
       actions.style.display = goal ? "" : "none";
-      var copy = actions.querySelector(".hc-todo-copy");
-      if (copy) copy.textContent = todoCopied ? "copied ✓" : "Copy TODOs";
       var build = actions.querySelector(".hc-todo-build");
       if (build) {
         var picked = todoPickedIds().length;
+        // What the press would do, said before it is pressed: the whole
+        // list by default, and only what was picked once something is.
+        var every = todoBuildable(todoItems).length;
         build.textContent = todoBuilding ? "Building…"
-          : picked ? "Build " + picked : "Build";
-        build.setAttribute("data-hc-todo-build", picked ? "on" : "off");
+          : picked ? "Build " + picked
+          : every ? "Build all" : "Build";
+        build.setAttribute("data-hc-todo-build", (picked || every) ? "on" : "off");
       }
       var note = actions.querySelector(".hc-todo-error");
       if (note) {
@@ -13708,6 +14026,10 @@
     understandSaveNow();
     understandAsking[qid] = true;
     var goalId = understandGoalId;
+    // An answer takes as long as a build does, and the reader is not held
+    // here while it is written: counted out now, and said once the last of
+    // the batch is back (see understandAlertIn).
+    understandAlertOut(goalId);
     renderTodoRail(true);
     fetch("/api/ask_scenario", {
       method: "POST",
@@ -13718,8 +14040,13 @@
       .catch(function () { return null; })
       .then(function (res) {
         delete understandAsking[qid];
+        var ok = !!(res && res.ok);
+        // Before the goal check, not after it: a reader still on this goal
+        // can see the answer appear, and one who moved on is exactly who the
+        // banner is for.
+        understandAlertIn(goalId, ok, (ok && str(res.asked)) || words);
         if (understandGoalId !== goalId) return;
-        if (!res || !res.ok) {
+        if (!ok) {
           understandError[qid] = str(res && res.error)
             || "the answer could not be generated";
           renderTodoRail(true);
@@ -13908,14 +14235,19 @@
   }
 
   function understandAnswerBlock(text) {
-    // The answer as Claude wrote it: prose, wrapped by the box it sits in,
-    // its own line breaks kept. It used to be drawn keyword by keyword,
-    // because answers came back in GIVEN / WHEN / THEN -- that shape belongs
-    // to the scenario now, which is written once and read by every build,
-    // and not to an answer read once by the person who asked for it.
+    // The answer as Claude wrote it, read rather than transcribed: it comes
+    // back as markdown -- `preview.py:225` in backticks, a name in bold, a
+    // list of the cases it found -- and printing the source of that made the
+    // punctuation part of the sentence. Same reader the panes and the
+    // highlight panel use, so code is a code chip everywhere in the product.
+    // It used to be drawn keyword by keyword, because answers came back in
+    // GIVEN / WHEN / THEN -- that shape belongs to the scenario now, which is
+    // written once and read by every build, and not to an answer read once by
+    // the person who asked for it.
     var box = document.createElement("div");
     box.className = "hc-understand-answer";
-    box.textContent = str(text);
+    ensureProjectStyles();
+    box.appendChild(markdownNode(str(text)));
     return box;
   }
 
@@ -14631,6 +14963,49 @@
     return l[side];
   }
 
+  // The same width, written where a drag can afford it. setRailWidth does
+  // three things and two of them are wasted sixty times a second:
+  // localStorage.setItem is synchronous, and the attribute pass re-reads a
+  // layout nothing else has touched. A drag writes the variable alone --
+  // once per frame, whatever the pointer reports -- and the store is asked
+  // for once, when the button comes up.
+  function paintRailWidth(side, px) {
+    var l = loadLayout();
+    l[side] = clampWidth(side, px);
+    var root = document.documentElement;
+    if (root && root.style && typeof root.style.setProperty === "function") {
+      root.style.setProperty(side === "left" ? "--hc-left" : "--hc-right",
+                             l[side] + "px");
+    }
+    // The embedded page is positioned in page coordinates from outside the
+    // artifact, so a rail that moves under it has to move it too -- or the
+    // preview hangs over the divider until the next render.
+    previewReflow();
+    return l[side];
+  }
+
+  // One callback per frame, and a plain timer where there are no frames
+  // (the test harness has no window). The handle carries which it was so
+  // it can be called off the same way.
+  function railFrame(fn) {
+    if (typeof window !== "undefined" && window.requestAnimationFrame) {
+      return { raf: true, id: window.requestAnimationFrame(fn) };
+    }
+    return { raf: false, id: setTimeout(fn, 16) };
+  }
+
+  function railFrameOff(handle) {
+    if (!handle) return false;
+    if (handle.raf) {
+      if (typeof window !== "undefined" && window.cancelAnimationFrame) {
+        window.cancelAnimationFrame(handle.id);
+      }
+    } else {
+      clearTimeout(handle.id);
+    }
+    return true;
+  }
+
   function setRailHidden(side, hidden) {
     var l = loadLayout();
     l[side === "left" ? "hideLeft" : "hideRight"] = !!hidden;
@@ -14696,7 +15071,15 @@
   function installRailDrag() {
     if (dragInstalled || !document.addEventListener) return false;
     dragInstalled = true;
-    var drag = null;
+    var drag = null, frame = null;
+    var where = function () {
+      return drag.side === "left" ? drag.x - drag.rect.left
+                                  : drag.rect.right - drag.x;
+    };
+    var paint = function () {
+      frame = null;
+      if (drag) paintRailWidth(drag.side, where());
+    };
     document.addEventListener("click", function (e) {
       var node = e.target;
       while (node && node !== document && !(node.getAttribute && node.getAttribute("data-hc-panel"))) {
@@ -14710,19 +15093,25 @@
       if (e.button !== 0) return;
       var hit = dividerAt(e.clientX, e.clientY);
       if (!hit) return;
-      drag = { side: hit.side, rect: hit.rect, moved: false };
+      drag = { side: hit.side, rect: hit.rect, moved: false, x: e.clientX };
       document.documentElement.setAttribute("data-hc-dragging", "");
       e.preventDefault();
     });
     document.addEventListener("mousemove", function (e) {
       if (!drag) return;
       drag.moved = true;
-      var px = drag.side === "left" ? e.clientX - drag.rect.left
-                                    : drag.rect.right - e.clientX;
-      setRailWidth(drag.side, px);
+      drag.x = e.clientX;
+      // The pointer reports faster than the screen redraws. Every report is
+      // remembered and one is drawn: the divider lands where the pointer is
+      // now, not where it was several reports ago.
+      if (!frame) frame = railFrame(paint);
     });
     document.addEventListener("mouseup", function () {
       if (!drag) return;
+      railFrameOff(frame);
+      frame = null;
+      // The one write to the store, at the width the pointer finished on.
+      if (drag.moved) setRailWidth(drag.side, where());
       drag = null;
       document.documentElement.removeAttribute("data-hc-dragging");
     });
@@ -15788,7 +16177,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-select\">Select all</span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-copy\">Copy TODOs</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n<div class=\"hc-notes-head\"><span>RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div class=\"hc-notes-prompts\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n<div class=\"hc-notes-head\"><span>RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div class=\"hc-notes-prompts\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's
@@ -16642,7 +17031,7 @@
       family: todoFamily,
       bands: todoBandOf,
       sectioned: todoSectioned,
-      sole: todoSole,
+      buildable: todoBuildable,
       blankAfter: todoBlankAfter,
       cancelHead: todoCancelHead,
       cancelHeads: todoCancelHeads,
@@ -16653,11 +17042,14 @@
       duration: buildDuration,
       watchLine: todoWatchLine,
       renderWatch: renderTodoWatch,
+      paintWatch: todoWatchPaint,
       restartOf: todoRestartOf,
       renderRestart: todoRestartPaint,
       copyRestart: todoRestartCopy,
       hideRestart: todoRestartHide,
       restartHidden: todoRestartHidden,
+      hideWatch: todoWatchHide,
+      watchHidden: todoWatchIsHidden,
       openLog: function (goalId) {
         watchOpen[goalId] = true;
         todoLoadLog(goalId);
@@ -16827,6 +17219,8 @@
     projectTheme: projectTheme,
     syncProjectTheme: syncProjectTheme,
     setRailWidth: setRailWidth,
+    paintRailWidth: paintRailWidth,
+    installRailDrag: installRailDrag,
     setRailHidden: setRailHidden,
     toggleRail: toggleRail,
     applyLayout: applyLayout,
@@ -16862,7 +17256,10 @@
       diff: todoAlertsFrom,
       trackRestart: trackRestartAlerts,
       restartDiff: restartAlertsFrom,
+      understandOut: understandAlertOut,
+      understandIn: understandAlertIn,
       sticky: alertSticky,
+      joinMs: function () { return ALERT_JOIN_MS; },
       noteOut: alertNoteOut,
       stack: alertStack,
       log: function () { return loadAlertLog().slice(); },

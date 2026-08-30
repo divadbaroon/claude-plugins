@@ -398,7 +398,7 @@ class TodoListModelTests(BridgeTestCase):
         self.assertIsNone(out)
 
     def test_the_todo_copy_carries_the_notes_as_context_only(self):
-        # The Copy TODOs body: rows with states first, then the goal's notes
+        # The Copy all body: rows with states first, then the goal's notes
         # under a CONTEXT header that says not to act on them.
         out = self.run_js(
             "var L = window.__hcPromptUI.todoList;"
@@ -1115,6 +1115,45 @@ class BuildWatchTests(BridgeTestCase):
         # neither the button nor the space it would have taken.
         self.assertIn(".hc-todo-watch-foot{", css)
         self.assertIn("[data-hc-readonly] .hc-todo-watch-foot", css)
+        # And a way out of it beside the log button.
+        self.assertIn(".hc-todo-watch-hide{", css)
+
+    def test_the_panel_carries_its_own_way_out(self):
+        # The log folds; the panel itself is dismissed, and the button names
+        # the goal it is dismissing for.
+        run = dict(self.RUN, started_at="2026-08-26T06:30:00+00:00")
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var box = document.createElement('div');"
+            "L.paintWatch(box, L.watchLine(%s), false, []);"
+            "var hide = box.querySelector('[data-hc-todo-watch-hide]');"
+            "out = hide ? [hide.textContent,"
+            "  hide.getAttribute('data-hc-todo-watch-hide'),"
+            "  hide.parentNode.className] : null;" % json.dumps(run))
+        self.assertEqual(["×", "", "hc-todo-watch-head"], out)
+
+    def test_a_dismissed_panel_stays_gone_until_the_next_build(self):
+        # Hidden, not folded -- and against the run, not the goal: a later
+        # build has its own state line and its own answer about restarting,
+        # and draws its own panel to say them in.
+        run = dict(self.RUN, started_at="2026-08-26T06:30:00+00:00")
+        later = dict(run, started_at="2026-08-27T09:00:00+00:00")
+        out = self.run_js(
+            "var L = window.__hcPromptUI.todoList;"
+            "var run = %s, later = %s;"
+            "var before = L.watchHidden('g1', run);"
+            "L.hideWatch('g1', run);"
+            "out = { before: before, after: L.watchHidden('g1', run),"
+            "  again: L.watchHidden('g1', later),"
+            "  elsewhere: L.watchHidden('g2', run),"
+            "  saved: JSON.parse(localStorage.getItem('hc-watch-hidden-v1')) };"
+            % (json.dumps(run), json.dumps(later)))
+        self.assertFalse(out["before"])
+        self.assertTrue(out["after"])
+        self.assertFalse(out["again"], "the next build brings the panel back")
+        self.assertFalse(out["elsewhere"], "one goal's panel, not every goal's")
+        # Written down, so a reload does not bring back what was put away.
+        self.assertEqual({"g1": "2026-08-26T06:30:00+00:00#2"}, out["saved"])
 
     # --- the restart check, under the line ----------------------------------
 
@@ -1329,8 +1368,8 @@ class RailSyncTests(BridgeTestCase):
         self.assertTrue(out)
 
 
-class SoleRowAndBlankRowTests(BridgeTestCase):
-    """Cmd+Enter with nothing picked, and the row a Build leaves behind."""
+class BuildableRowsAndBlankRowTests(BridgeTestCase):
+    """What a Build takes with nothing picked, and the row it leaves behind."""
 
     def rows(self, spec):
         return [{"id": "t%08d" % i, "text": t, "depth": d, "status": s,
@@ -1341,17 +1380,28 @@ class SoleRowAndBlankRowTests(BridgeTestCase):
             "var L = window.__hcPromptUI.todoList; var items = %s; out = (%s);"
             % (json.dumps(self.rows(spec)), expression))
 
-    def test_one_unsent_family_is_the_sole_pick(self):
-        self.assertEqual([0], self.ask("L.sole(items)",
-                                       [("one", 0, ""), ("", 0, ""), ("done", 0, "done")]))
-        self.assertEqual([0, 1], self.ask("L.sole(items)",
-                                          [("head", 0, ""), ("child", 1, ""),
-                                           ("out", 0, "queued")]))
-        self.assertEqual([1], self.ask("L.sole(items)",
-                                       [("done", 0, "done"), ("again", 0, "failed")]))
-        # two unsent families are a choice, and an empty list is nothing
-        self.assertEqual([], self.ask("L.sole(items)", [("a", 0, ""), ("b", 0, "")]))
-        self.assertEqual([], self.ask("L.sole(items)",
+    def test_nothing_picked_builds_every_unsent_row(self):
+        # Every written row that is not already out with a build or done --
+        # a failed one is unsent again, an empty one is nothing to build.
+        self.assertEqual(
+            ["t00000000"],
+            self.ask("L.buildable(items)",
+                     [("one", 0, ""), ("", 0, ""), ("done", 0, "done")]))
+        self.assertEqual(
+            ["t00000000", "t00000001"],
+            self.ask("L.buildable(items)",
+                     [("head", 0, ""), ("child", 1, ""), ("out", 0, "queued")]))
+        self.assertEqual(
+            ["t00000001"],
+            self.ask("L.buildable(items)",
+                     [("done", 0, "done"), ("again", 0, "failed")]))
+        # Two families are no longer a choice the reader has to make: both
+        # of them are the build.
+        self.assertEqual(
+            ["t00000000", "t00000001"],
+            self.ask("L.buildable(items)", [("a", 0, ""), ("b", 0, "")]))
+        # And a list with nothing unsent in it builds nothing.
+        self.assertEqual([], self.ask("L.buildable(items)",
                                       [("", 0, ""), ("out", 0, "building")]))
 
     def test_a_build_leaves_an_empty_row_at_the_foot_of_the_active_band(self):
@@ -1486,6 +1536,43 @@ class RailReconcileTests(BridgeTestCase):
         "var A = {id: 'ta', text: 'one', depth: 0, status: '', question: ''};"
         "var B = {id: 'tb', text: 'restored', depth: 0, status: '', question: ''};"
     )
+
+    def test_the_button_offers_the_whole_list_with_nothing_picked(self):
+        # Picking narrows a build; it is not what starting one costs. With
+        # nothing picked the button is armed and means the list -- and with
+        # nothing written it is neither.
+        out = self.run_js(
+            self.RAIL_DOM
+            + "var build = document.createElement('span');"
+            "build.className = 'hc-todo-build'; acts.appendChild(build);"
+            "var ui = window.__hcPromptUI;"
+            "var say = function () { return [build.textContent,"
+            "  build.getAttribute('data-hc-todo-build')]; };"
+            "put([A, B]); ui.renderTodoRail();"
+            "var whole = say();"
+            "put([{id: 'tz', text: '', depth: 0, status: '', question: ''}]);"
+            "ui.renderTodoRail();"
+            "out = { whole: whole, none: say() };")
+        self.assertEqual(["Build all", "on"], out["whole"])
+        self.assertEqual(["Build", "off"], out["none"])
+
+    def test_copy_sits_above_the_rows_and_not_in_the_header(self):
+        # The header carries the four tabs and nothing that comes and goes:
+        # a control appearing there the moment a TODO was typed pushed the
+        # tabs onto a second line under the reader's pointer.
+        out = self.run_js(
+            self.RAIL_DOM
+            + "var ui = window.__hcPromptUI;"
+            "put([A]); ui.renderTodoRail();"
+            "var top = host.querySelector('.hc-todos-top');"
+            "var copy = top && top.querySelector('.hc-todo-copy');"
+            "out = { where: host.children.map(function (k) { return k.className; }),"
+            "  copy: copy ? copy.textContent : null,"
+            "  select: !!document.querySelector('.hc-rail-select') };")
+        self.assertEqual("Copy all", out["copy"])
+        self.assertEqual("hc-todos-top", out["where"][0],
+                         "the strip sits above the rows")
+        self.assertFalse(out["select"], "no select-all control in the header")
 
     def test_a_row_the_store_gained_while_the_rail_had_focus_survives_its_save(self):
         # The rail loads [A]; the caret sits in it. The store gains B (a
@@ -5425,6 +5512,29 @@ class LaunchSkinTests(BridgeTestCase):
         self.assertEqual([380, 200, 720, 360, "200px", "360px",
                           {"left": 200, "right": 360,
                            "hideLeft": False, "hideRight": False}], out)
+
+    def test_a_drag_writes_the_variable_and_leaves_the_store_for_the_end(self):
+        # The pointer reports faster than the screen redraws, and a store
+        # write is synchronous: what a drag does per report is the CSS
+        # variable, and the store is asked for once, when the button comes
+        # up (setRailWidth, which is what mouseup calls).
+        out = self.layout(
+            "var ui = window.__hcPromptUI;"
+            "var mid = ui.paintRailWidth('left', 412);"
+            "var kept = localStorage.getItem('hc-launch-layout-v2');"
+            "var end = ui.setRailWidth('left', 412);"
+            "[mid, props['--hc-left'], kept, end,"
+            " JSON.parse(localStorage.getItem('hc-launch-layout-v2')).left];")
+        self.assertEqual([412, "412px", None, 412, 412], out)
+
+    def test_a_drag_takes_the_pointer_back_from_the_embedded_page(self):
+        # The preview frame lies over the middle pane. While a divider is
+        # being dragged it must not take the pointer, or the document stops
+        # hearing the drag the moment the pointer crosses onto it and the
+        # divider sticks where it was.
+        css = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn("[data-hc-launch][data-hc-dragging] iframe"
+                      "{pointer-events:none}", css)
 
     def test_hiding_a_rail_is_a_root_attribute_and_survives_the_page(self):
         out = self.layout(

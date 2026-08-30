@@ -114,6 +114,204 @@ class TodoAlertTests(BridgeTestCase):
                json.dumps(goals({"g1": [("t1", "wire it", "done")]}))))
         self.assertEqual([["done", "TODO finished", "wire it", "Goal g1"]], out)
 
+    # --- one word per job, not per row -----------------------------------------
+    #
+    # A run writes its rows as it finishes them and the page polls, so a build
+    # of three rows arrives as three transitions. What the reader asked for
+    # once comes back once: rows of a kind from a goal join the alert standing
+    # for them while it is unread and recent, and it says what it counts.
+
+    def test_rows_that_finish_together_are_one_banner(self):
+        out = self.alerts(
+            "accept(%s); accept(%s); [drawn(), A.log().length, A.unread()];"
+            % (json.dumps(goals({"g1": [("t1", "wire it", "building"),
+                                        ("t2", "test it", "building"),
+                                        ("t3", "ship it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "done"),
+                                        ("t3", "ship it", "done")]}))))
+        self.assertEqual(
+            [[["done", "TODO finished", "wire it +2 more", "Goal g1"]], 1, 1],
+            out)
+
+    def test_rows_that_finish_across_polls_join_the_banner_that_is_up(self):
+        # The common shape: the run writes t1, the page polls, it writes t2 a
+        # second later. One card, counting up, not a second one under it.
+        out = self.alerts(
+            "accept(%s); accept(%s); var one = drawn();"
+            "accept(%s); [one, drawn(), A.log().length];"
+            % (json.dumps(goals({"g1": [("t1", "wire it", "building"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "done")]}))))
+        self.assertEqual(
+            [[["done", "TODO finished", "wire it", "Goal g1"]],
+             [["done", "TODO finished", "wire it +1 more", "Goal g1"]], 1],
+            out)
+
+    def test_a_row_that_lands_after_the_window_is_its_own_word(self):
+        # Five seconds of quiet and the reader has stopped watching that card;
+        # the next finish is news again rather than an edit to it.
+        out = self.alerts(
+            "var t = Date.now(); Date.now = function () { return t; };"
+            "accept(%s); accept(%s);"
+            "t += A.joinMs() + 1;"
+            "accept(%s); [A.log().map(function (e) { return e.text; }), A.unread()];"
+            % (json.dumps(goals({"g1": [("t1", "wire it", "building"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "done")]}))))
+        self.assertEqual([["test it", "wire it"], 2], out)
+
+    def test_the_window_runs_from_the_last_row_to_join_not_the_first(self):
+        # A build finishing a row every three seconds is one job all the way
+        # through, however long it takes.
+        out = self.alerts(
+            "var t = Date.now(); Date.now = function () { return t; };"
+            "accept(%s);"
+            "t += 3000; accept(%s);"
+            "t += 3000; accept(%s);"
+            "t += 3000; accept(%s);"
+            "[A.log().length, drawn()];"
+            % (json.dumps(goals({"g1": [("t1", "a", "building"),
+                                        ("t2", "b", "building"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "building"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "done"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "done"),
+                                        ("t3", "c", "done")]}))))
+        self.assertEqual([1, [["done", "TODO finished", "a +2 more", "Goal g1"]]],
+                         out)
+
+    def test_two_goals_finishing_together_are_two_jobs(self):
+        # Builds are per goal, so two goals coming back at once is two jobs
+        # even in the one poll that reports them.
+        out = self.alerts(
+            "accept(%s); accept(%s); [drawn(), A.log().length];"
+            % (json.dumps(goals({"g1": [("t1", "wire it", "building")],
+                                 "g2": [("t2", "ship it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done")],
+                                 "g2": [("t2", "ship it", "done")]}))))
+        self.assertEqual(
+            [[["done", "TODO finished", "wire it", "Goal g1"],
+              ["done", "TODO finished", "ship it", "Goal g2"]], 2],
+            out)
+
+    def test_a_finish_and_a_failure_from_one_build_stay_apart(self):
+        # A reader told "TODO finished" has not been told one failed, so the
+        # two words are not folded into each other.
+        out = self.alerts(
+            "accept(%s); accept(%s); drawn();"
+            % (json.dumps(goals({"g1": [("t1", "a", "building"),
+                                        ("t2", "b", "building"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "done"),
+                                        ("t3", "c", "failed")]}))))
+        self.assertEqual(
+            [["done", "TODO finished", "a +1 more", "Goal g1"],
+             ["failed", "TODO failed", "c", "Goal g1"]], out)
+
+    def test_two_questions_from_one_build_are_one_banner_naming_the_first(self):
+        out = self.alerts(
+            "accept(%s); accept(%s); [drawn(), A.log().length];"
+            % (json.dumps(goals({"g1": [("t1", "a", "building"),
+                                        ("t2", "b", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "asking", "which registry?"),
+                                        ("t2", "b", "asking", "which port?")]}))))
+        self.assertEqual(
+            [[["asking", "Claude has a question",
+               "which registry? +1 more", "Goal g1"]], 1], out)
+
+    def test_a_row_joining_puts_the_banner_back_up_with_its_full_time(self):
+        # The first card's clock had all but run out when the second row
+        # landed; the reader gets the whole of it over again.
+        out = self.alerts(
+            "var delays = [];"
+            "var real = setTimeout;"
+            "setTimeout = function (f, ms) { delays.push(ms); return real(f, ms); };"
+            "A.setSettings({ seconds: 9 });"
+            "accept(%s); accept(%s);"
+            "fireTimers();"
+            "var gone = stack().length;"
+            "accept(%s);"
+            "[gone, drawn(), delays, A.log().length];"
+            % (json.dumps(goals({"g1": [("t1", "wire it", "building"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "done")]}))))
+        self.assertEqual(
+            [0, [["done", "TODO finished", "wire it +1 more", "Goal g1"]],
+             [9000, 9000], 1], out)
+
+    def test_an_alert_already_read_is_not_joined(self):
+        # Clicking through took the reader to the rail, which is where the
+        # first finish now lives; the next one is news of its own.
+        out = self.alerts(
+            "accept(%s); accept(%s);"
+            "A.markRead(A.log()[0].id, true);"
+            "accept(%s);"
+            "[A.log().map(function (e) { return [e.text, e.read]; }), A.unread()];"
+            % (json.dumps(goals({"g1": [("t1", "wire it", "building"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "building")]})),
+               json.dumps(goals({"g1": [("t1", "wire it", "done"),
+                                        ("t2", "test it", "done")]}))))
+        self.assertEqual([[["test it", False], ["wire it", True]], 1], out)
+
+    def test_a_folded_alert_lists_once_in_the_center(self):
+        out = self.alerts(
+            "accept(%s); accept(%s);"
+            "A.open();"
+            "var rows = A.center().querySelector('.hc-alert-center-list').children;"
+            "rows.map(function (r) { return ["
+            "  r.getAttribute('data-hc-alert-kind'),"
+            "  r.querySelector('.hc-alert-detail').textContent]; });"
+            % (json.dumps(goals({"g1": [("t1", "a", "building"),
+                                        ("t2", "b", "building"),
+                                        ("t3", "c", "building")]})),
+               json.dumps(goals({"g1": [("t1", "a", "done"),
+                                        ("t2", "b", "done"),
+                                        ("t3", "c", "done")]}))))
+        self.assertEqual([["done", "a +2 more"]], out)
+
+    def test_clicking_a_folded_alert_goes_to_the_goal(self):
+        out = self.alerts(
+            "var went = [];"
+            "window.__hcSelectGoal = function (id) { went.push(id); };"
+            "accept(%s); accept(%s);"
+            "fire('click', stack()[0].querySelector('.hc-alert-detail'));"
+            "[went, stack().length, A.log()[0].read, A.unread()];"
+            % (json.dumps(goals({"g2": [("t1", "a", "building"),
+                                        ("t2", "b", "building")]})),
+               json.dumps(goals({"g2": [("t1", "a", "done"),
+                                        ("t2", "b", "done")]}))))
+        self.assertEqual([["g2"], 0, True, 0], out)
+
+    def test_a_log_written_before_the_fold_still_reads(self):
+        # An entry stored by an older page carries the one row it named and
+        # says exactly what it said then.
+        out = self.alerts(
+            "store['hc-alerts-log-v1'] = JSON.stringify([{id: 'a1', kind: 'done',"
+            "  goalId: 'g1', goalTitle: 'Goal g1', rowId: 't1', text: 'wire it',"
+            "  question: '', at: 1700000000000, read: false}]);"
+            "accept([]); A.open();"
+            "var rows = A.center().querySelector('.hc-alert-center-list').children;"
+            "[A.log()[0].rowIds, rows[0].querySelector('.hc-alert-detail').textContent];")
+        self.assertEqual([["t1"], "wire it"], out)
+
     def test_a_global_vault_says_nothing(self):
         out = self.alerts(
             "accept(%s); accept(%s); [drawn(), A.log().length];"
@@ -450,6 +648,94 @@ class TodoAlertTests(BridgeTestCase):
             "[went, stack().length, A.log()[0].read, window.__hcPromptUI.todoState().tab];"
             % (g, g))
         self.assertEqual([["g1"], 0, True, "todos"], out)
+
+    # --- the Understanding tab's answers ---------------------------------------
+    #
+    # A question put to Claude from the rail is written out of sight, the way
+    # a build's rows are, and the reader is not held at the tab while it is.
+    # The word comes when the whole send is back: three questions asked at
+    # once are one banner, not three.
+
+    ONE = json.dumps(goals({"g1": [("t1", "wire it", "done")]}))
+    TWO = json.dumps(goals({"g1": [("t1", "wire it", "done")],
+                            "g2": [("t2", "ship it", "done")]}))
+
+    def test_an_answer_from_the_understanding_tab_is_a_banner(self):
+        out = self.alerts(
+            "accept(%s);"
+            "A.understandOut('g1'); var mid = drawn().length;"
+            "A.understandIn('g1', true, 'Who wins a conflict?');"
+            "[mid, drawn(), A.unread()];" % self.ONE)
+        self.assertEqual(
+            [0, [["understood", "Understanding answered",
+                  "Who wins a conflict?", "Goal g1"]], 1], out)
+
+    def test_a_send_of_several_questions_is_one_banner(self):
+        out = self.alerts(
+            "accept(%s);"
+            "A.understandOut('g1'); A.understandOut('g1'); A.understandOut('g1');"
+            "A.understandIn('g1', true, 'one'); A.understandIn('g1', true, 'two');"
+            "var mid = drawn().length;"
+            "A.understandIn('g1', true, 'three');"
+            "[mid, drawn(), A.log().length];" % self.ONE)
+        self.assertEqual(
+            [0, [["understood", "Understanding answered", "3 answers",
+                  "Goal g1"]], 1], out)
+
+    def test_an_answer_that_never_came_says_so_and_names_the_question(self):
+        out = self.alerts(
+            "accept(%s); A.understandOut('g1');"
+            "A.understandIn('g1', false, 'Who wins a conflict?');"
+            "drawn();" % self.ONE)
+        self.assertEqual(
+            [["understand_failed", "Understanding could not be answered",
+              "Who wins a conflict?", "Goal g1"]], out)
+
+    def test_a_send_that_half_landed_counts_both_halves(self):
+        out = self.alerts(
+            "accept(%s);"
+            "A.understandOut('g1'); A.understandOut('g1'); A.understandOut('g1');"
+            "A.understandIn('g1', true, 'one'); A.understandIn('g1', false, '');"
+            "A.understandIn('g1', true, 'two');"
+            "drawn();" % self.ONE)
+        self.assertEqual(
+            [["understood", "Understanding answered", "2 answers, 1 failed",
+              "Goal g1"]], out)
+
+    def test_two_goals_asked_from_are_two_jobs(self):
+        # A reader who asks here, moves to another goal and asks there is
+        # waiting on two answers, not on one batch of two.
+        out = self.alerts(
+            "accept(%s); A.understandOut('g1'); A.understandOut('g2');"
+            "A.understandIn('g1', true, 'about one');"
+            "var mid = drawn().map(function (d) { return d[3]; });"
+            "A.understandIn('g2', true, 'about two');"
+            "[mid, drawn().map(function (d) { return [d[2], d[3]]; })];"
+            % self.TWO)
+        self.assertEqual(
+            [["Goal g1"], [["about one", "Goal g1"], ["about two", "Goal g2"]]],
+            out)
+
+    def test_an_answer_to_an_ask_this_page_never_made_says_nothing(self):
+        # A reload while an answer is out leaves nothing to report against;
+        # the tab reads it from the goal when it opens.
+        out = self.alerts(
+            "accept(%s); [A.understandIn('g1', true, 'stray'), drawn()];"
+            % self.ONE)
+        self.assertEqual([[], []], out)
+
+    def test_clicking_an_answer_opens_the_goal_s_understanding_tab(self):
+        # The answer is written under Understanding, so that is the tab the
+        # reader lands on -- the rows say nothing about what they were told.
+        out = self.alerts(
+            "var went = [];"
+            "window.__hcSelectGoal = function (id) { went.push(id); };"
+            "accept(%s); A.understandOut('g2');"
+            "A.understandIn('g2', true, 'Who wins a conflict?');"
+            "fire('click', stack()[0].querySelector('.hc-alert-detail'));"
+            "[went, stack().length, A.log()[0].read,"
+            " window.__hcPromptUI.todoState().tab];" % self.TWO)
+        self.assertEqual([["g2"], 0, True, "understand"], out)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 A paste lands as "[attachment #N]" in the row's text and a file on disk under
 the workspace; the row remembers which file each marker names, and every body
-that leaves the rail (Copy TODOs, Copy prompt, a Build) ends with the markers
+that leaves the rail (Copy all, Copy prompt, a Build) ends with the markers
 resolved to their paths, so the session reading it can open them.
 """
 

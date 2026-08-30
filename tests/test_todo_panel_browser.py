@@ -196,9 +196,10 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 # releases them.
                 page.keyboard.press("Meta+a")
                 expect(page.locator(".hc-todo-build")).to_have_text("Build 3")
-                expect(page.locator(".hc-rail-select")).to_have_text("Deselect all")
                 page.keyboard.press("Meta+a")
-                expect(page.locator(".hc-todo-build")).to_have_text("Build")
+                # Released: the button is back at the whole list, which is
+                # what it offers when nothing is picked.
+                expect(page.locator(".hc-todo-build")).to_have_text("Build all")
                 # A selection dragged across rows is one selection: what is
                 # typed over it lands in the row the selection began in.
                 page.locator(".hc-todo-line").nth(2).click()
@@ -210,8 +211,9 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 texts = [r[0] for r in self.rows()]
                 self.assertEqual(1, len(texts), texts)
                 self.assertTrue(texts[0].endswith("Z"), texts)
-                # Copy TODOs at the lower left copies the whole list, each
-                # row named with its state (no notes here, so no CONTEXT).
+                # Copy all, at the top right of the list, copies the whole
+                # list, each row named with its state (no notes here, so no
+                # CONTEXT).
                 page.locator(".hc-todo-copy").click()
                 expect(page.get_by_text("copied ✓", exact=True)).to_be_visible()
                 self.assertEqual("- [active] " + texts[0] + "\n",
@@ -432,18 +434,14 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.keyboard.type("Update the docs")
                 page.wait_for_timeout(1200)
                 build = page.locator(".hc-todo-build")
-                expect(build).to_have_text("Build")
-                # nothing picked, nothing built
-                build.click()
-                page.wait_for_timeout(300)
-                self.assertEqual(["", ""], [r[2] for r in self.rows()])
+                # Nothing picked is the whole list, and the button says so.
+                expect(build).to_have_text("Build all")
                 # pick the first with the gutter, the second with Cmd+/
                 page.locator(".hc-todo-dash").first.click()
                 expect(build).to_have_text("Build 1")
                 page.locator(".hc-todo-line").nth(1).click()
                 page.keyboard.press("Meta+/")
                 expect(build).to_have_text("Build 2")
-                expect(page.locator(".hc-rail-select")).to_have_text("Deselect all")
                 build.click()
                 self.go(page)
                 # building at once, then asking on the first and done on the
@@ -467,8 +465,8 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_one_cmd_enter_builds_the_sole_row_and_the_page_stays(self):
-        # Nothing picked and one row to pick: Cmd+Enter builds it -- once,
+    def test_one_cmd_enter_builds_what_is_unsent_and_the_page_stays(self):
+        # Nothing picked: Cmd+Enter builds what has not been sent -- once,
         # and from wherever the caret is. The page is not reloaded to learn
         # the rows' new state or the goal's: the tree's own chips update in
         # place. A fresh empty row is waiting for the next TODO, with the
@@ -530,27 +528,24 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 expect(self.tile(page, "Ship it").locator(".hc-todo-status")
                        ).to_have_text("needs you", timeout=10_000)
                 self.assertEqual("same page", page.evaluate("() => window.__hcStay"))
-                # Two unsent rows is a choice: with nothing picked, Cmd+Enter
-                # from the Build control's side of the page builds nothing.
+                # Several unsent rows is not a choice the reader has to make
+                # first: with nothing picked, the button offers the whole
+                # list and Cmd+Enter takes it -- all three, since "Update
+                # the docs" was never sent either.
                 page.keyboard.type("Also this")
                 page.wait_for_timeout(1200)
-                page.locator(".hc-rail-select").click()  # picks both
-                page.locator(".hc-rail-select").click()  # releases both; focus is off the list
-                expect(page.locator(".hc-todo-build")).to_have_text("Build")
-                page.keyboard.press("Meta+Enter")
-                page.wait_for_timeout(600)
-                # Nothing to build is nothing to price: no dialog either.
-                expect(page.locator(".hc-ask")).to_have_count(0)
-                self.assertEqual(["", ""], [r[2] for r in self.rows()
-                                            if r[0] in ("Write the tests", "Also this")])
-                # And with all three unsent rows picked ("Update the docs"
-                # was never sent), from off the list: one press builds.
-                page.locator(".hc-rail-select").click()
-                expect(page.locator(".hc-todo-build")).to_have_text("Build 3")
+                page.keyboard.press("Meta+a")   # picks them
+                page.keyboard.press("Meta+a")   # and releases them again
+                expect(page.locator(".hc-todo-build")).to_have_text("Build all")
                 page.keyboard.press("Meta+Enter")
                 self.go(page)
                 expect(self.tile(page, "Also this").locator(".hc-todo-status")
                        ).to_have_text("done", timeout=10_000)
+                self.assertEqual(
+                    [], [r for r in self.rows()
+                         if r[0] in ("Write the tests", "Also this",
+                                     "Update the docs") and not r[2]],
+                    "every unsent row went with the build")
             finally:
                 browser.close()
 
@@ -847,6 +842,106 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_the_watch_panel_can_be_dismissed_and_stays_gone_for_that_build(self):
+        # The log folds; the panel goes. What it holds once a build has
+        # finished is a warning to restart the program by hand -- read, done,
+        # and then in the way -- so the head carries an × that takes the
+        # whole panel, and a reload does not bring it back.
+        os.environ["STUB_HOLD"] = "8"
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                page.locator(".hc-todo-build").click()
+                self.go(page)
+                panel = page.locator(".hc-todo-watch")
+                expect(panel).to_be_visible(timeout=10_000)
+                page.locator("[data-hc-todo-watch-hide]").click()
+                expect(panel).to_be_hidden()
+                page.reload(wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                page.wait_for_timeout(2000)
+                expect(page.locator(".hc-todo-watch")).to_be_hidden()
+            finally:
+                browser.close()
+
+    def test_a_dragged_divider_follows_the_pointer_and_is_stored_once(self):
+        # The pointer reports far faster than the screen redraws, and the
+        # store is a synchronous write: a drag that wrote it per report ran
+        # behind the pointer. The width follows the pointer while the button
+        # is down and reaches the store once, when it comes up.
+        from playwright.sync_api import sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-rail-left", timeout=15000)
+                page.evaluate(
+                    "() => { window.__hcSaves = 0;"
+                    "  const put = localStorage.setItem.bind(localStorage);"
+                    "  localStorage.setItem = (k, v) => {"
+                    "    if (k === 'hc-launch-layout-v2') window.__hcSaves++;"
+                    "    return put(k, v); }; }")
+                rail = page.locator(".hc-rail-left").bounding_box()
+                width = lambda: page.evaluate(
+                    "() => parseInt(getComputedStyle(document.documentElement)"
+                    "  .getPropertyValue('--hc-left'), 10)")
+                before = width()
+                page.mouse.move(rail["x"] + rail["width"], rail["y"] + 200)
+                page.mouse.down()
+                page.mouse.move(rail["x"] + rail["width"] - 90,
+                                rail["y"] + 200, steps=12)
+                page.wait_for_timeout(120)
+                dragged = width()
+                self.assertLess(dragged, before - 60,
+                                "the rail follows the pointer while dragging")
+                self.assertEqual(0, page.evaluate("() => window.__hcSaves"),
+                                 "nothing is written to the store mid-drag")
+                page.mouse.up()
+                page.wait_for_timeout(60)
+                self.assertEqual(1, page.evaluate("() => window.__hcSaves"))
+                self.assertEqual(
+                    dragged,
+                    page.evaluate(
+                        "() => JSON.parse(localStorage"
+                        "  .getItem('hc-launch-layout-v2')).left"))
+            finally:
+                browser.close()
+
+    def test_the_tabs_keep_their_line_when_a_row_is_typed(self):
+        # The header is the rail's navigation. A control that appeared there
+        # the moment a TODO was written pushed the four tabs onto a second
+        # line under the reader's pointer; Copy sits above the rows instead.
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                page.wait_for_selector(".hc-todo-line", timeout=15000)
+                tabs = page.locator(".hc-rail-tabs")
+                before = tabs.bounding_box()
+                copy = page.locator(".hc-todos-top .hc-todo-copy")
+                expect(copy).to_have_text("Copy all")
+                page.locator(".hc-todo-line").first.click()
+                page.keyboard.type("Add the route")
+                page.wait_for_timeout(1200)
+                after = tabs.bounding_box()
+                self.assertEqual(round(before["height"]), round(after["height"]),
+                                 "the tab row must not grow a second line")
+                self.assertEqual(round(before["y"]), round(after["y"]))
+                # Every tab is still on that one line, and none of them wrapped.
+                for name in ("TODOs", "Notes", "Prompt", "Understanding"):
+                    box = tabs.get_by_text(name, exact=True).bounding_box()
+                    self.assertLess(box["height"], after["height"] + 1, name)
+                expect(page.locator(".hc-rail-select")).to_have_count(0)
+            finally:
+                browser.close()
+
     def test_enter_on_a_building_row_opens_a_note_pane_and_the_build_is_told(self):
         # Enter on a row the build is on is not a new row: it opens the pane
         # under the row, and what is typed there goes to the build's session
@@ -954,6 +1049,21 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 prompt = page.evaluate("() => navigator.clipboard.readText()")
                 self.assertTrue(prompt.startswith("Restart the goals-ui dev process"), prompt)
                 self.assertTrue(prompt.endswith("re-run `goals-ui serve --dev`."), prompt)
+                # The notice's own × puts it away -- for good, not until the
+                # next poll repaints the panel over it. What it sat under, the
+                # build's state line, stays: that is still worth reading.
+                # Pressed on a panel that has settled: the build is over, its
+                # numbers have stopped moving, and nothing but the dismissal
+                # itself is left to tell the panel it must be redrawn.
+                page.wait_for_timeout(3000)
+                settled = page.locator(".hc-todo-watch-meta").inner_text()
+                yes.locator("[data-hc-todo-restart-hide]").click()
+                expect(page.locator(".hc-todo-restart")).to_have_count(0, timeout=5_000)
+                page.wait_for_timeout(3000)
+                expect(page.locator(".hc-todo-restart")).to_have_count(0)
+                expect(page.locator(".hc-todo-watch-head")).to_be_visible()
+                self.assertEqual(settled,
+                                 page.locator(".hc-todo-watch-meta").inner_text())
                 # The row is the build's verdict, not the check's: still done.
                 self.assertEqual(["done"], [r[2] for r in self.rows()])
                 # Dismissing the banner marks it read; it does not come back.
@@ -1015,6 +1125,86 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 self.assertEqual(
                     ["Where do invites live?"],
                     [q["text"] for q in self.understanding()["questions"]])
+            finally:
+                browser.close()
+
+    def seed_answer(self, answer):
+        """g1 with one question already answered, so the column has prose."""
+        goals, _ = chat_state.load_goals(self.session, self.root)
+        goal = GM.by_id(goals, "g1")
+        goal["understanding"] = {
+            "scenario": "The preview pane and the build pane disagree.",
+            "shots": [],
+            "questions": [{"id": "qaaaa0001",
+                           "text": "Do the two panes share staleness?",
+                           "thread": [{"q": "Do the two panes share staleness?",
+                                       "a": answer}]}]}
+        GM.sanitize(goals)
+        chat_state.paths(self.session, self.root).goals.write_text(
+            json.dumps(goals))
+
+    def test_the_send_foot_reaches_the_bottom_of_the_column_it_pins_over(self):
+        # A sticky foot is held inside its containing block, which is the
+        # column's *content* box -- so a bottom padding on the column left a
+        # strip of the answer sliding along under the Ask Claude button, and
+        # the band the foot covered read as a hole torn in the prose.
+        from playwright.sync_api import sync_playwright
+        self.seed_answer("A long answer. " + ("word " * 400))
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                self.open_understanding(page, url)
+                page.wait_for_selector(".hc-understand-answer", timeout=15000)
+                page.evaluate(
+                    "() => { document.querySelector('.hc-rail-understand')"
+                    ".scrollTop = 200; }")
+                page.wait_for_timeout(300)
+                seen = page.evaluate("""() => {
+                  const box = document.querySelector('.hc-rail-understand');
+                  const foot = document.querySelector('.hc-understand-foot');
+                  const b = box.getBoundingClientRect();
+                  const f = foot.getBoundingClientRect();
+                  return {below: (b.top + box.clientHeight) - f.bottom,
+                          room: box.scrollHeight - box.clientHeight};
+                }""")
+                # The column really is scrolling -- otherwise nothing is
+                # pinned and the check below is vacuous.
+                self.assertGreater(seen["room"], 0, seen)
+                self.assertLessEqual(abs(seen["below"]), 1, seen)
+            finally:
+                browser.close()
+
+    def test_an_answer_is_read_as_markdown_and_not_as_its_source(self):
+        # What Claude writes back is markdown, and printing the source of it
+        # put the punctuation into the sentence: `preview.py` with its
+        # backticks, ** around a name, a - in front of every list line.
+        from playwright.sync_api import expect, sync_playwright
+        self.seed_answer(
+            "They do **not** share it, by the note at `preview.py:225`.\n"
+            "\n"
+            "- the source is hashed\n"
+            "- `package.json` is not\n"
+            "\n"
+            "```python\n"
+            "def fingerprint(path):\n"
+            "    return sha(path)\n"
+            "```\n")
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                self.open_understanding(page, url)
+                answer = page.locator(".hc-understand-answer")
+                expect(answer).to_be_visible(timeout=15000)
+                expect(answer.locator("strong")).to_have_text("not")
+                expect(answer.locator("code.hc-md-code").first).to_have_text(
+                    "preview.py:225")
+                expect(answer.locator(".hc-md-item")).to_have_count(2)
+                expect(answer.locator("pre.hc-md-pre")).to_contain_text(
+                    "def fingerprint(path):")
+                # And none of the markup is left standing in the prose.
+                shown = answer.inner_text()
+                self.assertNotIn("`", shown)
+                self.assertNotIn("**", shown)
             finally:
                 browser.close()
 
@@ -1105,6 +1295,61 @@ class TodoPanelBrowserTests(unittest.TestCase):
                     "Prompt", exact=True).click()
                 expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
                     "the later one wins", timeout=15000)
+            finally:
+                browser.close()
+
+    def test_answers_landing_say_so_once_for_the_whole_send(self):
+        # The tab is not somewhere to sit and wait: an answer takes as long as
+        # a build does, and the reader who asked has gone back to the rows.
+        # One banner for the send, naming the goal, and clicking it comes back
+        # to the tab the answers are written under.
+        from playwright.sync_api import expect, sync_playwright
+        asked = []
+
+        def answer(route):
+            asked.append(json.loads(route.request.post_data))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "ok": True, "asked": asked[-1]["question"],
+                              "answer": "The later write wins."}))
+
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.route("**/api/ask_scenario", answer)
+                self.open_understanding(page, url)
+                # The banner sits over the header; the clock it runs on is
+                # what the assertions below would otherwise race.
+                page.evaluate(
+                    "() => window.__hcPromptUI.alerts.setSettings("
+                    "  { seconds: 120 })")
+                page.locator(".hc-understand-scenario").fill(
+                    "Two people work one tree from two machines.")
+                page.locator(".hc-understand-ask").first.fill(
+                    "Who wins a conflict?")
+                page.get_by_text("+ Add question", exact=True).click()
+                page.locator(".hc-understand-ask").nth(1).fill(
+                    "Where do invites live?")
+                # The reader leaves for the rows and the send answers behind
+                # them; the banner is what tells them it is back. The tab is
+                # clicked on the node rather than at its coordinates -- the
+                # banner is drawn over the header the tabs are in.
+                page.get_by_text("Ask Claude", exact=True).click()
+                page.eval_on_selector(
+                    ".hc-rail-tabs",
+                    "el => Array.prototype.slice.call(el.children).filter("
+                    "  c => c.textContent.trim() === 'TODOs')[0].click()")
+                banner = page.locator(".hc-alert[data-hc-alert-kind=\"understood\"]")
+                expect(banner).to_have_count(1, timeout=15000)
+                expect(banner).to_contain_text("Understanding answered")
+                expect(banner).to_contain_text("2 answers")
+                self.assertEqual(2, len(asked))
+                # And it is the way back: to the tab the answers are under,
+                # not to the rows.
+                banner.locator(".hc-alert-detail").click()
+                expect(page.locator(".hc-understand-answer")).to_have_count(
+                    2, timeout=15000)
+                expect(banner).to_have_count(0)
             finally:
                 browser.close()
 
@@ -1287,7 +1532,7 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         # own; the session-mode path is covered by the queued/building test.
         self.skipTest("headless-only")
 
-    def test_one_cmd_enter_builds_the_sole_row_and_the_page_stays(self):
+    def test_one_cmd_enter_builds_what_is_unsent_and_the_page_stays(self):
         self.skipTest("headless-only")
 
     def test_a_done_row_is_clicked_open_and_sent_back_out_with_the_note(self):
@@ -1301,6 +1546,11 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
     def test_the_terminal_sits_under_the_watch_line_and_not_across_it(self):
         # The panel being placed is a headless build's; a queued row has no
         # run to watch, so there is no line and no terminal to sit under it.
+        self.skipTest("headless-only")
+
+    def test_the_watch_panel_can_be_dismissed_and_stays_gone_for_that_build(self):
+        # Same reason: a queued row has no run, so there is no panel to
+        # dismiss until the session takes it.
         self.skipTest("headless-only")
 
     def test_a_finished_build_is_checked_for_a_restart_and_the_prompt_is_on_the_rail(self):
