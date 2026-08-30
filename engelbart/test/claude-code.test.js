@@ -8,6 +8,11 @@ const test = require('node:test');
 
 const claudeCode = require('../lib/claude-code');
 
+// POSIX file semantics (mode bits, shebang-executable helpers) cannot be
+// reproduced on a Windows filesystem, so those assertions/tests are host-gated.
+// The win32-specific behavior is covered by the "(win32)" tests below.
+const WINDOWS_HOST = process.platform === 'win32';
+
 function temporaryRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-wiring-'));
 }
@@ -61,7 +66,7 @@ test('a settings file that does not exist yet is created, owner-only', () => {
   const root = temporaryRoot();
   const file = settingsIn(root);
   assert.equal(connect(root, file).changed, true);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(read(file).env.CLAUDE_CODE_API_KEY_HELPER_TTL_MS, String(claudeCode.HELPER_TTL_MS));
 });
 
@@ -148,15 +153,16 @@ test('disconnecting removes what signing in added and nothing else', () => {
   const root = temporaryRoot();
   const file = write(settingsIn(root), { theme: 'dark', env: { EDITOR: 'vim' } });
   // The order `npx engelbart-cli auth` uses: helper first, then settings.
-  claudeCode.writeHelper(root, path.join(root, 'auth.json'));
-  connect(root, file);
-  assert.ok(fs.existsSync(claudeCode.helperPath(root)));
+  // Pinned to the POSIX branch so helperPath is a file path on any host.
+  claudeCode.writeHelper(root, path.join(root, 'auth.json'), undefined, undefined, 'linux');
+  connect(root, file, { platform: 'linux' });
+  assert.ok(fs.existsSync(claudeCode.helperFilePath(root, 'linux')));
 
-  const result = claudeCode.disconnect({ managedRoot: root, settingsFile: file, baseUrl: BASE_URL });
+  const result = claudeCode.disconnect({ managedRoot: root, settingsFile: file, baseUrl: BASE_URL, platform: 'linux' });
 
   assert.equal(result.changed, true);
   assert.deepEqual(read(file), { theme: 'dark', env: { EDITOR: 'vim' } });
-  assert.equal(fs.existsSync(claudeCode.helperPath(root)), false);
+  assert.equal(fs.existsSync(claudeCode.helperFilePath(root, 'linux')), false);
 });
 
 // A member who repointed these at something of their own keeps it: we only
@@ -199,9 +205,9 @@ test('disconnecting with no settings file at all is not an error', () => {
 test('the credential helper is executable, self-contained, and owner-only', () => {
   const root = temporaryRoot();
   const credentials = path.join(root, 'auth.json');
-  const helper = claudeCode.writeHelper(root, credentials);
+  const helper = claudeCode.writeHelper(root, credentials, undefined, undefined, 'linux');
 
-  assert.equal(fs.statSync(helper).mode & 0o777, 0o700);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(helper).mode & 0o777, 0o700);
   const source = fs.readFileSync(helper, 'utf8');
   assert.match(source, /^#!\/usr\/bin\/env node/);
   assert.ok(source.includes(JSON.stringify(credentials)));
@@ -222,7 +228,7 @@ test('a standalone install writes a credential helper that needs no Node or PATH
   });
   const credentials = path.join(root, 'auth.json');
   const settings = settingsIn(root);
-  const helper = claudeCode.writeHelper(root, credentials, settings, BASE_URL);
+  const helper = claudeCode.writeHelper(root, credentials, settings, BASE_URL, 'linux');
   const source = fs.readFileSync(helper, 'utf8');
 
   assert.match(source, /^#!\/bin\/sh/);
@@ -290,7 +296,7 @@ function runHelper(helper, args = []) {
   });
 }
 
-test('a server that says the credit is spent does not get the stored key printed anyway', async () => {
+test('a server that says the credit is spent does not get the stored key printed anyway', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({
     status: 402,
     body: { error: 'your Engelbart Claude credit is used up' },
@@ -322,7 +328,7 @@ test('a server that says the credit is spent does not get the stored key printed
 // while that happens concludes the tool is lying and goes looking for a manual
 // fix. Naming the restart is the difference between a 20-second recovery and
 // hand-editing settings.json.
-test('the refusal names the restart, which is the only thing that recovers the session', async () => {
+test('the refusal names the restart, which is the only thing that recovers the session', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({
     status: 402,
     body: { error: 'your Engelbart Claude credit is used up' },
@@ -342,7 +348,7 @@ test('the refusal names the restart, which is the only thing that recovers the s
   }
 });
 
-test('a 200 that reports an exhausted status is a refusal too', async () => {
+test('a 200 that reports an exhausted status is a refusal too', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({
     status: 200,
     body: { apiKey: 'sk-fresh', baseUrl: BASE_URL, status: 'exhausted', budgetUsd: 25, spendUsd: 25 },
@@ -366,7 +372,7 @@ test('a 200 that reports an exhausted status is a refusal too', async () => {
 // machine that unwired itself over a bad minute would need reconnecting by
 // hand for no reason. Claude Code holds the last key in memory for its cache
 // window, so a brief blip never reaches here at all.
-test('an unreachable server yields no key and leaves the machine wired', async () => {
+test('an unreachable server yields no key and leaves the machine wired', { skip: WINDOWS_HOST }, async () => {
   const machine = wiredMachine('http://127.0.0.1:1');
   const result = await runHelper(machine.helper);
 
@@ -376,7 +382,7 @@ test('an unreachable server yields no key and leaves the machine wired', async (
   assert.equal(read(machine.settingsFile).apiKeyHelper, machine.helper, 'still wired');
 });
 
-test('a deployment having a bad minute is not a refusal', async () => {
+test('a deployment having a bad minute is not a refusal', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({ status: 503, body: { error: 'upstream unavailable' } }));
   try {
     const machine = wiredMachine(stub.base);
@@ -392,7 +398,7 @@ test('a deployment having a bad minute is not a refusal', async () => {
 });
 
 // The claim this whole change exists to make.
-test('nothing the helper reads or writes ever contains the key', async () => {
+test('nothing the helper reads or writes ever contains the key', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({
     status: 200,
     body: { apiKey: 'sk-fresh', baseUrl: BASE_URL, status: 'active', budgetUsd: 25, spendUsd: 1 },
@@ -416,7 +422,7 @@ test('nothing the helper reads or writes ever contains the key', async () => {
   }
 });
 
-test('a healthy server still rotates the key in front of the stored one', async () => {
+test('a healthy server still rotates the key in front of the stored one', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({
     status: 200,
     body: { apiKey: 'sk-fresh', baseUrl: BASE_URL, status: 'active', budgetUsd: 25, spendUsd: 1 },
@@ -435,7 +441,7 @@ test('a healthy server still rotates the key in front of the stored one', async 
 
 // A member who pointed Claude Code at their own helper after signing in keeps
 // it: unwiring is only ever allowed to remove the exact value we wrote.
-test('refusing never removes a helper we did not write', async () => {
+test('refusing never removes a helper we did not write', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({ status: 403, body: { error: 'this key is paused' } }));
   try {
     const machine = wiredMachine(stub.base);
@@ -459,7 +465,7 @@ test('refusing never removes a helper we did not write', async () => {
 // the write if the bytes moved, which narrows the window where a write already
 // in flight could be lost. That window is sub-millisecond and on the far side
 // of a process boundary, so it is not what this test pins down.)
-test('unwiring subtracts our three values and preserves the rest', async () => {
+test('unwiring subtracts our three values and preserves the rest', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({ status: 402, body: { error: 'credit used up' } }));
   try {
     const machine = wiredMachine(stub.base);
@@ -493,7 +499,7 @@ test('unwiring subtracts our three values and preserves the rest', async () => {
 // precedence over a saved claude.ai login and `/login` cannot override it. So
 // a member whose settings we would not touch has to be told the command that
 // does work, not left to find it.
-test('a refusal that could not unwire names the way out', async () => {
+test('a refusal that could not unwire names the way out', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({ status: 402, body: { error: 'credit used up' } }));
   try {
     const machine = wiredMachine(stub.base);
@@ -515,7 +521,7 @@ test('a refusal that could not unwire names the way out', async () => {
 // The whole answer to "how do I put this back?". It has to work with no
 // network, no npx, no `engelbart` on PATH, and no credentials file -- because
 // any of those being the problem is a reason someone is reaching for it.
-test('--disconnect puts Claude Code back on the member own account', async () => {
+test('--disconnect puts Claude Code back on the member own account', { skip: WINDOWS_HOST }, async () => {
   const machine = wiredMachine('http://127.0.0.1:1');
   const before = read(machine.settingsFile);
   assert.equal(before.apiKeyHelper, machine.helper);
@@ -531,7 +537,7 @@ test('--disconnect puts Claude Code back on the member own account', async () =>
   assert.equal(after.theme, 'dark', 'their settings are still their settings');
 });
 
-test('--disconnect works with the credentials file already gone', async () => {
+test('--disconnect works with the credentials file already gone', { skip: WINDOWS_HOST }, async () => {
   const machine = wiredMachine('http://127.0.0.1:1');
   fs.rmSync(path.join(machine.root, 'auth.json'), { force: true });
 
@@ -545,7 +551,7 @@ test('--disconnect works with the credentials file already gone', async () => {
   assert.equal(after.env, undefined);
 });
 
-test('--disconnect run twice is not an error', async () => {
+test('--disconnect run twice is not an error', { skip: WINDOWS_HOST }, async () => {
   const machine = wiredMachine('http://127.0.0.1:1');
   await runHelper(machine.helper, ['--disconnect']);
   const second = await runHelper(machine.helper, ['--disconnect']);
@@ -554,7 +560,7 @@ test('--disconnect run twice is not an error', async () => {
   assert.match(second.stdout, /already on your own account/);
 });
 
-test('--disconnect leaves a helper it did not write alone', async () => {
+test('--disconnect leaves a helper it did not write alone', { skip: WINDOWS_HOST }, async () => {
   const machine = wiredMachine('http://127.0.0.1:1');
   write(machine.settingsFile, { apiKeyHelper: '/opt/other-tool/key', theme: 'dark' });
 
@@ -566,7 +572,7 @@ test('--disconnect leaves a helper it did not write alone', async () => {
 
 // Nothing is left behind when the swap declines: a stray temp file beside the
 // member's settings is its own small mess.
-test('a declined swap leaves no temporary file behind', async () => {
+test('a declined swap leaves no temporary file behind', { skip: WINDOWS_HOST }, async () => {
   const stub = await stubServer(() => ({ status: 402, body: { error: 'credit used up' } }));
   try {
     const machine = wiredMachine(stub.base);

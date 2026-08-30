@@ -41,6 +41,27 @@ jobs:
       - run: npm test
         working-directory: engelbart
 
+  cross-compile-windows:
+    # The release builds every target on ubuntu, so the Windows binary it ships
+    # is cross-compiled, not native. Prove that path works before a release tag
+    # depends on it: build the same windows-x64 artifact on Linux and confirm it
+    # and its checksum land where install.ps1 expects them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Cross-compile the Windows binary on Linux
+        run: scripts/build-binary.sh windows-x64
+        working-directory: engelbart
+      - name: The release artifacts exist under their expected names
+        run: test -f dist/engelbart-windows-x64.exe && test -f dist/engelbart-windows-x64.exe.sha256
+        working-directory: engelbart
+
   windows-binary:
     # Question 3: does Bun compile a Windows .exe of this CLI that actually
     # runs? --help returns before any platform gate, so it isolates "does the

@@ -31,6 +31,11 @@ const {
   launcherName,
 } = require('../lib/installer');
 
+// POSIX symlinks, mode bits, and the shell-PATH branch (which uses the host
+// path.delimiter and resolve semantics) cannot be reproduced on a Windows
+// filesystem; those tests are host-gated. win32 behavior has its own tests.
+const WINDOWS_HOST = process.platform === 'win32';
+
 function capture() {
   let value = '';
   return {
@@ -223,6 +228,7 @@ test('pinned uv bootstrap verifies the archive and repairs a corrupt managed bin
     const options = {
       root,
       target,
+      platform: 'linux',
       runner(command, args, spawnOptions) {
         return spawnSync(command, args, { encoding: 'utf8', ...spawnOptions });
       },
@@ -350,7 +356,7 @@ test('switchLauncher refuses an unmanaged existing launcher', () => {
     fs.mkdirSync(path.join(fixture, 'bin'), { recursive: true });
     fs.writeFileSync(path.join(fixture, 'bin', 'hc'), 'mine');
     assert.throws(
-      () => switchLauncher(fixture, '/managed/hc', null),
+      () => switchLauncher(fixture, '/managed/hc', null, null, 'linux'),
       /unmanaged launcher/,
     );
   } finally {
@@ -376,7 +382,7 @@ test('the runtime check asks for the python distribution, not the npm package', 
 
 // A one-command install that ends by telling the user to run a command their
 // shell cannot find is not installed. This is the check that was missing.
-test('PATH: an already-reachable launcher is left alone', () => {
+test('PATH: an already-reachable launcher is left alone', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin:/home/u/.human-compact/bin', SHELL: '/bin/zsh' },
@@ -388,7 +394,7 @@ test('PATH: an already-reachable launcher is left alone', () => {
   assert.equal(got.added, false);
 });
 
-test('PATH: a launcher the shell cannot find is added to the zsh profile', () => {
+test('PATH: a launcher the shell cannot find is added to the zsh profile', { skip: WINDOWS_HOST }, () => {
   const writes = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -407,7 +413,7 @@ test('PATH: a launcher the shell cannot find is added to the zsh profile', () =>
   assert.match(writes[0][1], /engelbart-cli \(runtime on PATH\)/);
 });
 
-test('PATH: ZDOTDIR is honoured over the home directory', () => {
+test('PATH: ZDOTDIR is honoured over the home directory', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin', SHELL: '/bin/zsh', ZDOTDIR: '/home/u/cfg' },
@@ -431,7 +437,7 @@ test('PATH: the profile is never given the same line twice', () => {
   assert.equal(got.onPath, false);
 });
 
-test('PATH: an unrecognised shell is instructed, not edited', () => {
+test('PATH: an unrecognised shell is instructed, not edited', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin', SHELL: '/usr/bin/fish' },
@@ -443,7 +449,7 @@ test('PATH: an unrecognised shell is instructed, not edited', () => {
   assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
 });
 
-test('PATH: both launchers are linked into a directory the shell already searches', () => {
+test('PATH: both launchers are linked into a directory the shell already searches', { skip: WINDOWS_HOST }, () => {
   const links = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -465,7 +471,7 @@ test('PATH: both launchers are linked into a directory the shell already searche
   ]);
 });
 
-test('PATH: an hc that is not ours is never overwritten', () => {
+test('PATH: an hc that is not ours is never overwritten', { skip: WINDOWS_HOST }, () => {
   const appended = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -483,7 +489,7 @@ test('PATH: an hc that is not ours is never overwritten', () => {
   assert.deepEqual(appended, ['/home/u/.zshrc']);
 });
 
-test('PATH: re-running the installer reuses its own link', () => {
+test('PATH: re-running the installer reuses its own link', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/home/u/.local/bin', SHELL: '/bin/zsh' },
@@ -500,7 +506,7 @@ test('PATH: re-running the installer reuses its own link', () => {
   ]);
 });
 
-test('PATH: a directory on PATH but not a known bin dir is left alone', () => {
+test('PATH: a directory on PATH but not a known bin dir is left alone', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin:/opt/homebrew/bin', SHELL: '/bin/zsh' },
@@ -605,7 +611,7 @@ test('switchLauncher (win32): refuses to overwrite an unmanaged .cmd', () => {
   }
 });
 
-test('spawnableLauncher: POSIX returns the stable symlink, no manifest read', () => {
+test('spawnableLauncher: POSIX returns the stable symlink, no manifest read', { skip: WINDOWS_HOST }, () => {
   // A non-existent root would make a manifest read throw; POSIX must not read one.
   assert.equal(
     spawnableLauncher('/nope/.human-compact', 'hc', 'linux'),

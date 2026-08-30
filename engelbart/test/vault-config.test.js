@@ -8,6 +8,10 @@ const test = require('node:test');
 
 const vaultConfig = require('../lib/vault-config');
 
+// POSIX permission bits do not exist on a Windows filesystem (files read back
+// as 0o666), so the owner-only mode assertion is gated to POSIX hosts.
+const WINDOWS_HOST = process.platform === 'win32';
+
 function temporaryVault() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-vault-'));
 }
@@ -32,7 +36,7 @@ test('the project a member signed into is the one hc is handed', () => {
     anon_key: 'anon-key',
     email: 'm@example.com',
   });
-  assert.equal(fs.statSync(configIn(vault)).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(configIn(vault)).mode & 0o777, 0o600);
 });
 
 // The vault directory may not exist yet on a machine that has only just paired.

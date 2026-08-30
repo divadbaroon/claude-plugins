@@ -406,6 +406,7 @@ test('a repaired authentication starts onboarding with the issued key', async ()
   const output = capture();
   const code = await run({
     argv: ['auth'],
+    platform: 'linux',
     output: output.stream,
     errorOutput: capture().stream,
     managedRoot: '/managed',
@@ -867,6 +868,7 @@ test('the installer runs with no question, says whose it is, and extends PATH', 
     env,
     output: said.stream,
     errorOutput: capture().stream,
+    platform: 'linux',
     deps: { spawn, homedir: '/home/x' },
   });
   assert.equal(ran.length, 1);
