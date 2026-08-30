@@ -47,6 +47,7 @@ from typing import Any, Dict, List, Optional
 
 from . import chat_state as CS
 from .secure_io import atomic_write_json, secure_dir
+from ..platform_compat import kill_process_tree, pid_alive
 
 # The scripts a preview is allowed to run, best first. Nothing else in
 # package.json is reachable from here: "dev" and "start" are the two names
@@ -276,13 +277,7 @@ def detect(cwd: str) -> Dict[str, Any]:
 
 
 def _pid_alive(pid) -> bool:
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return pid_alive(pid)
 
 
 def _answers(port) -> bool:
@@ -325,11 +320,15 @@ def _identity(record: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     pid = record.get("pid")
     if not _pid_alive(pid):
         return None
-    try:
-        if os.getpgid(int(pid)) != int(pid):
+    # Confirm the pid still leads its own process group before signalling it, so
+    # a recycled pid cannot make us kill a stranger's group. Windows has no
+    # process groups; there kill_process_tree is scoped to this pid's own tree.
+    if hasattr(os, "getpgid"):
+        try:
+            if os.getpgid(int(pid)) != int(pid):
+                return None
+        except (OSError, TypeError, ValueError):
             return None
-    except (OSError, TypeError, ValueError):
-        return None
     command = _command_of(pid)
     manager = str(record.get("manager") or "")
     if command and manager and manager not in command and "node" not in command:
@@ -388,7 +387,7 @@ class Server:
             self.plan["command"], cwd=self.cwd, env=self._env(),
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, close_fds=True,
-            start_new_session=True)
+            **detached_popen_kwargs())
         self.started_at = time.time()
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
@@ -615,8 +614,8 @@ def stop(session_id: str, root: Optional[Path], cwd: str,
     # crash when the process ends non-zero on SIGTERM, as it should.
     _save_record(session_id, root, cwd, {**record, "stopping": True})
     try:
-        os.killpg(os.getpgid(int(pid)), signal.SIGTERM)
-    except (OSError, TypeError, ValueError):
+        kill_process_tree(int(pid))
+    except (TypeError, ValueError):
         return {"ok": False, "error": "the dev server could not be signalled",
                 **status(session_id, root, cwd)}
     deadline = time.monotonic() + timeout
@@ -625,10 +624,7 @@ def stop(session_id: str, root: Optional[Path], cwd: str,
             break
         time.sleep(0.05)
     else:
-        try:
-            os.killpg(os.getpgid(int(pid)), signal.SIGKILL)
-        except (OSError, TypeError, ValueError):
-            pass
+        kill_process_tree(int(pid), force=True)
     with _RUNS_GUARD:
         if _RUNS.get(_key(cwd)) is live:
             _RUNS.pop(_key(cwd), None)

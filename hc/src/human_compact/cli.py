@@ -12,6 +12,10 @@ import uuid
 from importlib import resources
 from pathlib import Path
 
+from .platform_compat import (
+    detached_popen_kwargs, pid_alive, replace_process, terminate_pid,
+)
+
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
 BART_SKILL_DIR = HOME / ".claude" / "skills" / "bart"
@@ -1131,7 +1135,9 @@ def work_main(argv=None):
     # is about to create to this goal. A stale claim would bind the wrong one.
     env[AE.GOAL_ENV] = goal["id"]
     AE.clear_claim(trajdir)
-    os.execvpe(claude, [claude] + passthrough, env)
+    # POSIX replaces this process with claude; Windows cannot, so it runs claude
+    # to completion and exits with its status. Either way this call never returns.
+    replace_process(claude, passthrough, env)
     return 0
 
 
@@ -1389,13 +1395,7 @@ def _write_server_registry(session_dir, value):
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return pid_alive(pid)
 
 
 def _package_code_stamp():
@@ -1468,7 +1468,7 @@ def _stop_chat_server(record, timeout=6.0):
     if pid is None:
         return False
     try:
-        os.kill(pid, signal.SIGTERM)
+        terminate_pid(pid)
     except OSError:
         # Already gone, or not ours to signal. Only the first is a success.
         return not _pid_alive(pid)
@@ -1940,8 +1940,8 @@ def chat_ui_main(argv=None):
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     close_fds=True,
-                    start_new_session=True,
                     env=child_env,
+                    **detached_popen_kwargs(),
                 )
             # Keep the Popen object alive while this short-lived parent polls
             # readiness. Tests can reap it explicitly; the real CLI exits and

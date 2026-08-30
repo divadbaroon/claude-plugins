@@ -34,6 +34,7 @@ from .goals import (  # noqa: F401
     strip_todo_items,
 )
 from .secure_io import secure_dir
+from ..platform_compat import maybe_fchmod, pid_alive
 
 
 SCHEMA_VERSION = 1
@@ -163,13 +164,7 @@ def _local_lock(lock_dir: Path) -> threading.RLock:
 
 
 def _pid_alive(pid: Any) -> bool:
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return pid_alive(pid)
 
 
 @contextmanager
@@ -233,7 +228,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
     )
     try:
         with tmp.open("wb") as handle:
-            os.fchmod(handle.fileno(), 0o600)
+            maybe_fchmod(handle.fileno(), 0o600)
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())

@@ -96,6 +96,7 @@ from . import chat_state as CS
 from . import goals as GM
 from . import project_store as PS
 from .secure_io import atomic_write_json
+from ..platform_compat import detached_popen_kwargs, kill_process_tree
 
 
 def _now() -> str:
@@ -1226,7 +1227,7 @@ class Run:
         self.process = subprocess.Popen(
             self._command(message, resume, model, effort), cwd=self.cwd,
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=log, text=True, close_fds=True, start_new_session=True)
+            stderr=log, text=True, close_fds=True, **detached_popen_kwargs())
         self.asked = None
         self.spawned_at = time.time()
         self.phase = phase
@@ -1307,8 +1308,8 @@ class Run:
         self.stopped = True
         assert self.process
         try:
-            os.killpg(os.getpgid(self.process.pid), 15)
-        except (OSError, ProcessLookupError):
+            kill_process_tree(self.process.pid)
+        except Exception:  # noqa: BLE001 - fall back to a direct terminate
             try:
                 self.process.terminate()
             except OSError:

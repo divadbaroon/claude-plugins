@@ -23,6 +23,7 @@ from .trajectory.secure_io import (
     open_private_append,
     secure_dir as _trajectory_secure_dir,
 )
+from .platform_compat import detached_popen_kwargs
 
 
 def home_dir() -> Path:
@@ -298,7 +299,7 @@ def _start_worker(root: Path, session_id: str, now: str) -> None:
         subprocess.Popen(
             [sys.executable, "-m", "human_compact.cli", "worker"],
             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-            start_new_session=True, env=child_env,
+            env=child_env, **detached_popen_kwargs(),
         )
 
 
