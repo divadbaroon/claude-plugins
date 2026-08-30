@@ -10,7 +10,7 @@
 #   scripts/build-binary.sh darwin-arm64 linux-x64 ...
 #
 # Known targets: darwin-arm64 darwin-x64 linux-x64 linux-arm64
-#                linux-x64-musl linux-arm64-musl
+#                linux-x64-musl linux-arm64-musl windows-x64
 #
 # Requires bun on PATH (or set BUN=/path/to/bun).
 set -euo pipefail
@@ -24,11 +24,20 @@ command -v "$BUN" >/dev/null || {
 
 bun_target() {
   case "$1" in
-    darwin-arm64|darwin-x64|linux-x64|linux-arm64|linux-x64-musl|linux-arm64-musl)
+    darwin-arm64|darwin-x64|linux-x64|linux-arm64|linux-x64-musl|linux-arm64-musl|windows-x64)
       echo "bun-$1" ;;
     *)
       echo "unknown target: $1" >&2
       exit 1 ;;
+  esac
+}
+
+# Bun appends .exe to a Windows --compile output; name the artifact to match
+# so its checksum file and the installer that downloads it agree.
+target_outfile() {
+  case "$1" in
+    windows-*) echo "dist/engelbart-$1.exe" ;;
+    *)         echo "dist/engelbart-$1" ;;
   esac
 }
 
@@ -64,11 +73,12 @@ checksum() {
 }
 
 for target in "${targets[@]}"; do
-  out="dist/engelbart-$target"
+  out="$(target_outfile "$target")"
   "$BUN" build compile/entry.js \
     --compile \
     --target="$(bun_target "$target")" \
     --outfile "$out"
-  (cd dist && checksum "engelbart-$target" > "engelbart-$target.sha256")
+  base="$(basename "$out")"
+  (cd dist && checksum "$base" > "$base.sha256")
   echo "built $out ($version)"
 done
