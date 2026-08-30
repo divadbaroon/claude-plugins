@@ -14,6 +14,17 @@ function state() {
   try { return fs.readFileSync(STATE_FILE, 'utf8').trim(); } catch { return process.env.STATE || 'active'; }
 }
 
+// What `--code` pulls down after redeeming: one web-approved project,
+// claimable once. Set PENDING=0 to start with nothing waiting.
+let pendingSetup = process.env.PENDING === '0' ? null : {
+  name: 'fake-project',
+  plan: 'A project the fake API pretends was set up on the web.',
+  goals: [{ label: 'See the whole loop work', why: 'that is the test' }],
+  chosen: [0],
+  todos: ['run the CLI with --code against this fake'],
+  subgoals: [],
+};
+
 function body(req) {
   return new Promise((resolve) => {
     let raw = '';
@@ -44,6 +55,25 @@ const server = http.createServer(async (req, res) => {
       return send(200, { email: 'you@example.com' });
     }
     if (input.action === 'revoke') return send(200, { revoked: true });
+    if (input.action === 'redeem') {
+      console.log(`  → setup code "${input.code}" redeemed`);
+      return send(200, { status: 'ready', token: 'egb_test_token', email: 'you@example.com' });
+    }
+    return send(400, { error: 'unknown action' });
+  }
+
+  if (url === '/api/engelbart-setup') {
+    const input = await body(req);
+    if (input.action === 'pending') {
+      // Claim-once, like the real endpoint: the first pull gets the project
+      // the fake pretends was approved on the web, later pulls get nothing.
+      const payload = pendingSetup;
+      pendingSetup = null;
+      console.log(payload
+        ? `  → pending setup claimed ("${payload.name}")`
+        : '  → pending setup asked for; nothing waiting');
+      return send(200, { payload });
+    }
     return send(400, { error: 'unknown action' });
   }
 
