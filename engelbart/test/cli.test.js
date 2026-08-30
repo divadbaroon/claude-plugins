@@ -875,7 +875,9 @@ test('the installer runs with no question, says whose it is, and extends PATH', 
   assert.match(ran[0].join(' '), /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
   assert.match(said.read(), /Anthropic's official installer/);
   assert.doesNotMatch(said.read(), /\[Y\/n\]/);
-  assert.equal(result.PATH, `/home/x/.local/bin${path.delimiter}/usr/bin`);
+  // localBin is built with the host's path.join (backslashes on Windows), so
+  // construct the expectation the same way rather than hardcoding a POSIX path.
+  assert.equal(result.PATH, `${path.join('/home/x', '.local', 'bin')}${path.delimiter}/usr/bin`);
 });
 
 test('on Windows the installer is the PowerShell one-liner, not bash+curl', async () => {
