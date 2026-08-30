@@ -51,6 +51,7 @@ _LAUNCH_COMMAND_HELP = (
     ("setup", "noninteractive npm onboarding"),
     ("chat-ui", "goal tree for one Claude chat"),
     ("setup-ui", "set a first project up, before there is a chat"),
+    ("setup-import", "create a project from an approved web setup"),
     ("supabase", "connect this workspace to your own Supabase"),
     ("chat-serve", "session-scoped goal server (internal)"),
     ("chat-hook", "Claude Code chat-state hook (internal)"),
@@ -1764,6 +1765,67 @@ def setup_ui_main(argv=None):
             webbrowser.open(page)
 
 
+def setup_import_main(argv=None):
+    """Create the project a member approved on the web, then open it.
+
+    The conversation already happened -- on berkeley.mathetic.com, before
+    this machine had Engelbart at all -- so there is nothing to ask here.
+    The payload is the web page's saved answers in setup_chat's own commit
+    vocabulary; commit() re-normalizes every field, so a payload from a
+    different (or hostile) origin can make at most a project with odd text
+    in it, never anything else. On success the one line on stdout is the
+    workspace URL, which is the same contract setup-ui keeps with the
+    installer that spawns it.
+    """
+    import contextlib
+    import io
+    import json
+    import webbrowser
+    ap = argparse.ArgumentParser(
+        prog="hc setup-import",
+        description="Create a project from an approved web setup.")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", help="path to the saved setup payload")
+    source.add_argument("--stdin", action="store_true",
+                        help="read the payload from standard input")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    try:
+        raw = sys.stdin.read() if args.stdin else Path(args.file).read_text()
+        payload = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"hc: could not read the setup payload: {exc}\n")
+        raise SystemExit(1)
+    if not isinstance(payload, dict):
+        sys.stderr.write("hc: the setup payload is not an object\n")
+        raise SystemExit(1)
+    from .trajectory import setup_chat as SETUP
+    result = SETUP.commit(None, payload.get("name"), payload.get("plan"),
+                          payload.get("goals"), payload.get("chosen"),
+                          payload.get("todos"), payload.get("subgoals") or [],
+                          bind="")
+    if not result.get("ok"):
+        sys.stderr.write(f"hc: {result.get('error') or 'could not create the project'}\n")
+        raise SystemExit(1)
+    # The workspace launcher prints one line, the URL; it is the mechanism
+    # here rather than the message, so it is captured, not printed twice.
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        chat_ui_main(["--session", result["tree_session"], "--cwd",
+                      result["cwd"], "--port", str(args.port), "--no-open"])
+    url = next((line.strip() for line in reversed(said.getvalue().splitlines())
+                if line.strip().startswith("http://127.0.0.1:")), "")
+    if not url:
+        sys.stderr.write("hc: the project was created but its workspace "
+                         "did not start; run `hc setup-ui` to open it\n")
+        raise SystemExit(1)
+    print(url)
+    if not args.no_open:
+        with contextlib.suppress(Exception):
+            webbrowser.open(url)
+
+
 def chat_ui_main(argv=None):
     """Open or reuse the detached UI belonging to one Claude chat."""
     import webbrowser
@@ -1983,6 +2045,8 @@ def hc_main():
         chat_ui_main(rest)
     elif cmd == "setup-ui":
         setup_ui_main(rest)
+    elif cmd == "setup-import":
+        setup_import_main(rest)
     elif cmd == "supabase":
         raise SystemExit(supabase_main(rest) or 0)
     elif cmd == "chat-serve":
