@@ -59,11 +59,11 @@ jobs:
         run: scripts/build-binary.sh windows-x64
         working-directory: engelbart
       - name: It runs (--help)
-        run: engelbart\dist\engelbart-windows-x64.exe --help
+        run: .\dist\engelbart-windows-x64.exe --help
         working-directory: engelbart
       # Informational until the installer is ported: install --dry-run hits
       # the platform gate that still rejects win32. Captured, not required.
       - name: install --dry-run (informational)
         continue-on-error: true
-        run: engelbart\dist\engelbart-windows-x64.exe install --dry-run
+        run: .\dist\engelbart-windows-x64.exe install --dry-run
         working-directory: engelbart
