@@ -1031,3 +1031,22 @@ test('a payload that cannot be materialized is saved, not lost', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('the web project still opens when the shell needs a PATH line', async () => {
+  // A first install is exactly the machine the web flow exists for, and a
+  // first install always still needs the PATH step: the import spawns the
+  // launcher by absolute path, so it must not wait for that step.
+  const printed = await installOutput({ onPath: false, added: true }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--global-vault', '2'],
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => ({ name: 'nuclear-sim' }),
+    importSetup: () => ({ url: 'http://127.0.0.1:8123/', name: 'nuclear-sim' }),
+  });
+  assert.match(printed, /export PATH=/);
+  assert.match(printed, /Your project "nuclear-sim" is open in the workspace/);
+});

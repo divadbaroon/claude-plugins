@@ -427,9 +427,12 @@ async function run(deps = {}) {
     // setup this member already finished in the browser, and asking them to
     // describe the work a second time would waste the conversation they had.
     // The claim is single-use on the server, so a payload that cannot be
-    // materialized is written to disk rather than lost.
+    // materialized is written to disk rather than lost. Unlike the setup
+    // page below, this does not wait for the PATH step: the launcher is
+    // spawned by its absolute path, and a first install -- the machine the
+    // web flow exists for -- always still needs that step.
     let imported = null;
-    if (accountReady && !needsPathStep && launcherPath
+    if (accountReady && launcherPath
         && account && account.stored && account.stored.token) {
       const payload = await (deps.fetchPendingSetup || auth.fetchPendingSetup)(
         auth.apiBase(authDeps.env), account.stored.token, authDeps);

@@ -93,7 +93,15 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  if (url === '/api/engelbart-config') return send(200, {});
+  if (url === '/api/engelbart-config') {
+    // A deployment that publishes no config marks the account as not fully
+    // wired, which gates the setup steps off -- the one state the fake is
+    // for. Never an overwrite: vault-config keeps a member's own project.
+    return send(200, {
+      supabaseUrl: 'https://fake.supabase.co',
+      supabaseAnonKey: 'anon-test-key',
+    });
+  }
   return send(404, { error: 'not found' });
 });
 
