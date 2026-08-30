@@ -3034,8 +3034,15 @@
       ".hc-overview-label small{font-weight:400;letter-spacing:.2px;text-transform:none;color:var(--fnt,#9b9b9b);margin-left:6px}",
       ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;font-size:15.5px!important;font-weight:600;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12.5px/1.6 'Source Code Pro',monospace;caret-color:var(--ink,#111)}",
       ".hc-overview-objective::placeholder{color:var(--fnt,#9b9b9b)}",
-      ".hc-overview-worktree{align-items:center}",
-      ".hc-overview-wt{margin-left:6px;max-width:100%;border:1px solid var(--bd2);border-radius:3px;background:var(--panel2);color:var(--ink,#111);font:11.5px/1.5 'Source Code Pro',monospace;padding:2px 6px;cursor:pointer;outline:none}",
+      // The row sits outside the facts column, so the 7px the column puts
+      // between rows is written here by hand.
+      ".hc-overview-worktree{align-items:center;margin-top:7px}",
+      // A select's natural width is its longest option, and an option here
+      // is a branch plus a whole path -- wide enough to walk out of the
+      // card. min-width:0 lets the flex row shrink it to what fits, and
+      // the -7px pulls its 6px text inset (plus border) back onto the
+      // column the other values start on.
+      ".hc-overview-wt{margin-left:-7px;flex:0 1 auto;min-width:0;max-width:100%;text-overflow:ellipsis;border:1px solid var(--bd2);border-radius:3px;background:var(--panel2);color:var(--ink,#111);font:11.5px/1.5 'Source Code Pro',monospace;padding:2px 6px;cursor:pointer;outline:none}",
       ".hc-overview-wt:hover{border-color:var(--acc)}",
       ".hc-overview-context{display:flex;box-sizing:border-box;max-width:100%;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);min-height:320px}",
       ".hc-overview-srcs{flex:0 0 220px;border-right:1px solid var(--bd,#e3e3e3);padding:14px 12px}",
@@ -3087,21 +3094,30 @@
       // written on the box, so a redraw cannot lose the reader's place.
       ".hc-overview-main,.hc-saved,.hc-docs{display:none}",
       ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on],.hc-docs[data-hc-on]{display:block}",
-      ".hc-docs-list{display:flex;flex-direction:column;gap:12px;max-width:680px}",
+      // The docs read as one centered column: the questions are the page,
+      // and a column hugging the left edge of a wide window reads as a
+      // sidebar to a page that is not there.
+      ".hc-docs{max-width:680px;margin:0 auto}",
+      ".hc-docs-list{display:flex;flex-direction:column;gap:14px}",
+      ".hc-docs-div{flex:none;height:1px;background:var(--bd,#e3e3e3)}",
       ".hc-docs-card{border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:14px 18px}",
-      ".hc-docs-q{font:600 12px 'Source Code Pro',monospace;color:var(--ink,#111)}",
-      ".hc-docs-a{margin-top:5px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
-      ".hc-docs-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-docs-q{font:600 12px 'Source Code Pro',monospace;color:var(--ink,#111);cursor:pointer;user-select:none;list-style:none}",
+      ".hc-docs-q::-webkit-details-marker{display:none}",
+      ".hc-docs-q::before{content:'+';display:inline-block;width:16px;color:var(--fnt,#9b9b9b)}",
+      ".hc-docs-card[open] .hc-docs-q::before{content:'−'}",
+      ".hc-docs-a{margin-top:5px;padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
       ".hc-docs-steps{margin:8px 0 0;padding-left:18px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
       ".hc-docs-step{margin-top:3px}",
-      ".hc-docs-reach{margin-top:22px;border-top:1px solid var(--bd,#e3e3e3);padding-top:14px;max-width:680px}",
+      ".hc-docs-reach{margin-top:6px;margin-left:16px}",
       ".hc-docs-reach-row{display:flex;gap:14px;padding:9px 2px;border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-docs-reach-row:last-child{border-bottom:0}",
       ".hc-docs-reach-where{flex:none;width:64px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding-top:2px}",
       ".hc-docs-reach-at{display:block;font-size:12px;color:var(--ink,#111);overflow-wrap:anywhere}",
       "a.hc-docs-reach-at{color:var(--acc,#a5492a);text-decoration:none}",
       "a.hc-docs-reach-at:hover{text-decoration:underline}",
-      ".hc-docs-reach-note{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-top:1px}",
+      ".hc-docs-contact{margin-top:26px;border-top:1px solid var(--bd,#e3e3e3);padding-top:14px}",
+      ".hc-docs-contact-note{margin-top:5px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
+      ".hc-docs-contact-list{margin-top:8px}",
       ".hc-saved-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
       ".hc-saved-acts{display:flex;gap:9px;align-items:center;margin:0 2px 14px}",
       ".hc-saved-link{flex:1 1 auto;width:auto;max-width:520px}",
@@ -5854,65 +5870,99 @@
   // written here once. The one people come for is credit: inference and
   // builds spend the Claude credit issued with an Engelbart account, and
   // when it is used up the fix is a person, not a setting -- which is why
-  // the ways to reach one are the bottom of the page.
+  // the ways to reach one are a question of their own.
 
   var DOCS_REACH = [
-    { where: "discord", at: "discord.com/invite/ACEK85XnR",
-      href: "https://discord.com/invite/ACEK85XnR",
-      note: "Fastest. Post and someone will pick it up." },
-    { where: "phone", at: "571-492-2873",
-      note: "If you are stuck mid-session and nothing else answers." },
-    { where: "email", at: "david@mathetic.com",
-      href: "mailto:david@mathetic.com",
-      note: "For anything that can wait a day." },
-    { where: "email", at: "hudson@mathetic.com",
-      href: "mailto:hudson@mathetic.com",
-      note: "Same, if David is not answering." },
+    { where: "discord", at: "discord.gg/eMtcZgPDy",
+      href: "https://discord.gg/eMtcZgPDy" },
+    { where: "phone", at: "571-492-2873" },
+    { where: "email", at: "david@mathetic.org",
+      href: "mailto:david@mathetic.org" },
   ];
 
   var DOCS_FAQ = [
-    { q: "What is this workspace?",
+    { q: "What is Engelbart?",
       a: "Your goals, plans, and problems, inferred from your Claude Code"
          + " conversations and kept in front of the model while you build."
          + " Nothing is analyzed until /goals-ui runs in a chat, and the"
-         + " document it builds is injected back as context." },
-    { q: "Where does my data live?",
-      a: "On this machine. Hooks record each chat's own prompts and events"
-         + " locally, owner-only; the server answers 127.0.0.1 and nobody"
-         + " else. Nothing leaves except the model calls your own claude"
-         + " CLI makes." },
-    { q: "Can I edit what it writes?",
-      a: "Yes -- every field on the overview and every goal is yours to"
-         + " retitle, rewrite, or delete. Inference appends under its own"
-         + " headings and never overwrites what you typed." },
-    { q: "What does Build do?",
-      a: "Picked TODO rows go to a fresh claude session in this project's"
-         + " checkout. A row that asks a question stops and waits in the"
-         + " rail; answer it there and the session continues." },
-    { q: "What if I run out of tokens?",
-      a: "Goal inference and builds spend the Claude credit issued with"
-         + " your Engelbart account. When it is used up they stop -- your"
+         + " document it builds is injected back as context. Every field"
+         + " here is yours to retitle, rewrite, or delete -- inference"
+         + " appends under its own headings and never overwrites what you"
+         + " typed." },
+    { q: "How do I reach out if I have questions?",
+      a: "Any of these lands with a person, not a bot:",
+      reach: true },
+    { q: "What are Engelbart tokens?",
+      a: "The Claude credit issued with your Engelbart account. Goal"
+         + " inference and builds spend it -- our credit, not yours -- and"
+         + " the key that carries it is fetched per use, never written to"
+         + " this machine. Run engelbart auth in a terminal to see what is"
+         + " left." },
+    { q: "What do I do if I run out of tokens?",
+      a: "Inference and builds stop when the credit is used up -- your"
          + " goals and notes are safe on disk, and nothing is lost.",
       steps: [
         "Run engelbart auth in a terminal to see what is left of your"
         + " credit.",
-        "If it reads used up, reach out to us below and we will top it up.",
+        "If it reads used up, reach out to us and we will top it up.",
         "Keep working meanwhile: the workspace still opens, and everything"
         + " you type is saved locally." ] },
+    { q: "How do I make an Anthropic account?",
+      a: "You do not need one -- this workspace spends Engelbart's own"
+         + " credit. If you want yours anyway: claude.ai is where a Claude"
+         + " account is made, the one Claude Code's /login signs into, and"
+         + " console.anthropic.com is where API keys are issued." },
+    { q: "How do I link my own Anthropic key?",
+      a: "Run engelbart logout to disconnect our key, then hand Claude"
+         + " Code your own credential: /login inside Claude Code for a"
+         + " claude.ai account, or export ANTHROPIC_API_KEY in your shell"
+         + " for a Console key. engelbart auth wires ours back whenever"
+         + " you want to return." },
+    { q: "What does Build do?",
+      a: "Picked TODO rows go to a fresh claude session in this project's"
+         + " checkout. A row that asks a question stops and waits in the"
+         + " rail; answer it there and the session continues." },
   ];
+
+  // The ways to reach a person, as rows in whatever box asks for them: the
+  // reach-out question carries them, and so does the contact foot of the
+  // page.
+  function reachNode(className) {
+    var box = el("div", className);
+    DOCS_REACH.forEach(function (way) {
+      var line = el("div", "hc-docs-reach-row");
+      line.appendChild(el("span", "hc-docs-reach-where", way.where));
+      var body = el("div", "hc-docs-reach-body");
+      if (way.href) {
+        var at = el("a", "hc-docs-reach-at", way.at);
+        at.setAttribute("href", way.href);
+        at.setAttribute("target", "_blank");
+        at.setAttribute("rel", "noreferrer noopener");
+        body.appendChild(at);
+      } else {
+        body.appendChild(el("div", "hc-docs-reach-at", way.at));
+      }
+      line.appendChild(body);
+      box.appendChild(line);
+    });
+    return box;
+  }
 
   function docsNode() {
     var page = el("div", "hc-docs");
     page.setAttribute("data-hc-page", "docs");
     var head = el("div", "hc-overview-ctxhead");
-    head.appendChild(el("div", "hc-overview-label", "docs"));
-    head.appendChild(el("span", "hc-docs-note",
-                        "the short answers · reach us at the bottom"));
+    head.appendChild(el("div", "hc-overview-label", "faq"));
     page.appendChild(head);
     var list = el("div", "hc-docs-list");
-    DOCS_FAQ.forEach(function (row) {
-      var card = el("div", "hc-docs-card");
-      card.appendChild(el("div", "hc-docs-q", row.q));
+    // Each question is a <details>, closed until asked: the page reads as
+    // the list of questions, and only the one being read takes the room.
+    // A rule between neighbours keeps two closed questions from reading
+    // as one card.
+    DOCS_FAQ.forEach(function (row, i) {
+      if (i) list.appendChild(el("div", "hc-docs-div"));
+      var card = el("details", "hc-docs-card");
+      card.appendChild(el("summary", "hc-docs-q", row.q));
       card.appendChild(el("div", "hc-docs-a", row.a));
       if (row.steps) {
         var steps = el("ol", "hc-docs-steps");
@@ -5921,30 +5971,18 @@
         });
         card.appendChild(steps);
       }
+      if (row.reach) card.appendChild(reachNode("hc-docs-reach"));
       list.appendChild(card);
     });
     page.appendChild(list);
-    var reach = el("div", "hc-docs-reach");
-    reach.appendChild(el("div", "hc-overview-label",
-                         "out of tokens? reach us"));
-    DOCS_REACH.forEach(function (row) {
-      var line = el("div", "hc-docs-reach-row");
-      line.appendChild(el("span", "hc-docs-reach-where", row.where));
-      var body = el("div", "hc-docs-reach-body");
-      if (row.href) {
-        var at = el("a", "hc-docs-reach-at", row.at);
-        at.setAttribute("href", row.href);
-        at.setAttribute("target", "_blank");
-        at.setAttribute("rel", "noreferrer noopener");
-        body.appendChild(at);
-      } else {
-        body.appendChild(el("div", "hc-docs-reach-at", row.at));
-      }
-      body.appendChild(el("div", "hc-docs-reach-note", row.note));
-      line.appendChild(body);
-      reach.appendChild(line);
-    });
-    page.appendChild(reach);
+    var contact = el("div", "hc-docs-contact");
+    contact.appendChild(el("div", "hc-overview-label", "contact"));
+    contact.appendChild(el("div", "hc-docs-contact-note",
+                           "Feel free to reach out for any reason or concern"
+                           + " such as questions, feedback, or if you're out"
+                           + " of tokens."));
+    contact.appendChild(reachNode("hc-docs-contact-list"));
+    page.appendChild(contact);
     return page;
   }
 
@@ -6334,7 +6372,7 @@
     shelf.setAttribute("role", "button");
     // The docs sit before GOALS because GOALS is not a page -- it is the
     // way back to the tree, and the exit reads best at the end of the row.
-    var docs = el("span", "hc-overview-tab", "DOCS");
+    var docs = el("span", "hc-overview-tab", "FAQ");
     docs.setAttribute("data-hc-overview-tab", "docs");
     docs.setAttribute("role", "button");
     var goals = el("span", "hc-overview-tab", "GOALS");
@@ -7366,10 +7404,16 @@
       if (viewTab) {
         stop();
         var view = viewTab.getAttribute("data-hc-viewtab");
-        // Each opener closes the other two, so the three tabs are three
-        // states of one screen rather than two overlays that can stack.
-        if (view === "overview") { closeBrainstorm(); openOverview(); }
-        else if (view === "brainstorm") openBrainstorm();
+        // Each opener closes the others, so the four tabs are four states
+        // of one screen rather than overlays that can stack. Overview and
+        // Docs are two pages of one box: each names its page rather than
+        // reopening the box on whichever the reader left it turned to,
+        // since here the header row is the only tab strip they can see.
+        if (view === "overview") {
+          closeBrainstorm(); openOverview(); showOverviewPage("overview");
+        } else if (view === "docs") {
+          closeBrainstorm(); openOverview(); showOverviewPage("docs");
+        } else if (view === "brainstorm") openBrainstorm();
         else { closeBrainstorm(); closeOverview(); }
         renderViewTabs();
         // The sweep would catch up in 700ms; the frame changing views with
@@ -7632,8 +7676,11 @@
     // nothing else in here works until it is signed in.
     var tabs = document.createElement("div");
     tabs.className = "hc-settings-tabs";
+    // Cloud and Builds are gone from the strip: their sections still exist
+    // below, but with no tab to select them they never draw. Bring a pair
+    // back here to re-open one.
     [["account", "Account"], ["alerts", "Alerts"], ["sharing", "Sharing"],
-     ["cloud", "Cloud"], ["data", "Data"], ["builds", "Builds"]].forEach(function (spec) {
+     ["data", "Data"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -14378,21 +14425,27 @@
     }
     // The artifact re-materializes the header on render, so the slot is
     // refilled whenever it comes back empty.
-    // Three views now: what the project is, what its goals are, and the
-    // place to argue about them. Brainstorm sits last because it is where
-    // you go from the tree, not on the way to it.
-    if (!tabs.children || tabs.children.length !== 3) {
+    // Four views now: what the project is, what its goals are, the place
+    // to argue about them, and the answers a reader arrives with. Docs
+    // closes the row -- the launch skin hides the overview's own tab
+    // strip, so this row is the only way a reader here reaches it, and it
+    // reads best after the working views rather than among them.
+    if (!tabs.children || tabs.children.length !== 4) {
       while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
       [["overview", "Overview"], ["goals", "Goals"],
-       ["brainstorm", "Brainstorm"]].forEach(function (pair) {
+       ["brainstorm", "Brainstorm"], ["docs", "FAQ"]].forEach(function (pair) {
         var tab = el("span", "hc-viewtab", pair[1]);
         tab.setAttribute("data-hc-viewtab", pair[0]);
         tab.setAttribute("role", "button");
         tabs.appendChild(tab);
       });
     }
+    // Docs is a page of the overview box, so being "on" it means the box
+    // is up and turned to that page; any other page of the box reads as
+    // Overview.
     var on = brainstormShown() ? "brainstorm"
-      : (overviewShown() ? "overview" : "goals");
+      : !overviewShown() ? "goals"
+      : overviewPage() === "docs" ? "docs" : "overview";
     var kids = tabs.children || [];
     var moved = false;
     for (var i = 0; i < kids.length; i += 1) {
