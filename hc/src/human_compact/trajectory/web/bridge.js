@@ -688,11 +688,18 @@
       done: goal.status === "completed" || goal.status === "abandoned",
       open: !(folded && folded[goal.id]),
       status: goal.status === "in_progress" ? "inprog" : "todo",
+      // Path membership, carried onto the node so the left panel can group
+      // the project's goals under their phase. Empty for legacy goals.
+      phase: str(goal.phase),
       notes: str(goal.notes),
       todos_md: str(goal.todos_md),
       todo_items: array(goal.todo_items),
       prompt_md: str(goal.prompt_md),
       desc: str(goal.description),
+      // Why this goal matters to the project -- the free-text verdict written
+      // against the objective. Carried so the Current tab can say what the
+      // goal is for; empty on legacy goals, and the section simply omits then.
+      why: str(goal.relevance_why),
       // Whose goal this is, in a shared workspace. Empty everywhere else,
       // and the chip does not draw when it is empty: a personal tree has
       // one author, and saying so on every row would be noise.
@@ -9180,7 +9187,7 @@
       // own height; the preview takes the rest, which is what a running
       // program needs to be looked at in.
       "[data-hc-launch] .hc-main>*{flex:none}",
-      "[data-hc-launch] .hc-main>.hc-preview{flex:1 1 auto;min-height:320px}",
+      "[data-hc-launch] .hc-main>.hc-preview{flex:1 1 auto;min-height:320px;display:flex;flex-direction:column}",
       "[data-hc-launch] .hc-rail-right{position:relative;order:3;flex:0 0 var(--hc-right);display:flex;flex-direction:column;min-width:0;height:calc(100vh - var(--hc-top));box-sizing:border-box;border:solid var(--bd);border-width:0 0 0 1px;border-radius:0;background:transparent;padding:0 0 12px}",
       // Either rail can be hidden -- from the header toggles, or by
       // double-clicking its divider -- and the document takes the space.
@@ -9398,6 +9405,27 @@
       "[data-hc-launch] .hc-preview-mount{display:flex;flex-direction:column;gap:14px;min-height:0;flex:1 1 auto}",
       "[data-hc-launch] .hc-pv-cards{display:flex;flex-direction:column;gap:12px}",
       "[data-hc-launch] .hc-pv-card{border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:15px 17px 16px;display:flex;flex-direction:column;gap:9px;align-items:flex-start}",
+      // The four fixed center tabs, above the mount: a quiet strip, the active
+      // one inked and underlined. Always all four, never removed.
+      "[data-hc-launch] .hc-center-tabs{flex:none;display:flex;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:2px}",
+      "[data-hc-launch] .hc-center-tab{cursor:pointer;user-select:none;padding:7px 12px 8px;font:600 11px 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--mut);border-bottom:2px solid transparent;margin-bottom:-1px}",
+      "[data-hc-launch] .hc-center-tab:hover{color:var(--fnt)}",
+      "[data-hc-launch] .hc-center-tab[data-hc-on]{color:var(--ink);border-bottom-color:var(--acc)}",
+      // A tab's empty state: a plain card with its actions in a row.
+      "[data-hc-launch] .hc-center-empty-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}",
+      "[data-hc-launch] .hc-center-urlrow{display:flex;gap:8px;margin-top:10px;width:100%}",
+      "[data-hc-launch] .hc-center-urlinput{flex:1 1 auto;min-width:0;box-sizing:border-box;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:6px 10px;font:12px 'Source Code Pro',monospace;color:var(--dtxt);outline:none}",
+      // The document object: a clean writing surface. The title sits in the
+      // bar as bare editable text; the body is a wide markdown field that
+      // takes the rest of the pane -- a place to write, not a form.
+      "[data-hc-launch] .hc-pv-doc{display:flex;flex-direction:column;gap:12px;min-height:0;flex:1 1 auto}",
+      // The document object: a clean writing surface. The title sits in the
+      // bar as bare editable text; the body is a wide markdown field that
+      // takes the rest of the pane -- a place to write, not a form.
+      "[data-hc-launch] .hc-pv-doc{display:flex;flex-direction:column;gap:12px;min-height:0;flex:1 1 auto}",
+      "[data-hc-launch] .hc-pv-doctitle{flex:1 1 auto;min-width:0;background:transparent;border:0;outline:none;font:600 13px 'Source Code Pro',monospace;color:var(--ink)}",
+      "[data-hc-launch] .hc-pv-doctitle::placeholder{color:var(--mut)}",
+      "[data-hc-launch] .hc-pv-docbody{flex:1 1 auto;min-height:340px;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:14px 16px;font:13px/1.75 'Source Code Pro',monospace;color:var(--dtxt);outline:none;white-space:pre-wrap;word-break:break-word}",
       "[data-hc-launch] .hc-pv-kicker{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--mut)}",
       "[data-hc-launch] .hc-pv-head{font:600 14px/1.5 'Source Code Pro',monospace;color:var(--ink)}",
       "[data-hc-launch] .hc-pv-why{font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);max-width:70ch}",
@@ -9714,7 +9742,11 @@
   // so all of them are testable without a DOM.
 
   var TODO_INDENT = "    ";
-  var railTab = "todos";
+  var railTab = "current";
+  // Last-seen status per row and the rows already asked about, so a finished
+  // build fires its understanding-check probe exactly once.
+  var checkSeen = Object.create(null);
+  var checkFired = Object.create(null);
   var todoItems = null;
   var todoGoalId = null;
   // What the rail last took from the store, by row id: the text and depth
@@ -11030,8 +11062,10 @@
     var id = selectedGoalId();
     if (!id) return null;
     var node = todoFind(readLocalGoals(), id);
-    return node ? { id: id, notes: str(node.notes),
+    return node ? { id: id, title: str(node.title), notes: str(node.notes),
                     items: todoNormalize(node.todo_items),
+                    phase: str(node.phase),
+                    desc: str(node.desc), why: str(node.why),
                     prompt: str(node.prompt_md) }
                 : null;
   }
@@ -12330,7 +12364,8 @@
       }
       var name = node.getAttribute("data-hc-rail-tab");
       if (name !== "todos" && name !== "notes"
-          && name !== "prompt" && name !== "understand") return;
+          && name !== "prompt" && name !== "understand"
+          && name !== "current") return;
       railTab = name;
       renderTodoRail(true);
     }, true);
@@ -12374,6 +12409,9 @@
   function todoRowNode(row, head) {
     var wrap = document.createElement("div");
     wrap.className = "hc-todo";
+    // A stable handle on the row's outer tile, so the Current tab's "Start
+    // here" can scroll straight to this row after switching to the TODOs tab.
+    wrap.setAttribute("data-hc-todo-id", row.id);
     if (head) {
       // The way back from the build, in the tile's own lower-right corner:
       // on the family's head only, since the family comes back whole.
@@ -12511,7 +12549,71 @@
       // the row: the same thread again, opened by Enter on the row.
       wrap.appendChild(todoNoteNode(row));
     }
+    // An understanding check the build raised on THIS row: shown inline under
+    // the row it belongs to -- a grounded result of what happened and one
+    // question about it. The check lives with its own TODO, never on the goal
+    // pane; mechanical rows the build did not flag simply have none.
+    var chk = pendingCheckFor(todoGoalId);
+    if (chk && chk.todo_id === row.id) {
+      wrap.appendChild(todoCheckNode(row, chk));
+    }
     return wrap;
+  }
+
+  // The inline understanding-check pane under a finished TODO: a grounded
+  // result of what the build did (only when there is concrete output to state
+  // one), the one question about it, an answer box, and Continue -- which
+  // files the answer as evidence, or dismisses an empty one, clearing the
+  // pending slot either way. Read-only to the caret, like the note pane.
+  function todoCheckNode(row, chk) {
+    var MONO = "'Source Code Pro',monospace";
+    var pane = document.createElement("div");
+    pane.className = "hc-todo-ask hc-todo-check-pane";
+    pane.setAttribute("contenteditable", "false");
+    pane.style.marginLeft = (row.depth * 20 + 22) + "px";
+    pane.style.marginTop = "6px";
+    pane.style.paddingLeft = "12px";
+    pane.style.borderLeft = "2px solid var(--bd2)";
+    pane.style.maxWidth = "56ch";
+    function add(tag, css, text) {
+      var n = document.createElement(tag);
+      if (css) n.setAttribute("style", css);
+      if (text != null) n.textContent = text;
+      pane.appendChild(n);
+      return n;
+    }
+    if (str(chk.result).trim()) {
+      add("div", "font:700 9px " + MONO + ";letter-spacing:1.4px;"
+        + "text-transform:uppercase;color:var(--mut);margin-bottom:6px", "Result");
+      add("div", "font:12.5px/1.7 " + MONO + ";color:var(--dtxt);margin-bottom:14px",
+        str(chk.result).trim());
+    }
+    add("div", "font:13px/1.55 " + MONO + ";color:var(--ink)",
+      str(chk.question).trim());
+    var ta = add("textarea", "margin-top:10px;width:100%;box-sizing:border-box;"
+      + "min-height:64px;resize:vertical;border:1px solid var(--bd);"
+      + "border-radius:2px;background:var(--panel2);padding:8px 10px;font:12.5px/1.6 "
+      + MONO + ";color:var(--dtxt);outline:none");
+    ta.setAttribute("spellcheck", "false");
+    ta.setAttribute("placeholder", "Your answer — or leave blank to skip");
+    var cont = add("span", "display:inline-block;margin-top:10px;padding:4px 14px;"
+      + "border:1px solid var(--bd2);border-radius:2px;font:600 11px " + MONO
+      + ";color:var(--fnt);cursor:pointer;user-select:none", "Continue");
+    cont.addEventListener("mouseenter", function () {
+      cont.style.color = "var(--acc)"; cont.style.borderColor = "var(--acc)"; });
+    cont.addEventListener("mouseleave", function () {
+      cont.style.color = "var(--fnt)"; cont.style.borderColor = "var(--bd2)"; });
+    cont.addEventListener("click", function () {
+      if (cont._busy) return;
+      cont._busy = true;
+      cont.textContent = "Saving…";
+      post({ op: "resolve_check", goal_id: todoGoalId, response: str(ta.value) })
+        .then(function () {
+          var p = refreshState();
+          if (p && p.then) p.then(function () { renderTodoRail(true); });
+        });
+    });
+    return pane;
   }
 
   function todoNoteNode(row) {
@@ -12819,6 +12921,110 @@
   var previewShown = "";        // the address that frame is on
   var PREVIEW_EVERY_MS = 1200;
 
+  // The goal's server record, for the fields written through side-channel ops
+  // (documents, paper, understanding) rather than posted with the tree.
+  function goalServerRecord(goalId) {
+    var found = null;
+    array(serverState.goals).forEach(function (go) {
+      if (go && go.id === goalId) found = go;
+    });
+    return found;
+  }
+
+  function goalDocuments(goalId) {
+    var rec = goalServerRecord(goalId);
+    return rec ? array(rec.documents) : [];
+  }
+
+  // A fresh client-side document id, in the server's shape (^d[0-9a-f]{4,24}$).
+  function newDocId() {
+    var s = "", i;
+    for (i = 0; i < 8; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return "d" + s;
+  }
+
+  // A debounced writer for one document's title/body, so a save does not ride
+  // every keystroke. This editor is the only writer of the doc while it is
+  // open, so the textarea owns the text between saves.
+  function docSaver(goalId, docId) {
+    var timer = null, pend = {};
+    return function (patch) {
+      var k;
+      for (k in patch) if (patch.hasOwnProperty(k)) pend[k] = patch[k];
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        var body = { id: docId }, key;
+        for (key in pend) if (pend.hasOwnProperty(key)) body[key] = pend[key];
+        pend = {};
+        post({ op: "set_document", goal_id: goalId, document: body });
+      }, 400);
+    };
+  }
+
+  // Create a fresh empty document for the selected goal and show it. The id is
+  // minted here so the redraw lands on the new document rather than the empty
+  // state.
+  function centerCreateDocument() {
+    var goalId = previewGoal();
+    if (!goalId) return;
+    var id = newDocId();
+    post({ op: "set_document", goal_id: goalId,
+           document: { id: id, title: "Untitled" } })
+      .then(function () {
+        centerTabChoice[goalId] = "document";
+        var p = refreshState();
+        if (p && p.then) p.then(function () { renderPreview(true); });
+        else renderPreview(true);
+      });
+  }
+
+  // Attach a PDF to the selected goal's paper: a hidden file input, its bytes
+  // POSTed to /api/paper, which stores the file and records it on the goal.
+  function centerUploadPaper() {
+    var goalId = previewGoal();
+    if (!goalId) return;
+    var input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/pdf";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    input.addEventListener("change", function () {
+      var file = input.files && input.files[0];
+      var done = function () {
+        try { document.body.removeChild(input); } catch (e) { /* fine */ }
+      };
+      if (!file) { done(); return; }
+      fetch("/api/paper", {
+        method: "POST",
+        headers: { "Content-Type": "application/pdf",
+                   "X-HC-Goal": goalId, "X-HC-Name": file.name || "paper.pdf" },
+        body: file,
+      }).then(function (r) { return r.json(); }).then(function (res) {
+        done();
+        if (res && res.ok) {
+          centerTabChoice[goalId] = "paper";
+          var p = refreshState();
+          if (p && p.then) p.then(function () { renderPreview(true); });
+          else renderPreview(true);
+        }
+      }).catch(function () { done(); });
+    });
+    try { input.click(); } catch (e) { document.body.removeChild(input); }
+  }
+
+  // Clear the goal's paper reference, back to the "No paper attached" state.
+  function centerClearPaper() {
+    var goalId = previewGoal();
+    if (!goalId) return;
+    post({ op: "set_paper", goal_id: goalId,
+           paper: { url: "", pdf: "", title: "" } })
+      .then(function () {
+        var p = refreshState();
+        if (p && p.then) p.then(function () { renderPreview(true); });
+        else renderPreview(true);
+      });
+  }
+
   function previewGoal() {
     var goal = todoSelectedGoal();
     return goal ? str(goal.id) : "";
@@ -12867,6 +13073,17 @@
     if (previewWired) return;
     previewWired = true;
     document.addEventListener("click", function (event) {
+      // A center tab click: remember the reader's choice for this goal and
+      // redraw. The four tabs are always present, so this only switches which.
+      var tabNode = closestAttr(event.target, "data-hc-center-tab");
+      if (tabNode) {
+        event.preventDefault();
+        event.stopPropagation();
+        var pick = str(tabNode.getAttribute("data-hc-center-tab"));
+        centerTabChoice[previewGoal()] = pick;
+        renderPreview(true);
+        return;
+      }
       var node = closestAttr(event.target, "data-hc-pv");
       if (!node) return;
       event.preventDefault();
@@ -12874,6 +13091,17 @@
       var what = str(node.getAttribute("data-hc-pv"));
       var arg = str(node.getAttribute("data-hc-pv-arg"));
       if (what === "detect") { previewDo("preview_configure"); return; }
+      if (what === "doc_create") { centerCreateDocument(); return; }
+      if (what === "paper_upload") { centerUploadPaper(); return; }
+      if (what === "paper_clear") { centerClearPaper(); return; }
+      if (what === "paper_refresh") {
+        // Drop the cached signed URL for this goal's canonical paper and redraw;
+        // the Paper tab then mints a new one.
+        var pg = previewGoal();
+        if (pg) delete berkeleyPaperCache[pg];
+        renderPreview(true);
+        return;
+      }
       if (what === "pick") {
         previewDo("preview_pick", { profile_id: arg });
         return;
@@ -13005,6 +13233,28 @@
   }
 
   // --- one card per pairing of surface and status --------------------------
+
+  // The Interface tab's empty state: this project has no run configured yet.
+  // Restrained, and never the whole pane -- it sits inside the Interface tab,
+  // with the way to set a run up. Runnable-project state belongs only here.
+  function pvInterfaceEmpty(state) {
+    if (state.surface === "empty") {
+      var bare = pvCard("", "No interface for this goal.");
+      bare.appendChild(pvWhy(str(state.reason)
+        || "This workspace is not pointed at a project directory."));
+      return bare;
+    }
+    var card = pvCard("", "This project isn’t set up to run yet.");
+    card.appendChild(pvWhy(str(state.reason)
+      || "Nothing here names a way to start it — no dev script, no Makefile"
+         + " target, no entry point I recognise."));
+    var acts = el("div", "hc-center-empty-acts");
+    acts.appendChild(pvButton(
+      previewBusy === "preview_configure" ? "looking…" : "Find how to run it",
+      "detect", "", "go"));
+    card.appendChild(acts);
+    return card;
+  }
 
   function pvUnconfigured(state) {
     var card = pvCard("NOTHING RUNNABLE FOUND YET",
@@ -13218,7 +13468,10 @@
   function pvBody(state) {
     var status = str(state.status);
     if (status === "unconfigured") {
-      return state.surface === "empty" ? pvEmpty(state) : pvUnconfigured(state);
+      // A project with no run configured is not an error for the whole pane
+      // -- it only means this one tab has nothing to run. Shown here, in the
+      // Interface tab alone, with the way to set it up.
+      return pvInterfaceEmpty(state);
     }
     if (status === "not_ready") return pvNotReady(state);
     if (status === "needs_user_action") return pvBlocked(state);
@@ -13292,18 +13545,103 @@
             previewRow(), state.intent ? state.intent.expected : ""].join("|");
   }
 
+  // The center is four fixed tabs: Document, Paper, Interface, Notes. They are
+  // always all four, never removed for a goal -- the selected goal decides
+  // which is shown first and what each holds, not whether a tab exists.
+  var CENTER_TABS = [["document", "Document"], ["paper", "Paper"],
+                     ["interface", "Interface"], ["notes", "Notes"]];
+  var centerTabChoice = Object.create(null);   // goalId -> tab the reader chose
+
+  function goalHasPaper(goalId) {
+    var rec = goalServerRecord(goalId);
+    var p = (rec && rec.paper) || {};
+    return !!(str(p.url).trim() || str(p.pdf).trim() || str(p.paper_id).trim());
+  }
+
+  // goalId -> { paperId, fetchedAt, state:"loading"|"ready"|"error", data, error }
+  // A canonical paper's signed URL is fetched fresh from the backend and never
+  // persisted: cleared on Refresh, and refetched when the tab reopens it stale.
+  var berkeleyPaperCache = Object.create(null);
+
+  // The tab a goal opens on when the reader has not chosen one: a reading goal
+  // with a paper opens on Paper, an implementation goal with a running-or-
+  // runnable interface on Interface, everything else on Document.
+  function centerDefaultTab(goalId) {
+    if (goalHasPaper(goalId)) return "paper";
+    var rec = goalServerRecord(goalId);
+    var phase = rec ? str(rec.phase) : "";
+    var runnable = previewState && previewState.status
+      && previewState.status !== "unconfigured";
+    if (phase === "implement" && runnable) return "interface";
+    return "document";
+  }
+
+  function centerActiveTab(goalId) {
+    var chosen = centerTabChoice[goalId];
+    if (chosen === "document" || chosen === "paper"
+        || chosen === "interface" || chosen === "notes") return chosen;
+    return centerDefaultTab(goalId);
+  }
+
+  // The tab strip, built once above the mount and kept there. The artifact can
+  // re-materialize the pane, so a missing or wrong-sized strip is rebuilt.
+  function centerEnsureTabs(container) {
+    if (!container) return null;
+    var bar = container.querySelector(".hc-center-tabs");
+    if (bar && bar.children.length === 4) return bar;
+    if (!bar) {
+      bar = el("div", "hc-center-tabs");
+      var mount = container.querySelector(".hc-preview-mount");
+      container.insertBefore(bar, mount || null);
+    }
+    while (bar.firstChild) bar.removeChild(bar.firstChild);
+    CENTER_TABS.forEach(function (pair) {
+      var t = el("span", "hc-center-tab", pair[1]);
+      t.setAttribute("data-hc-center-tab", pair[0]);
+      t.setAttribute("role", "button");
+      bar.appendChild(t);
+    });
+    return bar;
+  }
+
+  function centerMarkTabs(active) {
+    var bar = document.querySelector(".hc-center-tabs");
+    if (!bar) return;
+    array(bar.children).forEach(function (t) {
+      if (t.getAttribute("data-hc-center-tab") === active) {
+        t.setAttribute("data-hc-on", "");
+      } else {
+        t.removeAttribute("data-hc-on");
+      }
+    });
+  }
+
   function renderPreview(force) {
     if (serverState.scope !== "chat") return false;
     previewDelegate();
     var mount = document.querySelector(".hc-preview-mount");
     if (!mount) { previewHideFrame(); return false; }
+    var goal = todoSelectedGoal();
+    var goalId = goal ? str(goal.id) : "";
+    // The run state is kept fresh even off the Interface tab, so the default
+    // tab can tell whether an interface is runnable. The read is throttled.
     previewRead(false);
+    centerEnsureTabs(mount.parentNode);
+    var tab = centerActiveTab(goalId);
+    centerMarkTabs(tab);
+    if (tab === "interface") return centerRenderInterface(mount, force);
+    if (tab === "paper") return centerRenderPaper(mount, goalId, force);
+    if (tab === "notes") return centerRenderNotes(mount, goal, goalId, force);
+    return centerRenderDocument(mount, goalId, force);
+  }
+
+  // --- Interface tab: the existing live-preview/run surface, unchanged. -----
+  // Runnable-project state -- "Find how to run it", a running server, a failed
+  // run -- lives HERE and only here, never as the whole pane's default.
+  function centerRenderInterface(mount, force) {
     var state = previewState;
-    if (!state) return false;
-    var sig = previewSig(state);
-    // The artifact re-rendering the pane hands back a fresh mount with no
-    // signature on it, which is the same thing as the signature changing:
-    // both mean what is on screen is not what this says.
+    if (!state) { previewHideFrame(); return false; }
+    var sig = "iface:" + previewSig(state);
     if (force || mount.getAttribute("data-hc-pv-sig") !== sig) {
       while (mount.firstChild) mount.removeChild(mount.firstChild);
       var intent = pvIntent(state);
@@ -13327,13 +13665,318 @@
     return true;
   }
 
+  // --- Document tab: the goal's working document, or a way to start one. -----
+  function centerRenderDocument(mount, goalId, force) {
+    previewHideFrame();
+    var docs = goalDocuments(goalId);
+    if (!docs.length) {
+      var esig = "doc:empty:" + goalId;
+      if (!force && mount.getAttribute("data-hc-pv-sig") === esig) return true;
+      while (mount.firstChild) mount.removeChild(mount.firstChild);
+      var card = el("div", "hc-pv-card hc-center-empty");
+      card.appendChild(el("div", "hc-pv-head", "No document yet."));
+      card.appendChild(el("div", "hc-pv-why",
+        "A place to write findings, a draft, or an analysis for this goal."));
+      card.appendChild(pvButton("Create document", "doc_create", "", "go"));
+      mount.appendChild(card);
+      mount.setAttribute("data-hc-pv-sig", esig);
+      return true;
+    }
+    // A goal may name the document to open explicitly (a generated Brainstorm
+    // goal does); otherwise the most-recently-touched document is the current
+    // one. Explicit id first, never a guess from the title.
+    var rec = goalServerRecord(goalId);
+    var primaryId = rec ? str(rec.primary_document_id) : "";
+    var doc = null;
+    if (primaryId) {
+      for (var di = 0; di < docs.length; di++) {
+        if (str(docs[di].id) === primaryId) { doc = docs[di]; break; }
+      }
+    }
+    if (!doc) {
+      doc = docs.slice().sort(function (a, b) {
+        return str(b.updated_at).localeCompare(str(a.updated_at));
+      })[0];
+    }
+    var sig = "doc:" + doc.id;
+    if (!force && mount.getAttribute("data-hc-pv-sig") === sig) return true;
+    while (mount.firstChild) mount.removeChild(mount.firstChild);
+    var wrap = el("div", "hc-pv-doc");
+    var bar = el("div", "hc-pv-bar");
+    bar.appendChild(el("span", "hc-pv-kicker", "DOCUMENT"));
+    var title = document.createElement("input");
+    title.className = "hc-pv-doctitle";
+    title.type = "text";
+    title.value = str(doc.title);
+    title.placeholder = "Untitled";
+    title.spellcheck = false;
+    bar.appendChild(title);
+    bar.appendChild(el("span", "hc-pv-grow", ""));
+    bar.appendChild(pvButton("New", "doc_create", "", "quiet"));
+    wrap.appendChild(bar);
+    var body = document.createElement("textarea");
+    body.className = "hc-pv-docbody";
+    body.value = str(doc.body_md);
+    body.spellcheck = false;
+    body.setAttribute("placeholder",
+      "Write in markdown — # heading, - list, **bold**, `code`");
+    wrap.appendChild(body);
+    mount.appendChild(wrap);
+    mount.setAttribute("data-hc-pv-sig", sig);
+    var save = docSaver(goalId, doc.id);
+    title.addEventListener("input", function () { save({ title: title.value }); });
+    body.addEventListener("input", function () { save({ body_md: body.value }); });
+    return true;
+  }
+
+  // --- Paper tab: an actual PDF/URL viewer, or a way to attach one. ---------
+  function centerRenderPaper(mount, goalId, force) {
+    var rec = goalServerRecord(goalId);
+    var paper = (rec && rec.paper) || {};
+    var pdf = str(paper.pdf).trim();
+    var url = str(paper.url).trim();
+    var paperId = str(paper.paper_id).trim();
+    // A canonical Berkeley paper (no local upload): its PDF lives in private
+    // Storage, reached through a fresh signed URL, so it has its own renderer.
+    // A locally uploaded PDF still wins -- that is a generic project's own file.
+    if (!pdf && paperId) {
+      return centerRenderBerkeleyPaper(mount, goalId, paper, paperId, force);
+    }
+    if (pdf || url) {
+      var src = pdf ? ("/api/paper-pdf?path=" + encodeURIComponent(pdf)) : url;
+      var sig = "paper:" + src;
+      if (force || mount.getAttribute("data-hc-pv-sig") !== sig) {
+        while (mount.firstChild) mount.removeChild(mount.firstChild);
+        var wrap = el("div", "hc-pv-live");
+        var bar = el("div", "hc-pv-bar");
+        bar.appendChild(el("span", "hc-pv-kicker", "PAPER"));
+        var name = el("span", "hc-pv-url", str(paper.title) || url || "PDF");
+        if (url) name.setAttribute("title", url);
+        bar.appendChild(name);
+        bar.appendChild(el("span", "hc-pv-grow", ""));
+        if (url) {
+          bar.appendChild(pvButton("Open original ↗", "open", url, "quiet"));
+        }
+        bar.appendChild(pvButton("Replace", "paper_clear", "", "quiet"));
+        wrap.appendChild(bar);
+        // The frame is drawn over this slot. See previewPlaceFrame.
+        wrap.appendChild(el("div", "hc-pv-slot", ""));
+        mount.appendChild(wrap);
+        mount.setAttribute("data-hc-pv-sig", sig);
+      }
+      previewPlaceFrame(src);
+      return true;
+    }
+    previewHideFrame();
+    var esig = "paper:empty:" + goalId;
+    if (!force && mount.getAttribute("data-hc-pv-sig") === esig) return true;
+    while (mount.firstChild) mount.removeChild(mount.firstChild);
+    var card = el("div", "hc-pv-card hc-center-empty");
+    card.appendChild(el("div", "hc-pv-head", "No paper attached"));
+    card.appendChild(el("div", "hc-pv-why",
+      "Attach the paper this goal reads against — a PDF to read here, or a"
+      + " link to open."));
+    var acts = el("div", "hc-center-empty-acts");
+    acts.appendChild(pvButton("Upload PDF", "paper_upload", "", "go"));
+    var addUrl = pvButton("Add paper URL", "paper_addurl", "", "quiet");
+    acts.appendChild(addUrl);
+    card.appendChild(acts);
+    // The URL field, revealed by "Add paper URL": a plain input and Save.
+    var urlRow = el("div", "hc-center-urlrow");
+    urlRow.hidden = true;
+    var input = document.createElement("input");
+    input.className = "hc-center-urlinput";
+    input.type = "url";
+    input.placeholder = "https://…";
+    input.spellcheck = false;
+    urlRow.appendChild(input);
+    var save = pvButton("Save", "paper_saveurl", "", "quiet");
+    urlRow.appendChild(save);
+    card.appendChild(urlRow);
+    addUrl.addEventListener("click", function () {
+      urlRow.hidden = false;
+      try { input.focus(); } catch (e) { /* fine */ }
+    });
+    var commit = function () {
+      var v = str(input.value).trim();
+      if (!/^https?:\/\//.test(v)) return;
+      post({ op: "set_paper", goal_id: goalId, paper: { url: v } })
+        .then(function () {
+          var p = refreshState();
+          if (p && p.then) p.then(function () { renderPreview(true); });
+          else renderPreview(true);
+        });
+    };
+    save.addEventListener("click", commit);
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); commit(); }
+    });
+    mount.appendChild(card);
+    mount.setAttribute("data-hc-pv-sig", esig);
+    return true;
+  }
+
+  // --- Paper tab, canonical Berkeley paper ----------------------------------
+  // The goal holds only the paper's id. The signed URL to its stored PDF is
+  // fetched fresh from the backend (which mints it server-side and keeps the
+  // storage path), rendered in the same frame the local PDF uses, and never
+  // persisted. When no PDF is stored, the source link is offered instead.
+  var BERKELEY_PAPER_TTL_MS = 240 * 1000;
+
+  function berkeleyPaperFetch(goalId, paperId) {
+    var entry = { paperId: paperId, fetchedAt: Date.now(), state: "loading",
+                  data: null, error: "" };
+    berkeleyPaperCache[goalId] = entry;
+    fetch("/api/berkeley-paper?paper_id=" + encodeURIComponent(paperId),
+          { headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (berkeleyPaperCache[goalId] !== entry) return;   // a newer fetch won
+        if (res && res.ok !== false) { entry.state = "ready"; entry.data = res; }
+        else {
+          entry.state = "error";
+          entry.error = str(res && res.error) || "could not load the paper";
+        }
+        renderPreview(true);
+      })
+      .catch(function () {
+        if (berkeleyPaperCache[goalId] !== entry) return;
+        entry.state = "error";
+        entry.error = "could not reach the paper service";
+        renderPreview(true);
+      });
+    return entry;
+  }
+
+  function centerRenderBerkeleyPaper(mount, goalId, paper, paperId, force) {
+    var entry = berkeleyPaperCache[goalId];
+    var stale = entry && entry.state === "ready"
+      && (Date.now() - entry.fetchedAt) > BERKELEY_PAPER_TTL_MS;
+    if (!entry || entry.paperId !== paperId || (stale && force)) {
+      entry = berkeleyPaperFetch(goalId, paperId);
+    }
+    var title = str(paper.title) || "Paper";
+    var source = str(paper.url).trim();
+
+    // Ready, with a signed URL: render the actual PDF. The sig is stable across
+    // URL refreshes, so a re-mint reloads the frame without rebuilding the bar.
+    if (entry.state === "ready" && entry.data && entry.data.available
+        && str(entry.data.signedUrl)) {
+      var src = str(entry.data.signedUrl);
+      var sig = "bpaper:ready:" + paperId;
+      if (force || mount.getAttribute("data-hc-pv-sig") !== sig) {
+        while (mount.firstChild) mount.removeChild(mount.firstChild);
+        var wrap = el("div", "hc-pv-live");
+        var bar = el("div", "hc-pv-bar");
+        bar.appendChild(el("span", "hc-pv-kicker", "PAPER"));
+        bar.appendChild(el("span", "hc-pv-url", str(entry.data.title) || title));
+        bar.appendChild(el("span", "hc-pv-grow", ""));
+        if (source) bar.appendChild(pvButton("Open source ↗", "open", source, "quiet"));
+        bar.appendChild(pvButton("Refresh", "paper_refresh", "", "quiet"));
+        wrap.appendChild(bar);
+        wrap.appendChild(el("div", "hc-pv-slot", ""));
+        mount.appendChild(wrap);
+        mount.setAttribute("data-hc-pv-sig", sig);
+      }
+      previewPlaceFrame(src);
+      return true;
+    }
+
+    // Loading, error, or ready-with-no-PDF: a card, never the frame.
+    previewHideFrame();
+    var kind = entry.state === "loading" ? "loading"
+      : (entry.state === "error" ? "error" : "nopdf");
+    var esig = "bpaper:" + kind + ":" + paperId + ":" + (source ? "s" : "");
+    if (!force && mount.getAttribute("data-hc-pv-sig") === esig) return true;
+    while (mount.firstChild) mount.removeChild(mount.firstChild);
+    var card = el("div", "hc-pv-card hc-center-empty");
+    if (kind === "loading") {
+      card.appendChild(el("div", "hc-pv-head", "Loading paper…"));
+      card.appendChild(el("div", "hc-pv-why", title));
+    } else if (kind === "error") {
+      card.appendChild(el("div", "hc-pv-head", "Couldn’t load the paper"));
+      card.appendChild(el("div", "hc-pv-why", entry.error || ""));
+      var actsErr = el("div", "hc-center-empty-acts");
+      actsErr.appendChild(pvButton("Try again", "paper_refresh", "", "go"));
+      if (source) actsErr.appendChild(pvButton("Open source ↗", "open", source, "quiet"));
+      card.appendChild(actsErr);
+    } else {
+      // ready but available === false: this canonical paper has no stored PDF.
+      card.appendChild(el("div", "hc-pv-head", "No paper attached"));
+      card.appendChild(el("div", "hc-pv-why",
+        source ? "No PDF is stored for this paper yet — open the source to read"
+          + " it, or add the PDF in the curator."
+          : "No PDF is stored for this paper yet — add it in the curator to read"
+          + " it here."));
+      var actsNo = el("div", "hc-center-empty-acts");
+      if (source) actsNo.appendChild(pvButton("Open source ↗", "open", source, "go"));
+      actsNo.appendChild(pvButton("Refresh", "paper_refresh", "", "quiet"));
+      card.appendChild(actsNo);
+    }
+    mount.appendChild(card);
+    mount.setAttribute("data-hc-pv-sig", esig);
+    return true;
+  }
+
+  // --- Notes tab: the goal's lightweight notes, autosaved. ------------------
+  function centerRenderNotes(mount, goal, goalId, force) {
+    previewHideFrame();
+    var sig = "notes:" + goalId;
+    if (!force && mount.getAttribute("data-hc-pv-sig") === sig) return true;
+    while (mount.firstChild) mount.removeChild(mount.firstChild);
+    var wrap = el("div", "hc-pv-doc");
+    var bar = el("div", "hc-pv-bar");
+    bar.appendChild(el("span", "hc-pv-kicker", "NOTES"));
+    bar.appendChild(el("span", "hc-pv-grow", ""));
+    wrap.appendChild(bar);
+    var body = document.createElement("textarea");
+    body.className = "hc-pv-docbody";
+    body.value = goal ? str(goal.notes) : "";
+    body.spellcheck = false;
+    body.setAttribute("placeholder",
+      "Notes for this goal — markdown, autosaved.");
+    wrap.appendChild(body);
+    mount.appendChild(wrap);
+    mount.setAttribute("data-hc-pv-sig", sig);
+    if (!goalId) { body.disabled = true; return true; }
+    var timer = null;
+    body.addEventListener("input", function () {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        post({ op: "set_notes", goal_id: goalId, notes: body.value });
+      }, 400);
+    });
+    return true;
+  }
+
   // The frame is positioned in page coordinates, so anything that moves the
   // pane under it has to move it too -- and a sweep 700ms later is a frame
   // sitting over the wrong part of the window in the meantime.
-  function previewReflow() {
-    if (previewState && previewState.surface === "web") {
-      previewPlaceFrame(previewState.url);
+  // The one URL the floating frame should show for the active tab: the running
+  // interface on the Interface tab, the paper's PDF or link on the Paper tab,
+  // nothing anywhere else. Keeps the frame and the pane in step on every sweep.
+  function centerFrameUrl() {
+    var goalId = previewGoal();
+    var tab = centerActiveTab(goalId);
+    if (tab === "interface") {
+      var s = previewState;
+      if (s && s.surface === "web" && s.url
+          && (s.run || {}).embeddable !== false) return s.url;
+      return "";
     }
+    if (tab === "paper") {
+      var rec = goalServerRecord(goalId);
+      var p = (rec && rec.paper) || {};
+      var pdf = str(p.pdf).trim(), url = str(p.url).trim();
+      if (pdf) return "/api/paper-pdf?path=" + encodeURIComponent(pdf);
+      if (url) return url;
+    }
+    return "";
+  }
+
+  function previewReflow() {
+    var u = centerFrameUrl();
+    if (u) previewPlaceFrame(u); else previewHideFrame();
     return true;
   }
 
@@ -13393,9 +14036,11 @@
     var promptBox = document.querySelector(".hc-rail-prompt");
     var understandBox = document.querySelector(".hc-rail-understand");
     var notesBox = document.querySelector(".hc-rail-notes");
+    var currentBox = document.querySelector(".hc-rail-current");
     if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
+    noteBuildDone(goal);
     if (!goal || goal.id !== todoGoalId) {
       // Whatever the reader typed into the goal the rail is leaving is
       // written before the rail forgets which goal that was: a save still
@@ -13443,13 +14088,14 @@
 
     if (tabs.children.length !== 4 || force) {
       while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
-      // In the order the work goes through them: the rows say what to do,
-      // the document says what it is for, the prompt is what both are
-      // copied into, and Understanding is where a question about any of it
-      // is asked.
+      // Current is the one thing that needs attention now; TODOs is the
+      // full list behind it; Notes is the document for the goal;
+      // Understanding is where a question about any of it is asked. Prompt is
+      // no longer a tab -- its pane stays reachable in code (railTab
+      // "prompt") but no longer takes permanent space on screen.
+      tabs.appendChild(todoTabSpan("current", "Current"));
       tabs.appendChild(todoTabSpan("todos", "TODOs"));
       tabs.appendChild(todoTabSpan("notes", "Notes"));
-      tabs.appendChild(todoTabSpan("prompt", "Prompt"));
       tabs.appendChild(todoTabSpan("understand", "Understanding"));
     }
     if (stamp) stamp.textContent = todoSavedLabel;
@@ -13474,6 +14120,11 @@
       // display is the one this overrules, and the sections stack in it.
       understandBox.style.display = railTab === "understand" ? "flex" : "none";
     }
+    if (currentBox) {
+      currentBox.style.display = railTab === "current" ? "flex" : "none";
+      currentBox.style.flexDirection = "column";
+    }
+    if (railTab === "current") renderCurrentTab(goal);
     if (railTab === "understand") renderUnderstandTab(goal);
     if (goal && railTab === "prompt") renderPromptTab(goal);
     // The rows are priced off the same preview the Prompt tab prints, so the
@@ -13496,6 +14147,20 @@
     var actions = host.querySelector(".hc-todos-actions");
     if (actions) {
       actions.style.display = goal ? "" : "none";
+      // A "+ Add TODO" that only shows with a goal selected, and drops the new
+      // row into that goal's list -- the goal-scoped mate to the phase-scoped
+      // "Add goal" on the left.
+      var addBtn = actions.querySelector(".hc-todo-add");
+      if (addBtn) {
+        addBtn.style.display = goal ? "" : "none";
+        addBtn.onclick = function () {
+          if (!todoItems) return;
+          todoItems.push(todoRow("", 0));
+          todoFocusAt = { index: todoItems.length - 1, caret: 0 };
+          todoSaveSoon();
+          renderTodoRail(true);
+        };
+      }
       var build = actions.querySelector(".hc-todo-build");
       if (build) {
         var picked = todoPickedIds().length;
@@ -13831,6 +14496,56 @@
     var out = "q";
     while (out.length < 9) out += Math.floor(Math.random() * 16).toString(16);
     return out;
+  }
+
+  // The one open understanding check for a goal, read from the state the
+  // server sent (understanding never rides in the local tree). Null unless a
+  // build actually raised a check -- the pane never invents one.
+  function pendingCheckFor(goalId) {
+    var found = null;
+    array(serverState.goals).forEach(function (goal) {
+      if (goal && goal.id === goalId) found = goal;
+    });
+    var held = (found && found.understanding
+                && typeof found.understanding === "object")
+      ? found.understanding : {};
+    var p = held.pending;
+    if (!p || typeof p !== "object"
+        || !str(p.question).trim() || !str(p.todo_id).trim()) return null;
+    return { todo_id: str(p.todo_id), todo_text: str(p.todo_text),
+             concept: str(p.concept), question: str(p.question).trim(),
+             result: str(p.result) };
+  }
+
+  // When a build finishes one of the selected goal's rows, ask the server --
+  // once per row -- whether that step is worth an understanding question. The
+  // server decides, fail-closed; a raised check arrives back through state and
+  // renders in Current. A first sighting is only recorded, never fired, so
+  // rows already done on load do not trigger.
+  function noteBuildDone(goal) {
+    if (!goal || serverState.scope !== "chat") return;
+    if (document.documentElement
+        && document.documentElement.getAttribute("data-hc-readonly") !== null) {
+      return;
+    }
+    array(goal.items).forEach(function (r) {
+      var id = r && r.id;
+      if (!id) return;
+      var prev = checkSeen[id];
+      var now = str(r.status);
+      checkSeen[id] = now;
+      if (now === "done" && prev !== undefined && prev !== "done"
+          && !checkFired[id]) {
+        checkFired[id] = true;
+        post({ op: "check_todo", goal_id: goal.id, todo_id: id })
+          .then(function (res) {
+            if (res && res.raised) {
+              var p = refreshState();
+              if (p && p.then) p.then(function () { renderTodoRail(true); });
+            }
+          });
+      }
+    });
   }
 
   function understandFromServer(goalId) {
@@ -14539,6 +15254,252 @@
     box.appendChild(understandFoot(data));
     var fields = box.querySelectorAll("[data-hc-understand]");
     for (var i = 0; i < fields.length; i += 1) understandGrow(fields[i]);
+  }
+
+  // The active step for THIS goal: the first written row that is not done.
+  // Only this one is shown under "Start here" -- the full list is the TODOs
+  // tab, and Current does not repeat it.
+  function currentStep(items) {
+    var cur = null;
+    array(items).some(function (r) {
+      if (!str(r.text).trim() || r.status === "done") return false;
+      cur = r; return true;
+    });
+    return cur;
+  }
+
+  // The project path in the order the left panel lays it out: the phase
+  // groups in PATH order, each goal in document order. When no goal carries a
+  // phase the path is the plain top-level goal list. "Next" is read off this
+  // sequence, never inferred from the goal titles.
+  function pathOrderedGoals() {
+    var PH = ["brainstorm", "understand", "implement", "apply"];
+    var goals = readLocalGoals(), byp = {}, any = false;
+    (function scan(ns) {
+      array(ns).forEach(function (n) {
+        if (!n) return;
+        if (PH.indexOf(n.phase) >= 0) {
+          (byp[n.phase] = byp[n.phase] || []).push(n);
+          any = true;
+        }
+        scan(n.children);
+      });
+    })(goals);
+    if (!any) return array(goals);
+    var out = [];
+    PH.forEach(function (ph) { array(byp[ph]).forEach(function (n) { out.push(n); }); });
+    return out;
+  }
+
+  function nextGoalInPath(id) {
+    var ord = pathOrderedGoals();
+    for (var i = 0; i < ord.length; i++) {
+      if (ord[i].id === id) return ord[i + 1] || null;
+    }
+    return null;
+  }
+
+  // The reserved slot under the active step, where an execution result or an
+  // understanding check will later land. Today it opens only for a real,
+  // row-borne question -- there is no fabricated assessment. New kinds hang
+  // off this one function so the pane never invents content to look complete.
+  function currentIntervention(row) {
+    if (row && str(row.question).trim()) {
+      return { kind: "question", text: str(row.question).trim() };
+    }
+    return null;
+  }
+
+  // What to call the action under the active step, and what it really does.
+  // The one real executor is the build/run pipeline; a step that carries a URL
+  // opens it instead. Nothing here is simulated -- a step with no real action
+  // returns null and no button draws. The label varies with the step so it is
+  // never the blanket "Build this step".
+  function currentActionFor(row) {
+    var text = str(row.text);
+    var url = (text.match(/https?:\/\/\S+/) || [])[0];
+    if (url) {
+      return { label: "Open →", run: function () {
+        try { window.open(url, "_blank", "noopener"); } catch (e) { /* blocked */ }
+      } };
+    }
+    var readonly = document.documentElement
+      && document.documentElement.getAttribute("data-hc-readonly") !== null;
+    if (readonly || !todoOpenRow(row)) return null;
+    var t = text.toLowerCase();
+    // A verb fit to the step, not a blanket one. Reading comes first so "Read
+    // the measures doc" reads "Read", never "Analyze".
+    var label = "Start";
+    if (/\b(read|review|study|skim)\b/.test(t)
+        || /\b(paper|docs?|documentation|article|readme|spec)\b/.test(t)) label = "Read";
+    else if (/\b(plot|chart|graph|visuali|histogram)\b/.test(t)) label = "Plot";
+    else if (/(analy|compare|measure|summari|examine|inspect|assess)/.test(t)) label = "Analyze";
+    else if (/\b(run|train|evaluate|execute|fit|benchmark|simulate)\b/.test(t)) label = "Run";
+    else if (/\b(build|implement|code|script|refactor|prototype|wire|configure)\b/.test(t)) label = "Build";
+    return { label: label, todos: true, run: function () {
+      if (!todoPicked[row.id]) todoTogglePick(row.id);
+      todoBuild();
+    } };
+  }
+
+  // Switch to the TODOs tab and land on a specific row -- used by the Current
+  // tab's "Start here", so the reader arrives on the exact step, not the top
+  // of the list.
+  function scrollTodoRowIntoView(id) {
+    try {
+      var n = document.querySelector('[data-hc-todo-id="' + id + '"]');
+      if (n && typeof n.scrollIntoView === "function") {
+        n.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    } catch (e) { /* best effort */ }
+  }
+  function focusTodoRow(id) {
+    railTab = "todos";
+    renderTodoRail(true);
+    if (!id) return;
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(function () { scrollTodoRowIntoView(id); });
+    } else {
+      scrollTodoRowIntoView(id);
+    }
+  }
+
+  function renderCurrentTab(goal) {
+    var box = document.querySelector(".hc-rail-current");
+    if (!box) return;
+    while (box.firstChild) box.removeChild(box.firstChild);
+    // A little breathing room off the left rail, and space at the foot so the
+    // last section is not flush against the bottom of a tall column.
+    box.style.padding = "16px 16px 44px 20px";
+
+    var MONO = "'Source Code Pro',monospace";
+    function el(parent, tag, css, text) {
+      var n = document.createElement(tag);
+      if (css) n.setAttribute("style", css);
+      if (text != null) n.textContent = text;
+      (parent || box).appendChild(n);
+      return n;
+    }
+    // A full-width hairline that opens a section. Every section below the
+    // title/description wears one, so the pane reads as an even stack of
+    // labelled bands rather than one run-on column.
+    function divider(top) {
+      el(box, "div", "height:1px;background:var(--bd);align-self:stretch;"
+        + "margin:" + (top == null ? 26 : top) + "px 0 0");
+    }
+    // A small section label, sitting just under the divider that opens its
+    // section.
+    function heading(label) {
+      return el(box, "div", "margin:14px 0 10px;font:700 9px " + MONO
+        + ";letter-spacing:1.4px;text-transform:uppercase;color:var(--mut)", label);
+    }
+
+    if (!goal) {
+      el(box, "div", "font:12px/1.75 " + MONO + ";color:var(--mut);max-width:46ch",
+         "Select a goal in the Project Path to see what it is and where to start.");
+      return;
+    }
+
+    // Goal title -- the strongest thing on the pane, standing on its own with
+    // no label above it. A little air above it off the top of the pane.
+    el(box, "div", "margin-top:12px;font:600 16px/1.35 " + MONO + ";color:var(--ink);"
+      + "letter-spacing:-.2px;max-width:34ch", str(goal.title));
+
+    // Description -- pulled right up under the title so the two read as one
+    // unit; quieter than the title, no label of its own. Omitted, never faked
+    // from the title, when the goal carries none.
+    if (str(goal.desc).trim()) {
+      el(box, "div", "margin-top:7px;font:12.5px/1.7 " + MONO
+        + ";color:var(--dtxt);max-width:52ch", str(goal.desc).trim());
+    }
+
+    // Why this matters -- the goal's stored purpose, above the work now:
+    // context first, then what to do about it. Dropped whole when there is no
+    // purpose on record.
+    if (str(goal.why).trim()) {
+      divider();
+      heading("Why this matters");
+      el(box, "div", "font:12px/1.7 " + MONO + ";color:var(--mut);max-width:52ch",
+         str(goal.why).trim());
+    }
+
+    // Start here -- the action area: the single current step, prominent, and
+    // an action fit to it. The post-execution result and understanding check
+    // no longer live here; they open inline on their own TODO in the TODOs tab.
+    divider();
+    heading("Start here");
+    var cur = currentStep(goal.items);
+    if (cur) {
+      // The step reads as the dominant line and clicks through to the TODOs
+      // tab, landing on this very row.
+      var step = el(box, "div", "font:14px/1.5 " + MONO + ";color:var(--ink);"
+        + "max-width:52ch;cursor:pointer", str(cur.text));
+      step.addEventListener("mouseenter", function () { step.style.color = "var(--acc)"; });
+      step.addEventListener("mouseleave", function () { step.style.color = "var(--ink)"; });
+      step.addEventListener("click", function () { focusTodoRow(cur.id); });
+      var act = currentActionFor(cur);
+      if (act) {
+        // The standard restrained button: neutral until hovered, terracotta on
+        // hover, like every other action in the workspace.
+        var btn = el(box, "span",
+          "align-self:flex-start;margin-top:14px;padding:5px 13px;border:1px solid "
+          + "var(--bd2);border-radius:2px;font:600 11px " + MONO + ";color:var(--fnt);"
+          + "cursor:pointer;user-select:none", act.label);
+        btn.addEventListener("mouseenter", function () {
+          btn.style.color = "var(--acc)"; btn.style.borderColor = "var(--acc)"; });
+        btn.addEventListener("mouseleave", function () {
+          btn.style.color = "var(--fnt)"; btn.style.borderColor = "var(--bd2)"; });
+        btn.addEventListener("click", function () {
+          act.run();
+          // A build/run's progress lands in the TODOs list, so the pane
+          // follows the reader there, onto this row; opening a URL leaves them
+          // where they are.
+          if (act.todos) focusTodoRow(cur.id);
+        });
+      }
+    } else if (array(goal.items).some(function (r) { return str(r.text).trim(); })) {
+      el(box, "div", "font:12px/1.7 " + MONO + ";color:var(--mut)",
+         "Every step on this goal is done.");
+    } else {
+      // No steps yet: a restrained way in, not broken execution UI. Sends the
+      // reader to the TODOs tab, where the empty list already offers a row to
+      // type the first step into.
+      var add = el(box, "span",
+        "align-self:flex-start;padding:8px 14px;border:1px dashed var(--bd2);"
+        + "border-radius:2px;font:600 11px " + MONO + ";color:var(--fnt);"
+        + "cursor:pointer;user-select:none", "+ Add the first step");
+      add.addEventListener("mouseenter", function () {
+        add.style.color = "var(--acc)"; add.style.borderColor = "var(--acc)"; });
+      add.addEventListener("mouseleave", function () {
+        add.style.color = "var(--fnt)"; add.style.borderColor = "var(--bd2)"; });
+      add.addEventListener("click", function () {
+        railTab = "todos";
+        renderTodoRail(true);
+      });
+    }
+
+    // Next -- the next GOAL in the path. Quiet, but clearly a link: it clicks
+    // through to select that goal. Omitted at the end of the path.
+    var nx = nextGoalInPath(goal.id);
+    if (nx) {
+      divider();
+      heading("Next");
+      var row = el(box, "div", "align-self:flex-start;display:flex;"
+        + "align-items:baseline;gap:8px;max-width:52ch;cursor:pointer");
+      var arrow = el(row, "span", "flex:none;color:var(--mut);font:12px " + MONO, "→");
+      var name = el(row, "span", "font:12.5px/1.6 " + MONO + ";color:var(--mut)",
+        str(nx.title));
+      row.addEventListener("mouseenter", function () {
+        name.style.color = "var(--acc)"; arrow.style.color = "var(--acc)"; });
+      row.addEventListener("mouseleave", function () {
+        name.style.color = "var(--mut)"; arrow.style.color = "var(--mut)"; });
+      row.addEventListener("click", function () {
+        if (typeof window !== "undefined"
+            && typeof window.__hcSelectGoal === "function") {
+          try { window.__hcSelectGoal(nx.id); } catch (e) { /* stay put */ }
+        }
+      });
+    }
   }
 
   function renderUnderstandTab(goal) {
@@ -16218,6 +17179,32 @@
       ["<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>",
        chat ? "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span class=\"hc-rowtitle\" style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"
             : "<sc-if value=\"{{ row.showTitle }}\" hint-placeholder-val=\"{{ true }}\"><span style=\"font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}\">{{ row.title }}</span></sc-if>"],
+      // --- the project path: phases as a grouping over the goals --------
+      // When a project was built from the research-path onboarding, its
+      // goals carry a `phase` (brainstorm/understand/implement/apply). The
+      // left panel then reads as a PROJECT PATH: the four phases are
+      // collapsible headers -- current one open, completed ones a quiet
+      // check, future ones a hollow mark -- and the phase's goals are the
+      // rows beneath it. A project with no phase on any goal is untouched:
+      // it walks and renders exactly as the plain goal tree it always was.
+      // The delete affordance is gated on a new `canDel` so the path rows
+      // (headers and goals) do not carry it; legacy rows keep it.
+      ["value=\"{{ row.isReal }}\" hint-placeholder-val=\"{{ true }}\"><span sc-camel-on-click=\"{{ row.del }}\" title=\"Delete goal\"",
+       "value=\"{{ row.canDel }}\" hint-placeholder-val=\"{{ true }}\"><span sc-camel-on-click=\"{{ row.del }}\" title=\"Delete goal\""],
+      ["rowRef: (el) => { (this._rowEls = this._rowEls || {})[n.id] = el; },",
+       "rowRef: (el) => { (this._rowEls = this._rowEls || {})[n.id] = el; }, canDel: true,"],
+      ["walk(goals.slice(0, rootsVis), 0);",
+       "(function(){var self=this;var PH=['brainstorm','understand','implement','apply'];var PHL={brainstorm:'Brainstorm',understand:'Understand',implement:'Implement',apply:'Apply'};var byp={};var any=false;var rootId='';var scan=function(ns,par){(ns||[]).forEach(function(n){if(n&&PH.indexOf(n.phase)>=0){(byp[n.phase]=byp[n.phase]||[]).push(n);any=true;if(!rootId)rootId=par;}scan(n&&n.children,n&&n.id);});};scan(goals,'');self._pathMode=any;if(!any){walk(goals.slice(0, rootsVis), 0);return;}var dn=function(n){return n.done||((n.children||[]).length>0&&(n.children||[]).every(dn));};var cur='';for(var i=0;i<PH.length;i++){var gg=byp[PH[i]]||[];var un=false;for(var j=0;j<gg.length;j++){if(!dn(gg[j])){un=true;break;}}if(un){cur=PH[i];break;}}PH.forEach(function(ph){var gs=byp[ph]||[];if(!gs.length)return;var allDone=gs.every(dn);var okey='__phopen_'+ph;var isCur=ph===cur;var stO=self.state[okey];var open=(stO===undefined)?isCur:stO;var tog=function(e){if(e&&e.stopPropagation)e.stopPropagation();var o=(self.state[okey]===undefined)?isCur:self.state[okey];var p={};p[okey]=!o;self.set(function(){return p;});};rows.push({id:'__phase_'+ph,isReal:false,isAdd:false,isPhase:true,title:PHL[ph],rawTitle:PHL[ph],pad:'0px',guide:'none',caret:open?'▾':(allDone?'✓':'○'),check:'',circB:'transparent',bg:'transparent',hovBg:'var(--acchov)',fw:isCur?'700':'600',tcol:allDone?'var(--mut)':(isCur?'var(--ink)':'var(--fnt)'),deco:'none',isSel:false,isEdit:false,showTitle:true,canDel:false,dragOp:'1',dropShadow:'none',sel:tog,toggle:tog,done:function(){},edit:function(){},del:function(){},addSub:function(){},key:function(){},blur:function(){},ref:function(){},dragStart:function(){},rowRef:function(){}});if(!open)return;gs.forEach(function(g){var isSel=selId===g.id;var isEd=editId===g.id;rows.push({id:g.id,isReal:true,isAdd:false,isPhase:false,title:g.title||'Untitled',rawTitle:g.title,pad:'22px',guide:'none',caret:'',bg:isSel?'var(--accbg)':'transparent',hovBg:isSel?'var(--accbg)':'var(--acchov)',dragOp:'1',dropShadow:'none',rowRef:function(el){(self._rowEls=self._rowEls||{})[g.id]=el;},fw:isSel?'600':'400',isSel:isSel,isEdit:isEd,showTitle:!isEd,canDel:false,tcol:g.done?'var(--mut)':'var(--ink)',deco:g.done?'line-through':'none',check:g.done?'✓':'',circB:g.done?'var(--fnt)':(g.status==='inprog'?'var(--acc)':'var(--fnt)'),sel:function(){if(self._justDragged)return;self.set(function(){return{selId:g.id,paneTab:'context'};});},toggle:function(){},done:function(e){if(e&&e.stopPropagation)e.stopPropagation();self.set(function(s){return{goals:self.up(s.goals,g.id,function(x){return Object.assign({},x,{done:!x.done});}),editId:null};},true);},edit:function(e){if(e&&e.stopPropagation)e.stopPropagation();self.set(function(){return{selId:g.id,editId:g.id};});},addSub:function(){},del:function(){},key:function(e){if(e.key==='Enter')self.commit(g.id,e.target.value);else if(e.key==='Escape'){self._esc=g.id;self.cancel(g.id);}},blur:function(e){self.commit(g.id,e.target.value);},ref:function(el){if(el&&!el._f){el._f=1;el.focus();el.select();}}});});rows.push({id:'__addg_'+ph,isReal:false,isAdd:true,isPhase:false,addLabel:'Add goal',pad:'22px',guide:'none',caret:'',check:'',circB:'transparent',bg:'transparent',hovBg:'var(--hov)',fw:'400',tcol:'var(--mut)',deco:'none',isSel:false,isEdit:false,showTitle:false,title:'',rawTitle:'',canDel:false,dragOp:'1',dropShadow:'none',sel:function(){var n=self.node();n.phase=ph;self._new=n.id;self.set(function(s){return{goals:self.up(s.goals,rootId,function(x){return Object.assign({},x,{open:true,children:(x.children||[]).concat([n])});}),selId:n.id,editId:n.id};},true);},edit:function(){},toggle:function(){},done:function(){},del:function(){},addSub:function(){},key:function(){},blur:function(){},ref:function(){},dragStart:function(){},rowRef:function(){}});});}).call(this);"],
+      // In path mode the left column is a project path, not a goal list, so
+      // the heading says so and the whole-tree "Add goal" gives way to a
+      // per-phase one (below). Both flags are read off _pathMode, which the
+      // row builder set while assembling the rows for this same render.
+      ["ctxObjective: ctxGet('objective'), ctxObjectiveCh: ctxCh('objective'),",
+       "ctxObjective: ctxGet('objective'), ctxObjectiveCh: ctxCh('objective'), railName: (this._pathMode ? 'PROJECT PATH' : 'GOALS'), showAddGoal: !this._pathMode,"],
+      ["<div sc-camel-on-click=\"{{ addRoot }}\"",
+       "<sc-if value=\"{{ showAddGoal }}\"><div sc-camel-on-click=\"{{ addRoot }}\""],
+      ["<span style=\"font-size:12.5px\">Add goal</span></div>",
+       "<span style=\"font-size:12.5px\">Add goal</span></div></sc-if>"],
       // --- the launch layout, chat scope only ---------------------------
       // Names for the containers the skin dresses, and the one column the
       // artifact does not have: a rail for the prompt it assembles. The
@@ -16227,10 +17214,10 @@
        chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
             : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
       ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
-       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">GOALS</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">{{ railName }}</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n<div class=\"hc-notes-head\"><span>RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div class=\"hc-notes-prompts\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-rail-current\"></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\" style=\"opacity:.5;border:none;padding:0;font-weight:400;align-self:flex-end\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-add\" style=\"font:600 10px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);cursor:pointer;margin-right:auto;opacity:.7\">+ Add TODO</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's
@@ -16479,7 +17466,7 @@
       // knows anything about. renderPreview fills it on the sweep.
       ["<div style=\"margin-top:20px;padding-top:14px;border-top:1px solid var(--bd);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">ADDITIONAL NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:96px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Plan in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>",
        chat ? "<div class=\"hc-preview\"><div class=\"hc-preview-mount\"></div></div>"
-            : "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:360px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>\n<div style=\"margin-top:15px;display:flex;align-items:baseline;justify-content:space-between;gap:12px\"><span style=\"font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">RELATED PROMPTS</span><span class=\"hc-prompt-add\"></span></div>\n<div style=\"margin-top:6px;max-height:420px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<sc-for list=\"{{ histRows }}\" as=\"hr\" hint-placeholder-count=\"2\">\n<div style=\"padding:8px 11px;border-bottom:{{ hr.bd }}\"><div style=\"display:flex;align-items:baseline;gap:10px\"><span style=\"flex:1;min-width:0;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.when }}</span><span style=\"flex:none;padding:0.5px 6px;border:1px solid var(--bd);border-radius:2px;font:600 8px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt)\">{{ hr.origin }}</span><span sc-camel-on-click=\"{{ hr.del }}\" title=\"Unlink this prompt\" style=\"flex:none;font:12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del)\">\u00d7</span></div><div style=\"margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word\">{{ hr.text }}</div></div>\n</sc-for>\n<sc-if value=\"{{ histEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"padding:12px 11px;font-size:11.5px;color:var(--fnt)\">No prompts of yours are tied to this goal yet.</div></sc-if>\n</div>"],
+            : "<div style=\"margin-top:16px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)\">NOTES</div>\n<div style=\"position:relative;margin-top:7px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)\">\n<div style=\"padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;min-height:360px;color:var(--dtxt)\">{{ notesOverlay }}</div>\n<textarea value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\" style=\"position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word\"></textarea>\n</div>"],
       // The section reports the run's state, not only a task list.
       [">AGENT TODOS</div>",
        ">AGENT STATUS</div>"],

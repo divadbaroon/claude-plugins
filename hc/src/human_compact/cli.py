@@ -1801,7 +1801,8 @@ def setup_import_main(argv=None):
     result = SETUP.commit(None, payload.get("name"), payload.get("plan"),
                           payload.get("goals"), payload.get("chosen"),
                           payload.get("todos"), payload.get("subgoals") or [],
-                          bind="")
+                          bind="", paper=payload.get("paper"),
+                          provenance=payload.get("provenance"))
     if not result.get("ok"):
         sys.stderr.write(f"hc: {result.get('error') or 'could not create the project'}\n")
         raise SystemExit(1)

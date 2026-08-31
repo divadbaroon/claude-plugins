@@ -53,7 +53,11 @@ MAX_PLAN = 2400
 MAX_UNSURE = 6
 MAX_GOALS = 8
 MAX_TODOS = 20
-MAX_SUBGOALS = 6
+# A generated project fans a phase into several goals (an Understand goal per
+# paper, several Implement goals), so the old four-lane cap of 6 is too low.
+MAX_SUBGOALS = 12
+MAX_DESC = 1000
+MAX_DOC_BODY = 8000
 MAX_FOCUS = 3
 MAX_CHAT_TURNS = 60
 MAX_CHAT_TURN = 1200
@@ -556,13 +560,28 @@ def _normalize_todos(value) -> List[str]:
     return out
 
 
-def _normalize_subgoals(value) -> List[Dict[str, Any]]:
-    """The pieces of the chosen goal, each with the rows that belong to it.
+def _normalize_document(value) -> Dict[str, Any]:
+    """A generated Brainstorm document carried on a subgoal: a title and body.
 
-    A piece with no rows under it is dropped: a subgoal is a place to put
-    work, and one with none is a heading. The reader can add rows to it
-    afterwards, but a heading the model invented and left empty is not
-    something they asked for.
+    Bounded, body newlines kept. ``None`` when there is nothing to open.
+    """
+    if not isinstance(value, dict):
+        return None
+    body = str(value.get("body_md") or "").replace("\r", "")[:MAX_DOC_BODY]
+    title = _one(value.get("title"), MAX_TITLE)
+    if not body.strip() and not title:
+        return None
+    return {"title": title, "body_md": body}
+
+
+def _normalize_subgoals(value) -> List[Dict[str, Any]]:
+    """The pieces of the chosen goal, each with the rows that belong to it and,
+    for a generated project, the goal-level resource it carries.
+
+    A piece with no rows is normally a heading and dropped -- but a piece that
+    names a real path phase, or carries a resource (a paper to read, a document
+    to shape), is a goal in its own right and is kept: an Understand paper goal
+    and a Brainstorm document goal have no rows of their own.
     """
     out = []
     for row in value if isinstance(value, list) else []:
@@ -570,9 +589,23 @@ def _normalize_subgoals(value) -> List[Dict[str, Any]]:
             continue
         label = _one(row.get("label") or row.get("title"), MAX_LABEL)
         rows = _normalize_todos(row.get("todos"))
-        if not label or not rows:
+        phase = _one(row.get("phase"), 40).lower()
+        if phase not in GM.PATH_PHASES:
+            phase = ""
+        paper = GM.normalize_paper(row.get("paper"))
+        if not paper.get("paper_id"):
+            paper = None
+        document = _normalize_document(row.get("document"))
+        if not label or (not rows and not phase and not paper and not document):
             continue
-        out.append({"label": label, "todos": rows})
+        piece = {"label": label, "todos": rows, "phase": phase,
+                 "why": _one(row.get("why"), MAX_WHY),
+                 "description": _long(row.get("description"), MAX_DESC)}
+        if paper:
+            piece["paper"] = paper
+        if document:
+            piece["document"] = document
+        out.append(piece)
         if len(out) >= MAX_SUBGOALS:
             break
     return out
@@ -685,7 +718,19 @@ def answers_as_said(questions, answers) -> str:
 
 # --- the approved conversation, as a project ---------------------------------
 
-def to_goals(offered, chosen, todos, subgoals=()) -> List[Dict[str, Any]]:
+def _paper_ref(value) -> Dict[str, Any]:
+    """A canonical paper reference for the chosen goal, or ``None``.
+
+    Delegates to the goal module's own normalizer so the id is validated and the
+    text bounded exactly as a saved goal's paper is; kept only when a real
+    canonical id survives, so a payload without one changes nothing.
+    """
+    ref = GM.normalize_paper(value)
+    return ref if ref.get("paper_id") else None
+
+
+def to_goals(offered, chosen, todos, subgoals=(),
+             paper=None) -> List[Dict[str, Any]]:
     """Every goal that was offered, and under the one picked, its pieces.
 
     The goals not chosen are kept and left alone -- they were proposed and
@@ -724,20 +769,52 @@ def to_goals(offered, chosen, todos, subgoals=()) -> List[Dict[str, Any]]:
         doc["goals"].append(picked)
     if picked is not None:
         for piece in pieces:
-            kid = _goal(doc, piece["label"], "", piece["todos"],
-                        parent=picked["id"])
+            # A generated piece carries its own description, purpose (rendered as
+            # "Why this matters"), and goal-level resource -- an Understand paper
+            # or a Brainstorm document.
+            kid = _goal(doc, piece["label"], piece.get("description", ""),
+                        piece["todos"], parent=picked["id"],
+                        phase=piece.get("phase", ""),
+                        purpose=piece.get("why", ""),
+                        paper=piece.get("paper"), document=piece.get("document"))
             doc["goals"].append(kid)
+        # LEGACY: an old single-paper payload attaches its paper to the chosen
+        # goal. New projects put papers on their own Understand goals instead.
+        ref = _paper_ref(paper)
+        if ref:
+            picked["paper"] = ref
     return doc["goals"]
 
 
-def _goal(doc, title, why, rows, parent=None) -> Dict[str, Any]:
+def _goal(doc, title, description, rows, parent=None, phase="",
+          purpose="", paper=None, document=None) -> Dict[str, Any]:
     # Ids are allocated against the tree as it grows: next_goal_id reads
     # what is already in it, so each goal must be in the document before
     # the next one asks for a name. A child takes its id from its parent's,
     # which is how the tree says who belongs to whom.
     gid = GM.child_goal_id(doc, parent) if parent else GM.next_goal_id(doc)
     goal = GM.new_goal(gid, title[:MAX_LABEL], parent, origin="user")
-    goal["description"] = why
+    goal["description"] = description
+    # Path membership, when the caller placed this goal under a phase.
+    if phase:
+        goal["phase"] = phase
+    # Why this goal matters, shown in the Current pane. Stored in relevance_why,
+    # which the pane already renders as "Why this matters".
+    if purpose:
+        goal["relevance_why"] = str(purpose)[:200]
+    # An Understand goal's canonical paper -- the Paper tab opens it by id.
+    if paper:
+        ref = GM.normalize_paper(paper)
+        if ref.get("paper_id"):
+            goal["paper"] = ref
+    # A Brainstorm goal's document -- created here as a real, persisted working
+    # document and pointed at explicitly, so the Document tab opens it at once.
+    if document and (document.get("body_md") or document.get("title")):
+        did = GM.document_id()
+        goal["documents"] = [{"id": did,
+                              "title": str(document.get("title") or "")[:200],
+                              "body_md": str(document.get("body_md") or "")}]
+        goal["primary_document_id"] = did
     # No status is what the rail means by "not yet sent to a build", and
     # setup has run nothing: every row it writes is the reader's to send.
     goal["todo_items"] = [{"id": GM.todo_id(), "text": text, "depth": 0,
@@ -748,20 +825,28 @@ def _goal(doc, title, why, rows, parent=None) -> Dict[str, Any]:
     return goal
 
 
-def to_project(name, plan) -> Dict[str, Any]:
+def to_project(name, plan, provenance=None) -> Dict[str, Any]:
     """What the project record holds when setup is done.
 
     The plan's head is the objective -- one line, the thing every chat in
     the project reads -- and the lines under it become the description,
     which is where the reader looks for what they agreed the work was.
+
+    *provenance* is the project's structured research lineage (canonical lab /
+    PI / student / paper / project ids); it is passed through here and bounded
+    by the project store's own whitelist, so a project keeps the ids that say
+    why it was suggested and how to relate it back to the research landscape.
     """
     plan = _normalize_plan(plan)
     said = plan["description"]
     # The objective is one line -- every chat in the project reads it -- so
     # it is the first sentence of what was agreed, not the whole of it.
     first = said.split("\n")[0].strip()
-    return {"name": _one(name, 80), "objective": first[:400],
-            "description": said}
+    record = {"name": _one(name, 80), "objective": first[:400],
+              "description": said}
+    if isinstance(provenance, dict) and provenance:
+        record["provenance"] = provenance
+    return record
 
 
 # --- what setup leaves behind ------------------------------------------------
@@ -773,19 +858,25 @@ def to_project(name, plan) -> Dict[str, Any]:
 # same way it would join any project it did not start.
 
 def commit(root, name, plan, offered, chosen, todos,
-           subgoals=(), bind="") -> Dict[str, Any]:
+           subgoals=(), bind="", paper=None, provenance=None) -> Dict[str, Any]:
     """Make the project, write its tree, attach it to nothing.
 
     Refused before anything is created when there is nothing to save, when
     the name cannot become a folder, and when the name is already a
     project's -- two projects with one name are two answers to "which one
     did I mean", and the reader is told rather than handed the first.
+
+    *paper* is an optional LEGACY single canonical paper for the chosen goal;
+    new projects carry a paper per Understand subgoal instead. *provenance* is
+    the project's structured research lineage. Both are validated/bounded before
+    anything is written, and dropped when empty, so an old payload behaves as
+    before and a new one gains the richer structure.
     """
     from . import chat_state as CS
     from . import project_store as PS
 
-    made = to_goals(offered, chosen, todos, subgoals)
-    held = to_project(name, plan)
+    made = to_goals(offered, chosen, todos, subgoals, paper)
+    held = to_project(name, plan, provenance)
     if not made and not held["objective"]:
         return {"ok": False, "error": "nothing to save yet"}
     if not held["name"]:
