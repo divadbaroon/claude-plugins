@@ -40,8 +40,8 @@ MANAGED_MARKER = ".human-compact-managed.json"
 _ASSET_FILES = {
     "vault": {
         ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
-        "hooks/hooks.experimental.json", "scripts/chat-hook.sh",
-        "scripts/vault-backfill.sh", "scripts/vault-hook.sh",
+        "hooks/hooks.experimental.json", "scripts/chat-hook.cjs",
+        "scripts/hc-runtime.cjs", "scripts/vault-hook.cjs",
     },
     "bart": {"SKILL.md"},
 }
@@ -1801,7 +1801,8 @@ def setup_import_main(argv=None):
     result = SETUP.commit(None, payload.get("name"), payload.get("plan"),
                           payload.get("goals"), payload.get("chosen"),
                           payload.get("todos"), payload.get("subgoals") or [],
-                          bind="")
+                          bind="", paper=payload.get("paper"),
+                          provenance=payload.get("provenance"))
     if not result.get("ok"):
         sys.stderr.write(f"hc: {result.get('error') or 'could not create the project'}\n")
         raise SystemExit(1)
