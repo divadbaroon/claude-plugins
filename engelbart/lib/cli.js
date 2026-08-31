@@ -145,8 +145,16 @@ function setupEnvironment(account, env) {
   // makes the provider keep it instead of falling back, so setup fails on a
   // dead key while the member's own working Claude login sits right there. Out
   // of credit has to mean "setup runs on your account", the same fallback the
-  // credential helper takes when it unwires itself.
-  if (auth.spent(claude)) return { ...env };
+  // credential helper takes when it unwires itself. The ambient shell may
+  // still carry that same dead key -- `engelbart env` exported it -- so a
+  // plain copy of env is not clean enough: strip the wiring too.
+  if (auth.spent(claude)) {
+    const clean = { ...env };
+    delete clean.ANTHROPIC_AUTH_TOKEN;
+    delete clean.ANTHROPIC_BASE_URL;
+    delete clean.HC_USE_API_KEY;
+    return clean;
+  }
   return {
     ...env,
     ANTHROPIC_BASE_URL: claude.baseUrl,
