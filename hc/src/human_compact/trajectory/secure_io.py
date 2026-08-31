@@ -23,6 +23,12 @@ FILE_MODE = 0o600
 
 
 def _chmod_nofollow(path: Path, mode: int, *, directory: bool = False) -> None:
+    # Windows has no mode bits to tighten (see maybe_fchmod), and its CRT
+    # cannot open a directory descriptor at all, so the os.open below would
+    # raise PermissionError on every directory. Privacy there comes from the
+    # tree living under the user's own profile.
+    if not hasattr(os, "fchmod"):
+        return
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
