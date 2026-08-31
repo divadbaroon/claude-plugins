@@ -3,6 +3,6 @@
   "package": "engelbart-cli",
   "version": "0.19.21",
   "wheel": "human_compact-0.19.21-py3-none-any.whl",
-  "sha256": "e765c242bb4f081f5da9def78dda3f4659f6bf77c7de7075ceddcec7190e7348",
-  "sourceRevision": "97917f81c15eb58364aa2710fede1709ecee0dfd"
+  "sha256": "4bad5f814593a339d69b8c2cfe938937600c36f8511c90e414e57ac027dc988e",
+  "sourceRevision": "c77c3c10fb397bc106c3d8ceafdc7a50e5a28be5"
 }
