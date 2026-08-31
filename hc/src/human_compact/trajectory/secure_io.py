@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
-from ..platform_compat import maybe_fchmod
+from ..platform_compat import IS_WINDOWS, maybe_fchmod
 
 
 DIR_MODE = 0o700
@@ -23,11 +23,12 @@ FILE_MODE = 0o600
 
 
 def _chmod_nofollow(path: Path, mode: int, *, directory: bool = False) -> None:
-    # Windows has no mode bits to tighten (see maybe_fchmod), and its CRT
-    # cannot open a directory descriptor at all, so the os.open below would
-    # raise PermissionError on every directory. Privacy there comes from the
-    # tree living under the user's own profile.
-    if not hasattr(os, "fchmod"):
+    # Windows has no POSIX mode bits to tighten (see maybe_fchmod), and its
+    # CRT cannot open a directory descriptor at all, so the os.open below
+    # raises PermissionError on every directory. (Python 3.13 grew an
+    # os.fchmod on Windows, so its absence is not the test.) Privacy there
+    # comes from the tree living under the user's own profile.
+    if IS_WINDOWS:
         return
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
