@@ -9,6 +9,8 @@ const { spawnSync } = require('child_process');
 const test = require('node:test');
 
 const {
+  INSTALL_SCHEMA,
+  OWNER,
   ensureUv,
   ensureManagedDirectory,
   ensureLauncherOnPath,
@@ -17,10 +19,22 @@ const {
   install,
   parseClaudeVersion,
   requireCompatibleClaude,
+  runtimeExecutables,
   safeChild,
+  spawnableLauncher,
   supportedTarget,
   switchLauncher,
+  launcherShim,
+  launcherShimTarget,
+  venvBinDir,
+  exeName,
+  launcherName,
 } = require('../lib/installer');
+
+// POSIX symlinks, mode bits, and the shell-PATH branch (which uses the host
+// path.delimiter and resolve semantics) cannot be reproduced on a Windows
+// filesystem; those tests are host-gated. win32 behavior has its own tests.
+const WINDOWS_HOST = process.platform === 'win32';
 
 function capture() {
   let value = '';
@@ -87,7 +101,14 @@ test('supportedTarget pins Darwin, glibc, and musl archives', () => {
     supportedTarget('linux', 'arm64', () => ({ header: {} })).key,
     'linux-arm64-musl',
   );
-  assert.throws(() => supportedTarget('win32', 'x64'), /unsupported platform/);
+  // Windows x64 is a supported target: a pinned .zip uv archive, no arm64.
+  const win = supportedTarget('win32', 'x64');
+  assert.equal(win.key, 'win32-x64');
+  assert.equal(win.platform, 'win32');
+  assert.equal(win.extension, 'zip');
+  assert.equal(win.sha256.length, 64);
+  assert.ok(win.file.endsWith('.zip'));
+  assert.throws(() => supportedTarget('win32', 'arm64'), /unsupported platform/);
 });
 
 test('inspectVendor rejects npm/backend skew and tampering', () => {
@@ -207,6 +228,7 @@ test('pinned uv bootstrap verifies the archive and repairs a corrupt managed bin
     const options = {
       root,
       target,
+      platform: 'linux',
       runner(command, args, spawnOptions) {
         return spawnSync(command, args, { encoding: 'utf8', ...spawnOptions });
       },
@@ -334,7 +356,7 @@ test('switchLauncher refuses an unmanaged existing launcher', () => {
     fs.mkdirSync(path.join(fixture, 'bin'), { recursive: true });
     fs.writeFileSync(path.join(fixture, 'bin', 'hc'), 'mine');
     assert.throws(
-      () => switchLauncher(fixture, '/managed/hc', null),
+      () => switchLauncher(fixture, '/managed/hc', null, null, 'linux'),
       /unmanaged launcher/,
     );
   } finally {
@@ -360,7 +382,7 @@ test('the runtime check asks for the python distribution, not the npm package', 
 
 // A one-command install that ends by telling the user to run a command their
 // shell cannot find is not installed. This is the check that was missing.
-test('PATH: an already-reachable launcher is left alone', () => {
+test('PATH: an already-reachable launcher is left alone', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin:/home/u/.human-compact/bin', SHELL: '/bin/zsh' },
@@ -372,7 +394,7 @@ test('PATH: an already-reachable launcher is left alone', () => {
   assert.equal(got.added, false);
 });
 
-test('PATH: a launcher the shell cannot find is added to the zsh profile', () => {
+test('PATH: a launcher the shell cannot find is added to the zsh profile', { skip: WINDOWS_HOST }, () => {
   const writes = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -391,7 +413,7 @@ test('PATH: a launcher the shell cannot find is added to the zsh profile', () =>
   assert.match(writes[0][1], /engelbart-cli \(runtime on PATH\)/);
 });
 
-test('PATH: ZDOTDIR is honoured over the home directory', () => {
+test('PATH: ZDOTDIR is honoured over the home directory', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin', SHELL: '/bin/zsh', ZDOTDIR: '/home/u/cfg' },
@@ -415,7 +437,7 @@ test('PATH: the profile is never given the same line twice', () => {
   assert.equal(got.onPath, false);
 });
 
-test('PATH: an unrecognised shell is instructed, not edited', () => {
+test('PATH: an unrecognised shell is instructed, not edited', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin', SHELL: '/usr/bin/fish' },
@@ -427,7 +449,7 @@ test('PATH: an unrecognised shell is instructed, not edited', () => {
   assert.equal(got.line, 'export PATH="$HOME/.human-compact/bin:$PATH"');
 });
 
-test('PATH: both launchers are linked into a directory the shell already searches', () => {
+test('PATH: both launchers are linked into a directory the shell already searches', { skip: WINDOWS_HOST }, () => {
   const links = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -449,7 +471,7 @@ test('PATH: both launchers are linked into a directory the shell already searche
   ]);
 });
 
-test('PATH: an hc that is not ours is never overwritten', () => {
+test('PATH: an hc that is not ours is never overwritten', { skip: WINDOWS_HOST }, () => {
   const appended = [];
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
@@ -467,7 +489,7 @@ test('PATH: an hc that is not ours is never overwritten', () => {
   assert.deepEqual(appended, ['/home/u/.zshrc']);
 });
 
-test('PATH: re-running the installer reuses its own link', () => {
+test('PATH: re-running the installer reuses its own link', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/home/u/.local/bin', SHELL: '/bin/zsh' },
@@ -484,7 +506,7 @@ test('PATH: re-running the installer reuses its own link', () => {
   ]);
 });
 
-test('PATH: a directory on PATH but not a known bin dir is left alone', () => {
+test('PATH: a directory on PATH but not a known bin dir is left alone', { skip: WINDOWS_HOST }, () => {
   const got = ensureLauncherOnPath({
     launcherDir: '/home/u/.human-compact/bin',
     env: { PATH: '/usr/bin:/opt/homebrew/bin', SHELL: '/bin/zsh' },
@@ -497,4 +519,149 @@ test('PATH: a directory on PATH but not a known bin dir is left alone', () => {
   });
   assert.equal(got.linked, null);
   assert.equal(got.added, true);
+});
+
+// --- Windows port: platform is injected, so these run on any host. ----------
+
+test('platform helpers: venv layout differs on Windows', () => {
+  assert.equal(venvBinDir('linux'), 'bin');
+  assert.equal(venvBinDir('win32'), 'Scripts');
+  assert.equal(exeName('hc', 'darwin'), 'hc');
+  assert.equal(exeName('hc', 'win32'), 'hc.exe');
+  assert.equal(launcherName('hc', 'linux'), 'hc');
+  assert.equal(launcherName('hc', 'win32'), 'hc.cmd');
+});
+
+test('runtimeExecutables: Windows uses Scripts\\*.exe', () => {
+  const win = runtimeExecutables('C:\\rt', 'win32');
+  assert.ok(win.hc.endsWith(path.join('Scripts', 'hc.exe')));
+  assert.ok(win.bart.endsWith(path.join('Scripts', 'bart.exe')));
+  assert.ok(win.python.endsWith(path.join('Scripts', 'python.exe')));
+  const posix = runtimeExecutables('/rt', 'linux');
+  assert.ok(posix.hc.endsWith(path.join('bin', 'hc')));
+});
+
+test('launcher shim: forwards args to the runtime exe and round-trips', () => {
+  const target = 'C:\\Users\\u\\.human-compact\\runtimes\\r\\Scripts\\hc.exe';
+  const shim = launcherShim(target);
+  assert.match(shim, /^@echo off/);
+  assert.match(shim, /%\*/);
+  assert.equal(launcherShimTarget(shim), target);
+  assert.equal(launcherShimTarget('not a shim'), null);
+});
+
+test('PATH (win32): a launcher not on PATH is instructed with setx, never a profile edit', () => {
+  // Drive-less paths keep this host-independent: real Windows drive-letter
+  // matching (its ';' delimiter, case-folding) is exercised by windows-port CI,
+  // since the POSIX host's ':' delimiter would split a "C:\..." entry apart.
+  const got = ensureLauncherOnPath({
+    launcherDir: '\\human-compact\\bin',
+    env: { PATH: '\\Windows' },
+    homedir: '\\Users\\U',
+    platform: 'win32',
+    fileSystem: { appendFileSync() { throw new Error('Windows has no shell profile to edit'); } },
+  });
+  assert.equal(got.onPath, false);
+  assert.equal(got.profile, null);
+  assert.equal(got.line, 'setx PATH "%PATH%;\\human-compact\\bin"');
+});
+
+test('PATH (win32): the launcher dir already on PATH needs no instruction', () => {
+  const got = ensureLauncherOnPath({
+    launcherDir: '\\human-compact\\bin',
+    env: { PATH: '\\human-compact\\bin' },
+    homedir: '\\Users\\U',
+    platform: 'win32',
+  });
+  assert.equal(got.onPath, true);
+  assert.equal(got.line, null);
+});
+
+test('switchLauncher (win32): a fresh install writes hc.cmd and bart.cmd shims', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-win-launcher-'));
+  try {
+    const rtBin = path.join('C:', 'rt', 'Scripts');
+    const hc = path.join(rtBin, 'hc.exe');
+    const bart = path.join(rtBin, 'bart.exe');
+    const result = switchLauncher(fixture, hc, null, bart, 'win32');
+    assert.ok(result.launcher.endsWith(path.join('bin', 'hc.cmd')));
+    assert.ok(result.bartLauncher.endsWith(path.join('bin', 'bart.cmd')));
+    const hcShim = fs.readFileSync(result.launcher, 'utf8');
+    assert.equal(launcherShimTarget(hcShim), hc);
+    const bartShim = fs.readFileSync(result.bartLauncher, 'utf8');
+    assert.equal(launcherShimTarget(bartShim), bart);
+    // No POSIX symlink was created.
+    assert.equal(fs.lstatSync(result.launcher).isFile(), true);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('switchLauncher (win32): refuses to overwrite an unmanaged .cmd', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-win-owner-'));
+  try {
+    fs.mkdirSync(path.join(fixture, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'bin', 'hc.cmd'), '@echo not ours');
+    assert.throws(
+      () => switchLauncher(fixture, path.join('C:', 'rt', 'Scripts', 'hc.exe'), null, null, 'win32'),
+      /unmanaged launcher/,
+    );
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('spawnableLauncher: POSIX returns the stable symlink, no manifest read', { skip: WINDOWS_HOST }, () => {
+  // A non-existent root would make a manifest read throw; POSIX must not read one.
+  assert.equal(
+    spawnableLauncher('/nope/.human-compact', 'hc', 'linux'),
+    path.join('/nope/.human-compact', 'bin', 'hc'),
+  );
+});
+
+test('spawnableLauncher (win32): resolves the runtime .exe from the owned manifest', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-spawnable-'));
+  try {
+    const runtime = path.join(fixture, 'runtimes', 'r');
+    fs.mkdirSync(runtime, { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'install.json'), `${JSON.stringify({
+      owner: OWNER, schema: INSTALL_SCHEMA, runtime,
+    }, null, 2)}\n`);
+    const exe = spawnableLauncher(fixture, 'hc', 'win32');
+    assert.equal(exe, path.join(runtime, 'Scripts', 'hc.exe'));
+    // No manifest on disk -> a clear error, never a bad spawn target.
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-spawnable-bare-'));
+    try {
+      assert.throws(() => spawnableLauncher(bare, 'hc', 'win32'), /manifest/);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('switchLauncher (win32): an owned upgrade re-points the shim to the new runtime', () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-win-upgrade-'));
+  try {
+    // First install at runtime "old".
+    const oldRt = path.join(fixture, 'runtimes', 'old');
+    const oldHc = path.join(oldRt, 'Scripts', 'hc.exe');
+    const oldBart = path.join(oldRt, 'Scripts', 'bart.exe');
+    const first = switchLauncher(fixture, oldHc, null, oldBart, 'win32');
+    const manifest = {
+      runtime: oldRt,
+      launcher: first.launcher,
+      bartLauncher: first.bartLauncher,
+    };
+    // Upgrade to runtime "new"; the manifest proves the old shim is ours.
+    const newRt = path.join(fixture, 'runtimes', 'new');
+    const newHc = path.join(newRt, 'Scripts', 'hc.exe');
+    const newBart = path.join(newRt, 'Scripts', 'bart.exe');
+    const second = switchLauncher(fixture, newHc, manifest, newBart, 'win32');
+    assert.equal(launcherShimTarget(fs.readFileSync(second.launcher, 'utf8')), newHc);
+    assert.equal(launcherShimTarget(fs.readFileSync(second.bartLauncher, 'utf8')), newBart);
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
 });

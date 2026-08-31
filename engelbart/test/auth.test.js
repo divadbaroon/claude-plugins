@@ -8,6 +8,11 @@ const test = require('node:test');
 
 const auth = require('../lib/auth');
 
+// POSIX mode bits cannot be reproduced on a Windows filesystem; those
+// assertions are host-gated. Logic tests pin platform:'linux' to keep
+// exercising the POSIX credential-helper branch on any host.
+const WINDOWS_HOST = process.platform === 'win32';
+
 function temporaryRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-auth-'));
 }
@@ -60,7 +65,7 @@ test('a stored token is owner-only on disk', () => {
     schema: 1, apiBase: 'https://berkeley.mathetic.com', token: 'egb_secret', email: 'm@example.com',
   });
   const file = auth.credentialsPath(root);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(auth.readCredentials(root, {}).email, 'm@example.com');
 });
 
@@ -361,6 +366,7 @@ test('signing in stores the token and pointedly not the key', async () => {
   ]);
 
   const result = await auth.login({
+    platform: 'linux',
     managedRoot: root,
     settingsFile: settingsIn(root),
     env: {},
@@ -405,7 +411,7 @@ test('signing in stores the token and pointedly not the key', async () => {
   const body = fs.readFileSync(envFile, 'utf8');
   assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
   assert.equal(body.includes('sk-abc'), false);
-  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
 });
 
 // The whole point of wiring the helper is that a key the pool has stopped
@@ -420,6 +426,7 @@ test('the wired helper is told where its own settings file is', async () => {
   ]);
 
   await auth.login({
+    platform: 'linux',
     managedRoot: root,
     settingsFile,
     env: {},
@@ -603,7 +610,7 @@ test('the exports file only ever unsets', () => {
   const body = fs.readFileSync(written, 'utf8');
   assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
   assert.equal(/^export /m.test(body), false, 'no export statement, only prose about one');
-  assert.equal(fs.statSync(written).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(written).mode & 0o777, 0o600);
 });
 
 // Credits can lag the account. Losing the key must not lose the pairing too,
@@ -693,6 +700,7 @@ test('a topped-up account re-wires without sending anyone to a browser', async (
   const scripted = scriptedFetch([{ body: { email: 'm@example.com' } }]);
 
   const result = await auth.login({
+    platform: 'linux',
     managedRoot: root,
     settingsFile: settingsIn(root),
     env: {},
@@ -847,4 +855,23 @@ test('fetchPendingSetup claims the web payload and never fails an install', asyn
   assert.equal(await auth.fetchPendingSetup('https://berkeley.mathetic.com', 'egb_t', {
     fetchImpl: scriptedFetch([{ ok: false, status: 500, body: {} }]).fetchImpl,
   }), null);
+});
+
+test('openBrowser: Windows uses rundll32 so a query string is safe', () => {
+  const calls = [];
+  const spawnImpl = (cmd, args) => {
+    calls.push([cmd, args]);
+    return { unref() {}, on() {} };
+  };
+  const url = 'https://berkeley.mathetic.com/engelbart/setup?code=A&x=1';
+  assert.equal(auth.openBrowser(url, { platform: 'win32', spawnImpl }), true);
+  assert.deepEqual(calls, [['rundll32', ['url.dll,FileProtocolHandler', url]]]);
+});
+
+test('openBrowser: macOS uses open, Linux uses xdg-open', () => {
+  const calls = [];
+  const spawnImpl = (cmd, args) => { calls.push([cmd, args]); return { unref() {}, on() {} }; };
+  auth.openBrowser('https://x', { platform: 'darwin', spawnImpl });
+  auth.openBrowser('https://x', { platform: 'linux', spawnImpl });
+  assert.deepEqual(calls, [['open', ['https://x']], ['xdg-open', ['https://x']]]);
 });

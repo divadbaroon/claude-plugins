@@ -19,6 +19,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
+from ..platform_compat import detached_popen_kwargs, pid_alive, terminate_pid
 from . import autosync as AUTOSYNC
 from . import brainstorm as BRAIN
 from . import preview as PREVIEW
@@ -153,13 +154,7 @@ def _write_registry(trajdir, url):
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return pid_alive(pid)
 
 
 def _server_identity(record):
@@ -213,7 +208,7 @@ def stop_existing(trajdir, timeout=6.0):
         _registry_path(trajdir).unlink(missing_ok=True)
         return None
     try:
-        os.kill(current["pid"], signal.SIGTERM)
+        terminate_pid(current["pid"])
     except OSError:
         return None
     deadline = time.monotonic() + timeout
@@ -222,10 +217,7 @@ def stop_existing(trajdir, timeout=6.0):
             break
         time.sleep(0.05)
     else:
-        try:
-            os.kill(current["pid"], signal.SIGKILL)
-        except OSError:
-            pass
+        terminate_pid(current["pid"], force=True)
     _registry_path(trajdir).unlink(missing_ok=True)
     return current
 
@@ -447,7 +439,7 @@ def _spawn_analysis(provider, trajdir):
         subprocess.Popen(
             [sys.executable, "-m", "human_compact.cli", "analyze"],
             stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
-            close_fds=True, start_new_session=True)
+            close_fds=True, **detached_popen_kwargs())
 
 
 def _first(value, default=""):

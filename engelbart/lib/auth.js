@@ -241,9 +241,14 @@ function writeEnvFile(managedRoot) {
 function openBrowser(url, options = {}) {
   const platform = options.platform || process.platform;
   const spawnImpl = options.spawnImpl || spawn;
-  const command = platform === 'darwin' ? 'open' : 'xdg-open';
+  // Windows: rundll32's FileProtocolHandler opens the default browser and takes
+  // the URL as a single argv, so a query string's `&` is safe -- unlike
+  // `cmd /c start`, where cmd would read `&` as a command separator.
+  const [command, args] = platform === 'win32'
+    ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+    : [platform === 'darwin' ? 'open' : 'xdg-open', [url]];
   try {
-    const child = spawnImpl(command, [url], { stdio: 'ignore', detached: true });
+    const child = spawnImpl(command, args, { stdio: 'ignore', detached: true });
     if (child && typeof child.unref === 'function') child.unref();
     if (child && typeof child.on === 'function') child.on('error', () => {});
     return true;
@@ -279,6 +284,7 @@ function wireClaudeCode(managedRoot, stored, options = {}) {
       credentialsPath(managedRoot),
       target.file,
       stored.claude.baseUrl,
+      options.platform || process.platform,
     );
     return claudeCode.connect({
       managedRoot,
@@ -287,6 +293,7 @@ function wireClaudeCode(managedRoot, stored, options = {}) {
       env: options.env,
       allowRealHome: options.allowRealHome,
       baseUrl: stored.claude.baseUrl,
+      platform: options.platform || process.platform,
     });
   } catch (error) {
     return { changed: false, reason: error.message };

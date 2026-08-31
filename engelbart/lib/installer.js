@@ -17,6 +17,55 @@ const INSTALL_SCHEMA = 1;
 function ownedByUs(owner) {
   return owner === OWNER || LEGACY_OWNERS.indexOf(owner) >= 0;
 }
+
+// --- platform shape ---------------------------------------------------------
+// A managed venv lays its console scripts out differently on Windows: they
+// live in `Scripts` rather than `bin`, and every executable carries a `.exe`.
+// These take the *target* platform (what is being installed for), which the
+// install flow already knows, so the same code can be exercised for win32 on
+// a macOS test host by passing it in.
+function isWindows(platform) {
+  return (platform || process.platform) === 'win32';
+}
+
+function venvBinDir(platform) {
+  return isWindows(platform) ? 'Scripts' : 'bin';
+}
+
+function exeName(name, platform) {
+  return isWindows(platform) ? `${name}.exe` : name;
+}
+
+// The stable launcher name the shell actually invokes: a bare symlink on POSIX,
+// a `.cmd` shim on Windows (a symlink there would need admin/Developer Mode).
+function launcherName(name, platform) {
+  return isWindows(platform) ? `${name}.cmd` : name;
+}
+
+// A Windows `.cmd` shim that forwards every argument to the runtime console
+// script. The quotes tolerate spaces in the managed path; %* preserves the
+// caller's own quoting. CRLF because cmd.exe is the interpreter.
+function launcherShim(targetExe) {
+  return `@echo off\r\n"${targetExe}" %*\r\n`;
+}
+
+// Recover the target a shim points at, for verifying an owned prior launcher.
+function launcherShimTarget(content) {
+  const match = String(content).match(/^"([^"]+)"\s+%\*/m);
+  return match ? match[1] : null;
+}
+
+// POSIX rename atomically replaces an existing file; on Windows rename fails
+// if the destination exists, so the destination is cleared first. That gives
+// up the crash-window atomicity Windows never actually offered here. Keyed on
+// the *real* platform: this is about the filesystem doing the rename, not the
+// target being installed for.
+function atomicReplace(temporary, file) {
+  if (process.platform === 'win32') {
+    try { fs.rmSync(file, { force: true }); } catch { /* fall through to rename */ }
+  }
+  fs.renameSync(temporary, file);
+}
 const MIN_CLAUDE_VERSION = Object.freeze([2, 1, 175]);
 const MIN_CLAUDE_VERSION_TEXT = MIN_CLAUDE_VERSION.join('.');
 const UV_VERSION = '0.11.32';
@@ -47,6 +96,10 @@ const UV_ASSETS = Object.freeze({
   'linux-x64-musl': {
     target: 'x86_64-unknown-linux-musl',
     sha256: '1fd052f196108d87e61fc3d98fe06b4ec758c9a1eb1466a6fd1a436fe45885f2',
+  },
+  'win32-x64': {
+    target: 'x86_64-pc-windows-msvc',
+    sha256: 'acfde570451cfdb8689fa159a138ee805ba4e241c466432750302c86254b0984',
   },
 });
 
@@ -110,19 +163,26 @@ function isMusl(reportProvider) {
 }
 
 function supportedTarget(platform, arch, reportProvider) {
-  if (!['darwin', 'linux'].includes(platform) || !['arm64', 'x64'].includes(arch)) {
-    throw new Error(`unsupported platform: ${platform}-${arch}; human-compact supports macOS and Linux on arm64/x64`);
+  // Windows compiles only x64 (Bun has no windows-arm64 target, and uv ships
+  // a Windows ARM build but the CLI binary would not run under it).
+  const archs = platform === 'win32' ? ['x64'] : ['arm64', 'x64'];
+  if (!['darwin', 'linux', 'win32'].includes(platform) || !archs.includes(arch)) {
+    throw new Error(`unsupported platform: ${platform}-${arch}; human-compact supports macOS and Linux on arm64/x64, and Windows on x64`);
   }
   const libc = platform === 'linux' ? (isMusl(reportProvider) ? 'musl' : 'gnu') : null;
   const key = [platform, arch, libc].filter(Boolean).join('-');
   const asset = UV_ASSETS[key];
   if (!asset) throw new Error(`no pinned uv bootstrap for ${key}`);
+  // uv ships Windows as a .zip, every other target as .tar.gz.
+  const extension = platform === 'win32' ? 'zip' : 'tar.gz';
   return {
     ...asset,
     key,
     name: key,
-    file: `uv-${asset.target}.tar.gz`,
-    url: `${UV_RELEASE}/uv-${asset.target}.tar.gz`,
+    platform,
+    extension,
+    file: `uv-${asset.target}.${extension}`,
+    url: `${UV_RELEASE}/uv-${asset.target}.${extension}`,
   };
 }
 
@@ -143,7 +203,7 @@ function atomicWrite(file, contents, mode = 0o600) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.tmp-${process.pid}-${crypto.randomBytes(5).toString('hex')}`;
   fs.writeFileSync(temporary, contents, { mode });
-  fs.renameSync(temporary, file);
+  atomicReplace(temporary, file);
 }
 
 function validateManagedRoot(root) {
@@ -319,16 +379,35 @@ function pythonCandidates(env) {
   return [...new Set(candidates)];
 }
 
-function runtimeExecutables(runtime) {
+function runtimeExecutables(runtime, platform = process.platform) {
+  const bin = venvBinDir(platform);
   return {
-    python: path.join(runtime, 'bin', 'python'),
-    hc: path.join(runtime, 'bin', 'hc'),
-    bart: path.join(runtime, 'bin', 'bart'),
+    python: path.join(runtime, bin, exeName('python', platform)),
+    hc: path.join(runtime, bin, exeName('hc', platform)),
+    bart: path.join(runtime, bin, exeName('bart', platform)),
   };
 }
 
-function validateRuntime(runner, runtime, version) {
-  const { python, hc, bart } = runtimeExecutables(runtime);
+// A launcher path that child_process can spawn directly. On POSIX the stable
+// bin/<name> symlink is spawnable and upgrade-stable, so it is the answer. On
+// Windows the stable launcher is a bin\<name>.cmd shim, which Node cannot spawn
+// without a shell (and won't at all since the .bat/.cmd hardening), so resolve
+// the runtime's real .exe from the owned install manifest instead.
+function spawnableLauncher(managedRoot, name = 'hc', platform = process.platform) {
+  const root = validateManagedRoot(managedRoot);
+  if (!isWindows(platform)) return path.join(root, 'bin', name);
+  const install = loadOwnedInstall(root);
+  if (!install || typeof install.runtime !== 'string') {
+    throw new Error('no owned install manifest to resolve a Windows launcher from');
+  }
+  const runtime = safeChild(root, install.runtime);
+  const exe = runtimeExecutables(runtime, platform)[name];
+  if (!exe) throw new Error(`unknown launcher: ${name}`);
+  return exe;
+}
+
+function validateRuntime(runner, runtime, version, platform = process.platform) {
+  const { python, hc, bart } = runtimeExecutables(runtime, platform);
   if (!fs.statSync(python, { throwIfNoEntry: false })?.isFile()
       || !fs.statSync(hc, { throwIfNoEntry: false })?.isFile()
       || !fs.statSync(bart, { throwIfNoEntry: false })?.isFile()) return false;
@@ -345,14 +424,14 @@ function validateRuntime(runner, runtime, version) {
   }
 }
 
-function createRuntimeWithPython(runner, python, staging, wheelPath, version, env) {
+function createRuntimeWithPython(runner, python, staging, wheelPath, version, env, platform = process.platform) {
   let result = runner(python, ['-m', 'venv', staging], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   if (result.status !== 0) return false;
-  const runtimePython = runtimeExecutables(staging).python;
+  const runtimePython = runtimeExecutables(staging, platform).python;
   result = runner(runtimePython, [
     '-m', 'pip', 'install', '--disable-pip-version-check', '--no-index', '--no-deps', wheelPath,
   ], { env, stdio: ['ignore', 'pipe', 'pipe'] });
-  return result.status === 0 && validateRuntime(runner, staging, version);
+  return result.status === 0 && validateRuntime(runner, staging, version, platform);
 }
 
 function downloadHttps(url, destination, redirects = 0) {
@@ -413,10 +492,13 @@ function findFile(root, basename, depth = 0) {
 
 async function ensureUv(options) {
   const { root, target, runner, download = downloadHttps } = options;
+  const platform = options.platform || target.platform || process.platform;
+  const windows = isWindows(platform);
+  const uvName = exeName('uv', platform);
   ensureManagedDirectory(root, path.join('tools', 'uv', UV_VERSION));
   ensureManagedDirectory(root, 'tmp');
   const toolRoot = path.join(root, 'tools', 'uv', UV_VERSION, target.key);
-  const executable = path.join(toolRoot, 'uv');
+  const executable = path.join(toolRoot, uvName);
   const toolStat = lstatIfPresent(toolRoot);
   if (toolStat && (toolStat.isSymbolicLink() || !toolStat.isDirectory())) {
     throw new Error(`managed uv path is not a real directory: ${toolRoot}`);
@@ -424,10 +506,12 @@ async function ensureUv(options) {
   if (fs.statSync(executable, { throwIfNoEntry: false })?.isFile()) {
     try {
       const manifest = readJson(path.join(toolRoot, 'manifest.json'));
+      // On Windows executability is the .exe extension, not a mode bit.
+      const runnable = windows || (fs.statSync(executable).mode & 0o111) !== 0;
       if (ownedByUs(manifest.owner) && manifest.version === UV_VERSION
           && manifest.target === target.key
           && manifest.archiveSha256 === target.sha256
-          && (fs.statSync(executable).mode & 0o111) !== 0
+          && runnable
           && sha256File(executable) === manifest.binarySha256) return executable;
     } catch {}
   }
@@ -439,24 +523,29 @@ async function ensureUv(options) {
   try {
     await download(target.url, archive);
     if (sha256File(archive) !== target.sha256) throw new Error('downloaded uv archive failed its pinned SHA-256 check');
-    checkedCommand(runner, 'tar', ['-xzf', archive, '-C', extracted], {
+    // bsdtar (the `tar` on Windows and macOS) reads a .zip; the -z flag is
+    // gzip-specific, so drop it for the Windows zip and let tar autodetect.
+    const tarFlags = target.extension === 'zip'
+      ? ['-xf', archive, '-C', extracted]
+      : ['-xzf', archive, '-C', extracted];
+    checkedCommand(runner, 'tar', tarFlags, {
       stdio: ['ignore', 'pipe', 'pipe'],
     }, 'uv archive extraction');
-    const source = findFile(extracted, 'uv');
+    const source = findFile(extracted, uvName);
     if (!source) throw new Error('uv archive did not contain the uv executable');
     const stagedTool = `${toolRoot}.tmp-${process.pid}`;
     removeManaged(root, stagedTool);
     fs.mkdirSync(stagedTool, { recursive: true, mode: 0o700 });
-    fs.copyFileSync(source, path.join(stagedTool, 'uv'));
-    fs.chmodSync(path.join(stagedTool, 'uv'), 0o700);
+    fs.copyFileSync(source, path.join(stagedTool, uvName));
+    fs.chmodSync(path.join(stagedTool, uvName), 0o700);
     atomicWrite(path.join(stagedTool, 'manifest.json'), `${JSON.stringify({
       owner: OWNER,
       version: UV_VERSION,
       target: target.key,
       archiveSha256: target.sha256,
-      binarySha256: sha256File(path.join(stagedTool, 'uv')),
+      binarySha256: sha256File(path.join(stagedTool, uvName)),
     }, null, 2)}\n`);
-    fs.renameSync(stagedTool, toolRoot);
+    atomicReplace(stagedTool, toolRoot);
     return executable;
   } finally {
     removeManaged(root, temporary);
@@ -465,18 +554,19 @@ async function ensureUv(options) {
 
 async function buildRuntime(options) {
   const { root, staging, vendor, target, runner, env, output, download } = options;
+  const platform = options.platform || target.platform || process.platform;
   for (const candidate of pythonCandidates(env)) {
     let compatible = false;
     try { compatible = compatiblePython(runner, candidate); } catch {}
     if (!compatible) continue;
     output.write(`  building the runtime with ${candidate}\u2026\n`);
     try {
-      if (createRuntimeWithPython(runner, candidate, staging, vendor.wheelPath, vendor.version, env)) return;
+      if (createRuntimeWithPython(runner, candidate, staging, vendor.wheelPath, vendor.version, env, platform)) return;
     } catch {}
     removeManaged(root, staging);
   }
   output.write(`  no usable python venv; bootstrapping uv ${UV_VERSION}\u2026\n`);
-  const uv = await ensureUv({ root, target, runner, download });
+  const uv = await ensureUv({ root, target, runner, download, platform });
   ensureManagedDirectory(root, path.join('cache', 'uv'));
   ensureManagedDirectory(root, 'python');
   const uvEnv = {
@@ -491,10 +581,10 @@ async function buildRuntime(options) {
     stdio: ['ignore', 'pipe', 'pipe'],
   }, 'managed Python creation');
   checkedCommand(runner, uv, [
-    'pip', 'install', '--python', runtimeExecutables(staging).python,
+    'pip', 'install', '--python', runtimeExecutables(staging, platform).python,
     '--no-index', '--no-deps', vendor.wheelPath,
   ], { env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] }, 'backend installation');
-  if (!validateRuntime(runner, staging, vendor.version)) {
+  if (!validateRuntime(runner, staging, vendor.version, platform)) {
     throw new Error('installed backend failed its version check');
   }
 }
@@ -522,37 +612,64 @@ function lstatIfPresent(file) {
   }
 }
 
-function switchLauncher(root, targetHc, previousInstall, targetBart = null) {
+function switchLauncher(root, targetHc, previousInstall, targetBart = null, platform = process.platform) {
+  const windows = isWindows(platform);
   const bin = ensureManagedDirectory(root, 'bin');
-  const launcher = path.join(bin, 'hc');
-  const bartLauncher = path.join(bin, 'bart');
-  const targets = {
-    [launcher]: targetHc,
-    [bartLauncher]: targetBart || path.join(path.dirname(targetHc), 'bart'),
-  };
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 });
+  const targetDir = path.dirname(targetHc);
+  const bartTarget = targetBart || path.join(targetDir, exeName('bart', platform));
+  const launcher = path.join(bin, launcherName('hc', platform));
+  const bartLauncher = path.join(bin, launcherName('bart', platform));
+  // Logical launcher name -> the runtime executable it must resolve to, plus the
+  // install-manifest field that records its stable path.
+  const specs = [
+    { name: 'hc', stable: launcher, target: targetHc, field: 'launcher' },
+    { name: 'bart', stable: bartLauncher, target: bartTarget, field: 'bartLauncher' },
+  ];
+
+  // Write / read / atomically place a launcher, in the shape the platform uses:
+  // a symlink on POSIX, a `.cmd` shim on Windows.
+  const writeLauncherAt = (file, target) => {
+    if (windows) fs.writeFileSync(file, launcherShim(target), { mode: 0o700 });
+    else fs.symlinkSync(target, file);
+  };
+  const placeLauncher = (temporary, stable) => {
+    // renameSync already replaces a POSIX symlink atomically; Windows must clear
+    // the destination first (atomicReplace does).
+    if (windows) atomicReplace(temporary, stable);
+    else fs.renameSync(temporary, stable);
+  };
+
   const previousTargets = new Map();
-  for (const [stable, target] of Object.entries(targets)) {
+  for (const spec of specs) {
+    const { stable, target, field } = spec;
     const launcherStat = lstatIfPresent(stable);
     if (!launcherStat) {
       previousTargets.set(stable, null);
       continue;
     }
     if (!previousInstall) throw new Error(`refusing to overwrite unmanaged launcher: ${stable}`);
-    const manifestField = stable === launcher ? 'launcher' : 'bartLauncher';
-    if (previousInstall[manifestField] !== stable
+    if (previousInstall[field] !== stable
         || typeof previousInstall.runtime !== 'string') {
       throw new Error('owned install manifest does not match its stable launcher');
     }
-    if (!launcherStat.isSymbolicLink()) throw new Error(`owned launcher is not a symlink: ${stable}`);
-    const previousTarget = fs.readlinkSync(stable);
     const previousRuntime = safeChild(root, previousInstall.runtime);
-    const expectedTarget = path.join(previousRuntime, 'bin', path.basename(target));
+    const expectedTarget = path.join(previousRuntime, venvBinDir(platform), exeName(spec.name, platform));
+    let previousTarget;
+    if (windows) {
+      if (!launcherStat.isFile()) throw new Error(`owned launcher is not a shim: ${stable}`);
+      previousTarget = launcherShimTarget(fs.readFileSync(stable, 'utf8'));
+      if (!previousTarget) throw new Error(`owned launcher is not a recognizable shim: ${stable}`);
+    } else {
+      if (!launcherStat.isSymbolicLink()) throw new Error(`owned launcher is not a symlink: ${stable}`);
+      previousTarget = fs.readlinkSync(stable);
+    }
     if (!path.isAbsolute(previousTarget)
         || path.resolve(previousTarget) !== path.resolve(expectedTarget)) {
       throw new Error('owned stable launcher target does not match the install manifest');
     }
     previousTargets.set(stable, previousTarget);
+    void target;
   }
 
   const temporaries = new Map();
@@ -567,21 +684,21 @@ function switchLauncher(root, targetHc, previousInstall, targetBart = null) {
       bin,
       `.${path.basename(stable)}.rollback-${process.pid}-${crypto.randomBytes(5).toString('hex')}`,
     );
-    fs.symlinkSync(previous, rollback);
-    fs.renameSync(rollback, stable);
+    writeLauncherAt(rollback, previous);
+    placeLauncher(rollback, stable);
   };
   try {
-    for (const [stable, target] of Object.entries(targets)) {
+    for (const spec of specs) {
       const temporary = path.join(
         bin,
-        `.${path.basename(stable)}.tmp-${process.pid}-${crypto.randomBytes(5).toString('hex')}`,
+        `.${path.basename(spec.stable)}.tmp-${process.pid}-${crypto.randomBytes(5).toString('hex')}`,
       );
-      fs.symlinkSync(target, temporary);
-      temporaries.set(stable, temporary);
+      writeLauncherAt(temporary, spec.target);
+      temporaries.set(spec.stable, temporary);
     }
-    for (const stable of Object.keys(targets)) {
-      fs.renameSync(temporaries.get(stable), stable);
-      switched.push(stable);
+    for (const spec of specs) {
+      placeLauncher(temporaries.get(spec.stable), spec.stable);
+      switched.push(spec.stable);
     }
   } catch (error) {
     for (const temporary of temporaries.values()) fs.rmSync(temporary, { force: true });
@@ -606,6 +723,7 @@ async function install(options) {
   const errorOutput = options.errorOutput || process.stderr;
   const env = deps.env || process.env;
   const target = supportedTarget(options.platform, options.arch, options.processReport);
+  const platform = target.platform;
   const vendor = inspectVendor(options.packageRoot, options.packageVersion);
   let claude;
   try {
@@ -634,7 +752,7 @@ async function install(options) {
     if (runtimeStat && (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory())) {
       throw new Error(`managed runtime path is not a real directory: ${runtime}`);
     }
-    if (!validateRuntime(runner, runtime, vendor.version)) {
+    if (!validateRuntime(runner, runtime, vendor.version, platform)) {
       if (fs.existsSync(runtime)) removeManaged(root, runtime);
       // Python venv console scripts contain absolute shebangs. Build at the
       // immutable final path; it remains unreachable until the launcher swap.
@@ -649,17 +767,18 @@ async function install(options) {
         env,
         output,
         download: deps.download,
+        platform,
       });
-      if (!validateRuntime(runner, staging, vendor.version)) throw new Error('new runtime failed validation');
+      if (!validateRuntime(runner, staging, vendor.version, platform)) throw new Error('new runtime failed validation');
       staging = null;
       createdRuntime = true;
     } else {
     }
 
     let switched;
+    const executables = runtimeExecutables(runtime, platform);
     try {
-      const executables = runtimeExecutables(runtime);
-      switched = switchLauncher(root, executables.hc, previousInstall, executables.bart);
+      switched = switchLauncher(root, executables.hc, previousInstall, executables.bart, platform);
     } catch (error) {
       if (createdRuntime) removeManaged(root, runtime);
       throw error;
@@ -669,7 +788,12 @@ async function install(options) {
       '--global-vault', options.choices.globalVault === '1' ? 'yes' : 'keep',
       '--goals', options.choices.goals === '1' ? 'yes' : 'no',
     ];
-    const setupEnv = { ...env, HC_EXECUTABLE: switched.launcher };
+    // The stable launcher is a `.cmd` shim on Windows, which spawnSync cannot
+    // execute without a shell. Drive setup through the runtime's real .exe;
+    // HC_EXECUTABLE still names the shim the user actually runs on POSIX, and
+    // the real exe on Windows so the backend can re-invoke itself directly.
+    const spawnLauncher = isWindows(platform) ? executables.hc : switched.launcher;
+    const setupEnv = { ...env, HC_EXECUTABLE: spawnLauncher };
     const baseManifest = {
       owner: OWNER,
       schema: INSTALL_SCHEMA,
@@ -695,7 +819,7 @@ async function install(options) {
 
     let setup;
     try {
-      setup = runner(switched.launcher, setupArgs, {
+      setup = runner(spawnLauncher, setupArgs, {
         env: setupEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -746,9 +870,22 @@ function shellProfileFor(env, homedir) {
   return null;                       // fish and friends: instruct, do not edit
 }
 
-function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
+function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem, platform }) {
   const files = fileSystem || fs;
   const entries = String(env.PATH || '').split(path.delimiter).filter(Boolean);
+  if (isWindows(platform)) {
+    // Windows PATH matching is case-insensitive, and there is no symlink-into-
+    // an-existing-bin shortcut: the launcher dir is the tool's own directory.
+    const wanted = path.resolve(launcherDir).toLowerCase();
+    if (entries.some((entry) => path.resolve(entry).toLowerCase() === wanted)) {
+      return { onPath: true, profile: null, added: false, linked: null, line: null };
+    }
+    // A child cannot change its parent shell's PATH; setx persists it for new
+    // terminals, which is the most a one-shot installer can safely do without
+    // touching the user's registry ourselves.
+    const line = `setx PATH "%PATH%;${launcherDir}"`;
+    return { onPath: false, profile: null, added: false, linked: null, line };
+  }
   if (entries.some((entry) => path.resolve(entry) === path.resolve(launcherDir))) {
     return { onPath: true, profile: null, added: false, linked: null, line: null };
   }
@@ -824,6 +961,13 @@ function ensureLauncherOnPath({ launcherDir, env, homedir, fileSystem }) {
 module.exports = {
   INSTALL_SCHEMA,
   ensureLauncherOnPath,
+  isWindows,
+  venvBinDir,
+  exeName,
+  launcherName,
+  launcherShim,
+  launcherShimTarget,
+  atomicReplace,
   shellProfileFor,
   MIN_CLAUDE_VERSION,
   MIN_CLAUDE_VERSION_TEXT,
@@ -847,7 +991,9 @@ module.exports = {
   requireCompatibleClaude,
   removeManaged,
   runCommand,
+  runtimeExecutables,
   safeChild,
+  spawnableLauncher,
   sha256File,
   supportedTarget,
   switchLauncher,

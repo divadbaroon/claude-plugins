@@ -985,6 +985,26 @@ def open_terminal(command, cwd=None, run=None) -> Dict[str, Any]:
         # shell metacharacter here is a request to run something else.
         return {"ok": False, "error": "that is not a command this can open"}
     here = str(Path(str(cwd)).expanduser()) if cwd else str(Path.home())
+    if sys.platform == "win32":
+        # Windows has no portable "seed the shell's recall buffer" -- cmd's
+        # doskey history does not survive into a fresh window and PSReadLine's
+        # is per-session -- so the Up-arrow affordance the POSIX paths give is
+        # not reachable. The window still opens in the project with the command
+        # printed for the reader to run; the copy rows remain the sure path.
+        # `said` was already checked to be plain words (no ; & | ` $ newline < >
+        # above), so it is safe to chain into cmd with &&.
+        winner = (
+            'cd /d "%s" && cls && echo( && '
+            'echo   run this to start the session: && echo( && '
+            'echo     %s && echo(' % (here, said))
+        try:
+            done = run(("cmd", "/c", "start", "", "cmd", "/k", winner),
+                       timeout=20, capture_output=True, text=True)
+        except (OSError, subprocess.SubprocessError):
+            return {"ok": False, "error": "no terminal this could open"}
+        if getattr(done, "returncode", 1) != 0:
+            return {"ok": False, "error": "no terminal this could open"}
+        return {"ok": True, "typed": said, "note": "shown"}
     quoted = shlex.quote(said)
     # The window says for itself what it is waiting for: a terminal that
     # opened with nothing visible in it is worse than not opening one.

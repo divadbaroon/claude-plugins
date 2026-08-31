@@ -70,6 +70,7 @@ from typing import Any, Dict, List, Optional
 
 from . import project_store as PS
 from .secure_io import atomic_write_json
+from ..platform_compat import detached_popen_kwargs, kill_process_tree
 
 SCHEMA_VERSION = 1
 
@@ -554,12 +555,12 @@ class Proc:
                 [shell, "-lc", self.profile["command"]], cwd=self.cwd,
                 env=child, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, text=True, bufsize=1,
-                close_fds=True, start_new_session=True)
+                close_fds=True, **detached_popen_kwargs())
         else:
             self.process = subprocess.Popen(
                 [shell, "-lc", self.profile["command"]], cwd=self.cwd,
                 env=child, stdin=slave, stdout=slave, stderr=slave,
-                close_fds=True, start_new_session=True)
+                close_fds=True, **detached_popen_kwargs())
             os.close(slave)
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
@@ -646,8 +647,8 @@ class Proc:
         self.stopped = True
         assert self.process
         try:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-        except (OSError, ProcessLookupError):
+            kill_process_tree(self.process.pid)
+        except Exception:  # noqa: BLE001 - fall back to a direct terminate
             try:
                 self.process.terminate()
             except OSError:
