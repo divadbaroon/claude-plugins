@@ -311,20 +311,15 @@ test('a page that would not open leaves a command that can be typed', async () =
   assert.match(text, /Next: Run `hc setup-ui` to set up your first project\./);
 });
 
-test('an unreachable launcher says what to run now, before the next step', async () => {
-  const text = await installOutput({ onPath: false, added: true });
+test('an unreachable stable launcher still opens setup by its absolute runtime path', async () => {
+  let launches = 0;
+  const text = await installOutput({ onPath: false, added: true }, {
+    openSetup: async () => { launches += 1; return 'http://127.0.0.1:5321/setup'; },
+  });
   assert.match(text, /Run this once in this terminal/);
   assert.match(text, /new terminals get it from \/home\/u\/\.zshrc/);
-  // The order is the point: an instruction the user cannot yet follow must
-  // not come before the one that makes it work.
-  // A launcher the shell cannot find cannot open anything, so the page
-  // is not offered -- the line above is what makes the command work.
-  assert.match(text, /Then: Run the line above, then `hc setup-ui`/);
-  // The order is what matters, so pin it to the instruction itself: the
-  // recording line above also names /bart, and a bare indexOf would find
-  // that one and pass no matter where the instruction ended up.
-  assert.ok(text.indexOf('export PATH')
-    < text.indexOf('Then: Run the line above'));
+  assert.equal(launches, 1);
+  assert.match(text, /Next: Setting up your first project: http:\/\/127\.0\.0\.1:5321\/setup/);
 });
 
 test('a profile that could not be edited tells the user what to add', async () => {

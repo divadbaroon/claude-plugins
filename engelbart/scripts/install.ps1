@@ -25,6 +25,25 @@ $target = "engelbart-windows-$machineArch.exe"
 
 function Fail($message) { Write-Error "engelbart: $message"; exit 1 }
 
+# setx only affects terminals started later. Put each launcher in the user's
+# persistent PATH *and* this PowerShell process, without replacing the
+# existing user PATH.
+function Add-UserPathEntry([string] $entry) {
+  if (-not $entry) { return }
+  $normalize = { param($value) ([string]$value).Trim().TrimEnd('\').ToLowerInvariant() }
+  $wanted = & $normalize $entry
+  $userPath = [Environment]::GetEnvironmentVariable('Path', [EnvironmentVariableTarget]::User)
+  $userEntries = @($userPath -split ';' | Where-Object { $_ })
+  if (-not ($userEntries | Where-Object { (& $normalize $_) -eq $wanted })) {
+    $joined = if ($userPath) { "$entry;$userPath" } else { $entry }
+    [Environment]::SetEnvironmentVariable('Path', $joined, [EnvironmentVariableTarget]::User)
+  }
+  $sessionEntries = @($env:PATH -split ';' | Where-Object { $_ })
+  if (-not ($sessionEntries | Where-Object { (& $normalize $_) -eq $wanted })) {
+    $env:PATH = "$entry;$env:PATH"
+  }
+}
+
 $dest = if ($env:ENGELBART_INSTALL_DIR) { $env:ENGELBART_INSTALL_DIR } `
         else { Join-Path $env:USERPROFILE '.local\bin' }
 $tmp = Join-Path $env:TEMP ('engelbart-install-' + [guid]::NewGuid().ToString('N'))
@@ -44,6 +63,7 @@ try {
   $installed = Join-Path $dest 'engelbart.exe'
   Move-Item -Force $binary $installed
   Write-Host "Installed $installed"
+  Add-UserPathEntry $dest
 
   $onPath = $env:PATH -split ';' | Where-Object {
     $_ -and ($_.TrimEnd('\') -ieq $dest.TrimEnd('\'))
@@ -56,6 +76,9 @@ try {
 
   # Hand off to the real installer; it explains everything from here.
   & $installed install @ForwardArgs
+  # Claude Code's native Windows installer uses this location but can leave it
+  # out of PATH. Add it after the child installer has created its launcher.
+  Add-UserPathEntry (Join-Path $env:USERPROFILE '.local\bin')
   exit $LASTEXITCODE
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

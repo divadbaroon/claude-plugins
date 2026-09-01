@@ -463,10 +463,9 @@ async function run(deps = {}) {
     // The one instruction. Someone who has just installed has no chat and no
     // project, so "open a chat and type /bart" is an instruction with a blank
     // screen at the end of it -- the setup page is what asks them which of
-    // those two things they are actually doing. It is only offered where it
-    // can be followed: a launcher that is not yet on PATH cannot be run, and
-    // a step the reader must do first belongs above the instruction, not
-    // after it.
+    // those two things they are actually doing. setup-ui is launched through
+    // the runtime executable's absolute path, so it must not wait for a new
+    // terminal just because the stable `hc` command is not yet on PATH.
     // Authentication is the gate, not a parallel branch: setup calls Claude,
     // so opening it before the issued key exists produces a first screen that
     // cannot answer. Pass that freshly-issued key to the detached setup server
@@ -496,7 +495,7 @@ async function run(deps = {}) {
         });
       }
     }
-    const opened = (!imported && accountReady && !needsPathStep && launcherPath
+    const opened = (!imported && accountReady && launcherPath
                     && !options.noOpen)
       ? await (deps.openSetup || openSetup)({ launcher: launcherPath, env: setupEnv,
                                               output, spawn: deps.spawn })
@@ -517,7 +516,7 @@ async function run(deps = {}) {
         : needsPathStep
         ? 'Run the line above, then `hc setup-ui` to set up your first project.'
         : 'Run `hc setup-ui` to set up your first project.';
-      output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
+      output.write(`\n${needsPathStep && !opened ? 'Then' : 'Next'}: ${next}\n`);
     }
     if (opened || (imported && imported.url)) {
       output.write('Already have a project? Open its chat with `claude -r`'
