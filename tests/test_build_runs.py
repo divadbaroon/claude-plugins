@@ -1462,6 +1462,7 @@ class BuildSettingsTests(BuildRunTests):
         out = ui._apply({"op": "set_build_settings", "model": "claude-opus-5",
                          "effort": "high"}, trajdir, True)
         self.assertEqual({"model": "claude-opus-5", "effort": "high",
+                          "quick_model": "", "quick_effort": "",
                           "check": True, "check_model": "", "check_effort": ""},
                          out["settings"])
         self.assertEqual(out["settings"], BUILD.load_settings(self.session, self.root))

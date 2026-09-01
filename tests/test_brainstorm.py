@@ -677,12 +677,12 @@ class PanelTests(BridgeTestCase):
             + "var bs = P.brainstorm;" + tail,
             state=state)
 
-    def test_the_tab_row_offers_three_views_not_two(self):
+    def test_the_tab_row_offers_the_four_workspace_views(self):
         out = self.api(
             "P.renderViewTabs();"
             "out = (document.querySelector('.hc-viewtabs').children || [])"
             "  .map(function (t) { return t.getAttribute('data-hc-viewtab'); });")
-        self.assertEqual(["overview", "goals", "brainstorm"], out)
+        self.assertEqual(["overview", "goals", "brainstorm", "docs"], out)
 
     def test_opening_it_marks_the_root_and_lights_its_tab(self):
         out = self.api(

@@ -6310,7 +6310,7 @@
     { q: "What is Engelbart?",
       a: "A live record of your goals, plans, and open problems, inferred"
          + " from your Claude Code conversations and kept in front of the"
-         + " model as you work. No analysis takes place until /goals-ui is"
+         + " model as you work. No analysis takes place until /bart is"
          + " run in a chat; the document it produces is then injected back"
          + " into that session as context. Every field is editable -- you"
          + " can retitle, rewrite, or delete anything here, and inference"
@@ -14599,7 +14599,7 @@
   function centerMarkTabs(active) {
     var bar = document.querySelector(".hc-center-tabs");
     if (!bar) return;
-    array(bar.children).forEach(function (t) {
+    kids(bar).forEach(function (t) {
       if (t.getAttribute("data-hc-center-tab") === active) {
         t.setAttribute("data-hc-on", "");
       } else {

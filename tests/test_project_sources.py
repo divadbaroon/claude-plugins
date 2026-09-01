@@ -68,28 +68,31 @@ class SourceListTests(Overview, BridgeTestCase):
 
     def test_the_list_names_every_source_by_its_kind(self):
         got = self.open(
-            "return JSON.stringify([texts(box, 'hc-overview-src-glyph'),"
-            " texts(box, 'hc-overview-src-name'),"
-            " texts(box, 'hc-overview-src-kind'),"
+            "return JSON.stringify([srcs().map(function (s) {"
+            " return deepText(s.querySelector('.hc-overview-chip-name')); }),"
+            " srcs().map(function (s) { return s.getAttribute('title'); }),"
             " srcs().map(function (s) { return s.getAttribute('data-hc-on'); })]);")
-        self.assertEqual([["R", "C", "D", "R"],
-                          ["myrepo", "Claude session: aaaaaaaa",
-                           "architecture.md", "acme/other"],
-                          ["Repository", "Conversation", "Document",
-                           "Repository"],
+        self.assertEqual([["Repository", "Document", "Paper",
+                           "Claude session: aaaaaaaa", "architecture.md",
+                           "acme/other"],
+                          ["myrepo", "Working document", "Reading",
+                           "Conversation · aaaaaaaa-1111-4111-8111-111111111111",
+                           "Document · docs/architecture.md",
+                           "Repository · acme/other"],
                           # the repository is what the page opens on
-                          ["", None, None, None]], got)
+                          ["", None, None, None, None, None]], got)
 
     def test_a_project_with_nothing_attached_shows_only_its_repository(self):
         got = self.open(
-            "return JSON.stringify([texts(box, 'hc-overview-src-name'),"
-            " box.querySelector('.hc-overview-addsrc').textContent]);",
+            "return JSON.stringify([srcs().map(function (s) {"
+            " return deepText(s.querySelector('.hc-overview-chip-name')); }),"
+            " box.querySelector('.hc-overview-addsrc').getAttribute('title')]);",
             state=state_with([]))
-        self.assertEqual([["myrepo"], "+ Add context"], got)
+        self.assertEqual([["Repository", "Document", "Paper"], "Add context"], got)
 
     def test_selecting_a_document_reads_it_and_hides_the_repository_pane(self):
         got = self.open(
-            "click(srcs()[2]);"
+            "click(srcs()[4]);"
             "return later(function () {"
             "  return JSON.stringify(["
             "    box.querySelector('.hc-overview-reading').getAttribute('data-hc-on'),"
@@ -103,7 +106,7 @@ class SourceListTests(Overview, BridgeTestCase):
 
     def test_going_back_to_the_repository_brings_its_panes_back(self):
         got = self.open(
-            "click(srcs()[2]);"
+            "click(srcs()[4]);"
             "return later(function () { click(srcs()[0]);"
             "  return JSON.stringify(["
             "    box.querySelector('.hc-overview-reading').getAttribute('data-hc-on'),"
@@ -113,7 +116,7 @@ class SourceListTests(Overview, BridgeTestCase):
 
     def test_a_conversation_reads_as_its_turns(self):
         got = self.open(
-            "click(srcs()[1]);"
+            "click(srcs()[3]);"
             "return later(function () {"
             "  return JSON.stringify([texts(box, 'hc-overview-turn-who'),"
             "    texts(box, 'hc-overview-turn-text'),"
@@ -127,7 +130,7 @@ class SourceListTests(Overview, BridgeTestCase):
 
     def test_a_repository_is_a_link_because_nothing_is_fetched(self):
         got = self.open(
-            "click(srcs()[3]);"
+            "click(srcs()[5]);"
             "return later(function () { var body = box.querySelector('[data-hc-src-body]');"
             "  var a = body.querySelector('hc-md-link');"
             "  return JSON.stringify([a === null ? null : a.getAttribute('href'),"
@@ -139,7 +142,7 @@ class SourceListTests(Overview, BridgeTestCase):
 
     def test_a_file_outside_the_project_says_so_rather_than_reading_it(self):
         got = self.open(
-            "click(srcs()[2]);"
+            "click(srcs()[4]);"
             "return later(function () { return JSON.stringify("
             "  texts(box.querySelector('.hc-overview-reading'),"
             "        'hc-overview-empty')); });",
@@ -305,7 +308,7 @@ class AddSourceTests(Overview, BridgeTestCase):
 
     def test_a_source_can_be_taken_off_again(self):
         got = self.open(
-            "var x = srcs()[2].querySelector('[data-hc-drop-source]');"
+            "var x = srcs()[4].querySelector('[data-hc-drop-source]');"
             "click(x);"
             "return later(function () { return JSON.stringify("
             "  calls.filter(function (c) { return c[1] && c[1].op === 'set_project_meta'; })"
@@ -500,7 +503,7 @@ class InheritedSourceTests(BridgeTestCase):
             "  var on = []; (function walk(n) { (n.children || []).forEach("
             "    function (c) { if (c.getAttribute('data-hc-source') !== null"
             "      && c.getAttribute('data-hc-on') !== null) {"
-            "      on.push(deepText(c.querySelector('.hc-overview-src-name'))); }"
+            "      on.push(deepText(c.querySelector('.hc-overview-chip-name'))); }"
             "    walk(c); }); })(box);"
             "  return JSON.stringify([P.overviewShown(), on]); });")
         self.assertEqual([True, ["architecture.md"]], got)

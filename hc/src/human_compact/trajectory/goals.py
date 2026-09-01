@@ -922,7 +922,8 @@ def new_goal(gid, title, parent_id=None, **fields):
             # The situation this goal's work happens in, and what the reader
             # wants answered about it. Written in the rail's Understanding
             # tab; carried into every build of this goal's rows.
-            "understanding": {"scenario": "", "shots": [], "questions": []},
+            "understanding": {"scenario": "", "shots": [], "questions": [],
+                              "evidence": [], "pending": {}},
             # How this goal stands to the project's objective, and the
             # objective it was judged against -- kept together, because a
             # verdict outlives the sentence that produced it and a stale one

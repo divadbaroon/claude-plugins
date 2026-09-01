@@ -225,7 +225,7 @@ class SavedPageTests(Saved, BridgeTestCase):
             " P.overviewPage(),"
             " box.querySelector('.hc-overview-main').getAttribute('data-hc-on'),"
             " box.querySelector('.hc-saved').getAttribute('data-hc-on')]);")
-        self.assertEqual([["OVERVIEW", "SAVED", "DOCS", "ARCHIVE", "GOALS"],
+        self.assertEqual([["OVERVIEW", "SAVED", "FAQ", "ARCHIVE", "GOALS"],
                           "overview", "", None],
                          got)
 

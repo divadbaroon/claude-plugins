@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,29 +14,33 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
+NODE = shutil.which("node") or "node"
 HC_SRC = ROOT / "hc" / "src"
 PLUGIN_HOOKS = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
 # The only events the global layer is allowed to add itself to.
 VAULT_HOOK_EVENTS = {"SessionStart", "PreCompact", "PostCompact", "SessionEnd"}
 
 
-CHAT_HOOK = '${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.sh'
+CHAT_HOOK = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"'
 
 
 def script_of(entry):
     """The hook script a command runs, with the quoting and any args off."""
-    command = entry["command"].split(" -", 1)[0].strip()
-    return command.strip('"').rsplit(" ", 1)[-1].strip('"')
+    command = entry["command"]
+    for script in ("chat-hook.cjs", "vault-hook.cjs"):
+        if script in command:
+            return script
+    return command
 
 
 def chat_only(hooks):
-    """The same hook map with every vault-hook.sh entry removed."""
+    """The same hook map with every vault-hook.cjs entry removed."""
     kept = {}
     for event, groups in hooks.items():
         remaining = []
         for group in groups:
             entries = [entry for entry in group["hooks"]
-                       if not script_of(entry).endswith("vault-hook.sh")]
+                       if not script_of(entry).endswith("vault-hook.cjs")]
             if entries:
                 remaining.append({**group, "hooks": entries})
         if remaining:
@@ -46,7 +51,7 @@ def chat_only(hooks):
 def vault_hook_events(hooks):
     return {event for event, groups in hooks.items() for group in groups
             for entry in group["hooks"]
-            if script_of(entry).endswith("vault-hook.sh")}
+            if script_of(entry).endswith("vault-hook.cjs")}
 
 
 class HcOnboardingTests(unittest.TestCase):
@@ -117,21 +122,21 @@ class HcOnboardingTests(unittest.TestCase):
         for event in ("SessionStart", "UserPromptSubmit", "PostToolBatch", "Stop"):
             commands = [h["command"] for group in hooks[event]
                         for h in group["hooks"]]
-            self.assertTrue(any("chat-hook.sh" in c for c in commands), event)
+            self.assertTrue(any("chat-hook.cjs" in c for c in commands), event)
         # The global layer is a separate, experimental hook set: shipped, but
         # never wired up by a default install.
-        self.assertNotIn("vault-hook.sh", default)
-        self.assertIn("vault-hook.sh", experimental)
-        self.assertIn("chat-hook.sh", experimental)
+        self.assertNotIn("vault-hook.cjs", default)
+        self.assertIn("vault-hook.cjs", experimental)
+        self.assertIn("chat-hook.cjs", experimental)
         vault_script = (HC_SRC / "human_compact" / "assets" / "plugin" /
-                        "scripts" / "vault-hook.sh").read_text()
+                        "scripts" / "vault-hook.cjs").read_text()
         chat_script = (HC_SRC / "human_compact" / "assets" / "plugin" /
-                       "scripts" / "chat-hook.sh").read_text()
-        self.assertIn('CLAUDE_VAULT:-', vault_script)
-        self.assertNotIn('CLAUDE_VAULT:-', chat_script)
+                       "scripts" / "chat-hook.cjs").read_text()
+        self.assertIn("HC_EXPERIMENTAL: '1'", vault_script)
+        self.assertNotIn("HC_EXPERIMENTAL: '1'", chat_script)
 
     def test_the_experimental_hooks_are_the_default_set_plus_vault_entries(self):
-        # One file is the other plus vault-hook.sh. Nothing else may drift.
+        # One file is the other plus vault-hook.cjs. Nothing else may drift.
         default = json.loads((PLUGIN_HOOKS / "hooks.json").read_text())
         experimental = json.loads(
             (PLUGIN_HOOKS / "hooks.experimental.json").read_text())
@@ -140,15 +145,13 @@ class HcOnboardingTests(unittest.TestCase):
         self.assertEqual(VAULT_HOOK_EVENTS,
                          vault_hook_events(experimental["hooks"]))
         self.assertEqual(set(), vault_hook_events(default["hooks"]))
-        # The global layer backgrounds `hc worker`, which the release gate
-        # refuses unless the flag is set; the vault entries carry it, and
-        # nothing else in either file does.
+        # The global layer is portable: no POSIX-only environment prefix is
+        # allowed in a hook command. vault-hook.cjs carries the flag when it
+        # spawns the runtime instead.
         for event, groups in experimental["hooks"].items():
             for entry in (e for group in groups for e in group["hooks"]):
                 with self.subTest(event=event, command=entry["command"]):
-                    self.assertEqual(
-                        script_of(entry).endswith("vault-hook.sh"),
-                        entry["command"].startswith("HC_EXPERIMENTAL=1 "))
+                    self.assertNotIn("HC_EXPERIMENTAL", entry["command"])
         self.assertNotIn("HC_EXPERIMENTAL", json.dumps(default))
 
     def test_goal_context_reaches_subagents_and_tool_batches(self):
@@ -198,17 +201,14 @@ class HcOnboardingTests(unittest.TestCase):
                      for entry in group["hooks"]],
                     entries)
 
-    def test_hook_commands_do_not_quote_the_plugin_path(self):
-        # Claude Code spawns hook commands without a shell, so quotes written
-        # into the command are not syntax but part of the path: posix_spawn
-        # looked for a file literally named '"…/chat-hook.sh"' and found
-        # nothing, and every chat hook -- capture, injection, build status
-        # -- died with it. The path goes bare.
+    def test_hook_commands_launch_node_with_one_quoted_script_argument(self):
+        # Node is the portable launcher; the plugin path remains one quoted
+        # argument so spaces in an installation directory survive intact.
         for name in ("hooks.json", "hooks.experimental.json"):
             hooks = json.loads((PLUGIN_HOOKS / name).read_text())["hooks"]
             for event, groups in hooks.items():
                 for entry in (e for group in groups for e in group["hooks"]):
-                    if not script_of(entry).endswith("chat-hook.sh"):
+                    if not script_of(entry).endswith("chat-hook.cjs"):
                         continue
                     with self.subTest(name=name, event=event):
                         self.assertTrue(entry["command"].startswith(CHAT_HOOK),
@@ -216,13 +216,13 @@ class HcOnboardingTests(unittest.TestCase):
 
     def test_the_chat_hook_forwards_its_own_arguments(self):
         script = (HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /
-                  "chat-hook.sh").read_text()
-        self.assertIn('"$HC_CMD" chat-hook "$@"', script)
+                  "chat-hook.cjs").read_text()
+        self.assertIn("['chat-hook', ...passthrough]", script)
 
     def test_ui_expansion_reports_missing_cli_instead_of_claiming_success(self):
         script = (
             HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /
-            "chat-hook.sh"
+            "chat-hook.cjs"
         )
         payload = json.dumps({
             "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
@@ -236,7 +236,7 @@ class HcOnboardingTests(unittest.TestCase):
                            "HOME": empty_home}
             environment.pop("HC_EXECUTABLE", None)
             result = subprocess.run(
-                ["/bin/bash", str(script)],
+                [NODE, str(script)],
                 input=payload,
                 text=True,
                 capture_output=True,
@@ -255,7 +255,7 @@ class HcOnboardingTests(unittest.TestCase):
     def test_missing_runtime_prefers_an_installed_standalone_repair(self):
         script = (
             HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /
-            "chat-hook.sh"
+            "chat-hook.cjs"
         )
         payload = json.dumps({
             "session_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
@@ -270,7 +270,7 @@ class HcOnboardingTests(unittest.TestCase):
                            "HOME": empty_home}
             environment.pop("HC_EXECUTABLE", None)
             result = subprocess.run(
-                ["/bin/bash", str(script)],
+                [NODE, str(script)],
                 input=payload,
                 text=True,
                 capture_output=True,
@@ -290,7 +290,8 @@ class HcCommandGateTests(unittest.TestCase):
     # setup-ui is on the launch surface, not behind the experimental flag:
     # it is what somebody runs when the install is the only thing that has
     # happened yet, which is the least experimental moment there is.
-    LAUNCH_COMMANDS = {"install", "setup", "setup-ui", "chat-ui", "chat-serve",
+    LAUNCH_COMMANDS = {"install", "setup", "setup-ui", "setup-import",
+                       "chat-ui", "chat-serve",
                        "chat-hook", "chat-refresh", "global-hook", "supabase"}
 
     def _cli(self):

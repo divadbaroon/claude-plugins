@@ -22,10 +22,14 @@ from typing import Any, Dict, List, Optional
 _ABSENT: Dict[str, Any] = {
     "todos": [], "todos_md": "", "opening": "",
     "detached_prompt_ids": [], "important_item_ids": [],
+    "documents": [], "primary_document_id": "",
+    "paper": {"title": "", "url": "", "pdf": "", "paper_id": ""},
+    "phase": "",
     # The scenario a goal's work is for. Kept on the machine it was written
     # on; the sync has no column for it, so a guest sees the tab empty rather
     # than sees someone else's words go missing from it.
-    "understanding": {"scenario": "", "shots": [], "questions": []},
+    "understanding": {"scenario": "", "shots": [], "questions": [],
+                      "evidence": [], "pending": {}},
 }
 
 

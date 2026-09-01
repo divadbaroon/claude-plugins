@@ -29,7 +29,8 @@ from test_projects import server_for  # noqa: E402
 from test_chat_ui_server import post_json  # noqa: E402
 
 
-EMPTY = {"scenario": "", "shots": [], "questions": []}
+EMPTY = {"scenario": "", "shots": [], "questions": [],
+         "evidence": [], "pending": {}}
 
 
 class Engine:

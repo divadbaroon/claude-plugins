@@ -36,7 +36,8 @@ WRITE_OPS = frozenset({
     # One goal, edited.
     "rename_goal", "set_status", "set_priority", "set_notes", "set_sources",
     "set_opening", "set_description", "toggle_todo", "set_relevance",
-    "add_todo", "set_understanding",
+    "add_todo", "set_understanding", "resolve_check", "set_document",
+    "set_paper",
     # The tree's shape, and what hangs off it.
     "add_goal", "attach_prompt", "detach_prompt", "generate_prompt",
     # Which chats the project is built from.

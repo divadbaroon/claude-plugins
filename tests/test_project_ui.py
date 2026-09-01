@@ -579,7 +579,7 @@ class ProjectMenuTests(BridgeTestCase):
     def test_the_view_tabs_are_drawn_into_the_header_as_words(self):
         # The tabs live in the header's own second row, under the brand,
         # and read as the filter counts do -- "Overview", "Goals",
-        # "Brainstorm" -- not as a tracked strip of capitals. Nothing is
+        # "Brainstorm", "FAQ" -- not as a tracked strip of capitals. Nothing is
         # parked on .hc for them, and the root carries no attribute for a
         # strip that is not there.
         got = json.loads(self.run_js(
@@ -592,8 +592,8 @@ class ProjectMenuTests(BridgeTestCase):
             " document.querySelector('.hc-pillbar') === null,"
             " P.renderViewTabs(), tabs.children.length]);"))
         self.assertEqual(["hc-subbar", True,
-                          ["Overview", "Goals", "Brainstorm"], "", None, True,
-                          False, 3], got)
+                          ["Overview", "Goals", "Brainstorm", "FAQ"], "", None, True,
+                          False, 4], got)
 
     def test_remote_hrefs(self):
         got = json.loads(self.run_js(
@@ -625,18 +625,20 @@ class OverviewTests(BridgeTestCase):
             + "var box = document.querySelector('.hc-overview');"
             + "later(function () { " + tail + " });"))
 
-    def test_the_overview_shows_the_project_its_objective_and_its_repository(self):
+    def test_the_overview_shows_the_project_its_objective_and_location(self):
         got = self.open(
             "return JSON.stringify([P.overviewShown(), !!box,"
             " texts(box, 'hc-overview-tab'), box.querySelector('.hc-overview-name').value,"
             " box.querySelector('.hc-overview-objective').value,"
             " box.querySelector('.hc-overview-objective').getAttribute('placeholder'),"
-            " box.querySelector('.hc-overview-src-name').textContent,"
-            " box.querySelector('.hc-overview-src-kind').textContent,"
+            " texts(box, 'hc-overview-rowlabel'),"
+            " texts(box, 'hc-overview-path'),"
             " deepText(box.querySelector('.hc-overview-repo-meta'))]);")
-        self.assertEqual([True, True, ["OVERVIEW", "SAVED", "DOCS", "GOALS"],
+        self.assertEqual([True, True,
+                          ["OVERVIEW", "SAVED", "FAQ", "ARCHIVE", "GOALS"],
                           "myrepo", "Ship the thing.",
-                          "What are you trying to accomplish?", "myrepo", "Repository",
+                          "What are you trying to accomplish?",
+                          ["Directory", "Context"], ["/Users/me/work/myrepo"],
                           "git@github.com:acme/myrepo.git · feat/x"], got)
 
     def test_the_repository_pane_reads_its_readme_and_offers_ask(self):
@@ -731,9 +733,9 @@ class OverviewTests(BridgeTestCase):
         got = self.open(
             "var tabs = []; (function walk(n) { (n.children || []).forEach(function (c) {"
             "  if (String(c.className).split(' ').indexOf('hc-overview-tab') >= 0) tabs.push(c); walk(c); }); })(box);"
-            # GOALS is the last of the four: SAVED and DOCS sit between it
-            # and OVERVIEW, and swap the page rather than closing the box.
-            "click(tabs[3]); var a = P.overviewShown();"
+            # GOALS is the last tab; the intervening project pages swap the
+            # body rather than closing the box.
+            "click(tabs[4]); var a = P.overviewShown();"
             "P.openOverview(); var b = P.overviewShown();"
             "key('Escape', document.body); var c = P.overviewShown();"
             "return JSON.stringify([a, b, c]);")

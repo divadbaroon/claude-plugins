@@ -265,6 +265,32 @@ test('a launcher that opens the page is named instead of the command', async () 
   assert.match(text, /Already have a project\? Open its chat with `claude -r`/);
 });
 
+test('/bart is installed before the new auth flow and setup UI run', async () => {
+  const order = [];
+  await installOutput({ onPath: true, added: false }, {
+    install: async () => {
+      order.push('install /bart');
+      return {
+        launcher: '/home/u/.human-compact/bin/hc',
+        bartLauncher: '/home/u/.human-compact/bin/bart',
+      };
+    },
+    login: async () => {
+      order.push('auth');
+      return {
+        status: 'ready',
+        email: 'member@example.com',
+        claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      };
+    },
+    openSetup: async () => {
+      order.push('setup UI');
+      return 'http://127.0.0.1:5321/setup';
+    },
+  });
+  assert.deepEqual(order, ['install /bart', 'auth', 'setup UI']);
+});
+
 test('setup stays closed until authentication returns a Claude key', async () => {
   let opened = 0;
   const text = await installOutput({ onPath: true, added: false }, {

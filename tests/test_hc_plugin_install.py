@@ -209,7 +209,7 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertEqual(1, len(expansion))
             self.assertEqual("bart", expansion[0]["matcher"])
             self.assertEqual(1, len(expansion[0]["hooks"]))
-            self.assertIn("chat-hook.sh", expansion[0]["hooks"][0]["command"])
+            self.assertIn("chat-hook.cjs", expansion[0]["hooks"][0]["command"])
             self.assertEqual(45, expansion[0]["hooks"][0]["timeout"])
 
             for event in self.CHAT_HOOK_EVENTS:
@@ -217,12 +217,12 @@ class HcPluginInstallTests(unittest.TestCase):
                             for group in installed["hooks"][event]
                             for entry in group["hooks"]]
                 self.assertTrue(
-                    any("chat-hook.sh" in c for c in commands), event)
+                    any("chat-hook.cjs" in c for c in commands), event)
             every_command = [entry["command"]
                              for groups in installed["hooks"].values()
                              for group in groups for entry in group["hooks"]]
             self.assertEqual([], [c for c in every_command
-                                  if "vault-hook.sh" in c])
+                                  if "vault-hook.cjs" in c])
 
     def test_install_says_which_hook_set_it_wired(self):
         with tempfile.TemporaryDirectory() as td:
@@ -246,12 +246,12 @@ class HcPluginInstallTests(unittest.TestCase):
                 self._install(cli)
 
             hooks = (cli.SKILLS_DIR / "hooks" / "hooks.json").read_text()
-            self.assertNotIn("vault-hook.sh", hooks)
-            self.assertIn("chat-hook.sh", hooks)
+            self.assertNotIn("vault-hook.cjs", hooks)
+            self.assertIn("chat-hook.cjs", hooks)
             # The implementation still ships; only its wiring is withheld.
-            self.assertIn("vault-hook.sh", (cli.SKILLS_DIR / "hooks" /
+            self.assertIn("vault-hook.cjs", (cli.SKILLS_DIR / "hooks" /
                                             "hooks.experimental.json").read_text())
-            for script in ("vault-hook.sh", "vault-backfill.sh"):
+            for script in ("chat-hook.cjs", "vault-hook.cjs", "hc-runtime.cjs"):
                 self.assertTrue((cli.SKILLS_DIR / "scripts" / script).is_file())
             self.assertEqual([], self._leftovers(cli))
 
@@ -263,7 +263,7 @@ class HcPluginInstallTests(unittest.TestCase):
 
             hooks = cli.SKILLS_DIR / "hooks" / "hooks.json"
             experimental = cli.SKILLS_DIR / "hooks" / "hooks.experimental.json"
-            self.assertIn("vault-hook.sh", hooks.read_text())
+            self.assertIn("vault-hook.cjs", hooks.read_text())
             self.assertEqual(experimental.read_text(), hooks.read_text())
             # The swapped tree must still be one this installer owns, with the
             # same modes the packaged files get.
@@ -279,7 +279,7 @@ class HcPluginInstallTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"HC_EXPERIMENTAL": ""}):
                 self._install(cli)
 
-            self.assertNotIn("vault-hook.sh",
+            self.assertNotIn("vault-hook.cjs",
                              (cli.SKILLS_DIR / "hooks" / "hooks.json").read_text())
             self.assertEqual([], self._leftovers(cli))
 
@@ -291,8 +291,8 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertEqual(0o700, stat.S_IMODE(cli.SKILLS_DIR.stat().st_mode))
             self.assertEqual(0o700, stat.S_IMODE(
                 cli.BART_SKILL_DIR.stat().st_mode))
-            self.assertEqual(0o700, stat.S_IMODE(
-                (cli.SKILLS_DIR / "scripts" / "chat-hook.sh").stat().st_mode))
+            self.assertEqual(0o600, stat.S_IMODE(
+                (cli.SKILLS_DIR / "scripts" / "chat-hook.cjs").stat().st_mode))
             for path in (
                 cli.SKILLS_DIR / cli.MANAGED_MARKER,
                 cli.SKILLS_DIR / "README.md",

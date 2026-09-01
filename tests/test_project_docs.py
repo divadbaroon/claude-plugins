@@ -37,30 +37,41 @@ class DocsPageTests(Saved, BridgeTestCase):
             " box.querySelector('.hc-docs').getAttribute('data-hc-on')]);")
         self.assertEqual(["overview", None], got)
 
-    def test_the_token_answer_is_there_and_has_the_steps(self):
+    def test_the_current_faq_is_there_and_token_exhaustion_has_steps(self):
         got = self.open(
             "click(tab('docs'));"
-            "return JSON.stringify([texts(box, 'hc-docs-q').length,"
-            " texts(box, 'hc-docs-q').slice(-1)[0],"
+            "return JSON.stringify([texts(box, 'hc-docs-q'),"
             " texts(box, 'hc-docs-step').length]);")
-        self.assertEqual(5, got[0])
-        self.assertEqual("What if I run out of tokens?", got[1])
-        self.assertEqual(3, got[2])
+        self.assertEqual(["What is Engelbart?", "How do I get in touch?",
+                          "What are Engelbart tokens?",
+                          "What happens if my tokens run out?",
+                          "Do I need my own Anthropic account?",
+                          "How do I connect my own Anthropic key?",
+                          "What does Build do?"], got[0])
+        self.assertEqual(3, got[1])
+
+    def test_the_launch_instruction_names_the_installed_slash_command(self):
+        got = self.open(
+            "click(tab('docs'));"
+            "return JSON.stringify(deepText(box.querySelector('.hc-docs')));")
+        self.assertIn("/bart", got)
+        self.assertNotIn("/goals-ui", got)
 
     def test_the_ways_to_reach_a_person_close_the_page(self):
         got = self.open(
             "click(tab('docs'));"
             "var page = box.querySelector('.hc-docs');"
             "var last = page.children[page.children.length - 1];"
+            "var contact = page.querySelector('.hc-docs-contact-list');"
             "return JSON.stringify(["
-            " texts(box, 'hc-docs-reach-where'),"
-            " texts(box, 'hc-docs-reach-at'),"
+            " texts(contact, 'hc-docs-reach-where'),"
+            " texts(contact, 'hc-docs-reach-at'),"
             " String(last.className)]);")
-        self.assertEqual(["discord", "phone", "email", "email"], got[0])
-        self.assertEqual(["discord.com/invite/ACEK85XnR", "571-492-2873",
-                          "david@mathetic.com", "hudson@mathetic.com"],
+        self.assertEqual(["discord", "phone", "email"], got[0])
+        self.assertEqual(["discord.gg/eMtcZgPDy", "571-492-2873",
+                          "david@mathetic.org"],
                          got[1])
-        self.assertEqual("hc-docs-reach", got[2])
+        self.assertEqual("hc-docs-contact", got[2])
 
 
 if __name__ == "__main__":
