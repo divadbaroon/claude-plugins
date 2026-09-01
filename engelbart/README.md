@@ -142,6 +142,10 @@ See [`STASHED.md`](../STASHED.md) for the full inventory.
 - Claude Code 2.1.175+
 - `curl` for the standalone installer; Node.js 18+ only for the optional npm path
 
+If the `claude` command is present but below the supported version, Engelbart
+runs Claude Code's built-in `claude update` before continuing. A failed update
+stops the install before Engelbart writes its managed state.
+
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
 runtimes live under `~/.human-compact/runtimes/`; and the stable launchers are
 `~/.human-compact/bin/hc` and `~/.human-compact/bin/bart`. Re-running the same

@@ -776,7 +776,7 @@ test('a reinstall on an already-connected machine points at the stored key', asy
 
 // Claude Code is a hard requirement, and its installer asks no questions.
 test('a missing Claude Code is installed, and the extended env reaches install', async () => {
-  const { claudeOnPath, installClaudeCode } = require('../lib/cli');
+  const { claudeInstallState, claudeOnPath, installClaudeCode } = require('../lib/cli');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-offer-'));
   try {
     fixturePackage(root);
@@ -799,7 +799,81 @@ test('a missing Claude Code is installed, and the extended env reaches install',
     assert.equal(code, 0);
     assert.equal(installEnv.PATH, '/home/x/.local/bin:/usr/bin');
     assert.equal(typeof claudeOnPath, 'function');
+    assert.equal(typeof claudeInstallState, 'function');
     assert.equal(typeof installClaudeCode, 'function');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a runnable but stale Claude Code is updated before the Engelbart install', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-update-'));
+  try {
+    fixturePackage(root);
+    const output = capture();
+    let update = null;
+    let installed = false;
+    const code = await run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: output.stream,
+      errorOutput: capture().stream,
+      claudeInstallState: () => ({ state: 'outdated', version: '2.1.174' }),
+      updateClaudeCode: async (options) => { update = options; return true; },
+      install: async () => { installed = true; return { launcher: null }; },
+      readCredentials: () => null,
+    });
+    assert.equal(code, 0);
+    assert.equal(installed, true);
+    assert.equal(update.version, '2.1.174');
+    assert.equal(update.env.PATH, '/usr/bin');
+    assert.match(output.read(), /engelbart-cli 0\.16\.0/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the Claude preflight distinguishes compatible, stale, and unknown binaries', () => {
+  const { claudeInstallState } = require('../lib/cli');
+  const state = (result) => claudeInstallState({ PATH: '/usr/bin' }, () => result);
+
+  assert.deepEqual(state({ status: 0, stdout: '2.1.175 (Claude Code)\n', stderr: '' }), {
+    state: 'compatible', version: '2.1.175',
+  });
+  assert.deepEqual(state({ status: 0, stdout: '2.1.174 (Claude Code)\n', stderr: '' }), {
+    state: 'outdated', version: '2.1.174',
+  });
+  assert.deepEqual(state({ status: 0, stdout: 'other program\n', stderr: '' }), {
+    state: 'unrecognized', output: 'other program',
+  });
+  assert.deepEqual(state({ status: 127, stdout: '', stderr: 'missing' }), { state: 'missing' });
+});
+
+test('a failed automatic Claude update stops before the Engelbart install', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-update-fail-'));
+  try {
+    fixturePackage(root);
+    let installed = false;
+    await assert.rejects(run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      platform: 'darwin',
+      arch: 'arm64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: () => ({ state: 'outdated', version: '2.1.174' }),
+      updateClaudeCode: async () => false,
+      install: async () => { installed = true; return { launcher: null }; },
+    }), /could not be updated automatically/);
+    assert.equal(installed, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -878,6 +952,22 @@ test('the installer runs with no question, says whose it is, and extends PATH', 
   // localBin is built with the host's path.join (backslashes on Windows), so
   // construct the expectation the same way rather than hardcoding a POSIX path.
   assert.equal(result.PATH, `${path.join('/home/x', '.local', 'bin')}${path.delimiter}/usr/bin`);
+});
+
+test('an outdated Claude Code uses its built-in updater', async () => {
+  const { updateClaudeCode } = require('../lib/cli');
+  const ran = [];
+  const said = capture();
+  const updated = await updateClaudeCode({
+    env: { PATH: '/usr/bin' },
+    output: said.stream,
+    errorOutput: capture().stream,
+    version: '2.1.174',
+    deps: { spawn: (command, args) => { ran.push([command, ...args]); return { status: 0 }; } },
+  });
+  assert.equal(updated, true);
+  assert.deepEqual(ran, [['claude', 'update']]);
+  assert.match(said.read(), /2\.1\.174 is below the required 2\.1\.175/);
 });
 
 test('on Windows the installer is the PowerShell one-liner, not bash+curl', async () => {

@@ -6,8 +6,11 @@ const {
   ensureLauncherOnPath,
   install,
   inspectVendor,
+  parseClaudeVersion,
+  requireCompatibleClaude,
   spawnableLauncher,
   supportedTarget,
+  MIN_CLAUDE_VERSION_TEXT,
 } = require('./installer');
 const auth = require('./auth');
 const { invocation } = require('./invocation');
@@ -301,15 +304,40 @@ async function run(deps = {}) {
     const target = supportedTarget(platform, arch, deps.processReport);
     const vendor = inspectVendor(packageRoot, packageJson.version);
 
-    // Claude Code is a hard requirement, and its official installer asks no
-    // questions. A pipe or session runner may remove the TTY even though this
-    // is a real install, so only CI and dry runs suppress the bootstrap.
-    if (!options.dryRun && !env.CI
-        && !(deps.claudeOnPath || claudeOnPath)(env, deps.spawn)) {
-      env = await (deps.installClaudeCode || installClaudeCode)({
-        env, output, errorOutput, platform, deps,
-      });
-      authDeps.env = env;
+    // Claude Code is a hard requirement. A pipe or session runner may remove
+    // the TTY even though this is a real install, so only CI and dry runs
+    // suppress the bootstrap. The compatibility check is deliberately the
+    // same gate install() applies: a runnable but too-old `claude` needs an
+    // update, not a late failure after the rest of the command has started.
+    if (!options.dryRun && !env.CI) {
+      // `claudeOnPath` was the original test seam. Keep it as a compatibility
+      // shim for callers that model only present/missing; production always
+      // uses the full version probe below.
+      const probe = deps.claudeInstallState
+        || (deps.claudeOnPath
+          ? (currentEnv, spawn) => (deps.claudeOnPath(currentEnv, spawn)
+            ? { state: 'compatible' }
+            : { state: 'missing' })
+          : claudeInstallState);
+      const claude = probe(env, deps.spawn);
+      if (claude.state === 'missing') {
+        env = await (deps.installClaudeCode || installClaudeCode)({
+          env, output, errorOutput, platform, deps,
+        });
+        authDeps.env = env;
+      } else if (claude.state === 'outdated') {
+        const updated = await (deps.updateClaudeCode || updateClaudeCode)({
+          env, output, errorOutput, version: claude.version, deps,
+        });
+        if (!updated) {
+          throw new Error('Claude Code could not be updated automatically. '
+            + 'Run `claude update` manually and re-run this command.');
+        }
+      } else if (claude.state === 'unrecognized') {
+        throw new Error('unsupported Claude Code version output '
+          + `${JSON.stringify(claude.output || '(empty)')}; `
+          + `Engelbart requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`);
+      }
     }
 
     let reach = null;
@@ -517,6 +545,16 @@ const CLAUDE_INSTALL_URL_PS1 = 'https://claude.ai/install.ps1';
  * only decides whether to offer, never whether to proceed.
  */
 function claudeOnPath(env, spawn) {
+  return claudeInstallState(env, spawn).state !== 'missing';
+}
+
+/*
+ * Separate a missing binary from a stale Claude Code installation before the
+ * main installer mutates anything. Version output we cannot positively
+ * identify is not sent `update`: a command named `claude` could be another
+ * program, and the existing fail-closed preflight remains the safe outcome.
+ */
+function claudeInstallState(env, spawn) {
   const run = spawn || require('child_process').spawnSync;
   try {
     const done = run('claude', ['--version'], {
@@ -525,9 +563,17 @@ function claudeOnPath(env, spawn) {
       timeout: 20000,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return Boolean(done && !done.error && done.status === 0);
+    if (!done || done.error || done.status !== 0) return { state: 'missing' };
+    const output = String(done.stdout || '').trim() || String(done.stderr || '').trim();
+    const parsed = parseClaudeVersion(output);
+    if (!parsed) return { state: 'unrecognized', output };
+    try {
+      return { state: 'compatible', version: requireCompatibleClaude(output) };
+    } catch (error) {
+      return { state: 'outdated', version: parsed.join('.') };
+    }
   } catch (error) {
-    return false;
+    return { state: 'missing' };
   }
 }
 
@@ -563,6 +609,23 @@ async function installClaudeCode({ env, output, errorOutput, platform = process.
   // native installer uses ~/.local/bin on every platform, Windows included.
   const localBin = path.join(deps.homedir || os.homedir(), '.local', 'bin');
   return { ...env, PATH: `${localBin}${path.delimiter}${env.PATH || ''}` };
+}
+
+// Claude Code owns its installation mechanism. Using its documented update
+// command keeps an existing npm, native, or managed installation in place
+// instead of replacing it with a different installation type.
+async function updateClaudeCode({ env, output, errorOutput, version, deps = {} }) {
+  output.write(`\nClaude Code ${version} is below the required ${MIN_CLAUDE_VERSION_TEXT} -- updating it...\n\n`);
+  const run = deps.spawn || require('child_process').spawnSync;
+  try {
+    const done = run('claude', ['update'], { env, stdio: 'inherit' });
+    if (done && !done.error && done.status === 0) return true;
+  } catch (error) {
+    // The caller emits one actionable error below; avoid exposing platform-
+    // specific spawn internals as though they were a member-facing remedy.
+  }
+  errorOutput.write('\nClaude Code could not be updated automatically.\n');
+  return false;
 }
 
 /* Materialize a project the member approved on the web.
@@ -642,6 +705,7 @@ module.exports = {
   InputCancelled,
   UsageError,
   canPrompt,
+  claudeInstallState,
   claudeOnPath,
   importSetup,
   installClaudeCode,
@@ -651,5 +715,6 @@ module.exports = {
   resolveChoices,
   run,
   runAccountCommand,
+  updateClaudeCode,
   usage,
 };

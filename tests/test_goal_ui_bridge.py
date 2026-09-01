@@ -1571,6 +1571,17 @@ class RailReconcileTests(BridgeTestCase):
         self.assertEqual(["Build all", "on"], out["whole"])
         self.assertEqual(["Build", "off"], out["none"])
 
+    def test_todos_is_the_default_rail_surface_without_a_current_tab(self):
+        out = self.run_js(
+            self.RAIL_DOM
+            + "var ui = window.__hcPromptUI;"
+            "ui.renderTodoRail(true);"
+            "var on = tabs.querySelector('.hc-rail-tab-on');"
+            "out = { labels: tabs.children.map(function (tab) {"
+            "  return tab.textContent; }), active: on && on.textContent };")
+        self.assertEqual(["TODOs", "Notes", "Understanding"], out["labels"])
+        self.assertEqual("TODOs", out["active"])
+
     def test_copy_sits_above_the_rows_and_not_in_the_header(self):
         # The header carries the four tabs and nothing that comes and goes:
         # a control appearing there the moment a TODO was typed pushed the

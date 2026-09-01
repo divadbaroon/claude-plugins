@@ -10543,7 +10543,9 @@
   // so all of them are testable without a DOM.
 
   var TODO_INDENT = "    ";
-  var railTab = "current";
+  // The work list is the first useful surface: it exposes Quick and Build
+  // immediately instead of making the reader pass through a summary page.
+  var railTab = "todos";
   // Last-seen status per row and the rows already asked about, so a finished
   // build fires its understanding-check probe exactly once.
   var checkSeen = Object.create(null);
@@ -13185,8 +13187,7 @@
       }
       var name = node.getAttribute("data-hc-rail-tab");
       if (name !== "todos" && name !== "notes"
-          && name !== "prompt" && name !== "understand"
-          && name !== "current") return;
+          && name !== "prompt" && name !== "understand") return;
       railTab = name;
       renderTodoRail(true);
     }, true);
@@ -14549,11 +14550,9 @@
             previewRow(), state.intent ? state.intent.expected : ""].join("|");
   }
 
-  // The center is two fixed tabs: Interface and Notes. Document and Paper
-  // used to sit here too; they now live in the overview's context card as
-  // rows of its rail (see renderOverviewPane), so the goals view keeps only
-  // what is about running and annotating the work itself.
-  var CENTER_TABS = [["interface", "Interface"], ["notes", "Notes"]];
+  // The center is the project's Interface. Goal notes live in the rail,
+  // alongside TODOs and Understanding, so the preview stays a single surface.
+  var CENTER_TABS = [["interface", "Interface"]];
   var centerTabChoice = Object.create(null);   // goalId -> tab the reader chose
 
   // goalId -> { paperId, fetchedAt, state:"loading"|"ready"|"error", data, error }
@@ -14572,7 +14571,7 @@
 
   function centerActiveTab(goalId) {
     var chosen = centerTabChoice[goalId];
-    if (chosen === "interface" || chosen === "notes") return chosen;
+    if (chosen === "interface") return chosen;
     return centerDefaultTab(goalId);
   }
 
@@ -14622,9 +14621,7 @@
     centerEnsureTabs(mount.parentNode);
     var tab = centerActiveTab(goalId);
     centerMarkTabs(tab);
-    var did = tab === "interface"
-      ? centerRenderInterface(mount, force)
-      : centerRenderNotes(mount, goal, goalId, force);
+    var did = centerRenderInterface(mount, force);
     // The overview's Document/Paper pane rides the same refreshes: every
     // action that redraws the center redraws it too, and it places its own
     // frame last so the center's hide never wins over a visible paper.
@@ -15091,7 +15088,6 @@
     var promptBox = document.querySelector(".hc-rail-prompt");
     var understandBox = document.querySelector(".hc-rail-understand");
     var notesBox = document.querySelector(".hc-rail-notes");
-    var currentBox = document.querySelector(".hc-rail-current");
     if (!host || !list || !tabs) return false;
 
     var goal = todoSelectedGoal();
@@ -15141,14 +15137,11 @@
       }
     }
 
-    if (tabs.children.length !== 4 || force) {
+    if (tabs.children.length !== 3 || force) {
       while (tabs.firstChild) tabs.removeChild(tabs.firstChild);
-      // Current is the one thing that needs attention now; TODOs is the
-      // full list behind it; Notes is the document for the goal;
-      // Understanding is where a question about any of it is asked. Prompt is
-      // no longer a tab -- its pane stays reachable in code (railTab
-      // "prompt") but no longer takes permanent space on screen.
-      tabs.appendChild(todoTabSpan("current", "Current"));
+      // TODOs is the work surface; Notes is the goal document; Understanding
+      // is where a question about either is asked. Prompt stays reachable in
+      // code, but does not take permanent space on screen.
       tabs.appendChild(todoTabSpan("todos", "TODOs"));
       tabs.appendChild(todoTabSpan("notes", "Notes"));
       tabs.appendChild(todoTabSpan("understand", "Understanding"));
@@ -15175,11 +15168,6 @@
       // display is the one this overrules, and the sections stack in it.
       understandBox.style.display = railTab === "understand" ? "flex" : "none";
     }
-    if (currentBox) {
-      currentBox.style.display = railTab === "current" ? "flex" : "none";
-      currentBox.style.flexDirection = "column";
-    }
-    if (railTab === "current") renderCurrentTab(goal);
     if (railTab === "understand") renderUnderstandTab(goal);
     if (goal && railTab === "prompt") renderPromptTab(goal);
     // The rows are priced off the same preview the Prompt tab prints, so the
@@ -16461,252 +16449,6 @@
     box.appendChild(understandFoot(data));
     var fields = box.querySelectorAll("[data-hc-understand]");
     for (var i = 0; i < fields.length; i += 1) understandGrow(fields[i]);
-  }
-
-  // The active step for THIS goal: the first written row that is not done.
-  // Only this one is shown under "Start here" -- the full list is the TODOs
-  // tab, and Current does not repeat it.
-  function currentStep(items) {
-    var cur = null;
-    array(items).some(function (r) {
-      if (!str(r.text).trim() || r.status === "done") return false;
-      cur = r; return true;
-    });
-    return cur;
-  }
-
-  // The project path in the order the left panel lays it out: the phase
-  // groups in PATH order, each goal in document order. When no goal carries a
-  // phase the path is the plain top-level goal list. "Next" is read off this
-  // sequence, never inferred from the goal titles.
-  function pathOrderedGoals() {
-    var PH = ["brainstorm", "understand", "implement", "apply"];
-    var goals = readLocalGoals(), byp = {}, any = false;
-    (function scan(ns) {
-      array(ns).forEach(function (n) {
-        if (!n) return;
-        if (PH.indexOf(n.phase) >= 0) {
-          (byp[n.phase] = byp[n.phase] || []).push(n);
-          any = true;
-        }
-        scan(n.children);
-      });
-    })(goals);
-    if (!any) return array(goals);
-    var out = [];
-    PH.forEach(function (ph) { array(byp[ph]).forEach(function (n) { out.push(n); }); });
-    return out;
-  }
-
-  function nextGoalInPath(id) {
-    var ord = pathOrderedGoals();
-    for (var i = 0; i < ord.length; i++) {
-      if (ord[i].id === id) return ord[i + 1] || null;
-    }
-    return null;
-  }
-
-  // The reserved slot under the active step, where an execution result or an
-  // understanding check will later land. Today it opens only for a real,
-  // row-borne question -- there is no fabricated assessment. New kinds hang
-  // off this one function so the pane never invents content to look complete.
-  function currentIntervention(row) {
-    if (row && str(row.question).trim()) {
-      return { kind: "question", text: str(row.question).trim() };
-    }
-    return null;
-  }
-
-  // What to call the action under the active step, and what it really does.
-  // The one real executor is the build/run pipeline; a step that carries a URL
-  // opens it instead. Nothing here is simulated -- a step with no real action
-  // returns null and no button draws. The label varies with the step so it is
-  // never the blanket "Build this step".
-  function currentActionFor(row) {
-    var text = str(row.text);
-    var url = (text.match(/https?:\/\/\S+/) || [])[0];
-    if (url) {
-      return { label: "Open →", run: function () {
-        try { window.open(url, "_blank", "noopener"); } catch (e) { /* blocked */ }
-      } };
-    }
-    var readonly = document.documentElement
-      && document.documentElement.getAttribute("data-hc-readonly") !== null;
-    if (readonly || !todoOpenRow(row)) return null;
-    var t = text.toLowerCase();
-    // A verb fit to the step, not a blanket one. Reading comes first so "Read
-    // the measures doc" reads "Read", never "Analyze".
-    var label = "Start";
-    if (/\b(read|review|study|skim)\b/.test(t)
-        || /\b(paper|docs?|documentation|article|readme|spec)\b/.test(t)) label = "Read";
-    else if (/\b(plot|chart|graph|visuali|histogram)\b/.test(t)) label = "Plot";
-    else if (/(analy|compare|measure|summari|examine|inspect|assess)/.test(t)) label = "Analyze";
-    else if (/\b(run|train|evaluate|execute|fit|benchmark|simulate)\b/.test(t)) label = "Run";
-    else if (/\b(build|implement|code|script|refactor|prototype|wire|configure)\b/.test(t)) label = "Build";
-    return { label: label, todos: true, run: function () {
-      if (!todoPicked[row.id]) todoTogglePick(row.id);
-      todoBuild();
-    } };
-  }
-
-  // Switch to the TODOs tab and land on a specific row -- used by the Current
-  // tab's "Start here", so the reader arrives on the exact step, not the top
-  // of the list.
-  function scrollTodoRowIntoView(id) {
-    try {
-      var n = document.querySelector('[data-hc-todo-id="' + id + '"]');
-      if (n && typeof n.scrollIntoView === "function") {
-        n.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-    } catch (e) { /* best effort */ }
-  }
-  function focusTodoRow(id) {
-    railTab = "todos";
-    renderTodoRail(true);
-    if (!id) return;
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(function () { scrollTodoRowIntoView(id); });
-    } else {
-      scrollTodoRowIntoView(id);
-    }
-  }
-
-  function renderCurrentTab(goal) {
-    var box = document.querySelector(".hc-rail-current");
-    if (!box) return;
-    while (box.firstChild) box.removeChild(box.firstChild);
-    // A little breathing room off the left rail, and space at the foot so the
-    // last section is not flush against the bottom of a tall column.
-    box.style.padding = "16px 16px 44px 20px";
-
-    var MONO = "'Source Code Pro',monospace";
-    function el(parent, tag, css, text) {
-      var n = document.createElement(tag);
-      if (css) n.setAttribute("style", css);
-      if (text != null) n.textContent = text;
-      (parent || box).appendChild(n);
-      return n;
-    }
-    // A full-width hairline that opens a section. Every section below the
-    // title/description wears one, so the pane reads as an even stack of
-    // labelled bands rather than one run-on column.
-    function divider(top) {
-      el(box, "div", "height:1px;background:var(--bd);align-self:stretch;"
-        + "margin:" + (top == null ? 26 : top) + "px 0 0");
-    }
-    // A small section label, sitting just under the divider that opens its
-    // section.
-    function heading(label) {
-      return el(box, "div", "margin:14px 0 10px;font:700 9px " + MONO
-        + ";letter-spacing:1.4px;text-transform:uppercase;color:var(--mut)", label);
-    }
-
-    if (!goal) {
-      el(box, "div", "font:12px/1.75 " + MONO + ";color:var(--mut);max-width:46ch",
-         "Select a goal in the Project Path to see what it is and where to start.");
-      return;
-    }
-
-    // Goal title -- the strongest thing on the pane, standing on its own with
-    // no label above it. A little air above it off the top of the pane.
-    el(box, "div", "margin-top:12px;font:600 16px/1.35 " + MONO + ";color:var(--ink);"
-      + "letter-spacing:-.2px;max-width:34ch", str(goal.title));
-
-    // Description -- pulled right up under the title so the two read as one
-    // unit; quieter than the title, no label of its own. Omitted, never faked
-    // from the title, when the goal carries none.
-    if (str(goal.desc).trim()) {
-      el(box, "div", "margin-top:7px;font:12.5px/1.7 " + MONO
-        + ";color:var(--dtxt);max-width:52ch", str(goal.desc).trim());
-    }
-
-    // Why this matters -- the goal's stored purpose, above the work now:
-    // context first, then what to do about it. Dropped whole when there is no
-    // purpose on record.
-    if (str(goal.why).trim()) {
-      divider();
-      heading("Why this matters");
-      el(box, "div", "font:12px/1.7 " + MONO + ";color:var(--mut);max-width:52ch",
-         str(goal.why).trim());
-    }
-
-    // Start here -- the action area: the single current step, prominent, and
-    // an action fit to it. The post-execution result and understanding check
-    // no longer live here; they open inline on their own TODO in the TODOs tab.
-    divider();
-    heading("Start here");
-    var cur = currentStep(goal.items);
-    if (cur) {
-      // The step reads as the dominant line and clicks through to the TODOs
-      // tab, landing on this very row.
-      var step = el(box, "div", "font:14px/1.5 " + MONO + ";color:var(--ink);"
-        + "max-width:52ch;cursor:pointer", str(cur.text));
-      step.addEventListener("mouseenter", function () { step.style.color = "var(--acc)"; });
-      step.addEventListener("mouseleave", function () { step.style.color = "var(--ink)"; });
-      step.addEventListener("click", function () { focusTodoRow(cur.id); });
-      var act = currentActionFor(cur);
-      if (act) {
-        // The standard restrained button: neutral until hovered, terracotta on
-        // hover, like every other action in the workspace.
-        var btn = el(box, "span",
-          "align-self:flex-start;margin-top:14px;padding:5px 13px;border:1px solid "
-          + "var(--bd2);border-radius:2px;font:600 11px " + MONO + ";color:var(--fnt);"
-          + "cursor:pointer;user-select:none", act.label);
-        btn.addEventListener("mouseenter", function () {
-          btn.style.color = "var(--acc)"; btn.style.borderColor = "var(--acc)"; });
-        btn.addEventListener("mouseleave", function () {
-          btn.style.color = "var(--fnt)"; btn.style.borderColor = "var(--bd2)"; });
-        btn.addEventListener("click", function () {
-          act.run();
-          // A build/run's progress lands in the TODOs list, so the pane
-          // follows the reader there, onto this row; opening a URL leaves them
-          // where they are.
-          if (act.todos) focusTodoRow(cur.id);
-        });
-      }
-    } else if (array(goal.items).some(function (r) { return str(r.text).trim(); })) {
-      el(box, "div", "font:12px/1.7 " + MONO + ";color:var(--mut)",
-         "Every step on this goal is done.");
-    } else {
-      // No steps yet: a restrained way in, not broken execution UI. Sends the
-      // reader to the TODOs tab, where the empty list already offers a row to
-      // type the first step into.
-      var add = el(box, "span",
-        "align-self:flex-start;padding:8px 14px;border:1px dashed var(--bd2);"
-        + "border-radius:2px;font:600 11px " + MONO + ";color:var(--fnt);"
-        + "cursor:pointer;user-select:none", "+ Add the first step");
-      add.addEventListener("mouseenter", function () {
-        add.style.color = "var(--acc)"; add.style.borderColor = "var(--acc)"; });
-      add.addEventListener("mouseleave", function () {
-        add.style.color = "var(--fnt)"; add.style.borderColor = "var(--bd2)"; });
-      add.addEventListener("click", function () {
-        railTab = "todos";
-        renderTodoRail(true);
-      });
-    }
-
-    // Next -- the next GOAL in the path. Quiet, but clearly a link: it clicks
-    // through to select that goal. Omitted at the end of the path.
-    var nx = nextGoalInPath(goal.id);
-    if (nx) {
-      divider();
-      heading("Next");
-      var row = el(box, "div", "align-self:flex-start;display:flex;"
-        + "align-items:baseline;gap:8px;max-width:52ch;cursor:pointer");
-      var arrow = el(row, "span", "flex:none;color:var(--mut);font:12px " + MONO, "→");
-      var name = el(row, "span", "font:12.5px/1.6 " + MONO + ";color:var(--mut)",
-        str(nx.title));
-      row.addEventListener("mouseenter", function () {
-        name.style.color = "var(--acc)"; arrow.style.color = "var(--acc)"; });
-      row.addEventListener("mouseleave", function () {
-        name.style.color = "var(--mut)"; arrow.style.color = "var(--mut)"; });
-      row.addEventListener("click", function () {
-        if (typeof window !== "undefined"
-            && typeof window.__hcSelectGoal === "function") {
-          try { window.__hcSelectGoal(nx.id); } catch (e) { /* stay put */ }
-        }
-      });
-    }
   }
 
   function renderUnderstandTab(goal) {
@@ -18475,7 +18217,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">{{ railName }}</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-rail-current\"></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\" style=\"opacity:.5;border:none;padding:0;font-weight:400;align-self:flex-end\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-add\" style=\"font:600 10px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);cursor:pointer;margin-right:auto;opacity:.7\">+ Add TODO</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-quick\" data-hc-todo-quick=\"off\" title=\"A small, fast change: slim context, the quick model, your kept session — and no restart check after (⇧⌘↩)\">Quick</span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\" style=\"opacity:.5;border:none;padding:0;font-weight:400;align-self:flex-end\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-add\" style=\"font:600 10px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);cursor:pointer;margin-right:auto;opacity:.7\">+ Add TODO</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-quick\" data-hc-todo-quick=\"off\" title=\"A small, fast change: slim context, the quick model, your kept session — and no restart check after (⇧⌘↩)\">Quick</span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's

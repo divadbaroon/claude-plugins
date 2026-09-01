@@ -60,6 +60,31 @@ class OpeningTests(unittest.TestCase):
         self.assertIn("turn 59", body)
         self.assertNotIn("turn 0\n", body)
 
+    def test_public_links_are_extracted_without_the_sentence_punctuation(self):
+        sources = SC.linked_sources([
+            {"role": "you", "text": "Use https://example.com/brief, then https://example.com/brief."},
+            {"role": "you", "text": "Also https://docs.example.org/a)."},
+        ])
+        self.assertEqual(["https://example.com/brief", "https://docs.example.org/a"],
+                         sources)
+
+    def test_a_linked_description_uses_the_web_enabled_setup_turn(self):
+        seen = []
+        class LinkAware:
+            def generate_json(self, _prompt):
+                raise AssertionError("ordinary setup call used")
+            def generate_json_with_web(self, prompt):
+                seen.append(prompt)
+                return {"say": "I read it.", "card": "questions",
+                        "questions": {"items": [{"id": "q", "type": "free",
+                                                   "title": "Who is it for?"}]}}
+        out = SC.ask([{"role": "you", "text": "Build this: https://example.com/brief"}],
+                     engine=LinkAware())
+        self.assertTrue(out["ok"])
+        self.assertEqual("questions", out["card"])
+        self.assertIn("Use WebFetch", seen[0])
+        self.assertIn("https://example.com/brief", seen[0])
+
 
 class CardTests(unittest.TestCase):
     """What comes back, coerced into the one shape the rail can draw."""
@@ -1428,13 +1453,7 @@ class NamedForYouTests(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "node is required for setup.js tests")
 class WhoTests(unittest.TestCase):
-    """The card that comes before the fork: who is reading this.
-
-    Everything the page says afterwards was written by a model, and a model
-    writes for whoever wrote the prompt unless it is told otherwise. Four
-    answers change that -- and they are asked once, against the account, so
-    a reader who has already given them never sees this card again.
-    """
+    """The profile is the first, progressively extended conversation."""
 
     def run_js(self, expression, reply=None):
         env = dict(os.environ, HC_REPLY=json.dumps(reply or {}))
@@ -1445,154 +1464,162 @@ class WhoTests(unittest.TestCase):
         return json.loads(done.stdout)
 
     def opened(self, tail, reply=None):
-        """Let boot settle -- the card is decided by what /setup.who says."""
+        """Let boot settle -- /setup.who decides whether the turns are shown."""
         return self.run_js("settle(function () {" + tail + "});", reply)
 
     KNOWN = {"session": "", "events": 0, "bound": True,
              "profile": {"name": "Maya", "year": "2",
                          "major": "Molecular Biology", "level": "plain"}}
 
+    def with_profile(self, tail, name="Maya", year="2",
+                     major="Computer Science", level="plain",
+                     touched=False, reply=None):
+        step = (4 if touched else 3 if major else 2 if year else 1 if name
+                else 0)
+        seed = (
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'who'; st.whoStep = %s;"
+            "st.profile = {name: %s, year: %s, major: %s, level: %s};"
+            "st.levelTouched = %s;"
+            "st.slide = %s;"
+            "window.__hcSetup.draw();"
+            % (step, json.dumps(name), json.dumps(year), json.dumps(major),
+               json.dumps(level), "true" if touched else "false",
+               {"plain": 0, "some": 100, "full": 200}.get(level, 100))
+        )
+        return self.opened(seed + tail, reply)
+
     def test_a_cold_page_opens_on_the_questions_and_not_the_fork(self):
-        out = self.opened("return {titles: app.querySelectorAll('.card-title')"
-                          "  .map(function (n) { return n.textContent; })};",
+        out = self.opened("return {title: app.querySelector('.wizard-title').textContent,"
+                          "  steps: app.querySelectorAll('.wizard-step').length};",
                           {"session": "", "events": 0, "bound": True})
-        self.assertIn("What is your name?", out["titles"])
-        self.assertNotIn("Is this new work, or work you already have?",
-                         out["titles"])
+        self.assertEqual("What is your name?", out["title"])
+        self.assertEqual(10, out["steps"])
 
-    def test_all_four_questions_are_on_it(self):
-        out = self.opened("return {titles: app.querySelectorAll('.card-title')"
-                          "  .map(function (n) { return n.textContent; })};")
-        for asked in ("What is your name?", "What year are you?",
-                      "What is your major?",
-                      "How technical should explanations be?"):
-            self.assertIn(asked, out["titles"])
-
-    def test_the_years_are_offered_with_somewhere_else_to_go(self):
+    def test_the_first_question_is_a_large_contained_message(self):
         out = self.opened(
+            "return {wizard: !!app.querySelector('.wizard'),"
+            " rail: !!app.querySelector('.wizard-rail'),"
+            " card: !!app.querySelector('.card'),"
+            " placeholder: app.querySelector('.profile-name')"
+            "   .getAttribute('placeholder')};")
+        self.assertTrue(out["wizard"])
+        self.assertTrue(out["rail"])
+        self.assertFalse(out["card"])
+        self.assertEqual("type your name…", out["placeholder"])
+    def test_each_answer_appends_the_next_message_without_rebuilding_the_thread(self):
+        out = self.opened(
+            "var name = app.querySelector('.profile-name');"
+            "var go = app.querySelector('.wizard-actions .btn');"
+            "var shut = go.hasAttribute('disabled');"
+            "name.value = 'Maya'; name.handlers.input.forEach(function (h) { h({}); });"
+            "var open = !go.hasAttribute('disabled'); go.press();"
+            "return {shut: shut, open: open,"
+            " title: app.querySelector('.wizard-title').textContent};")
+        self.assertTrue(out["shut"])
+        self.assertTrue(out["open"])
+        self.assertEqual("What year are you?", out["title"])
+
+    def test_the_years_are_offered_after_a_name(self):
+        out = self.with_profile(
             "return {rows: app.querySelectorAll('.opt-label')"
-            "  .map(function (n) { return n.textContent; })};")
+            "  .map(function (n) { return n.textContent; })};",
+            year="", major="")
         self.assertEqual(["First year", "Second year", "Third year",
                           "Fourth year", "Something else"], out["rows"])
 
-    def test_choosing_something_else_opens_a_box_to_write_in(self):
-        out = self.opened(
+    def test_choosing_something_else_opens_a_box(self):
+        out = self.with_profile(
             "app.querySelectorAll('.opt')[4].press();"
             "return {other: window.__hcSetup.state().yearOther,"
-            "        boxes: app.querySelectorAll('.field').length};")
+            "        boxes: app.querySelectorAll('.field').length};",
+            year="", major="")
         self.assertTrue(out["other"])
-        # Name, the year they are writing, the major: three boxes, where
-        # before there were two.
-        self.assertEqual(3, out["boxes"])
+        self.assertEqual(1, out["boxes"])
 
-    def test_the_majors_are_seeded_and_narrow_as_they_type(self):
-        # Twenty-eight rows is a form. Seeding them means most readers press
-        # one instead of typing, and the filter is what keeps it to a few.
-        out = self.opened(
-            "var box = app.querySelectorAll('.field .f')[1];"
-            "box.value = 'bio';"
-            "box.handlers.input[0]({});"
-            "return {seeds: app.querySelectorAll('.seed')"
-            "  .map(function (n) { return n.textContent; })};")
+    def test_major_input_precedes_seeds_and_filters_in_place(self):
+        out = self.with_profile(
+            "var field = app.querySelector('.profile-major');"
+            "var order = field.parentNode.parentNode.children"
+            "  .map(function (n) { return n.className; });"
+            "field.value = 'bio'; field.handlers.input[0]({});"
+            "return {order: order, seeds: app.querySelectorAll('.seed')"
+            "  .map(function (n) { return n.textContent; })};",
+            major="")
+        self.assertEqual(["wizard-count", "wizard-title", "field wizard-field",
+                          "seeds wizard-seeds", "wizard-actions"], out["order"])
         self.assertTrue(out["seeds"])
-        for seed in out["seeds"]:
-            self.assertIn("bio", seed.lower())
+        self.assertTrue(all("bio" in seed.lower() for seed in out["seeds"]))
 
-    def test_a_major_nobody_seeded_is_still_their_answer(self):
-        out = self.opened(
-            "var box = app.querySelectorAll('.field .f')[1];"
-            "box.value = 'Rhetoric & Molecular Origami';"
-            "box.handlers.input[0]({});"
-            "return {major: window.__hcSetup.state().profile.major,"
-            "        seeds: app.querySelectorAll('.seed').length};")
-        self.assertEqual("Rhetoric & Molecular Origami", out["major"])
-        self.assertEqual(0, out["seeds"])
-
-    def test_pressing_a_seed_fills_the_box(self):
-        out = self.opened(
+    def test_a_seed_or_any_typed_major_is_the_answer(self):
+        seeded = self.with_profile(
             "app.querySelectorAll('.seed')[0].press();"
-            "return {major: window.__hcSetup.state().profile.major};")
-        self.assertEqual("Computer Science", out["major"])
+            "return window.__hcSetup.state().profile.major;", major="")
+        self.assertEqual("Computer Science", seeded)
+        typed = self.with_profile(
+            "var field = app.querySelector('.profile-major');"
+            "field.value = 'Rhetoric & Molecular Origami';"
+            "field.handlers.input[0]({});"
+            "return {major: window.__hcSetup.state().profile.major,"
+            "        seeds: app.querySelectorAll('.seed').length};", major="")
+        self.assertEqual("Rhetoric & Molecular Origami", typed["major"])
+        self.assertEqual(0, typed["seeds"])
 
-    def test_the_slider_has_three_stops_and_starts_between_them(self):
-        out = self.opened(
+    def test_a_deliberate_slider_choice_unlocks_continue(self):
+        out = self.with_profile(
+            "var track = app.querySelector('.range');"
+            "track.value = '164'; track.handlers.input[0]({});"
+            "var mid = window.__hcSetup.state().profile.level;"
+            "var go = app.querySelector('.wizard-actions .btn');"
+            "var before = go.hasAttribute('disabled');"
+            "track.handlers.change[0]({});"
             "return {stops: app.querySelectorAll('.stop')"
-            "  .map(function (n) { return n.textContent; }),"
-            " level: window.__hcSetup.state().profile.level,"
-            " lit: app.querySelectorAll('.stop')"
-            "  .map(function (n) { return n.getAttribute('data-on'); })};")
+            "  .map(function (n) { return n.textContent; }), mid: mid,"
+            "        level: window.__hcSetup.state().profile.level,"
+            "        at: track.value, slide: window.__hcSetup.state().slide,"
+            "        before: before, after: !go.hasAttribute('disabled')};",
+            level="", touched=False)
         self.assertEqual(["Plain language", "Some technical detail",
                           "Fully technical"], out["stops"])
-        self.assertEqual("some", out["level"])
-        self.assertEqual(["0", "1", "0"], out["lit"])
-
-    def test_dragging_it_settles_on_the_nearest_stop(self):
-        # Continuous while it moves -- the thumb goes where the finger is --
-        # and snapped when it is let go, so three options are still a slider
-        # rather than three buttons wearing a track.
-        out = self.opened(
-            "var track = app.querySelector('.range');"
-            "track.value = '164';"
-            "track.handlers.input[0]({});"
-            "var mid = window.__hcSetup.state().profile.level;"
-            "track.handlers.change[0]({});"
-            "return {mid: mid, level: window.__hcSetup.state().profile.level,"
-            "        at: track.value,"
-            "        slide: window.__hcSetup.state().slide};")
         self.assertEqual("full", out["mid"])
         self.assertEqual("full", out["level"])
         self.assertEqual("200", out["at"])
         self.assertEqual(200, out["slide"])
+        self.assertTrue(out["before"])
+        self.assertTrue(out["after"])
 
-    def test_a_stop_can_be_pressed_instead_of_dragged_to(self):
-        out = self.opened(
-            "app.querySelectorAll('.stop')[0].press();"
-            "return {level: window.__hcSetup.state().profile.level};")
-        self.assertEqual("plain", out["level"])
-
-    def test_continue_posts_the_four_answers_and_moves_on(self):
-        out = self.opened(
-            "app.querySelectorAll('.field .f')[0].value = 'Maya';"
-            "app.querySelectorAll('.field .f')[0].handlers.input[0]({});"
-            "app.querySelectorAll('.opt')[1].press();"
-            "app.querySelectorAll('.stop')[0].press();"
-            "app.querySelectorAll('.btn').filter(function (b) {"
-            "  return b.textContent.indexOf('Continue') === 0; })[0].press();"
-            "return settle(function () {"
-            "  return {posted: calls.filter(function (c) {"
-            "            return c.op === 'setup_profile'; }),"
-            "          screen: window.__hcSetup.state().screen};"
-            "});", {"ok": True})
+    def test_send_is_the_only_way_forward_and_needs_every_answer(self):
+        reply = {"ok": True, "say": "", "card": "none"}
+        out = self.with_profile(
+            "var field = app.querySelector('.project-draft-field');"
+            "var send = app.querySelector('.project-send');"
+            "var shut = send.hasAttribute('disabled');"
+            "field.value = 'Make a small site for our club';"
+            "field.handlers.input[0]({}); send.press();"
+            "return settle(function () { return {shut: shut, screen: window.__hcSetup.state().screen,"
+            " posted: calls.filter(function (c) { return c.op === 'setup_profile'; }),"
+            " said: window.__hcSetup.state().msgs.map(function (m) { return m.text; })}; });",
+            touched=True, reply=reply)
+        self.assertTrue(out["shut"])
+        self.assertEqual("talk", out["screen"])
         self.assertEqual(1, len(out["posted"]))
-        self.assertEqual({"name": "Maya", "year": "2", "major": "",
-                          "level": "plain"}, out["posted"][0]["profile"])
-        self.assertEqual("fork", out["screen"])
+        self.assertEqual({"name": "Maya", "year": "2",
+                          "major": "Computer Science", "level": "plain"},
+                         out["posted"][0]["profile"])
+        self.assertIn("Make a small site for our club", out["said"])
 
-    def test_answers_that_could_not_be_saved_stop_the_page(self):
-        # Every prompt afterwards reads them from the vault, so answers that
-        # did not land are answers that change nothing -- and a reader who
-        # thinks they were heard is worse off than one who was asked twice.
-        out = self.opened(
-            "app.querySelectorAll('.btn').filter(function (b) {"
-            "  return b.textContent.indexOf('Continue') === 0; })[0].press();"
-            "return settle(function () {"
-            "  return {screen: window.__hcSetup.state().screen,"
-            "          err: (app.querySelector('.err') || {}).textContent};"
-            "});", {"ok": False, "error": "the disk is full"})
+    def test_a_failed_save_keeps_the_fifth_message_in_the_thread(self):
+        out = self.with_profile(
+            "var field = app.querySelector('.project-draft-field');"
+            "field.value = 'Build a tool'; field.handlers.input[0]({});"
+            "app.querySelector('.project-send').press();"
+            "return settle(function () { return {screen: window.__hcSetup.state().screen,"
+            " err: (app.querySelector('.err') || {}).textContent,"
+            " draft: !!app.querySelector('.project-draft-field')}; });",
+            touched=True, reply={"ok": False, "error": "the disk is full"})
         self.assertEqual("who", out["screen"])
         self.assertIn("disk is full", out["err"])
-
-    def test_skip_never_posts_and_never_blocks(self):
-        # Somebody who does not want to answer should not be held at the
-        # door of a tool they have not seen yet.
-        out = self.opened(
-            "app.querySelectorAll('.btn').filter(function (b) {"
-            "  return b.textContent.indexOf('Skip') === 0; })[0].press();"
-            "return {screen: window.__hcSetup.state().screen,"
-            "        posted: calls.filter(function (c) {"
-            "          return c.op === 'setup_profile'; }).length};")
-        self.assertEqual("fork", out["screen"])
-        self.assertEqual(0, out["posted"])
+        self.assertTrue(out["draft"])
 
     def test_a_reader_who_has_answered_is_never_asked_again(self):
         out = self.opened(
@@ -1614,25 +1641,20 @@ class WhoTests(unittest.TestCase):
         self.assertTrue(out["other"])
         self.assertEqual("transferring", out["year"])
 
-    def test_a_chat_with_something_in_it_is_still_asked_first(self):
-        # The other cold start: /bart in a conversation that has been going
-        # all afternoon. Reading it is what happens next, not instead --
-        # the goals it proposes are written for whoever answered here.
+    def test_a_returning_reader_with_a_chat_still_goes_to_that_chat(self):
+        reply = json.loads(json.dumps(self.KNOWN))
+        reply.update({"session": "s" * 8, "events": 12, "bound": False})
         out = self.opened(
-            "app.querySelectorAll('.btn').filter(function (b) {"
-            "  return b.textContent.indexOf('Skip') === 0; })[0].press();"
             "return {screen: window.__hcSetup.state().screen,"
             "        adopting: window.__hcSetup.state().adopting,"
             "        read: calls.filter(function (c) {"
-            "          return c.op === 'setup_from_chat'; }).length};",
-            {"session": "s" * 8, "events": 12, "bound": False})
+            "          return c.op === 'setup_from_chat'; }).length};", reply)
         self.assertEqual("adopt", out["screen"])
         self.assertTrue(out["adopting"])
         self.assertEqual(1, out["read"])
 
     def test_a_workspace_that_will_not_answer_leaves_them_on_the_card(self):
-        # It cannot say whether they have answered, so it asks. Skip is one
-        # press away and nothing behind it depends on the answer.
+        # It cannot say who is here, so it asks the opening question.
         out = self.run_js(
             "window.fetch = function () { return Promise.reject(new Error('x')); };"
             "window.__hcSetup.boot();"
@@ -1731,16 +1753,15 @@ class PageTests(unittest.TestCase):
         self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
                          answer["profile"])
 
-    def test_the_opening_question_and_its_answer_field_are_pills(self):
+    def test_the_setup_card_path_has_no_competing_freeform_composer(self):
         with self.server() as base:
             _status, script = self.get(base + "/setup.js")
             _status, page = self.get(base + "/setup")
-        self.assertIn("msg-opening", script)
-        self.assertIn("composer-first", script)
-        self.assertIn("What are you working on? Describe it", script)
-        self.assertIn(".msg-opening .msg-body", page)
-        self.assertIn(".composer-first{", page)
-        self.assertIn("padding:8px 32px 56px", page)
+        self.assertNotIn("drawComposer", script)
+        self.assertNotIn("or just talk", script)
+        self.assertNotIn("Tell me what you're working on in your own words", script)
+        self.assertNotIn(".msg-opening .msg-body", page)
+        self.assertNotIn(".composer-first{", page)
 
 
 if __name__ == "__main__":

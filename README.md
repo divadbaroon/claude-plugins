@@ -14,7 +14,8 @@ https://github.com/user-attachments/assets/46b8eb80-ca27-43e9-a180-6515fc4ec2c4
 
 ## Install
 
-macOS or Linux and Claude Code 2.1.175+.
+macOS or Linux and Claude Code 2.1.175+. If Claude Code is installed but below
+that version, Engelbart runs `claude update` automatically before installing.
 
 ```bash
 curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh

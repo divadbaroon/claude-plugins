@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 from pathlib import Path
@@ -63,6 +64,33 @@ MAX_DOC_BODY = 8000
 MAX_FOCUS = 3
 MAX_CHAT_TURNS = 60
 MAX_CHAT_TURN = 1200
+
+# A public link in the reader's description is explicit permission for this
+# one setup turn to consult that source. It is not permission to browse for
+# projects that did not supply one.
+URL_RE = re.compile(r"https?://[^\s<>()]+", re.I)
+MAX_LINKS = 8
+
+
+def linked_sources(transcript) -> List[str]:
+    """Distinct reader-supplied public links, in the order they appeared."""
+    found: List[str] = []
+    for row in transcript or []:
+        if not isinstance(row, dict):
+            continue
+        for raw in URL_RE.findall(str(row.get("text") or "")):
+            url = raw.rstrip(".,;:!?)]}")
+            if url and url not in found:
+                found.append(url)
+            if len(found) >= MAX_LINKS:
+                return found
+    return found
+
+
+def _json_reply(engine, prompt: str, use_web: bool):
+    """Use web tools only on a turn carrying reader-supplied links."""
+    web = getattr(engine, "generate_json_with_web", None) if use_web else None
+    return web(prompt) if callable(web) else engine.generate_json(prompt)
 
 CARDS = ("questions", "plan", "goals", "todos", "none")
 
@@ -1004,6 +1032,16 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
     from . import providers as PROVIDERS
     import os
     due = stage_of(transcript, shown)
+    links = linked_sources(transcript)
+    if links:
+        extra = list(extra) + [
+            "", "# Linked sources the reader supplied", "",
+            *["- " + url for url in links], "",
+            "Use WebFetch to read those sources before proposing the work. "
+            "Use WebSearch only when it resolves context the sources leave "
+            "unclear. Ground the plan in what you find; do not claim to have "
+            "read a source that the tools could not reach.",
+        ]
     if due in _DUE:
         extra = list(extra) + [
             "", "# The card you are writing now", "",
@@ -1016,8 +1054,9 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
             setup_model(root), timeout=SETUP_TIMEOUT_SECONDS)
-        raw = engine.generate_json(
-            "\n".join(compose(transcript, extra, root)) + "\n")
+        raw = _json_reply(engine,
+                          "\n".join(compose(transcript, extra, root)) + "\n",
+                          bool(links))
     except PROVIDERS.ProviderError as exc:
         return {"ok": False,
                 "error": " ".join(str(exc).split())[:200] + credit_note()}
@@ -1035,11 +1074,12 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
         kept = card["say"]
         if not kept:
             try:
-                raw = engine.generate_json(
+                raw = _json_reply(engine,
                     "\n".join(compose(transcript, list(extra) + [
                         "", "You just replied with a %s card when the card"
                         " due is %s. That reply was discarded. Write the %s"
-                        " card." % (card["card"], due, due)], root)) + "\n")
+                        " card." % (card["card"], due, due)], root)) + "\n",
+                    bool(links))
             except Exception:                            # noqa: BLE001
                 raw = {}
             card = normalize_card(raw, due)

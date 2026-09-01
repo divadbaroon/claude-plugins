@@ -22,6 +22,10 @@ CLAUDE_SEARCH_TIMEOUT_SECONDS = 420
 # that writes, and nothing that runs -- the question was "what does the code
 # do", and answering it never needs the code to be changed or executed.
 SEARCH_TOOLS = "Read,Grep,Glob"
+# A setup description can name a live source. That is different from a
+# repository search: the reader explicitly supplied a public URL, so Claude
+# may fetch it (and search for context when the source itself points there).
+WEB_TOOLS = "WebFetch,WebSearch"
 
 
 class ProviderError(RuntimeError):
@@ -130,7 +134,7 @@ def subscription_env(base=None):
 class ClaudeCLI(Base):
     kind = "claude"
     def _run(self, prompt, *, structured=False, plain=False, read=None,
-             search=""):
+             search="", web=False):
         command = ["claude", "-p", "--safe-mode", "--model", self.model,
                    "--no-session-persistence"]
         deadline = self.timeout or CLAUDE_TIMEOUT_SECONDS
@@ -160,6 +164,11 @@ class ClaudeCLI(Base):
             command += ["--tools", "Read", "--allowed-tools", "Read"]
             for folder in read:
                 command += ["--add-dir", str(folder)]
+        elif web:
+            # This is opt-in at the call site: a link the reader supplied is
+            # permission to visit that public source, not a blanket licence
+            # for setup to browse on every project.
+            command += ["--tools", WEB_TOOLS, "--allowed-tools", WEB_TOOLS]
         elif structured or plain:
             # Neither of these is a coding-agent turn: the prompt carries the
             # text the answer comes from, so a subprocess that starts reading
@@ -213,6 +222,15 @@ class ClaudeCLI(Base):
         # Avoid a second full model call when a large rebuild response includes
         # prose or a discarded draft before its corrected final object.
         raw = self._run(prompt, structured=True)
+        try:
+            return _last_json_object(raw)
+        except json.JSONDecodeError as e:
+            raise ProviderError(
+                f"{self.identity()} did not return parseable JSON") from e
+
+    def generate_json_with_web(self, prompt):
+        """A structured setup turn allowed to read the reader's public links."""
+        raw = self._run(prompt, structured=True, web=True)
         try:
             return _last_json_object(raw)
         except json.JSONDecodeError as e:

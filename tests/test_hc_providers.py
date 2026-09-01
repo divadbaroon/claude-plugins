@@ -53,6 +53,22 @@ class ClaudeCLIProviderTests(unittest.TestCase):
         )
 
     @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_a_reader_supplied_link_allows_only_web_tools(self, run):
+        run.return_value = Mock(returncode=0, stdout=json.dumps({"card": "none"}),
+                                stderr="")
+
+        result = providers.ClaudeCLI("sonnet").generate_json_with_web(
+            "Read https://example.com/brief")
+
+        self.assertEqual({"card": "none"}, result)
+        command = run.call_args.args[0]
+        self.assertEqual(providers.WEB_TOOLS,
+                         command[command.index("--tools") + 1])
+        self.assertEqual(providers.WEB_TOOLS,
+                         command[command.index("--allowed-tools") + 1])
+        self.assertEqual("low", command[command.index("--effort") + 1])
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
     def test_free_form_calls_do_not_force_low_effort_or_json_schema(self, run):
         run.return_value = Mock(returncode=0, stdout="summary", stderr="")
 
