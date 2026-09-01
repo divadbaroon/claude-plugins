@@ -97,6 +97,7 @@ from . import goals as GM
 from . import project_store as PS
 from . import reader as READER
 from .secure_io import atomic_write_json
+from ..platform_compat import detached_popen_kwargs, kill_process_tree
 
 
 def _now() -> str:
@@ -235,7 +236,7 @@ def execution_lines(session_id: str, root: Optional[Path],
 def compose_prompt(session_id: str, goals: Dict[str, Any],
                    important: Dict[str, Any], prompts: List[Dict[str, Any]],
                    goal: Dict[str, Any], rows: List[Dict[str, Any]],
-                   root: Optional[Path] = None) -> str:
+                   root: Optional[Path] = None, quick: bool = False) -> str:
     """The build session's opening message.
 
     The project it runs in; the goal tree the plugin already injects into the
@@ -243,24 +244,39 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
     wrote one; then the picked rows with their children, each parent under its
     id. This is also what the rail's Prompt tab prints, so that what the
     reader is shown and what the build opens on are one string.
+
+    ``quick`` is the fast lane: the goal tree, the reader's own prompt and the
+    Understanding scene all stay out, because the change is small and the
+    seconds a model spends reading orientation it will not use are the whole
+    of what makes a small change feel slow. The rows, the run command and any
+    attachments they cite still go: those are the work itself.
     """
-    tree = CS._goal_context_text(session_id, goals, important, prompts)
     title = " ".join(str(goal.get("title") or "Untitled").split())
     head = project_lines(session_id, root)
-    lines = ([] if not head else head + [""]) + [
-             tree.rstrip("\n"), "",
-             "# FOCUS goal", "",
-             f"{goal['id']} · {title}",
-             "Work only on this goal's rows below; the tree above is orientation."]
-    own = str(goal.get("prompt_md") or "").strip()
-    if own:
-        lines += ["", "# The user's own prompt for this goal", "", own]
-    # What the reader wrote in the rail's Understanding tab: the situation the
-    # rows below are for, and the questions they have about it. Above the work
-    # because it is what the work is for.
-    scene = GM.render_understanding(goal)
-    if scene:
-        lines += [""] + scene
+    lines = [] if not head else head + [""]
+    if quick:
+        lines += ["# FOCUS goal", "",
+                  f"{goal['id']} · {title}",
+                  "This is a QUICK build: make the smallest correct change"
+                  " the rows below ask for. Do not refactor around them, do"
+                  " not run test suites or build steps unless a row asks for"
+                  " one -- the reader checks the result in the live preview."]
+    else:
+        tree = CS._goal_context_text(session_id, goals, important, prompts)
+        lines += [tree.rstrip("\n"), "",
+                  "# FOCUS goal", "",
+                  f"{goal['id']} · {title}",
+                  "Work only on this goal's rows below; the tree above is"
+                  " orientation."]
+        own = str(goal.get("prompt_md") or "").strip()
+        if own:
+            lines += ["", "# The user's own prompt for this goal", "", own]
+        # What the reader wrote in the rail's Understanding tab: the situation
+        # the rows below are for, and the questions they have about it. Above
+        # the work because it is what the work is for.
+        scene = GM.render_understanding(goal)
+        if scene:
+            lines += [""] + scene
     lines += ["", "# The work", ""]
     for row in rows:
         indent = "  " * int(row.get("depth") or 0)
@@ -970,6 +986,30 @@ def fallback_estimate(session_id: str, root: Optional[Path],
 CHECK_MODEL = "sonnet"
 CHECK_EFFORT = "high"
 
+# The fast lane's defaults (see start's ``quick``): a fast model at low
+# effort, since the change is small by declaration. The Builds tab's choice
+# (quick_model / quick_effort) or the shell's (HC_BUILD_QUICK_MODEL,
+# HC_BUILD_QUICK_EFFORT) overrides either.
+QUICK_MODEL = "sonnet"
+QUICK_EFFORT = "low"
+# Quick builds keep one session per goal, resumed build after build, so the
+# repository is read once rather than once per change. Rotated after this
+# many uses: a transcript that has grown ten builds long stops being fast.
+QUICK_SESSION_ROTATE = 8
+
+
+def _transcript_exists(cwd: str, claude_session: str) -> bool:
+    """Whether the CLI still holds the session's transcript for this
+    directory -- the one thing --resume needs. The path scheme (every
+    non-alphanumeric of the cwd becomes a dash) is the CLI's own."""
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(cwd or ""))
+    try:
+        spot = (Path.home() / ".claude" / "projects" / slug
+                / f"{claude_session}.jsonl")
+        return spot.is_file() and spot.stat().st_size > 0
+    except OSError:
+        return False
+
 RESTART_CHECK = """\
 [Engelbart] The rows are done. This is a different job, and a short one: \
 check, do not build.
@@ -1081,6 +1121,45 @@ def _rows_in(session_id: str, root: Optional[Path], goal_id: str,
             if row.get("status") == status]
 
 
+def _note_build(session_id: str, root: Optional[Path], goal_id: str,
+                picked: List[str], quick: bool) -> None:
+    """Leave one line for the trajectory map when a build finishes.
+
+    A build is deliberately not a vaulted chat (spawn keeps it out of
+    capture), so the map's extraction pipeline never sees built work. This
+    is the other half of that decision: the finished build writes its own
+    line into the vault's trajectory dir, and the map reads the feed
+    directly (see graph_build.build_activity_nodes) -- no model pass, no
+    vault entry, just the fact that the work happened.
+    """
+    try:
+        from . import state
+        trajdir = state.trajdir()
+        if not trajdir.is_dir():
+            return
+        goals, _ = CS.load_goals(session_id, root)
+        goal = GM.by_id(goals, goal_id) or {}
+        title = " ".join(str(goal.get("title") or "").split())
+        chosen = set(picked)
+        rows = [str(row.get("text") or "").strip()[:120]
+                for row in goal.get("todo_items") or []
+                if row.get("id") in chosen and row.get("status") == "done"]
+        if not title or not rows:
+            return
+        spot = trajdir / "builds.json"
+        try:
+            kept = json.loads(spot.read_text())
+        except (OSError, ValueError):
+            kept = []
+        if not isinstance(kept, list):
+            kept = []
+        kept.append({"at": _now(), "date": _now()[:10], "goal": title[:120],
+                     "rows": rows[:12], "quick": bool(quick)})
+        atomic_write_json(spot, kept[-400:], root=trajdir.parent)
+    except Exception:  # noqa: BLE001 -- the map must never fail a build
+        return
+
+
 # A run that died on the provider's side, not on the work: retried by
 # resuming the same session, so nothing already done is lost.
 _TRANSIENT = re.compile(
@@ -1128,6 +1207,43 @@ def _claude_executable(home: Optional[Path] = None) -> Optional[Path]:
     return None
 
 
+def _trust_folder(cwd: str) -> None:
+    """Accept Claude Code's per-folder trust dialog for ``cwd``, ahead of a
+    headless run there.
+
+    The dialog exists so the CLI never reads a folder nobody chose; a build
+    IS the reader choosing this folder -- they pressed Build on this
+    project -- so answering it for them here is carrying their answer, not
+    skipping the question. Only this one directory is marked, nothing about
+    permissions changes (acceptEdits still governs the run), and a config
+    that cannot be read or written is left alone: the run then simply meets
+    the dialog the way it always did.
+    """
+    spot = Path.home() / ".claude.json"
+    try:
+        value = json.loads(spot.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(value, dict):
+        return
+    projects = value.get("projects")
+    if not isinstance(projects, dict):
+        projects = value["projects"] = {}
+    entry = projects.get(cwd)
+    if isinstance(entry, dict):
+        if entry.get("hasTrustDialogAccepted"):
+            return
+        entry["hasTrustDialogAccepted"] = True
+    else:
+        projects[cwd] = {"hasTrustDialogAccepted": True}
+    try:
+        tmp = spot.with_name(".claude.json.hc-tmp")
+        tmp.write_text(json.dumps(value, indent=2), encoding="utf-8")
+        tmp.replace(spot)
+    except OSError:
+        pass
+
+
 class Run:
     """One goal's build process, and the thread that reads what it prints."""
 
@@ -1173,6 +1289,10 @@ class Run:
         # (see RESTART_CHECK). The check is the same session, resumed on a
         # different model; what it prints is a verdict, never a row's state.
         self.phase = "rows"
+        # The fast lane (see start): slim prompt, the quick model, and no
+        # restart check after -- a small change is watched in the preview,
+        # not audited.
+        self.quick = False
 
     def record(self, **extra) -> Dict[str, Any]:
         rec = load_run(self.session_id, self.root, self.goal_id) or {}
@@ -1217,6 +1337,10 @@ class Run:
     def spawn(self, message: str, resume: bool, phase: str = "rows",
               model: str = "", effort: str = "") -> None:
         from .providers import subscription_env
+        # The reader pressed Build on THIS project: that is the folder-trust
+        # answer, given here so a headless run in a directory Claude Code
+        # has never opened does not stall on a dialog nobody is watching.
+        _trust_folder(self.cwd)
         # On the reader's subscription, not an API key the server happened
         # to inherit (see providers.subscription_env).
         env = subscription_env()
@@ -1233,7 +1357,7 @@ class Run:
         self.process = subprocess.Popen(
             self._command(message, resume, model, effort), cwd=self.cwd,
             env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=log, text=True, close_fds=True, start_new_session=True)
+            stderr=log, text=True, close_fds=True, **detached_popen_kwargs())
         self.asked = None
         self.spawned_at = time.time()
         self.phase = phase
@@ -1256,7 +1380,11 @@ class Run:
         # progress has no restart verdict: whatever the last one said is
         # about code this one is changing.
         fresh: Dict[str, Any] = {"started_at": _now(), "ended_at": None,
-                                 "phase": "rows", "restart": None}
+                                 "phase": "rows", "restart": None,
+                                 # Per RUN, not per goal: the kept-session
+                                 # bookkeeping under "quick" outlives this
+                                 # run, this flag does not.
+                                 "is_quick": self.quick}
         if not resume:
             fresh["rows"] = len(self.picked) or 1
             # A new build has not said what it will cost yet; the last
@@ -1314,8 +1442,8 @@ class Run:
         self.stopped = True
         assert self.process
         try:
-            os.killpg(os.getpgid(self.process.pid), 15)
-        except (OSError, ProcessLookupError):
+            kill_process_tree(self.process.pid)
+        except Exception:  # noqa: BLE001 - fall back to a direct terminate
             try:
                 self.process.terminate()
             except OSError:
@@ -1460,9 +1588,17 @@ class Run:
     def _bank(self) -> None:
         """Bank what this build spent: one sample for the estimate, and -- when
         the build was one row and one row only -- the real number onto that
-        row, where the rail prints it in place of its guess."""
+        row, where the rail prints it in place of its guess.
+
+        Quick runs bank nothing. They resume a kept session, so what the CLI
+        reports is mostly cache reads of the whole transcript -- a number
+        that says nothing about what a row of work costs and would poison
+        both the samples every estimate is made of and the corner of the row
+        it was stamped on."""
         spent, self.tokens = self.tokens, 0
         took, self.seconds = self.seconds, 0.0
+        if self.quick:
+            return
         # A build the reader cut short spent what it spent, but it says
         # nothing about what a row costs: it is not a sample of one.
         if spent <= 0 or not self.picked or self.stopped or self.cancelled:
@@ -1526,13 +1662,25 @@ class Run:
             for row_id in _rows_in(self.session_id, self.root, self.goal_id, "building"):
                 _set_row(self.session_id, self.root, self.goal_id, row_id,
                          status="failed" if (code or self.error) else "done")
-        spent = {"tokens": self.tokens} if self.tokens else {}
+        # A quick run's reported spend is mostly the kept transcript being
+        # cache-read back in; printing it beside a one-line change reads as
+        # a broken number, because as a cost it is one (see _bank).
+        spent = ({"tokens": self.tokens}
+                 if self.tokens and not self.quick else {})
         ended = ("waiting" if waiting else "cancelled" if self.stopped
                  else ("failed" if code else "idle"))
         # ended_at freezes the clock the rail shows: a check that follows,
         # and every write it makes to the record, is not the build's time.
         self.record(status=ended, exit_code=code, error=self.error,
                     ended_at=_now(), **spent)
+        # A quick run that failed may have failed because the kept session it
+        # resumed is gone or spoiled; drop it so the next quick build starts
+        # clean rather than failing the same way twice.
+        if self.quick and (code or self.error):
+            self.record(quick=None)
+        if ended == "idle" and not self.error:
+            _note_build(self.session_id, self.root, self.goal_id,
+                        self.picked, self.quick)
         self._say("end", {"waiting": "waiting on your answer",
                           "cancelled": "you stopped the build",
                           "failed": "the build stopped: "
@@ -1551,7 +1699,7 @@ class Run:
             held = _pop_later(self.session_id, self.root, self.goal_id)
             if held:
                 start(self.session_id, self.root, self.goal_id, held)
-            elif (ended == "idle" and not self.error
+            elif (ended == "idle" and not self.error and not self.quick
                   and check_enabled(self.session_id, self.root)
                   and _rows_in(self.session_id, self.root, self.goal_id, "done")):
                 # Finished on its own terms, with nothing behind it: the one
@@ -1739,10 +1887,18 @@ def _join(session_id: str, root: Optional[Path], goal_id: str, run: "Run",
 
 
 def start(session_id: str, root: Optional[Path], goal_id: str,
-          row_ids: List[str]) -> Dict[str, Any]:
+          row_ids: List[str], quick: bool = False) -> Dict[str, Any]:
     """Submit rows: mark them building, compose the prompt, spawn the run --
     or, when a build of this goal is already out, hand them to that one
-    rather than opening a second process on the same directory (``_join``)."""
+    rather than opening a second process on the same directory (``_join``).
+
+    ``quick`` is the fast lane for a small change: the prompt carries the
+    rows and how the project runs but not the goal tree; the run goes out on
+    the quick model at low effort; the goal's previous quick session is
+    resumed when its transcript is still there, so the repository is read
+    once across many small changes; and no restart check follows -- the
+    reader is looking at the preview, which is the point of a quick change.
+    """
     ids = [i for i in row_ids if isinstance(i, str)]
     if not ids:
         return {"ok": False, "error": "pick at least one TODO"}
@@ -1781,7 +1937,7 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
         GM.sanitize(goals)
         prompts = CS.load_prompts(session_id, root)
         prompt = compose_prompt(session_id, goals, important, prompts, goal,
-                                rows, root=root)
+                                rows, root=root, quick=quick)
         if not CS.save_goals(session_id, goals, important, root):
             return {"ok": False, "error": "goal state changed; try again"}
     if mode() == "session":
@@ -1789,24 +1945,51 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
                                    "row_ids": ids, "prompt": prompt})
         return {"ok": True, "queued": True, "mode": "session", "rows": ids,
                 "prompt": prompt}
-    run = Run(session_id, root, goal_id,
-              _cwd_for(session_id, root, goals, goal_id),
-              str(uuid.uuid4()))
+    cwd = _cwd_for(session_id, root, goals, goal_id)
+    # The quick lane resumes the goal's kept quick session while its
+    # transcript is still on disk, so a second small change opens on a model
+    # that has already read the repository. Rotated before it grows long.
+    claude_session, resume, uses = str(uuid.uuid4()), False, 0
+    model = effort = ""
+    if quick:
+        chosen = load_settings(session_id, root)
+        model = (chosen.get("quick_model")
+                 or os.environ.get("HC_BUILD_QUICK_MODEL", "") or QUICK_MODEL)
+        effort = (chosen.get("quick_effort")
+                  or os.environ.get("HC_BUILD_QUICK_EFFORT", "") or QUICK_EFFORT)
+        record = load_run(session_id, root, goal_id) or {}
+        kept = record.get("quick") if isinstance(record.get("quick"), dict) else {}
+        held = str((kept or {}).get("claude_session_id") or "")
+        uses = int((kept or {}).get("uses") or 0)
+        if (held and uses < QUICK_SESSION_ROTATE
+                and _transcript_exists(cwd, held)):
+            claude_session, resume = held, True
+        else:
+            uses = 0
+    run = Run(session_id, root, goal_id, cwd, claude_session)
+    run.quick = quick
     # What this build is, for the cost it will report when it ends: the rows
     # picked, and the text they and their children carry.
     run.picked = list(ids)
     run.picked_chars = sum(len(str(row.get("text") or "")) for row in rows)
     try:
-        run.spawn(prompt, resume=False)
+        run.spawn(prompt, resume=resume, model=model, effort=effort)
     except FileNotFoundError:
         _revert(session_id, root, goal_id, ids)
         return {"ok": False, "error": "claude CLI not found on PATH"}
     except OSError as exc:
         _revert(session_id, root, goal_id, ids)
         return {"ok": False, "error": str(exc)[:200]}
+    if quick:
+        # rows and estimate are written fresh here because a resumed spawn
+        # deliberately leaves them alone -- but a quick resume is a new
+        # build, not a continued one, and the old countdown is not its.
+        run.record(rows=len(run.picked) or 1, estimate=None,
+                   quick={"claude_session_id": claude_session,
+                          "uses": uses + 1, "at": _now()})
     with _RUNS_GUARD:
         _RUNS[f"{session_id}:{goal_id}"] = run
-    return {"ok": True, "started": True, "rows": ids,
+    return {"ok": True, "started": True, "rows": ids, "quick": quick,
             "claude_session_id": run.claude_session, "cwd": run.cwd,
             "prompt": prompt}
 
@@ -2421,9 +2604,13 @@ def live(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
         rows = max(1, int(record.get("rows") or 1))
         estimate = _estimate_of(record)
         if (building and not estimate and elapsed is not None
-                and elapsed >= ESTIMATE_GRACE_S):
+                and elapsed >= ESTIMATE_GRACE_S
+                and not record.get("is_quick")):
             # The build has had its chance to say; the rail gets the chat's
-            # own measure of a build this size instead, marked as such.
+            # own measure of a build this size instead, marked as such. A
+            # quick run gets no stand-in: the samples are of full builds,
+            # and a big borrowed number beside a small change is exactly
+            # the "messed up" a stand-in exists to prevent.
             estimate = fallback_estimate(session_id, root, rows)
         try:
             spent = max(0, int(record.get("tokens") or 0))
@@ -2533,18 +2720,20 @@ SETTINGS_DEFAULTS: Dict[str, Any] = {
     "model": "", "effort": "",
     # Whether a finished build is followed by the restart check, and what
     # that check runs on; "" is CHECK_MODEL / CHECK_EFFORT.
-    "check": True, "check_model": "", "check_effort": ""}
+    "check": True, "check_model": "", "check_effort": "",
+    # What a quick build runs on; "" is QUICK_MODEL / QUICK_EFFORT.
+    "quick_model": "", "quick_effort": ""}
 
 
 def _clean_settings(value: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = dict(SETTINGS_DEFAULTS)
     if not isinstance(value, dict):
         return out
-    for key in ("model", "check_model"):
+    for key in ("model", "check_model", "quick_model"):
         model = str(value.get(key) or "").strip()
         if _MODEL_ID.match(model):
             out[key] = model
-    for key in ("effort", "check_effort"):
+    for key in ("effort", "check_effort", "quick_effort"):
         effort = str(value.get(key) or "").strip().lower()
         if effort in EFFORTS:
             out[key] = effort
@@ -2571,13 +2760,13 @@ def save_settings(session_id: str, root: Optional[Path],
     if not isinstance(patch, dict):
         return {"ok": False, "error": "nothing to set"}
     current = load_settings(session_id, root)
-    for key in ("model", "check_model"):
+    for key in ("model", "check_model", "quick_model"):
         if key in patch:
             model = str(patch.get(key) or "").strip()
             if model and not _MODEL_ID.match(model):
                 return {"ok": False, "error": "that is not a model id"}
             current[key] = model
-    for key in ("effort", "check_effort"):
+    for key in ("effort", "check_effort", "quick_effort"):
         if key in patch:
             effort = str(patch.get(key) or "").strip().lower()
             if effort and effort not in EFFORTS:
@@ -2675,7 +2864,10 @@ def models(session_id: str, root: Optional[Path]) -> Dict[str, Any]:
                            # What the restart check runs on when nothing
                            # is chosen for it.
                            "check_defaults": {"model": CHECK_MODEL,
-                                              "effort": CHECK_EFFORT}}
+                                              "effort": CHECK_EFFORT},
+                           # And the quick lane, likewise.
+                           "quick_defaults": {"model": QUICK_MODEL,
+                                              "effort": QUICK_EFFORT}}
     binary = _cli_binary()
     if binary is None:
         return out

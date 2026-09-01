@@ -338,6 +338,28 @@ def question_id() -> str:
     return "q" + secrets.token_hex(4)
 
 
+# The understanding-assessment layer. After a conceptually meaningful TODO
+# runs, the build may raise one grounded check -- a brief result of what
+# actually happened and a single question about it. The reader's answer is
+# kept as evidence against the goal. None of this is a phase, a goal, or a
+# permanent panel: `pending` holds at most one open check, cleared when it is
+# answered or superseded; `evidence` accumulates the answered ones.
+MAX_EVIDENCE = 40
+MAX_EV_RESULT = 600
+MAX_EV_CONCEPT = 160
+# The three states evidence can stand in. Not a grade: an answer is recorded
+# as "unresolved" and only a deliberate later assessment moves it, so the
+# system never fabricates confidence about what the reader understood.
+EVIDENCE_STATES = ("unresolved", "partial", "demonstrated")
+_EVIDENCE_ID = re.compile(r"^e[0-9a-z]{4,24}$")
+
+
+def evidence_id() -> str:
+    """A fresh id for one piece of understanding evidence."""
+    import secrets
+    return "e" + secrets.token_hex(4)
+
+
 def normalize_thread(value) -> list:
     """One question's conversation: what was asked, what came back.
 
@@ -375,6 +397,63 @@ def normalize_shots(value) -> list:
     return out
 
 
+def normalize_evidence(value) -> list:
+    """The answered checks kept against a goal, each tying one response back to
+    the TODO it followed and the concept it was about. Bounded; anything
+    without both a question and a response is dropped -- a check with no answer
+    in it is not evidence of anything.
+    """
+    out, seen = [], set()
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        question = " ".join(str(row.get("question") or "").split())[:400]
+        response = str(row.get("response") or "").strip()[:MAX_ANSWER]
+        if not question or not response:
+            continue
+        eid = str(row.get("id") or "")
+        if not _EVIDENCE_ID.match(eid) or eid in seen:
+            eid = evidence_id()
+        seen.add(eid)
+        state = str(row.get("state") or "unresolved")
+        if state not in EVIDENCE_STATES:
+            state = "unresolved"
+        out.append({
+            "id": eid,
+            "todo_id": str(row.get("todo_id") or "")[:32],
+            "todo_text": " ".join(str(row.get("todo_text") or "").split())[:400],
+            "concept": " ".join(str(row.get("concept") or "").split())[:MAX_EV_CONCEPT],
+            "question": question,
+            "response": response,
+            "result": " ".join(str(row.get("result") or "").split())[:MAX_EV_RESULT],
+            "state": state,
+            "ts": str(row.get("ts") or "")[:40]})
+        if len(out) >= MAX_EVIDENCE:
+            break
+    return out
+
+
+def normalize_pending(value) -> dict:
+    """The one open understanding check, or {} when there is none. A check with
+    no question is not a check; a check not tied to a TODO has nothing to be
+    about. The result is optional -- omitted, never invented, when the build
+    produced no concrete output to state one from.
+    """
+    if not isinstance(value, dict):
+        return {}
+    question = " ".join(str(value.get("question") or "").split())[:400]
+    todo_id = str(value.get("todo_id") or "")[:32]
+    if not question or not todo_id:
+        return {}
+    return {
+        "todo_id": todo_id,
+        "todo_text": " ".join(str(value.get("todo_text") or "").split())[:400],
+        "concept": " ".join(str(value.get("concept") or "").split())[:MAX_EV_CONCEPT],
+        "question": question,
+        "result": " ".join(str(value.get("result") or "").split())[:MAX_EV_RESULT],
+        "ts": str(value.get("ts") or "")[:40]}
+
+
 def normalize_understanding(value) -> dict:
     """Coerce whatever was stored or posted into the tab's whole shape.
 
@@ -408,7 +487,9 @@ def normalize_understanding(value) -> dict:
             break
     return {"scenario": str(value.get("scenario") or "")[:MAX_SCENARIO],
             "shots": normalize_shots(value.get("shots")),
-            "questions": out}
+            "questions": out,
+            "evidence": normalize_evidence(value.get("evidence")),
+            "pending": normalize_pending(value.get("pending"))}
 
 
 def render_understanding(goal) -> list:
@@ -574,6 +655,116 @@ def normalize_sources(value):
     return out
 
 
+# --- documents ------------------------------------------------------------
+#
+# A goal's working documents: the actual artifacts the reader writes ON this
+# goal -- a findings writeup, a draft, an analysis -- as opposed to the goal's
+# lightweight `notes` scratchpad. Distinct store on purpose: the middle pane
+# opens one as a full working surface, and it must not be the same text the
+# right-hand Notes tab edits. A document may be tied to the TODO it is the
+# artifact for (`todo_id`), so "Write the summary" reopens the same draft.
+
+MAX_DOCUMENTS = 40
+_DOCUMENT_ID = re.compile(r"^d[0-9a-f]{4,24}$")
+
+
+def document_id() -> str:
+    """A fresh id for one working document: short, opaque, never shown."""
+    import secrets
+    return "d" + secrets.token_hex(4)
+
+
+def normalize_documents(value) -> list:
+    """Keep the goal's documents as clean rows; drop the truly empty.
+
+    A row survives if it carries something a reader would miss: a body, a
+    title, or the TODO it belongs to. Bodies are coerced, never truncated --
+    a cap here would silently eat the tail of something a person wrote.
+    """
+    out, seen = [], set()
+    for entry in (value if isinstance(value, list) else [])[:MAX_DOCUMENTS]:
+        if not isinstance(entry, dict):
+            continue
+        did = str(entry.get("id") or "")
+        if not _DOCUMENT_ID.match(did):
+            did = document_id()
+        if did in seen:
+            continue
+        title = str(entry.get("title") or "")[:200]
+        body = str(entry.get("body_md") or "")
+        todo_id = str(entry.get("todo_id") or "")[:40]
+        if not title.strip() and not body.strip() and not todo_id:
+            continue
+        seen.add(did)
+        row = {"id": did, "title": title, "body_md": body,
+               "updated_at": str(entry.get("updated_at") or _now())}
+        if todo_id:
+            row["todo_id"] = todo_id
+        out.append(row)
+    return out
+
+
+_PAPER_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+def normalize_paper(value) -> dict:
+    """The one paper a goal reads against: a title, a URL, a stored PDF path,
+    and -- for a canonical Berkeley paper -- its stable `paper_id`.
+
+    Any field may be empty. `pdf` is a local absolute path under this
+    workspace's attachments directory (what the upload handed back); the server
+    gates it again before serving, so an unresolvable path here is harmless.
+    `paper_id` names a canonical paper in the shared research graph: when set,
+    the Paper tab asks the backend for a fresh signed URL to the stored PDF
+    rather than serving a local file -- so the id is the whole reference, and no
+    signed URL or storage path is ever kept on the goal.
+    """
+    if not isinstance(value, dict):
+        return {"title": "", "url": "", "pdf": "", "paper_id": ""}
+    url = str(value.get("url") or "").strip()[:1000]
+    if url and not url.startswith(("http://", "https://")):
+        url = ""
+    pid = str(value.get("paper_id") or "").strip()
+    if not _PAPER_ID_RE.match(pid):
+        pid = ""
+    return {"title": str(value.get("title") or "")[:200],
+            "url": url,
+            "pdf": str(value.get("pdf") or "")[:1000],
+            "paper_id": pid}
+
+
+def upsert_document(existing, patch) -> list:
+    """Apply one document create-or-update to a goal's document list.
+
+    The client owns the id (like a source's), so an edit is an id it has seen
+    and a create is one it just made. Only the fields the patch names are
+    touched; the rest of the row stands.
+    """
+    rows = normalize_documents(existing)
+    if not isinstance(patch, dict):
+        return rows
+    did = str(patch.get("id") or "")
+    if not _DOCUMENT_ID.match(did):
+        did = document_id()
+    found = None
+    for row in rows:
+        if row["id"] == did:
+            found = row
+            break
+    if found is None:
+        found = {"id": did, "title": "", "body_md": "", "updated_at": _now()}
+        rows.append(found)
+    if "title" in patch:
+        found["title"] = str(patch.get("title") or "")[:200]
+    if "body_md" in patch:
+        found["body_md"] = str(patch.get("body_md") or "")
+    if patch.get("todo_id"):
+        found["todo_id"] = str(patch.get("todo_id"))[:40]
+    found["updated_at"] = _now()
+    return normalize_documents(rows)[:MAX_DOCUMENTS]
+
+
 def evidence_prompts(trajdir: Path):
     """The user's own turns, as assignable prompts for the global tree.
 
@@ -716,6 +907,18 @@ def new_goal(gid, title, parent_id=None, **fields):
             "description": "", "priority": "normal", "notes": "",
             "todos_md": "", "todo_items": [], "prompt_md": "",
             "sources": [], "opening": "",
+            # The working documents written on this goal -- drafts, findings,
+            # writeups -- opened in the middle pane. A distinct store from the
+            # `notes` scratchpad above, never the same text.
+            "documents": [],
+            # Which of those documents the middle pane opens for this goal, by
+            # id. Set for a generated Brainstorm goal that ships a document; ""
+            # for every other goal, where the pane opens the newest document.
+            "primary_document_id": "",
+            # The one paper this goal reads against: a title, a URL, and/or an
+            # uploaded PDF, plus an optional canonical `paper_id`. Shown in the
+            # center's Paper tab as an actual viewer, never replaced by a summary.
+            "paper": {"title": "", "url": "", "pdf": "", "paper_id": ""},
             # The situation this goal's work happens in, and what the reader
             # wants answered about it. Written in the rail's Understanding
             # tab; carried into every build of this goal's rows.
@@ -730,6 +933,12 @@ def new_goal(gid, title, parent_id=None, **fields):
             # started in; set when the goal was made under another one, and
             # then a build of its TODO rows runs there rather than here.
             "project_cwd": "",
+            # Which stage of the project path this goal belongs to, when the
+            # project was built from the research-path onboarding. One of
+            # PATH_PHASES, or "" for a goal that carries no path membership --
+            # every ordinary and legacy goal. The workspace groups a project's
+            # goals under their phase; "" everywhere means the plain goal tree.
+            "phase": "",
             "origin": "inferred", "updated_at": _now()}
     goal.update(fields)
     return goal
@@ -866,6 +1075,12 @@ def norm_status(value):
     return value if value in STATUSES else None
 
 
+# The stages of the research-path onboarding, in order. A goal's `phase` is
+# one of these or "" (no membership). The order is the order the workspace
+# lays the phases out in; the value is the stable key, never shown raw.
+PATH_PHASES = ("brainstorm", "understand", "implement", "apply")
+
+
 def sanitize(goals):
     """Structural guardrails: parents must exist, depth<=4, statuses legal."""
     promote_todos(goals)
@@ -878,6 +1093,10 @@ def sanitize(goals):
         # failure to understand one must not be what hides it.
         if g.get("relevance") not in ("core", "supporting", "unrelated"):
             g["relevance"] = "core"
+        # An unrecognised phase is no phase: a goal only groups under a path
+        # stage when it says a real one, so anything else falls back to "".
+        if g.get("phase") not in PATH_PHASES:
+            g["phase"] = ""
         g["relevance_why"] = str(g.get("relevance_why") or "")[:200]
         g["relevance_for"] = str(g.get("relevance_for") or "")[:2000]
         g["project_cwd"] = str(g.get("project_cwd") or "")[:1000]
@@ -929,6 +1148,18 @@ def sanitize(goals):
         # Extra context the user chose to attach. Never inferred — a local
         # path here widens what a launched session may read.
         g["sources"] = normalize_sources(g.get("sources"))
+        # The goal's working documents, kept clean and their bodies whole.
+        g["documents"] = normalize_documents(g.get("documents"))
+        # The document the middle pane opens for this goal, named explicitly so
+        # the workspace never has to guess from the title. Kept only when it
+        # actually points at one of this goal's documents; otherwise cleared, and
+        # the pane falls back to the most-recently-touched document.
+        pdid = str(g.get("primary_document_id") or "")
+        if pdid and not any(d.get("id") == pdid for d in g["documents"]):
+            pdid = ""
+        g["primary_document_id"] = pdid
+        # The goal's paper reference (title / URL / uploaded PDF path).
+        g["paper"] = normalize_paper(g.get("paper"))
         if g["priority"] not in ("urgent", "high", "normal"):
             g["priority"] = "normal"
     # A model response or imported browser snapshot can name valid parents and

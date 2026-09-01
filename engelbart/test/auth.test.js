@@ -8,6 +8,11 @@ const test = require('node:test');
 
 const auth = require('../lib/auth');
 
+// POSIX mode bits cannot be reproduced on a Windows filesystem; those
+// assertions are host-gated. Logic tests pin platform:'linux' to keep
+// exercising the POSIX credential-helper branch on any host.
+const WINDOWS_HOST = process.platform === 'win32';
+
 function temporaryRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-auth-'));
 }
@@ -60,7 +65,7 @@ test('a stored token is owner-only on disk', () => {
     schema: 1, apiBase: 'https://berkeley.mathetic.com', token: 'egb_secret', email: 'm@example.com',
   });
   const file = auth.credentialsPath(root);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(auth.readCredentials(root, {}).email, 'm@example.com');
 });
 
@@ -361,6 +366,7 @@ test('signing in stores the token and pointedly not the key', async () => {
   ]);
 
   const result = await auth.login({
+    platform: 'linux',
     managedRoot: root,
     settingsFile: settingsIn(root),
     env: {},
@@ -405,7 +411,7 @@ test('signing in stores the token and pointedly not the key', async () => {
   const body = fs.readFileSync(envFile, 'utf8');
   assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
   assert.equal(body.includes('sk-abc'), false);
-  assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
 });
 
 // The whole point of wiring the helper is that a key the pool has stopped
@@ -420,6 +426,7 @@ test('the wired helper is told where its own settings file is', async () => {
   ]);
 
   await auth.login({
+    platform: 'linux',
     managedRoot: root,
     settingsFile,
     env: {},
@@ -603,7 +610,7 @@ test('the exports file only ever unsets', () => {
   const body = fs.readFileSync(written, 'utf8');
   assert.match(body, /unset ANTHROPIC_AUTH_TOKEN\nunset ANTHROPIC_BASE_URL\n$/);
   assert.equal(/^export /m.test(body), false, 'no export statement, only prose about one');
-  assert.equal(fs.statSync(written).mode & 0o777, 0o600);
+  if (!WINDOWS_HOST) assert.equal(fs.statSync(written).mode & 0o777, 0o600);
 });
 
 // Credits can lag the account. Losing the key must not lose the pairing too,
@@ -693,6 +700,7 @@ test('a topped-up account re-wires without sending anyone to a browser', async (
   const scripted = scriptedFetch([{ body: { email: 'm@example.com' } }]);
 
   const result = await auth.login({
+    platform: 'linux',
     managedRoot: root,
     settingsFile: settingsIn(root),
     env: {},
@@ -781,4 +789,89 @@ test('pairing can be forced past a token that would otherwise be reused', async 
   assert.equal(result.status, 'ready');
   assert.deepEqual(scripted.calls.map((call) => call.body.action), ['start', 'poll']);
   assert.equal(auth.readCredentials(root, {}).email, 'other@example.com');
+});
+
+test('a setup code redeems straight into establish: no browser, no polling', async () => {
+  const root = temporaryRoot();
+  const output = collector();
+  const opened = [];
+  const script = scriptedFetch([
+    { body: { token: 'egb_issued-token', email: 'member@example.com' } },
+  ]);
+  const result = await auth.redeemCode(' abcd-2345-wxyz ', {
+    managedRoot: root,
+    settingsFile: settingsIn(root),
+    env: {},
+    output,
+    hostname: 'laptop.local',
+    fetchImpl: script.fetchImpl,
+    now: () => 1_700_000_000_000,
+    openUrl: (url) => { opened.push(url); return true; },
+  });
+  assert.equal(result.status, 'ready');
+  assert.equal(opened.length, 0);
+  assert.equal(script.calls[0].body.action, 'redeem');
+  assert.equal(script.calls[0].body.code, 'abcd-2345-wxyz');
+  assert.equal(script.calls[0].body.label, 'laptop');
+  const stored = auth.readCredentials(root, {});
+  assert.equal(stored.token, 'egb_issued-token');
+  assert.equal(stored.email, 'member@example.com');
+  assert.match(output.text(), /Signed in as member@example\.com/);
+});
+
+test('a refused setup code surfaces the server message', async () => {
+  const root = temporaryRoot();
+  const script = scriptedFetch([
+    { ok: false, status: 409, body: { error: 'That setup code was already used' } },
+  ]);
+  await assert.rejects(
+    auth.redeemCode('ABCD-2345-WXYZ', {
+      managedRoot: root,
+      settingsFile: settingsIn(root),
+      env: {},
+      output: collector(),
+      fetchImpl: script.fetchImpl,
+    }),
+    /already used/,
+  );
+  assert.equal(auth.readCredentials(root, {}), null);
+});
+
+test('fetchPendingSetup claims the web payload and never fails an install', async () => {
+  const script = scriptedFetch([
+    { body: { payload: { name: 'nuclear-sim', goals: [] } } },
+  ]);
+  const payload = await auth.fetchPendingSetup(
+    'https://berkeley.mathetic.com', 'egb_t', { fetchImpl: script.fetchImpl });
+  assert.equal(payload.name, 'nuclear-sim');
+  assert.match(script.calls[0].url, /\/api\/engelbart-setup$/);
+  assert.equal(script.calls[0].body.action, 'pending');
+  assert.equal(script.calls[0].headers.Authorization, 'Bearer egb_t');
+
+  // Nothing waiting, and a server that cannot answer, both read as null.
+  assert.equal(await auth.fetchPendingSetup('https://berkeley.mathetic.com', 'egb_t', {
+    fetchImpl: scriptedFetch([{ body: { payload: null } }]).fetchImpl,
+  }), null);
+  assert.equal(await auth.fetchPendingSetup('https://berkeley.mathetic.com', 'egb_t', {
+    fetchImpl: scriptedFetch([{ ok: false, status: 500, body: {} }]).fetchImpl,
+  }), null);
+});
+
+test('openBrowser: Windows uses rundll32 so a query string is safe', () => {
+  const calls = [];
+  const spawnImpl = (cmd, args) => {
+    calls.push([cmd, args]);
+    return { unref() {}, on() {} };
+  };
+  const url = 'https://berkeley.mathetic.com/engelbart/setup?code=A&x=1';
+  assert.equal(auth.openBrowser(url, { platform: 'win32', spawnImpl }), true);
+  assert.deepEqual(calls, [['rundll32', ['url.dll,FileProtocolHandler', url]]]);
+});
+
+test('openBrowser: macOS uses open, Linux uses xdg-open', () => {
+  const calls = [];
+  const spawnImpl = (cmd, args) => { calls.push([cmd, args]); return { unref() {}, on() {} }; };
+  auth.openBrowser('https://x', { platform: 'darwin', spawnImpl });
+  auth.openBrowser('https://x', { platform: 'linux', spawnImpl });
+  assert.deepEqual(calls, [['open', ['https://x']], ['xdg-open', ['https://x']]]);
 });

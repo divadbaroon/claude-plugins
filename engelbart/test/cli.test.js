@@ -9,6 +9,7 @@ const test = require('node:test');
 
 const {
   UsageError,
+  importSetup,
   parseArgs,
   resolveChoices,
   run,
@@ -79,7 +80,7 @@ function fixturePackage(root) {
 test('parseArgs accepts only numeric choices and enforces goal dependency', () => {
   withExperimental('1', () => {
     assert.deepEqual(parseArgs(['--non-interactive', '--global-vault', '1', '--goals', '2']), {
-      command: 'install', globalVault: '1', goals: '2',
+      command: 'install', code: null, globalVault: '1', goals: '2',
       nonInteractive: true, dryRun: false, localOnly: false, noOpen: false,
       help: false,
     });
@@ -101,7 +102,7 @@ test('turning global Vault on is refused without HC_EXPERIMENTAL=1', () => {
     }
     // The inert choice keeps working, so scripted installs do not break.
     assert.deepEqual(parseArgs(['--global-vault', '2', '--goals', '2']), {
-      command: 'install', globalVault: '2', goals: '2',
+      command: 'install', code: null, globalVault: '2', goals: '2',
       nonInteractive: false, dryRun: false, localOnly: false, noOpen: false,
       help: false,
     });
@@ -405,6 +406,7 @@ test('a repaired authentication starts onboarding with the issued key', async ()
   const output = capture();
   const code = await run({
     argv: ['auth'],
+    platform: 'linux',
     output: output.stream,
     errorOutput: capture().stream,
     managedRoot: '/managed',
@@ -866,13 +868,35 @@ test('the installer runs with no question, says whose it is, and extends PATH', 
     env,
     output: said.stream,
     errorOutput: capture().stream,
+    platform: 'linux',
     deps: { spawn, homedir: '/home/x' },
   });
   assert.equal(ran.length, 1);
   assert.match(ran[0].join(' '), /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
   assert.match(said.read(), /Anthropic's official installer/);
   assert.doesNotMatch(said.read(), /\[Y\/n\]/);
-  assert.equal(result.PATH, `/home/x/.local/bin${path.delimiter}/usr/bin`);
+  // localBin is built with the host's path.join (backslashes on Windows), so
+  // construct the expectation the same way rather than hardcoding a POSIX path.
+  assert.equal(result.PATH, `${path.join('/home/x', '.local', 'bin')}${path.delimiter}/usr/bin`);
+});
+
+test('on Windows the installer is the PowerShell one-liner, not bash+curl', async () => {
+  const { installClaudeCode } = require('../lib/cli');
+  const ran = [];
+  const spawn = (command, args) => { ran.push([command, ...args]); return { status: 0 }; };
+  const said = capture();
+  const result = await installClaudeCode({
+    env: { PATH: 'C:\\Windows' },
+    output: said.stream,
+    errorOutput: capture().stream,
+    platform: 'win32',
+    deps: { spawn, homedir: 'C:\\Users\\x' },
+  });
+  assert.equal(ran[0][0], 'powershell');
+  assert.match(ran[0].join(' '), /irm https:\/\/claude\.ai\/install\.ps1 \| iex/);
+  assert.doesNotMatch(ran[0].join(' '), /bash|curl/);
+  assert.match(said.read(), /install\.ps1/);
+  assert.ok(result.PATH.startsWith(path.join('C:\\Users\\x', '.local', 'bin')));
 });
 
 test('an installer that fails leaves the env alone and says to install manually', async () => {
@@ -902,4 +926,150 @@ test('the standalone binary speaks of itself as engelbart, npm as npx', () => {
   } finally {
     setInvocation(before);
   }
+});
+
+// --- web-first onboarding: --code and the pending setup ----------------------
+
+test('--code takes a value, refuses --local-only, and reaches auth too', () => {
+  assert.equal(parseArgs(['--code', 'ABCD-2345-WXYZ']).code, 'ABCD-2345-WXYZ');
+  assert.equal(parseArgs(['auth', '--code', 'ABCD-2345-WXYZ']).command, 'auth');
+  assert.throws(() => parseArgs(['--code']), /requires a setup code/);
+  assert.throws(() => parseArgs(['--code', 'X', '--local-only']),
+    /--code connects an Engelbart account/);
+  assert.match(usage(),
+    /^ {2}--code XXXX-XXXX-XXXX connect with the setup code from \/engelbart\/setup$/m);
+});
+
+test('a setup code redeems, pulls the web project, and opens the workspace', async () => {
+  const redeemed = [];
+  let loggedIn = false;
+  let localSetupOpened = false;
+  const importedWith = [];
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--global-vault', '2'],
+    redeemCode: async (code) => {
+      redeemed.push(code);
+      return {
+        status: 'ready',
+        email: 'member@example.com',
+        claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+        stored: { token: 'egb_issued', email: 'member@example.com' },
+      };
+    },
+    login: async () => { loggedIn = true; throw new Error('login must not run'); },
+    fetchPendingSetup: async (base, token) => {
+      assert.equal(token, 'egb_issued');
+      return { name: 'nuclear-sim', goals: [] };
+    },
+    importSetup: (input) => {
+      importedWith.push(input.payload);
+      return { url: 'http://127.0.0.1:8123/', name: 'nuclear-sim' };
+    },
+    openSetup: async () => { localSetupOpened = true; return null; },
+  });
+  assert.deepEqual(redeemed, ['ABCD-2345-WXYZ']);
+  assert.equal(loggedIn, false);
+  assert.equal(localSetupOpened, false);
+  assert.equal(importedWith[0].name, 'nuclear-sim');
+  assert.match(printed, /Your project "nuclear-sim" is open in the workspace: http:\/\/127\.0\.0\.1:8123\//);
+});
+
+test('a dead setup code falls back to the device flow instead of dying', async () => {
+  let loggedIn = false;
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--global-vault', '2'],
+    redeemCode: async () => { throw new Error('That setup code was already used'); },
+    login: async () => {
+      loggedIn = true;
+      return {
+        status: 'ready',
+        email: 'member@example.com',
+        claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      };
+    },
+    fetchPendingSetup: async () => null,
+  });
+  assert.equal(loggedIn, true);
+  assert.match(printed, /Run `hc setup-ui` to set up your first project\./);
+});
+
+test('an account with nothing pending still gets the local setup page', async () => {
+  let localSetupOpened = false;
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--global-vault', '2'],
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => null,
+    openSetup: async () => { localSetupOpened = true; return 'http://127.0.0.1:9000/setup'; },
+  });
+  assert.equal(localSetupOpened, true);
+  assert.match(printed, /Setting up your first project: http:\/\/127\.0\.0\.1:9000\/setup/);
+});
+
+test('importSetup pipes the payload on stdin and reads the last URL line', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-import-'));
+  try {
+    const spawned = [];
+    const result = importSetup({
+      launcher: '/managed/bin/hc',
+      env: { HC_USE_API_KEY: '1' },
+      payload: { name: 'nuclear-sim' },
+      managedRoot: root,
+      errorOutput: capture().stream,
+      spawn: (command, args, options) => {
+        spawned.push({ command, args, input: options.input });
+        return { status: 0, stdout: 'note: hello\nhttp://127.0.0.1:8123/\n' };
+      },
+    });
+    assert.deepEqual(spawned[0].args, ['setup-import', '--stdin']);
+    assert.equal(JSON.parse(spawned[0].input).name, 'nuclear-sim');
+    assert.deepEqual(result, { url: 'http://127.0.0.1:8123/', name: 'nuclear-sim' });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a payload that cannot be materialized is saved, not lost', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-import-'));
+  try {
+    const errors = capture();
+    const result = importSetup({
+      launcher: '/managed/bin/hc',
+      env: {},
+      payload: { name: 'nuclear-sim' },
+      managedRoot: root,
+      errorOutput: errors.stream,
+      spawn: () => ({ status: 1, stderr: 'a project is already called that' }),
+    });
+    assert.deepEqual(result, { failed: true });
+    const saved = JSON.parse(fs.readFileSync(path.join(root, 'pending-setup.json'), 'utf8'));
+    assert.equal(saved.name, 'nuclear-sim');
+    assert.match(errors.read(), /a project is already called that/);
+    assert.match(errors.read(), /hc setup-import --file /);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the web project still opens when the shell needs a PATH line', async () => {
+  // A first install is exactly the machine the web flow exists for, and a
+  // first install always still needs the PATH step: the import spawns the
+  // launcher by absolute path, so it must not wait for that step.
+  const printed = await installOutput({ onPath: false, added: true }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--global-vault', '2'],
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => ({ name: 'nuclear-sim' }),
+    importSetup: () => ({ url: 'http://127.0.0.1:8123/', name: 'nuclear-sim' }),
+  });
+  assert.match(printed, /export PATH=/);
+  assert.match(printed, /Your project "nuclear-sim" is open in the workspace/);
 });

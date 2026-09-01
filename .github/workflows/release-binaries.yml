@@ -35,7 +35,7 @@ jobs:
           fi
       - run: npm test
         working-directory: engelbart
-      - run: scripts/build-binary.sh darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl
+      - run: scripts/build-binary.sh darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl windows-x64
         working-directory: engelbart
       # The compiled binary must verify and plan from its embedded wheel alone.
       - run: engelbart/dist/engelbart-linux-x64 install --dry-run
@@ -49,7 +49,7 @@ jobs:
             --latest=false \
             --title "$GITHUB_REF_NAME" \
             --notes "Standalone engelbart binaries (no Node, npm, or Python required). Install with: curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh" \
-            engelbart/dist/engelbart-* engelbart/scripts/install.sh
+            engelbart/dist/engelbart-* engelbart/scripts/install.sh engelbart/scripts/install.ps1
           gh release view engelbart-latest >/dev/null 2>&1 || \
             gh release create engelbart-latest \
               --latest=false \
@@ -57,7 +57,7 @@ jobs:
               --title "engelbart (latest)" \
               --notes "Rolling release: always the newest engelbart binaries. Versioned engelbart-v* releases are the record; this one exists so download URLs stay stable."
           gh release upload engelbart-latest --clobber \
-            engelbart/dist/engelbart-* engelbart/scripts/install.sh
+            engelbart/dist/engelbart-* engelbart/scripts/install.sh engelbart/scripts/install.ps1
         env:
           GH_TOKEN: ${{ github.token }}
       # The tag is the single release button: it ships the binaries and the

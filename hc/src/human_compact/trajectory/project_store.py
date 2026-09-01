@@ -63,6 +63,91 @@ PROJECT_DESCRIPTION_LIMIT = 8000
 PROJECT_NAME_LIMIT = 80
 SAVED_LIMIT = 200
 
+import re as _re
+
+_PROV_UUID = _re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", _re.I)
+
+
+def _prov_id(value) -> str:
+    text = str(value or "").strip()
+    return text if _PROV_UUID.match(text) else ""
+
+
+def _prov_list(value, fn, cap):
+    out = []
+    for entry in value if isinstance(value, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        mapped = fn(entry)
+        if mapped:
+            out.append(mapped)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def normalize_provenance(value) -> Dict[str, Any]:
+    """The project's structured research lineage, bounded to a known shape.
+
+    Stable canonical ids (lab / PI / student / paper / project) plus the
+    interest and idea that produced the project -- kept as DATA, never re-derived
+    from goal titles, so the workspace can later relate a project back to the
+    real researchers and work it came from. Returns ``{}`` when nothing valid
+    survives; a project without provenance simply has none.
+    """
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    interest = str(value.get("interest") or "").strip()[:400]
+    if interest:
+        out["interest"] = interest
+    area = value.get("area")
+    if isinstance(area, dict):
+        label = str(area.get("label") or "").strip()[:200]
+        if label:
+            out["area"] = {"label": label}
+    lab = value.get("lab")
+    if isinstance(lab, dict):
+        pi_id = _prov_id(lab.get("pi_id"))
+        lab_name = str(lab.get("lab_name") or "").strip()[:200]
+        if pi_id or lab_name:
+            out["lab"] = {"pi_id": pi_id, "lab_name": lab_name}
+    pi = value.get("pi")
+    if isinstance(pi, dict):
+        pid = _prov_id(pi.get("id"))
+        name = str(pi.get("name") or "").strip()[:200]
+        if pid or name:
+            out["pi"] = {"id": pid, "name": name}
+    students = _prov_list(
+        value.get("students"),
+        lambda s: ({"id": _prov_id(s.get("id")),
+                    "name": str(s.get("name") or "").strip()[:200]}
+                   if (_prov_id(s.get("id")) or s.get("name")) else None), 12)
+    if students:
+        out["students"] = students
+    papers = _prov_list(
+        value.get("papers"),
+        lambda p: ({"paper_id": _prov_id(p.get("paper_id") or p.get("id")),
+                    "title": str(p.get("title") or "").strip()[:200]}
+                   if _prov_id(p.get("paper_id") or p.get("id")) else None), 8)
+    if papers:
+        out["papers"] = papers
+    projects = _prov_list(
+        value.get("projects"),
+        lambda p: ({"id": _prov_id(p.get("id")),
+                    "title": str(p.get("title") or "").strip()[:200]}
+                   if (_prov_id(p.get("id")) or p.get("title")) else None), 8)
+    if projects:
+        out["projects"] = projects
+    idea = value.get("idea")
+    if isinstance(idea, dict):
+        title = str(idea.get("title") or "").strip()[:200]
+        inspired = str(idea.get("inspired") or "").strip()[:200]
+        if title or inspired:
+            out["idea"] = {"title": title, "inspired": inspired}
+    return out
+
 
 # --- what the reader keeps here, without giving it to anybody ----------------
 #
@@ -404,6 +489,13 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     identity = section.get("id")
     if isinstance(identity, str) and identity:
         out["id"] = identity[:64]
+    # The structured research provenance. Read back as well as written, for the
+    # same reason tree_session is: a regeneration rebuilds the record from this
+    # authored half, and a key on only one side of the whitelist is dropped by
+    # the next unrelated write.
+    provenance = normalize_provenance(section.get("provenance"))
+    if provenance:
+        out["provenance"] = provenance
     # Where the project's goals are. Read back as well as written: this is
     # the authored half a regeneration rebuilds the record from, and a key
     # written on one side of the whitelist and not the other is dropped by
@@ -476,6 +568,13 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     identity = authored.get("id")
     if isinstance(identity, str) and identity:
         section["id"] = identity[:64]
+    # The project's structured research provenance (canonical lab / PI / student
+    # / paper / project ids). Carried explicitly through the whitelist, like the
+    # other structured keys, so an unrelated edit does not drop it. Omitted when
+    # empty, so a plain project's record is unchanged.
+    provenance = normalize_provenance(authored.get("provenance"))
+    if provenance:
+        section["provenance"] = provenance
     # Which store holds the project's goals. Carried through explicitly: this
     # section is rebuilt from a whitelist on every write, so a key merely
     # present in the record it was read from would be dropped by the next
@@ -906,6 +1005,10 @@ def _goal_record(goal: Dict[str, Any], goals: List[Dict[str, Any]],
         "status": str(goal.get("status") or "active"),
         "priority": str(goal.get("priority") or "normal"),
         "origin": str(goal.get("origin") or ""),
+        # Which path stage this goal groups under in the workspace, or "" for
+        # an ordinary/legacy goal. The Project Path view reads this; a tree
+        # with none reads exactly as the plain goal tree it always was.
+        "phase": str(goal.get("phase") or ""),
         # How this goal stands to the project's objective, and the objective
         # it was judged against -- a verdict outlives the sentence that made
         # it, so the two travel together.

@@ -6,6 +6,7 @@ const {
   ensureLauncherOnPath,
   install,
   inspectVendor,
+  spawnableLauncher,
   supportedTarget,
 } = require('./installer');
 const auth = require('./auth');
@@ -28,6 +29,7 @@ Commands:
                         credit; use as: eval "$(${invocation()} env)"
 
 Options:
+  --code XXXX-XXXX-XXXX connect with the setup code from /engelbart/setup
   --local-only          install without connecting an Engelbart account
   --non-interactive     install locally without opening a browser
   --no-open             install without opening the setup page
@@ -55,6 +57,7 @@ function numericChoice(flag, value) {
 function parseArgs(argv) {
   const result = {
     command: 'install',
+    code: null,
     globalVault: null,
     goals: null,
     nonInteractive: false,
@@ -78,6 +81,10 @@ function parseArgs(argv) {
     // `--no-login` was this flag's name before the rename; both spellings
     // mean the same thing, so a script written against either still works.
     else if (arg === '--local-only' || arg === '--no-login') result.localOnly = true;
+    else if (arg === '--code') {
+      if (index + 1 >= argv.length) throw new UsageError('--code requires a setup code');
+      result.code = String(argv[index += 1]).trim();
+    }
     else if (arg === '--global-vault' || arg === '--goals') {
       if (index + 1 >= argv.length) throw new UsageError(`${arg} requires 1 or 2`);
       const value = numericChoice(arg, argv[index += 1]);
@@ -89,6 +96,9 @@ function parseArgs(argv) {
   }
   if (result.globalVault === '2' && result.goals === '1') {
     throw new UsageError('--goals 1 requires --global-vault 1');
+  }
+  if (result.code && result.localOnly) {
+    throw new UsageError('--code connects an Engelbart account; drop --local-only');
   }
   // The flags still parse, so scripted installs keep their inert '2'; only
   // turning the global layer on is withheld from this release.
@@ -135,8 +145,16 @@ function setupEnvironment(account, env) {
   // makes the provider keep it instead of falling back, so setup fails on a
   // dead key while the member's own working Claude login sits right there. Out
   // of credit has to mean "setup runs on your account", the same fallback the
-  // credential helper takes when it unwires itself.
-  if (auth.spent(claude)) return { ...env };
+  // credential helper takes when it unwires itself. The ambient shell may
+  // still carry that same dead key -- `engelbart env` exported it -- so a
+  // plain copy of env is not clean enough: strip the wiring too.
+  if (auth.spent(claude)) {
+    const clean = { ...env };
+    delete clean.ANTHROPIC_AUTH_TOKEN;
+    delete clean.ANTHROPIC_BASE_URL;
+    delete clean.HC_USE_API_KEY;
+    return clean;
+  }
   return {
     ...env,
     ANTHROPIC_BASE_URL: claude.baseUrl,
@@ -151,7 +169,10 @@ function setupEnvironment(account, env) {
 async function runAccountCommand(command, options, authDeps, deps, errorOutput) {
   const output = authDeps.output;
   if (command === 'auth') {
-    const result = await (deps.login || auth.login)(authDeps);
+    // A setup code stands in for the whole device flow: no browser, no poll.
+    const result = options.code
+      ? await (deps.redeemCode || auth.redeemCode)(options.code, authDeps)
+      : await (deps.login || auth.login)(authDeps);
     if (result.status !== 'ready') return 1;
     const setupEnv = setupEnvironment(result, authDeps.env);
     if (!setupEnv) {
@@ -159,7 +180,10 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
         + `Run \`${invocation()} auth\` again after the missing connection is ready.\n`);
       return 0;
     }
-    const launcher = deps.launcher || path.join(authDeps.managedRoot, 'bin', 'hc');
+    // On Windows the stable bin\hc.cmd shim is not directly spawnable; resolve
+    // the runtime's real .exe. On POSIX this is the bin/hc symlink as before.
+    const launcher = deps.launcher
+      || spawnableLauncher(authDeps.managedRoot, 'hc', deps.platform || process.platform);
     const opened = options.noOpen
       ? null
       : await (deps.openSetup || openSetup)({
@@ -283,7 +307,7 @@ async function run(deps = {}) {
     if (!options.dryRun && !env.CI
         && !(deps.claudeOnPath || claudeOnPath)(env, deps.spawn)) {
       env = await (deps.installClaudeCode || installClaudeCode)({
-        env, output, errorOutput, deps,
+        env, output, errorOutput, platform, deps,
       });
       authDeps.env = env;
     }
@@ -311,12 +335,17 @@ async function run(deps = {}) {
       });
       // Only promise `hc` in this terminal once the shell can actually find it.
       const launcher = installed && installed.launcher;
-      launcherPath = launcher || '';
+      // PATH guidance points at the stable launcher's dir; spawning setup uses a
+      // directly-spawnable target (the runtime .exe on Windows, the symlink on POSIX).
+      launcherPath = launcher
+        ? spawnableLauncher(managedRoot, 'hc', platform)
+        : '';
       if (launcher) {
         reach = (deps.ensureLauncherOnPath || ensureLauncherOnPath)({
           launcherDir: path.dirname(launcher),
           env,
           homedir,
+          platform,
         });
       }
     }
@@ -329,10 +358,28 @@ async function run(deps = {}) {
     }
     // The install stands on its own. An account adds the hosted Claude
     // credits to it, so failing to connect one is reported, never fatal.
+    // A setup code is the one way in that needs no browser and no prompt,
+    // which is why it lifts the --non-interactive gate.
     let account = null;
-    if (!options.dryRun && !options.localOnly && !options.nonInteractive) {
+    if (!options.dryRun && !options.localOnly
+        && (options.code || !options.nonInteractive)) {
       const stored = (deps.readCredentials || auth.readCredentials)(managedRoot, authDeps.env);
-      if (stored) {
+      if (options.code) {
+        // An explicit code wins over stored credentials: rebinding this
+        // machine to the account that issued the code is what the member
+        // asked for by pasting it. Said out loud when it changes accounts.
+        try {
+          account = await (deps.redeemCode || auth.redeemCode)(options.code, authDeps);
+        } catch (error) {
+          errorOutput.write(`\nCould not redeem that setup code: ${error.message}\n`);
+        }
+        if (account && stored && stored.email && account.email
+            && stored.email !== account.email) {
+          output.write(`  note         this machine was connected to ${stored.email}; `
+            + `it is now connected to ${account.email}\n`);
+        }
+      }
+      if (!account && stored) {
         output.write(`  account      ${stored.email || 'connected'}\n`);
         // The key is not on this disk any more, so a reinstall cannot read one
         // back out of the stored record -- it has to ask for a fresh one. The
@@ -353,7 +400,7 @@ async function run(deps = {}) {
             projectConfigured: stored.projectConfigured,
           };
         }
-      } else if (canPrompt(deps)) {
+      } else if (!account && canPrompt(deps)) {
         try {
           account = await (deps.login || auth.login)(authDeps);
         } catch (error) {
@@ -372,7 +419,11 @@ async function run(deps = {}) {
       : '\nInstalled. Chats are recorded locally; nothing is analyzed or '
         + 'injected until you run /bart in a chat.\n');
     if (reach && !reach.onPath) {
-      output.write(reach.added
+      output.write(platform === 'win32'
+        // Windows PATH is a per-user registry value, not a profile file: setx
+        // writes it for new terminals; the caller still needs it in this one.
+        ? `\nAdd the launcher to your PATH (takes effect in new terminals):\n\n    ${reach.line}\n`
+        : reach.added
         ? `\nRun this once in this terminal (new terminals get it from ${reach.profile}):\n\n    ${reach.line}\n`
         : reach.present
         ? `\nThis terminal predates ${reach.profile}. Run this once here:\n\n    ${reach.line}\n`
@@ -393,7 +444,32 @@ async function run(deps = {}) {
     // cannot answer. Pass that freshly-issued key to the detached setup server
     // as well as wiring Claude Code, so a pre-existing foreign apiKeyHelper
     // cannot make onboarding silently use the wrong account.
-    const opened = (accountReady && !needsPathStep && launcherPath && !options.noOpen)
+    // A project approved on the web comes first: the account may hold the
+    // setup this member already finished in the browser, and asking them to
+    // describe the work a second time would waste the conversation they had.
+    // The claim is single-use on the server, so a payload that cannot be
+    // materialized is written to disk rather than lost. Unlike the setup
+    // page below, this does not wait for the PATH step: the launcher is
+    // spawned by its absolute path, and a first install -- the machine the
+    // web flow exists for -- always still needs that step.
+    let imported = null;
+    if (accountReady && launcherPath
+        && account && account.stored && account.stored.token) {
+      const payload = await (deps.fetchPendingSetup || auth.fetchPendingSetup)(
+        auth.apiBase(authDeps.env), account.stored.token, authDeps);
+      if (payload) {
+        imported = (deps.importSetup || importSetup)({
+          launcher: launcherPath,
+          env: setupEnv,
+          payload,
+          managedRoot,
+          errorOutput,
+          spawn: deps.spawn,
+        });
+      }
+    }
+    const opened = (!imported && accountReady && !needsPathStep && launcherPath
+                    && !options.noOpen)
       ? await (deps.openSetup || openSetup)({ launcher: launcherPath, env: setupEnv,
                                               output, spawn: deps.spawn })
       : null;
@@ -401,6 +477,12 @@ async function run(deps = {}) {
       output.write(`\nNext: Run \`${invocation()} auth\` to finish connecting your `
         + 'Engelbart account, Claude credits, and Supabase sync. Setup starts '
         + 'after that.\n');
+    } else if (imported && imported.url) {
+      output.write(`\nNext: Your project${imported.name ? ` "${imported.name}"` : ''}`
+        + ` is open in the workspace: ${imported.url}\n`);
+    } else if (imported) {
+      // The recovery instructions are already on stderr; repeating them as
+      // a "Next" would bury the command they name.
     } else {
       const next = opened
         ? `Setting up your first project: ${opened}`
@@ -409,7 +491,7 @@ async function run(deps = {}) {
         : 'Run `hc setup-ui` to set up your first project.';
       output.write(`\n${needsPathStep ? 'Then' : 'Next'}: ${next}\n`);
     }
-    if (opened) {
+    if (opened || (imported && imported.url)) {
       output.write('Already have a project? Open its chat with `claude -r`'
         + ' and type /bart.\n');
     }
@@ -428,6 +510,7 @@ async function run(deps = {}) {
 }
 
 const CLAUDE_INSTALL_URL = 'https://claude.ai/install.sh';
+const CLAUDE_INSTALL_URL_PS1 = 'https://claude.ai/install.ps1';
 
 /* Does `claude` answer on this PATH? A throwing spawn and a nonzero exit both
  * mean no; install() re-checks with the full version gate afterwards, so this
@@ -459,21 +542,69 @@ function claudeOnPath(env, spawn) {
  * then judges the result. An installer that fails returns the env
  * unchanged and the previous error path says what to do.
  */
-async function installClaudeCode({ env, output, errorOutput, deps = {} }) {
+async function installClaudeCode({ env, output, errorOutput, platform = process.platform, deps = {} }) {
+  const windows = platform === 'win32';
+  const url = windows ? CLAUDE_INSTALL_URL_PS1 : CLAUDE_INSTALL_URL;
   output.write('\nClaude Code is required and was not found -- installing it '
-    + `with Anthropic's official installer (${CLAUDE_INSTALL_URL})...\n\n`);
+    + `with Anthropic's official installer (${url})...\n\n`);
   const run = deps.spawn || require('child_process').spawnSync;
-  const done = run('bash', ['-c', `curl -fsSL ${CLAUDE_INSTALL_URL} | bash`], {
-    env,
-    stdio: 'inherit',
-  });
+  // Windows ships no bash; its official installer is a PowerShell one-liner.
+  const [command, args] = windows
+    ? ['powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${url} | iex`]]
+    : ['bash', ['-c', `curl -fsSL ${url} | bash`]];
+  const done = run(command, args, { env, stdio: 'inherit' });
   if (!done || done.error || done.status !== 0) {
     errorOutput.write('\nThe Claude Code installer did not finish; install it '
       + 'manually and re-run this command.\n');
     return env;
   }
+  // The installer wires new shells, not this process. Point PATH at the dir it
+  // drops `claude` into so install()'s preflight can find it right away; the
+  // native installer uses ~/.local/bin on every platform, Windows included.
   const localBin = path.join(deps.homedir || os.homedir(), '.local', 'bin');
   return { ...env, PATH: `${localBin}${path.delimiter}${env.PATH || ''}` };
+}
+
+/* Materialize a project the member approved on the web.
+ *
+ * The launcher does the work -- `hc setup-import` reads the payload on
+ * stdin, creates the project and its goal tree through the same commit path
+ * the local setup page uses, starts the workspace on it, and prints its URL
+ * as the last line, the same contract `setup-ui` keeps. The claim that
+ * fetched this payload was single-use, so a payload that cannot be
+ * materialized (a duplicate project name, a broken runtime) is written to
+ * disk with the command that retries it rather than lost.
+ */
+function importSetup({ launcher, env, payload, managedRoot, errorOutput, spawn }) {
+  const run = spawn || require('child_process').spawnSync;
+  let done;
+  try {
+    done = run(launcher, ['setup-import', '--stdin'], {
+      env,
+      encoding: 'utf8',
+      timeout: 60000,
+      input: JSON.stringify(payload),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (error) {
+    done = { status: -1, stderr: error.message };
+  }
+  if (done && done.status === 0) {
+    const said = String(done.stdout || '').trim().split('\n');
+    const url = said.reverse().find((line) => line.startsWith('http://127.0.0.1:'));
+    if (url) return { url, name: String((payload && payload.name) || '') };
+  }
+  const file = path.join(managedRoot, 'pending-setup.json');
+  try {
+    require('fs').writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+    const detail = String((done && (done.stderr || done.stdout)) || '').trim();
+    if (detail) errorOutput.write(`\n${detail}\n`);
+    errorOutput.write(`\nCould not open the project you set up on the web. It is saved at\n`
+      + `${file};\nfix the issue above, then run:\n\n    hc setup-import --file ${file}\n`);
+  } catch (error) {
+    errorOutput.write(`\nCould not import or save your web setup: ${error.message}\n`);
+  }
+  return { failed: true };
 }
 
 /* Open the setup page for someone who has just installed.
@@ -512,6 +643,7 @@ module.exports = {
   UsageError,
   canPrompt,
   claudeOnPath,
+  importSetup,
   installClaudeCode,
   numericChoice,
   openSetup,

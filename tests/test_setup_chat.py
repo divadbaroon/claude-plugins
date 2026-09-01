@@ -613,6 +613,8 @@ class FromChatTests(unittest.TestCase):
         # With no Engelbart account record, the failure can prescribe a retry
         # but cannot claim which account paid for the failed request. The
         # spent-credit case below carries that account context explicitly.
+        self._account({})
+
         class Boom:
             def generate_json(self, prompt):
                 raise RuntimeError("boom")
@@ -1647,17 +1649,18 @@ class PageTests(unittest.TestCase):
     def server(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        srv = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.H)
-        ui._configure_server(srv, Path(tmp.name), False)
-        thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield "http://127.0.0.1:%d" % srv.server_address[1]
-        finally:
-            srv.follow_stop.set()
-            srv.shutdown()
-            srv.server_close()
-            thread.join(timeout=2)
+        with mock.patch.dict(os.environ, {"CLAUDE_VAULT_DIR": tmp.name}):
+            srv = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.H)
+            ui._configure_server(srv, Path(tmp.name), False)
+            thread = threading.Thread(target=srv.serve_forever, daemon=True)
+            thread.start()
+            try:
+                yield "http://127.0.0.1:%d" % srv.server_address[1]
+            finally:
+                srv.follow_stop.set()
+                srv.shutdown()
+                srv.server_close()
+                thread.join(timeout=2)
 
     def get(self, url):
         with urllib.request.urlopen(url, timeout=10) as answer:

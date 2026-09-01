@@ -15,12 +15,21 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
+from ..platform_compat import IS_WINDOWS, maybe_fchmod
+
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
 
 def _chmod_nofollow(path: Path, mode: int, *, directory: bool = False) -> None:
+    # Windows has no POSIX mode bits to tighten (see maybe_fchmod), and its
+    # CRT cannot open a directory descriptor at all, so the os.open below
+    # raises PermissionError on every directory. (Python 3.13 grew an
+    # os.fchmod on Windows, so its absence is not the test.) Privacy there
+    # comes from the tree living under the user's own profile.
+    if IS_WINDOWS:
+        return
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -28,7 +37,7 @@ def _chmod_nofollow(path: Path, mode: int, *, directory: bool = False) -> None:
         flags |= os.O_DIRECTORY
     descriptor = os.open(path, flags)
     try:
-        os.fchmod(descriptor, mode)
+        maybe_fchmod(descriptor, mode)
     finally:
         os.close(descriptor)
 
@@ -114,7 +123,7 @@ def atomic_write_text(path: Path, text: str, *, root: Optional[Path] = None,
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     temporary = Path(temporary_name)
     try:
-        os.fchmod(descriptor, FILE_MODE)
+        maybe_fchmod(descriptor, FILE_MODE)
         with os.fdopen(descriptor, "w", encoding=encoding) as stream:
             descriptor = -1
             stream.write(text)
@@ -147,7 +156,7 @@ def open_private_append(path: Path, *, root: Optional[Path] = None,
         flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags, FILE_MODE)
     try:
-        os.fchmod(descriptor, FILE_MODE)
+        maybe_fchmod(descriptor, FILE_MODE)
         kwargs = {} if binary else {"encoding": "utf-8"}
         with os.fdopen(descriptor, "ab" if binary else "a", **kwargs) as stream:
             descriptor = -1
@@ -166,7 +175,7 @@ def touch_private(path: Path, *, root: Optional[Path] = None) -> Path:
         flags |= os.O_NOFOLLOW
     descriptor = os.open(path, flags, FILE_MODE)
     try:
-        os.fchmod(descriptor, FILE_MODE)
+        maybe_fchmod(descriptor, FILE_MODE)
     finally:
         os.close(descriptor)
     return path

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import discover as D
 from .secure_io import atomic_write_json, atomic_write_text, secure_dir
+from ..platform_compat import pid_alive
 
 
 def trajdir():
@@ -36,11 +37,7 @@ def failed():
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError, ValueError, TypeError):
-        return False
+    return pid_alive(pid)
 
 
 def acquire_lock(wait_s=0):

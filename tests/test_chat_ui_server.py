@@ -1324,6 +1324,51 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_notes_use_native_text_geometry_while_editing_and_pasting(self):
+        """The caret and visible text come from the same textarea on focus."""
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+
+        pasted = "# Pasted heading\n\n- first line\n- second line"
+        with server_for(self.a) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome,
+                headless=True,
+                args=["--disable-background-networking"],
+            )
+            try:
+                context = browser.new_context(
+                    viewport={"width": 1400, "height": 900},
+                    permissions=["clipboard-read", "clipboard-write"],
+                )
+                page = context.new_page()
+                page.goto(url, wait_until="domcontentloaded")
+                self.open_notes(page)
+                editor = page.locator(self.EDITOR)
+                rendered = page.locator(".hc-notes-render")
+                expect(editor).to_be_visible(timeout=10_000)
+
+                editor.focus()
+                page.evaluate("text => navigator.clipboard.writeText(text)",
+                              pasted)
+                page.keyboard.press("Meta+V")
+                expect(editor).to_have_value(pasted)
+                expect(editor).not_to_have_css("color", "rgba(0, 0, 0, 0)")
+                expect(editor).to_have_css("overflow-y", "auto")
+                expect(rendered).to_have_css("visibility", "hidden")
+
+                editor.blur()
+                expect(rendered).to_have_css("visibility", "visible")
+                self.assertIn("Pasted heading", rendered.text_content())
+                self.assertIn("first line", rendered.text_content())
+            finally:
+                browser.close()
+
     def test_a_line_typed_under_a_heading_outlives_the_page_and_the_server(self):
         try:
             from playwright.sync_api import expect, sync_playwright

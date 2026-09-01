@@ -12,6 +12,10 @@ import uuid
 from importlib import resources
 from pathlib import Path
 
+from .platform_compat import (
+    detached_popen_kwargs, pid_alive, replace_process, terminate_pid,
+)
+
 HOME = Path(os.environ.get("HC_HOME", Path.home()))
 SKILLS_DIR = HOME / ".claude" / "skills" / "vault"
 BART_SKILL_DIR = HOME / ".claude" / "skills" / "bart"
@@ -36,8 +40,8 @@ MANAGED_MARKER = ".human-compact-managed.json"
 _ASSET_FILES = {
     "vault": {
         ".claude-plugin/plugin.json", "README.md", "hooks/hooks.json",
-        "hooks/hooks.experimental.json", "scripts/chat-hook.sh",
-        "scripts/vault-backfill.sh", "scripts/vault-hook.sh",
+        "hooks/hooks.experimental.json", "scripts/chat-hook.cjs",
+        "scripts/hc-runtime.cjs", "scripts/vault-hook.cjs",
     },
     "bart": {"SKILL.md"},
 }
@@ -51,6 +55,7 @@ _LAUNCH_COMMAND_HELP = (
     ("setup", "noninteractive npm onboarding"),
     ("chat-ui", "goal tree for one Claude chat"),
     ("setup-ui", "set a first project up, before there is a chat"),
+    ("setup-import", "create a project from an approved web setup"),
     ("supabase", "connect this workspace to your own Supabase"),
     ("chat-serve", "session-scoped goal server (internal)"),
     ("chat-hook", "Claude Code chat-state hook (internal)"),
@@ -383,19 +388,16 @@ def install_shim():
 
 
 def run_backfill(assume_yes=False):
-    script = SKILLS_DIR / "scripts" / "vault-backfill.sh"
-    dry = subprocess.run(["bash", str(script), "--dry-run"],
-                         capture_output=True, text=True)
-    if dry.returncode != 0:
-        raise RuntimeError(dry.stderr.strip() or dry.stdout.strip() or
-                           "Vault backfill preview failed")
-    tail = (dry.stdout.strip().splitlines() or ["backfill: nothing found"])[-1]
-    say(f"preview: {tail}")
-    if "0 imported" in tail or "nothing found" in tail:
+    # Import through the runtime's own idempotent backfill rather than a bash
+    # script: it needs no jq/coreutils and so runs the same on every OS. The
+    # caller has already gathered consent for the retroactive import.
+    from . import global_vault
+    counts = global_vault.backfill()
+    if not counts["imported"] and not counts["skipped"]:
         say("nothing new to import")
         return
-    if assume_yes or ask("Import these now?"):
-        subprocess.run(["bash", str(script)], check=True)
+    say(f"history import: {counts['imported']} imported, "
+        f"{counts['skipped']} already present")
 
 
 def backup_main():
@@ -1130,7 +1132,9 @@ def work_main(argv=None):
     # is about to create to this goal. A stale claim would bind the wrong one.
     env[AE.GOAL_ENV] = goal["id"]
     AE.clear_claim(trajdir)
-    os.execvpe(claude, [claude] + passthrough, env)
+    # POSIX replaces this process with claude; Windows cannot, so it runs claude
+    # to completion and exits with its status. Either way this call never returns.
+    replace_process(claude, passthrough, env)
     return 0
 
 
@@ -1388,13 +1392,7 @@ def _write_server_registry(session_dir, value):
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return pid_alive(pid)
 
 
 def _package_code_stamp():
@@ -1467,7 +1465,7 @@ def _stop_chat_server(record, timeout=6.0):
     if pid is None:
         return False
     try:
-        os.kill(pid, signal.SIGTERM)
+        terminate_pid(pid)
     except OSError:
         # Already gone, or not ours to signal. Only the first is a success.
         return not _pid_alive(pid)
@@ -1764,6 +1762,68 @@ def setup_ui_main(argv=None):
             webbrowser.open(page)
 
 
+def setup_import_main(argv=None):
+    """Create the project a member approved on the web, then open it.
+
+    The conversation already happened -- on berkeley.mathetic.com, before
+    this machine had Engelbart at all -- so there is nothing to ask here.
+    The payload is the web page's saved answers in setup_chat's own commit
+    vocabulary; commit() re-normalizes every field, so a payload from a
+    different (or hostile) origin can make at most a project with odd text
+    in it, never anything else. On success the one line on stdout is the
+    workspace URL, which is the same contract setup-ui keeps with the
+    installer that spawns it.
+    """
+    import contextlib
+    import io
+    import json
+    import webbrowser
+    ap = argparse.ArgumentParser(
+        prog="hc setup-import",
+        description="Create a project from an approved web setup.")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", help="path to the saved setup payload")
+    source.add_argument("--stdin", action="store_true",
+                        help="read the payload from standard input")
+    ap.add_argument("--port", type=int, default=0)
+    ap.add_argument("--no-open", action="store_true")
+    args = ap.parse_args(argv or [])
+    try:
+        raw = sys.stdin.read() if args.stdin else Path(args.file).read_text()
+        payload = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"hc: could not read the setup payload: {exc}\n")
+        raise SystemExit(1)
+    if not isinstance(payload, dict):
+        sys.stderr.write("hc: the setup payload is not an object\n")
+        raise SystemExit(1)
+    from .trajectory import setup_chat as SETUP
+    result = SETUP.commit(None, payload.get("name"), payload.get("plan"),
+                          payload.get("goals"), payload.get("chosen"),
+                          payload.get("todos"), payload.get("subgoals") or [],
+                          bind="", paper=payload.get("paper"),
+                          provenance=payload.get("provenance"))
+    if not result.get("ok"):
+        sys.stderr.write(f"hc: {result.get('error') or 'could not create the project'}\n")
+        raise SystemExit(1)
+    # The workspace launcher prints one line, the URL; it is the mechanism
+    # here rather than the message, so it is captured, not printed twice.
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        chat_ui_main(["--session", result["tree_session"], "--cwd",
+                      result["cwd"], "--port", str(args.port), "--no-open"])
+    url = next((line.strip() for line in reversed(said.getvalue().splitlines())
+                if line.strip().startswith("http://127.0.0.1:")), "")
+    if not url:
+        sys.stderr.write("hc: the project was created but its workspace "
+                         "did not start; run `hc setup-ui` to open it\n")
+        raise SystemExit(1)
+    print(url)
+    if not args.no_open:
+        with contextlib.suppress(Exception):
+            webbrowser.open(url)
+
+
 def chat_ui_main(argv=None):
     """Open or reuse the detached UI belonging to one Claude chat."""
     import webbrowser
@@ -1878,8 +1938,8 @@ def chat_ui_main(argv=None):
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     close_fds=True,
-                    start_new_session=True,
                     env=child_env,
+                    **detached_popen_kwargs(),
                 )
             # Keep the Popen object alive while this short-lived parent polls
             # readiness. Tests can reap it explicitly; the real CLI exits and
@@ -1983,6 +2043,8 @@ def hc_main():
         chat_ui_main(rest)
     elif cmd == "setup-ui":
         setup_ui_main(rest)
+    elif cmd == "setup-import":
+        setup_import_main(rest)
     elif cmd == "supabase":
         raise SystemExit(supabase_main(rest) or 0)
     elif cmd == "chat-serve":

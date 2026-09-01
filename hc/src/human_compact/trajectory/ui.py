@@ -19,6 +19,7 @@ from importlib import resources
 from pathlib import Path
 
 from . import agent_exec as AE, chat_state as CS, goals as GM, state
+from ..platform_compat import detached_popen_kwargs, pid_alive, terminate_pid
 from . import autosync as AUTOSYNC
 from . import brainstorm as BRAIN
 from . import preview as PREVIEW
@@ -37,6 +38,7 @@ SERVER_REGISTRY = "server.json"
 # runs to several megabytes; twenty-five is room for any of them and a wall
 # against anything else.
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+MAX_PAPER_BYTES = 40 * 1024 * 1024
 ATTACHMENT_TYPES = {"image/png": ".png", "image/jpeg": ".jpg",
                     "image/gif": ".gif", "image/webp": ".webp"}
 
@@ -69,7 +71,8 @@ EXPERIMENTAL_ROUTES = ("/api/briefing", "/api/briefings", "/api/plan",
 GOAL_OPS = frozenset({
     "rename_goal", "set_status", "set_priority", "set_notes", "set_sources",
     "set_opening", "set_description", "toggle_todo", "set_relevance",
-    "add_todo", "set_understanding",
+    "add_todo", "set_understanding", "resolve_check", "set_document",
+    "set_paper",
 })
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
 
@@ -154,13 +157,7 @@ def _write_registry(trajdir, url):
 
 
 def _pid_alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except PermissionError:
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+    return pid_alive(pid)
 
 
 def _server_identity(record):
@@ -214,7 +211,7 @@ def stop_existing(trajdir, timeout=6.0):
         _registry_path(trajdir).unlink(missing_ok=True)
         return None
     try:
-        os.kill(current["pid"], signal.SIGTERM)
+        terminate_pid(current["pid"])
     except OSError:
         return None
     deadline = time.monotonic() + timeout
@@ -223,10 +220,7 @@ def stop_existing(trajdir, timeout=6.0):
             break
         time.sleep(0.05)
     else:
-        try:
-            os.kill(current["pid"], signal.SIGKILL)
-        except OSError:
-            pass
+        terminate_pid(current["pid"], force=True)
     _registry_path(trajdir).unlink(missing_ok=True)
     return current
 
@@ -464,7 +458,7 @@ def _spawn_analysis(provider, trajdir):
         subprocess.Popen(
             [sys.executable, "-m", "human_compact.cli", "analyze"],
             stdin=subprocess.DEVNULL, stdout=stream, stderr=subprocess.STDOUT,
-            close_fds=True, start_new_session=True)
+            close_fds=True, **detached_popen_kwargs())
 
 
 def _first(value, default=""):
@@ -2510,6 +2504,15 @@ def _payload(trajdir=None, chat_scoped=None):
             payload["build_session"] = None
             payload["build_cost"] = None
             payload["build_runs"] = {}
+    # Whether the pool's credit just ran out -- asked outside the state lock
+    # (it is a real round trip, rate-limited inside to every ten minutes)
+    # and reported once per exhaustion, so the account flip the credential
+    # helper makes silently gets said out loud in the browser.
+    try:
+        from .. import claude_account
+        payload["credit_alert"] = claude_account.credit_alert(trajdir)
+    except Exception:  # noqa: BLE001 - a poll must not fail over a banner
+        payload["credit_alert"] = None
     return payload
 
 
@@ -2597,7 +2600,10 @@ def _preview_op(op, trajdir, chat_scoped):
     if not cwd:
         return {"ok": False, "error": "this chat is not bound to a project"}
     if kind == "preview_configure":
-        return PREVIEW.configure(root, cwd)
+        # The pane asking on its own may only have the free, read-only
+        # detection; the model fallback stays behind the reader's click.
+        return PREVIEW.configure(root, cwd,
+                                 detect_only=bool(op.get("auto")))
     if kind == "preview_pick":
         return PREVIEW.set_primary(root, cwd, str(op.get("profile_id") or ""))
     if kind == "preview_start":
@@ -2622,8 +2628,11 @@ def _preview_op(op, trajdir, chat_scoped):
     if kind == "preview_show_ui":
         # One press for "I want to see it": the steps that have to happen
         # first, then the thing that serves. It answers not_ready rather
-        # than starting something that cannot end in a page.
-        return PREVIEW.show_ui(root, cwd, session_id=_session_id)
+        # than starting something that cannot end in a page. The auto flag
+        # is the pane asking unasked, which show_ui allows only for the
+        # exact command watched working here before.
+        return PREVIEW.show_ui(root, cwd, session_id=_session_id,
+                               auto=bool(op.get("auto")))
     if kind == "preview_stop":
         return PREVIEW.stop(cwd, root, _session_id)
     if kind == "preview_forget":
@@ -2678,6 +2687,129 @@ def _preview_state(trajdir, chat_scoped, goal_id="", todo_id=""):
     out["goal_id"] = goal_id
     out["todo_id"] = todo_id
     return out
+
+
+def _understanding_check_prompt(row_text, goal_title, goal_desc, log_text):
+    """The classifier prompt: conservative, and grounded only in real output."""
+    lines = [
+        "You are a conservative tutor embedded in a build tool. A build step",
+        "just finished. Decide whether it is worth interrupting the user with",
+        "ONE short understanding question, and if so write it.",
+        "",
+        "STRONG DEFAULT: no question. Routine mechanical work -- add a button,",
+        "rename a label, change spacing or colour, create a file, install a",
+        "dependency, wire a simple control, move a component -- must return",
+        "meaningful=false. Only conceptually meaningful work qualifies: choosing",
+        "features/variables, comparing approaches or algorithms, choosing a",
+        "preprocessing method, interpreting a graph or result, testing a",
+        "hypothesis, a real modelling decision, or interpreting unexpected",
+        "output. Weigh conceptual importance x consequence of misunderstanding x",
+        "novelty; if any is low, return meaningful=false. When unsure, false.",
+        "",
+        "GROUNDING (critical): a result must be stated ONLY from the actual",
+        "build output below -- never inferred or invented from the step's",
+        "wording. If the output does not concretely show a result, set result to",
+        "null. Ask a question ONLY if it is grounded in what actually happened;",
+        "if you can ground neither a result nor a question in the output, set",
+        "meaningful=false.",
+        "",
+        'Return ONLY minified JSON: {"meaningful":bool,"concept":string,'
+        '"result":string-or-null,"question":string}. result = one concise',
+        "sentence of what actually happened, or null. question = one grounded",
+        "sentence, no preamble. concept = a 1-4 word topic.",
+        "",
+        "Goal: " + (goal_title or "(untitled)"),
+    ]
+    if goal_desc:
+        lines.append("Goal description: " + goal_desc)
+    lines += [
+        "Step that ran: " + row_text,
+        "",
+        "Actual build output (the only evidence a result may be stated from):",
+        log_text or "(no output was recorded)",
+    ]
+    return "\n".join(lines)
+
+
+def _raise_understanding_check(session_id, root, goal_id, todo_id):
+    """Best-effort, fail-closed. After a build finishes a row, decide -- from
+    the row's ACTUAL build output -- whether it is worth one understanding
+    question, and if so set the goal's pending check. Any doubt, missing
+    evidence, or error means no check. Never raises; never touches the build.
+    """
+    try:
+        if os.environ.get("HC_CHAT_INFERENCE", "").strip() == "1":
+            return {"ok": True, "raised": False}   # no checks inside a check
+        if not goal_id or not todo_id:
+            return {"ok": True, "raised": False}
+        goals, _important = CS.load_goals(session_id, root)
+        goal = GM.by_id(goals, goal_id)
+        if not goal:
+            return {"ok": True, "raised": False}
+        u = goal.get("understanding") if isinstance(
+            goal.get("understanding"), dict) else {}
+        if GM.normalize_pending(u.get("pending")):
+            return {"ok": True, "raised": False}   # one open check at a time
+        if any(e.get("todo_id") == todo_id
+               for e in GM.normalize_evidence(u.get("evidence"))):
+            return {"ok": True, "raised": False}   # this row already checked
+        row = next((r for r in goal.get("todo_items") or []
+                    if r.get("id") == todo_id), None)
+        row_text = " ".join(str((row or {}).get("text") or "").split())
+        if not row_text:
+            return {"ok": True, "raised": False}
+        # The row's actual build output -- the only thing a result may be
+        # grounded in. Too little logged means nothing concrete to state, so
+        # no check (fail closed).
+        from . import build as BUILD
+        lines = BUILD.load_activity(session_id, root, goal_id)
+        texts = [str(l.get("text") or "") for l in lines if isinstance(l, dict)]
+        log_text = "\n".join(t for t in texts if t.strip())[-4000:]
+        if len(log_text.strip()) < 40:
+            return {"ok": True, "raised": False}
+        from . import providers as PROVIDERS
+        engine = PROVIDERS.make(
+            os.environ.get("HC_CHAT_PROVIDER", "claude"), "structured")
+        prompt = _understanding_check_prompt(
+            row_text, str(goal.get("title") or ""),
+            str(goal.get("description") or ""), log_text)
+        try:
+            verdict = engine.generate_json(prompt)
+        except Exception:
+            return {"ok": True, "raised": False}   # model unavailable -> none
+        if not isinstance(verdict, dict) or not verdict.get("meaningful"):
+            return {"ok": True, "raised": False}
+        question = " ".join(str(verdict.get("question") or "").split())
+        if not question:
+            return {"ok": True, "raised": False}
+        result = verdict.get("result")
+        result = "" if result in (None, False, "null") else \
+            " ".join(str(result).split())
+        pending = GM.normalize_pending({
+            "todo_id": todo_id, "todo_text": row_text,
+            "concept": " ".join(str(verdict.get("concept") or "").split()),
+            "question": question, "result": result, "ts": GM._now()})
+        if not pending:
+            return {"ok": True, "raised": False}
+        # Commit under the lock, re-reading in case a check was raised or the
+        # goal changed while the model was thinking.
+        with CS.session_lock(session_id, root, wait_s=5):
+            g2, imp2 = CS.load_goals(session_id, root)
+            goal2 = GM.by_id(g2, goal_id)
+            if not goal2:
+                return {"ok": True, "raised": False}
+            u2 = goal2.get("understanding") if isinstance(
+                goal2.get("understanding"), dict) else {}
+            if GM.normalize_pending(u2.get("pending")):
+                return {"ok": True, "raised": False}
+            u2["pending"] = pending
+            goal2["understanding"] = GM.normalize_understanding(u2)
+            goal2["updated_at"] = GM._now()
+            GM.sanitize(g2)
+            CS.save_goals(session_id, g2, imp2, root)
+        return {"ok": True, "raised": True}
+    except Exception:
+        return {"ok": True, "raised": False}
 
 
 def _apply_dispatch(op, trajdir=None, chat_scoped=None):
@@ -2777,8 +2909,12 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         from . import dev_server as DEV
         cwd = goal_id or ""
         if kind == "dev_start":
+            # Starting it by hand is also consent to start it unasked next
+            # time (see preview.show_ui's auto); a stop is the retraction.
+            PREVIEW._set_autostart(root, cwd, True)
             return DEV.start(session_id, root, cwd, force=bool(op.get("force")))
         if kind == "dev_stop":
+            PREVIEW._set_autostart(root, cwd, False)
             return DEV.stop(session_id, root, cwd)
         if kind == "dev_log":
             return DEV.log(session_id, root, cwd)
@@ -2797,7 +2933,11 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
     if kind == "build_todos":
         ids = op.get("ids")
         return BUILD.start(session_id, root, goal_id,
-                           ids if isinstance(ids, list) else [])
+                           ids if isinstance(ids, list) else [],
+                           quick=bool(op.get("quick")))
+    if kind == "check_todo":
+        return _raise_understanding_check(
+            session_id, root, goal_id, str(op.get("todo_id") or ""))
     if kind == "cancel_todos":
         ids = op.get("ids")
         return BUILD.cancel(session_id, root, goal_id,
@@ -2816,7 +2956,8 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         return BUILD.save_settings(
             session_id, root,
             {k: op.get(k) for k in ("model", "effort", "check",
-                                    "check_model", "check_effort") if k in op})
+                                    "check_model", "check_effort",
+                                    "quick_model", "quick_effort") if k in op})
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -2948,6 +3089,11 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error":
                         "no project directory is recorded for this goal yet"}
             confirmed = op.get("confirmed") is True
+            # Working on this goal in this project is the folder-trust
+            # answer; carried ahead so the terminal that opens does not
+            # greet the reader with the dialog instead of the work.
+            from . import build as BUILD_TRUST
+            BUILD_TRUST._trust_folder(cwd)
             # --start gives Claude the opening message as an argument, so the
             # session begins on its own. Without it the command is typed into
             # a shell and waits, which is the other honest option.
@@ -3169,6 +3315,17 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                     "working_dir": saved.get("working_dir", ""),
                     "branch": AE._git_branch(
                         saved.get("working_dir") or who["cwd"]) or ""}
+        if kind == "claude_account":
+            # Moving `claude` between the Engelbart pool key and the
+            # member's own login. Machine-level, not goal state: it edits
+            # the same Claude Code settings `engelbart auth` writes, so the
+            # next spawned subprocess -- and the next interactive session --
+            # starts on the chosen account.
+            from .. import claude_account
+            try:
+                return claude_account.switch(str(op.get("use") or ""))
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)[:200]}
         if kind in ("set_supabase_config", "supabase_login",
                     "supabase_logout"):
             # Connecting the workspace to the reader's own Supabase, from
@@ -3431,7 +3588,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
         if kind in ("build_todos", "answer_todo", "cancel_todos",
                     "reopen_todo", "note_todo", "generate_prompt",
                     "prompt_preview", "reopen_session", "build_log",
-                    "watch_build", "set_build_settings"):
+                    "watch_build", "set_build_settings", "check_todo"):
             # The rail's build and generate: chat scope only, since both run
             # against the chat's own project and goal tree. The build ops are
             # handed back to _apply to run OUTSIDE this lock -- build.py takes
@@ -3542,12 +3699,73 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             # Accepts plain strings or the typed rows the artifact edits.
             g["sources"] = GM.normalize_sources(raw)
             g["updated_at"] = GM._now()
+        elif kind == "set_document" and g:
+            # One working document, created or updated. The client owns the
+            # id (like a source's), so this is an upsert: a create names a
+            # fresh id and a todo it belongs to, an edit names an id already
+            # seen and the field that changed. Only the named fields move.
+            doc = op.get("document")
+            if not isinstance(doc, dict):
+                return {"ok": False, "error": "document must be an object"}
+            g["documents"] = GM.upsert_document(g.get("documents"), doc)
+            g["updated_at"] = GM._now()
+        elif kind == "set_paper" and g:
+            # The goal's paper reference, merged: the op names only the field
+            # that changed (a URL typed, a title, a PDF just uploaded), and
+            # the rest of the reference stands.
+            patch = op.get("paper")
+            if not isinstance(patch, dict):
+                return {"ok": False, "error": "paper must be an object"}
+            prev_p = g.get("paper") if isinstance(g.get("paper"), dict) else {}
+            merged = dict(prev_p)
+            for key in ("title", "url", "pdf"):
+                if key in patch:
+                    merged[key] = patch[key]
+            g["paper"] = GM.normalize_paper(merged)
+            g["updated_at"] = GM._now()
         elif kind == "set_understanding" and g:
             # The scenario this goal's work is for and the questions asked
             # about it, as the Understanding tab holds them. Written whole:
             # the tab owns both halves and posts both together, so a save is
             # never half a scenario.
-            g["understanding"] = GM.normalize_understanding(op)
+            new_u = GM.normalize_understanding(op)
+            # The assessment layer's evidence and open check are NOT the tab's
+            # to write: the tab posts only scenario/shots/questions, so unless
+            # this op names them, the goal's existing evidence and pending
+            # check are carried across rather than blanked by their absence.
+            prev_u = g.get("understanding") if isinstance(
+                g.get("understanding"), dict) else {}
+            if "evidence" not in op:
+                new_u["evidence"] = GM.normalize_evidence(prev_u.get("evidence"))
+            if "pending" not in op:
+                new_u["pending"] = GM.normalize_pending(prev_u.get("pending"))
+            g["understanding"] = new_u
+            g["updated_at"] = GM._now()
+        elif kind == "resolve_check" and g:
+            # The reader answered the open understanding check: the pending
+            # check becomes one piece of evidence against the goal, and the
+            # slot clears. Recorded as "unresolved" -- kept, not graded.
+            u = g.get("understanding") if isinstance(
+                g.get("understanding"), dict) else {}
+            pend = GM.normalize_pending(u.get("pending"))
+            answer = str(op.get("response") or "").strip()
+            if pend and answer:
+                ev = GM.normalize_evidence(u.get("evidence"))
+                ev.append({
+                    "id": GM.evidence_id(),
+                    "todo_id": pend.get("todo_id", ""),
+                    "todo_text": pend.get("todo_text", ""),
+                    "concept": pend.get("concept", ""),
+                    "question": pend.get("question", ""),
+                    "response": answer,
+                    "result": pend.get("result", ""),
+                    "state": "unresolved",
+                    "ts": GM._now()})
+                u["evidence"] = ev
+            # Either way the check is spent -- an answered check is filed, an
+            # empty "Continue" dismisses it. Only the pending slot clears.
+            u["pending"] = {}
+            g["understanding"] = GM.normalize_understanding(u)
             g["updated_at"] = GM._now()
         elif kind == "set_opening" and g:
             g["opening"] = str(op.get("opening", "")).strip()[:400]
@@ -3815,6 +4033,34 @@ class H(BaseHTTPRequestHandler):
                     self._send(200, {"ok": False, "error": "no such source"})
                 else:
                     self._send(200, source_body(root, who["cwd"], found))
+            elif self.path.split("?", 1)[0] == "/api/paper-pdf":
+                # The PDF uploaded for a goal's Paper tab, served as bytes for
+                # the browser's own viewer. The path arrives from the client,
+                # so it is trusted no further than a screenshot's: only a file
+                # already under this workspace's attachments directory -- every
+                # file /api/paper ever wrote and nothing else -- is served.
+                from urllib.parse import parse_qs, urlsplit
+                want = (parse_qs(urlsplit(self.path).query).get("path")
+                        or [""])[0]
+                self._serve_workspace_pdf(want)
+            elif self.path.split("?", 1)[0] == "/api/berkeley-paper":
+                # A fresh signed URL for a canonical Berkeley paper's stored PDF.
+                # The goal holds only the paper's id; this asks the Engelbart
+                # backend (with the machine's own session) to mint the URL, so
+                # the storage path stays server-side and no signed URL is kept.
+                # Fetched anew every time the Paper tab opens or refreshes.
+                from urllib.parse import parse_qs, urlsplit
+                from . import supabase_client as SB
+                pid = (parse_qs(urlsplit(self.path).query).get("paper_id")
+                       or [""])[0]
+                root = None
+                if self.server.chat_scoped:
+                    _, root = _chat_identity(self.server.trajdir)
+                try:
+                    answer = SB.engelbart_paper_pdf(pid, root)
+                    self._send(200, dict(answer, ok=True))
+                except SB.SupabaseError as exc:
+                    self._send(200, {"ok": False, "error": str(exc)})
             elif self.path.split("?", 1)[0] == "/api/file":
                 # One text file of the project, named relative to its root.
                 from urllib.parse import parse_qs, urlsplit
@@ -3846,6 +4092,17 @@ class H(BaseHTTPRequestHandler):
                     cwd = _project_identity(
                         self.server.trajdir, True, session_id).get("cwd")
                 self._send(200, _supabase_status(SB, root, cwd))
+            elif self.path.split("?", 1)[0] == "/api/claude-account":
+                # Which account `claude` runs on -- the pool key or the
+                # member's own login -- read from the same settings wiring
+                # `engelbart auth` writes. ?fresh=1 asks the pool's server
+                # for the live meter instead of the last CLI run's figures.
+                from .. import claude_account
+                try:
+                    self._send(200, claude_account.status(
+                        fresh="fresh=1" in self.path))
+                except (OSError, ValueError) as exc:
+                    self._send(200, {"ok": False, "error": str(exc)[:200]})
             elif self.path == "/api/models":
                 # What the Builds tab offers: the models the installed CLI
                 # names, the efforts, and what is chosen. Chat scope, since
@@ -4109,12 +4366,89 @@ class H(BaseHTTPRequestHandler):
         self._send(200, {"ok": True, "path": str(path),
                          "name": name or path.name})
 
+    def _take_paper(self):
+        """A PDF uploaded for a goal's Paper tab: the file bytes, as sent.
+
+        Raw bytes on their own route for the same reason a screenshot is --
+        a paper is far bigger than an op may be, and base64 would only grow
+        it. Only application/pdf, up to MAX_PAPER_BYTES; stored under this
+        workspace's attachments directory (the one place /api/file-paper is
+        allowed to serve from), and the goal's paper.pdf set to its path
+        under the state lock so a reload finds it.
+        """
+        content_types = self.headers.get_all("Content-Type", [])
+        ctype = (content_types[0].split(";", 1)[0].strip().lower()
+                 if len(content_types) == 1 else "")
+        if ctype != "application/pdf":
+            self._send(415, {"ok": False, "error": "a PDF is required"})
+            return
+        goal_id = str(self.headers.get("X-HC-Goal") or "").strip()
+        if not goal_id:
+            self._send(400, {"ok": False, "error": "a goal is required"})
+            return
+        lengths = self.headers.get_all("Content-Length", [])
+        try:
+            n = int(lengths[0]) if len(lengths) == 1 else -1
+        except (ValueError, TypeError):
+            n = -1
+        if n <= 0:
+            self._send(400, {"ok": False, "error": "invalid content length"})
+            return
+        if n > MAX_PAPER_BYTES:
+            self._send(413, {"ok": False, "error": "PDF too large"})
+            return
+        data = self.rfile.read(n)
+        name = " ".join(str(self.headers.get("X-HC-Name") or "").split())[:200]
+        try:
+            path = _store_attachment(self.server.trajdir, data, ".pdf")
+        except OSError as exc:
+            self._send(500, {"ok": False, "error": str(exc)[:200]})
+            return
+        # Record the upload on the goal, through the same door every op uses.
+        res = _apply({"op": "set_paper", "goal_id": goal_id,
+                      "paper": {"pdf": str(path),
+                                "title": name or path.name}},
+                     self.server.trajdir, self.server.chat_scoped)
+        if not res or res.get("ok") is False:
+            self._send(200, res or {"ok": False, "error": "could not record"})
+            return
+        self._send(200, {"ok": True, "path": str(path),
+                         "name": name or path.name})
+
+    def _serve_workspace_pdf(self, want):
+        """Serve one uploaded PDF, gated to the attachments directory.
+
+        The path came from a browser, so -- as with a screenshot handed to a
+        subprocess -- it is honoured only when it resolves to a file that is
+        directly inside this workspace's own attachments folder. Anything
+        else is a 404, never a read of an arbitrary path.
+        """
+        try:
+            folder = Path(_scope(self.server.trajdir) / "attachments").resolve()
+            path = Path(str(want)).expanduser().resolve()
+        except OSError:
+            self._send(404, {"ok": False, "error": "not found"})
+            return
+        if (path.parent != folder or path.suffix.lower() != ".pdf"
+                or not path.is_file()):
+            self._send(404, {"ok": False, "error": "not found"})
+            return
+        try:
+            data = path.read_bytes()
+        except OSError:
+            self._send(404, {"ok": False, "error": "not found"})
+            return
+        self._send(200, data, "application/pdf")
+
     def do_POST(self):
         if not self._begin_request():
             return
         try:
             if self.path == "/api/attachment":
                 self._take_attachment()
+                return
+            if self.path == "/api/paper":
+                self._take_paper()
                 return
             content_types = self.headers.get_all("Content-Type", [])
             if (len(content_types) != 1 or
@@ -4831,6 +5165,13 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "important_item_ids": prev.get("important_item_ids", []),
                         "prompt_ids": prev.get("prompt_ids", []),
                         "sources": prev.get("sources", []),
+                        # Written through set_document, never posted with the
+                        # tree -- carried like understanding, or the next tree
+                        # the browser posts would drop every document.
+                        "documents": prev.get("documents", []),
+                        # Likewise the paper reference: its own op, carried.
+                        "paper": prev.get("paper",
+                                          {"title": "", "url": "", "pdf": ""}),
                         # Carried, not recomputed. The browser posts the
                         # whole tree back on every edit and this rebuilds
                         # each goal from a fixed field list -- so a field
@@ -4840,13 +5181,22 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                         "relevance_why": prev.get("relevance_why", ""),
                         "relevance_for": prev.get("relevance_for", ""),
                         "project_cwd": prev.get("project_cwd", ""),
+                        # Path membership. A goal created in the Project Path
+                        # posts its phase, so a valid one on the node wins; an
+                        # existing goal that does not post it keeps the phase
+                        # from the prior copy rather than losing it on the next
+                        # edit.
+                        "phase": (node.get("phase")
+                                  if node.get("phase") in GM.PATH_PHASES
+                                  else prev.get("phase", "")),
                         "opening": prev.get("opening", ""),
                         # The Understanding tab's, written through its own op
                         # and never posted with the tree: carried, or the next
                         # thing typed in the artifact would erase it.
                         "understanding": (prev.get("understanding")
                                           or {"scenario": "", "shots": [],
-                                              "questions": []}),
+                                              "questions": [], "evidence": [],
+                                              "pending": {}}),
                         "auto_prompt_ids": prev.get("auto_prompt_ids", []),
                         "detached_prompt_ids": prev.get("detached_prompt_ids", []),
                         "priority": node.get("prio") if node.get("prio") in

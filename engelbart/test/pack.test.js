@@ -9,13 +9,19 @@ const test = require('node:test');
 
 const packageRoot = path.resolve(__dirname, '..');
 
+// This test executes the packed CLI's POSIX bin shim (.bin/engelbart) directly;
+// on Windows npm writes a .cmd wrapper that spawnSync cannot run without a
+// shell, so the end-to-end pack-and-run check is gated to POSIX hosts. The
+// packaging itself is verified on the Linux/macOS CI legs.
+const WINDOWS_HOST = process.platform === 'win32';
+
 function checked(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', ...options });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return result;
 }
 
-test('packed npm artifact contains and executes the verified wheel', () => {
+test('packed npm artifact contains and executes the verified wheel', { skip: WINDOWS_HOST }, () => {
   const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json')));
   assert.deepEqual(Object.keys(metadata.bin), ['engelbart']);
   assert.equal(metadata.dependencies, undefined);

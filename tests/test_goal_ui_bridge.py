@@ -138,6 +138,16 @@ const document = {
     if (at >= 0) listeners.splice(at, 1);
   },
   createElement: (t) => new El(t),
+  createTextNode: (value) => {
+    const node = new El("#text");
+    node.nodeType = 3;
+    node.textContent = String(value == null ? "" : value);
+    node.length = node.textContent.length;
+    return node;
+  },
+  // The overview now draws SVG icons. For the test DOM, namespaces do not
+  // change element behavior; retaining the tag is enough to test the tree.
+  createElementNS: (_ns, t) => new El(t),
   getElementById: (id) => made.find(e => e.id === id) || null,
   querySelector: (s) => (s === ".hc" ? app : root.querySelector(s)),
   // Enough for a tag-name sweep: the bridge uses it to find a heading
@@ -1546,6 +1556,11 @@ class RailReconcileTests(BridgeTestCase):
             + "var build = document.createElement('span');"
             "build.className = 'hc-todo-build'; acts.appendChild(build);"
             "var ui = window.__hcPromptUI;"
+            "ui.renderTodoRail(true);"
+            "var todoTab = tabs.querySelector('[data-hc-rail-tab=\"todos\"]');"
+            "listeners.filter(function (l) { return l[0] === 'click'; })"
+            "  .forEach(function (l) { l[1]({target: todoTab,"
+            "    preventDefault: function () {}, stopPropagation: function () {}}); });"
             "var say = function () { return [build.textContent,"
             "  build.getAttribute('data-hc-todo-build')]; };"
             "put([A, B]); ui.renderTodoRail();"
@@ -1563,6 +1578,11 @@ class RailReconcileTests(BridgeTestCase):
         out = self.run_js(
             self.RAIL_DOM
             + "var ui = window.__hcPromptUI;"
+            "ui.renderTodoRail(true);"
+            "var todoTab = tabs.querySelector('[data-hc-rail-tab=\"todos\"]');"
+            "listeners.filter(function (l) { return l[0] === 'click'; })"
+            "  .forEach(function (l) { l[1]({target: todoTab,"
+            "    preventDefault: function () {}, stopPropagation: function () {}}); });"
             "put([A]); ui.renderTodoRail();"
             "var top = host.querySelector('.hc-todos-top');"
             "var copy = top && top.querySelector('.hc-todo-copy');"
@@ -3221,7 +3241,7 @@ class LiveFeedTests(BridgeTestCase):
         # through the PROMPT tab, so removing that tab took them off the
         # screen entirely — histRows was still being computed with nothing
         # rendering it.
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertIn("RELATED PROMPTS", out)
         self.assertIn('<sc-for list="{{ histRows }}" as="hr"', out)
         self.assertIn("{{ hr.text }}", out)
@@ -3300,7 +3320,7 @@ class LiveFeedTests(BridgeTestCase):
         # The list is the record of what was said, not a place to act on it
         # -- except for the one act the record itself can be wrong about:
         # inference tying a prompt to the wrong goal.
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertIn('sc-camel-on-click="{{ hr.del }}"', out)
         self.assertIn('title="Unlink this prompt"', out)
         self.assertNotIn("{{ hr.copy }}", out)
@@ -3308,7 +3328,7 @@ class LiveFeedTests(BridgeTestCase):
 
     def test_each_prompt_names_the_conversation_it_came_from(self):
         # A quote without a source cannot be checked.
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertIn("{{ hr.conv }}", out)
         # The separator travels with the source, so a prompt that has no
         # conversation leaves no punctuation behind.
@@ -3330,17 +3350,15 @@ class LiveFeedTests(BridgeTestCase):
     def test_the_words_sit_under_the_document_they_are_evidence_for(self):
         # They used to be filed between the dormant textboxes. The pane is
         # one document now, and the prompts that fed it read below it.
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertLess(out.index("{{ notesOverlay }}"),
                         out.index("RELATED PROMPTS"))
         self.assertLess(out.index("RELATED PROMPTS"),
                         out.index('<sc-if value="{{ showAgent }}"'))
-        self.assertLess(out.index("BLOCKERS &amp; OPEN QUESTIONS"),
-                        out.index("RELATED PROMPTS"))
         self.assertEqual(1, out.count("RELATED PROMPTS"))
 
     def test_a_long_history_scrolls_rather_than_pushing_the_pane_down(self):
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         at = out.index('<sc-for list="{{ histRows }}"')
         box = out[out.rindex("<div", 0, at):at]
         self.assertIn("max-height:420px;overflow-y:auto", box)
@@ -3368,7 +3386,7 @@ class LiveFeedTests(BridgeTestCase):
     def test_the_reader_can_attach_one_of_their_own_prompts(self):
         # Which of your words belong to which goal is a judgement the
         # inference only guesses at, so the reader gets to say.
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertIn('<span class="hc-prompt-add"></span>', out)
         rendered = self.run_js(
             "var slot = document.createElement('span');"
@@ -3602,7 +3620,7 @@ class LiveFeedTests(BridgeTestCase):
         self.assertIn("overflow-y:auto;overscroll-behavior:contain", css)
 
     def test_the_pane_list_scrolls_without_taking_the_page_with_it(self):
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         at = out.index('<sc-for list="{{ histRows }}"')
         box = out[out.rindex("<div", 0, at):at]
         self.assertIn("max-height:420px;overflow-y:auto;"
@@ -4337,6 +4355,16 @@ class DocumentPaneTests(BridgeTestCase):
         self.assertLess(out.index('class="hc-rail-prompt"'),
                         out.index('class="hc-rail-understand"'))
 
+    def test_the_notes_caret_uses_the_textareas_own_text_while_focused(self):
+        out = self.run_js("window.__hcPromptUI.launchCss();")
+        self.assertIn(
+            ".hc-notes-box:focus-within .hc-notes-render{visibility:hidden}",
+            out,
+        )
+        self.assertIn(
+            ".hc-notes-edit:focus{color:var(--dtxt);overflow:auto}", out
+        )
+
     def test_the_middle_says_which_of_the_two_it_is(self):
         # One tab is visible in a chat, so its word is the whole label the
         # pane gets. It said CONTEXT while it held the editor.
@@ -4406,7 +4434,7 @@ class DocumentPaneTests(BridgeTestCase):
                          self.run_js("window.__hcDefaultDoc;"))
 
     def test_the_prompts_that_fed_the_document_read_below_it(self):
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertLess(out.index("{{ notesOverlay }}"),
                         out.index("RELATED PROMPTS"))
         self.assertIn('<span class="hc-prompt-add"></span>', out)
@@ -4414,7 +4442,7 @@ class DocumentPaneTests(BridgeTestCase):
         self.assertEqual(1, out.count('<sc-for list="{{ histRows }}" as="hr"'))
 
     def test_a_row_says_whether_a_machine_made_the_link(self):
-        out = self.patched_bundle("out;")
+        out = self.patched_bundle("out;", scope="chat")
         self.assertIn("origin: p.auto ? 'automatic' : 'yours',", out)
         self.assertIn("{{ hr.origin }}", out)
 
@@ -5663,26 +5691,19 @@ class DevServerStripTests(BridgeTestCase):
     def buttons(self, painted):
         return [[row[1], row[4]] for row in painted["head"] if row[4]]
 
-    def test_a_project_that_is_not_running_offers_to_run_it(self):
+    def test_a_healthy_stopped_project_uses_no_rail_space(self):
         out = self.paint(self.STOPPED)
-        self.assertEqual("stopped", out["state"])
-        self.assertEqual("Next.js · not running", out["head"][1][1])
-        self.assertEqual([["Start", "start"], ["Log", "log"]],
-                         self.buttons(out))
-        # What it would run, said before it runs it.
-        self.assertEqual("run npm run dev here", out["head"][2][2])
+        self.assertEqual("none", out["display"])
+        self.assertIsNone(out["state"])
+        self.assertEqual([], out["head"])
 
-    def test_a_running_one_links_to_the_address_it_printed(self):
+    def test_a_healthy_running_project_uses_the_preview_not_the_rail(self):
         out = self.paint(dict(self.STOPPED, status="running",
                               url="http://127.0.0.1:3210/",
                               last=["  ✓ Ready in 900ms"]))
-        self.assertEqual("running", out["state"])
-        link = out["head"][2]
-        self.assertEqual("hc-dev-link", link[0])
-        self.assertEqual("127.0.0.1:3210", link[1])
-        self.assertEqual("http://127.0.0.1:3210/", link[3])
-        self.assertEqual([["Stop", "stop"], ["Log", "log"]], self.buttons(out))
-        self.assertEqual("  ✓ Ready in 900ms", out["last"])
+        self.assertEqual("none", out["display"])
+        self.assertIsNone(out["state"])
+        self.assertEqual([], out["head"])
 
     def test_a_busy_port_is_named_as_somebody_elses_not_as_this_project(self):
         out = self.paint(dict(self.STOPPED, status="in_use",
@@ -5706,8 +5727,8 @@ class DevServerStripTests(BridgeTestCase):
         self.assertEqual([], out["head"])
 
     def test_the_log_prints_what_the_server_printed(self):
-        out = self.paint(dict(self.STOPPED, status="running",
-                              url="http://127.0.0.1:3210/"),
+        out = self.paint(dict(self.STOPPED, status="in_use",
+                              other_url="http://127.0.0.1:3210/"),
                          open_log=True,
                          lines=["$ npm run dev", "  - Local: http://localhost:3210"])
         self.assertEqual(["$ npm run dev", "  - Local: http://localhost:3210"],
@@ -5715,7 +5736,9 @@ class DevServerStripTests(BridgeTestCase):
         self.assertEqual("Hide log", self.buttons(out)[-1][0])
 
     def test_an_open_log_with_nothing_in_it_says_that(self):
-        out = self.paint(self.STOPPED, open_log=True)
+        out = self.paint(dict(self.STOPPED, status="in_use",
+                              other_url="http://127.0.0.1:3210/"),
+                         open_log=True)
         self.assertEqual(["nothing printed yet"], out["log"])
 
     def test_the_strip_sits_above_the_build_panel(self):

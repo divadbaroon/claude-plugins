@@ -41,6 +41,7 @@ SESSION_NAME = "supabase-session.json"
 # already completed in a browser.
 ENGELBART_CREDENTIALS = "auth.json"
 ENGELBART_SESSION_PATH = "/api/engelbart-session"
+ENGELBART_PAPER_PATH = "/api/engelbart-paper"
 TIMEOUT_S = 20.0
 # Renew a little before the token actually lapses: a send that starts valid
 # and finishes expired is a confusing failure to read.
@@ -638,6 +639,38 @@ def current_session(root: Optional[Path] = None) -> Dict[str, Any]:
     if int(session.get("expires_at") or 0) - REFRESH_MARGIN_S <= time.time():
         session = _renew(session, root)
     return session
+
+
+def engelbart_paper_pdf(paper_id: str,
+                        root: Optional[Path] = None) -> Dict[str, Any]:
+    """A fresh signed URL (or source fallback) for one canonical paper's PDF.
+
+    The Paper tab holds a canonical paper's id, never its bytes: this asks the
+    Engelbart backend, which mints a short-lived signed URL server-side with the
+    service role. Nothing durable is stored here and the storage PATH never
+    reaches this machine -- only the momentary signed URL, refetched each time
+    the tab opens. Needs a connected machine (`engelbart auth`): the backend
+    gates on membership, and a password-only Supabase login has no Engelbart
+    apiBase to ask. Returns the backend's own shape:
+    ``{available, signedUrl|sourceUrl, title}``.
+    """
+    pid = str(paper_id or "").strip()
+    if not pid:
+        raise SupabaseError("no paper id")
+    credentials = engelbart_credentials()
+    if not credentials:
+        raise SupabaseError(
+            "not connected to Engelbart -- run `engelbart auth` to read this "
+            "paper's PDF")
+    session = current_session(root)
+    token = str(session.get("access_token") or "")
+    if not token:
+        raise SupabaseError("this machine is connected but has no session")
+    base = str(credentials["apiBase"]).rstrip("/")
+    answer = _post(f"{base}{ENGELBART_PAPER_PATH}",
+                   {"Authorization": f"Bearer {token}"},
+                   {"action": "pdf_url", "paperId": pid}, "rpc")
+    return answer if isinstance(answer, dict) else {}
 
 
 def status(root: Optional[Path] = None) -> Dict[str, Any]:

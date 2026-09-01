@@ -6,6 +6,7 @@ Recurring items across conversations MERGE into one node whose weight is its
 recurrence, which is what makes clusters emerge under ForceAtlas2.
 Derived layer: regenerable, raw Vault untouched.
 """
+import json
 import re
 from pathlib import Path
 
@@ -20,6 +21,44 @@ ITEM_FIELDS = [("decisions", "decision"), ("actions_taken", "action"),
 TARGET_MAX = 80
 STOP = set("the a an of to for and in on with that this is are was were be been "
            "it its into from as at by or not no do does did user claude".split())
+
+
+def build_activity_nodes(trajdir: Path):
+    """Nodes for finished builds, merged into the graph at serve time.
+
+    Builds never enter the vault (a build is not the reader's chat), so the
+    synthesized graph cannot know them; each finished build instead leaves a
+    line in builds.json (see build._note_build). Builds of the same goal
+    merge into one node whose weight is how often it was built -- the same
+    move the graph makes for recurring items -- so an afternoon of quick
+    builds reads as one heavy dot, not confetti.
+    """
+    try:
+        recs = json.loads((trajdir / "builds.json").read_text())
+    except (OSError, ValueError):
+        return []
+    if not isinstance(recs, list):
+        return []
+    merged = {}
+    for r in recs:
+        if not isinstance(r, dict):
+            continue
+        goal = str(r.get("goal") or "").strip()
+        date = str(r.get("date") or "")[:10]
+        if not goal or len(date) != 10:
+            continue
+        m = merged.setdefault(goal.lower(), {"goal": goal, "dates": [], "n": 0})
+        m["dates"].append(date)
+        m["n"] += 1
+    nodes = []
+    for i, m in enumerate(sorted(merged.values(), key=lambda x: x["goal"])):
+        dates = sorted(m["dates"])
+        nodes.append({"id": f"b:{i}", "type": "action",
+                      "label": ("built: " + m["goal"])[:70],
+                      "date": dates[-1], "date_first": dates[0],
+                      "weight": min(m["n"], 12), "evidence_ids": [],
+                      "cluster": -1, "built": True})
+    return nodes
 
 
 def _tokens(s):

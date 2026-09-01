@@ -347,8 +347,10 @@ class RowControlTests(BridgeTestCase):
         # without it would leave a guest a button that can only fail.
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         css = "".join(css) if isinstance(css, list) else css
-        self.assertIn('[title="Archive goal"]{display:none!important}', css)
-        self.assertNotIn('[title="Delete goal"]', css)
+        self.assertIn(
+            '[data-hc-launch][data-hc-readonly] [title="Archive goal"],', css
+        )
+        self.assertIn('[title="Delete goal"]{display:none!important}', css)
 
     def test_the_guest_keeps_the_archive_page_but_not_its_buttons(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")

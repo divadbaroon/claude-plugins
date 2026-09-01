@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from . import chat_state as CS, goals as GM, providers as P
+from ..platform_compat import detached_popen_kwargs, maybe_fchmod, pid_alive
 
 
 MAX_EVENT_CHARS = 36_000
@@ -561,7 +562,7 @@ def _write_worker_record(path: Path, value: Dict[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{token}.tmp")
     try:
         with temporary.open("w", encoding="utf-8") as handle:
-            os.fchmod(handle.fileno(), 0o600)
+            maybe_fchmod(handle.fileno(), 0o600)
             json.dump(value, handle, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
@@ -592,13 +593,7 @@ def _worker_record_alive(record: Dict[str, Any], session_id: str) -> bool:
         return True
     if record.get("mode", "detached") == "detached":
         return _worker_process_matches(pid, session_id)
-    try:
-        os.kill(pid, 0)
-        return True
-    except PermissionError:
-        return True
-    except OSError:
-        return False
+    return pid_alive(pid)
 
 
 def _claim_refresh(
@@ -902,8 +897,8 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
         with log.open("ab", buffering=0) as handle:
             process = subprocess.Popen(
                 command, stdin=subprocess.DEVNULL, stdout=handle,
-                stderr=subprocess.STDOUT, close_fds=True, start_new_session=True,
-                env=child_env,
+                stderr=subprocess.STDOUT, close_fds=True,
+                env=child_env, **detached_popen_kwargs(),
             )
         _DETACHED_PROCESSES.append(process)
         _write_worker_record(worker, {
@@ -921,9 +916,7 @@ def spawn_refresh(session_id: str, root: Optional[Path] = None) -> Dict[str, Any
 
 def _worker_process_matches(pid: Any, session_id: str) -> bool:
     """Reject stale/reused PIDs before coalescing a requested refresh."""
-    try:
-        os.kill(int(pid), 0)
-    except (OSError, TypeError, ValueError):
+    if not pid_alive(pid):
         return False
     if os.name == "nt":
         return True

@@ -49,7 +49,27 @@ def run(trajdir: Path, port=7710, open_browser=True):
                 except Exception:
                     self.send_response(404); self.end_headers()
             elif u.path == "/api/graph":
-                self._send(load("graph.json"))
+                g = load("graph.json")
+                # Built work never reaches the vault, so the synthesized
+                # graph cannot carry it; merge the builds' own feed fresh on
+                # every request rather than waiting for the next synthesis.
+                # With no synthesis yet, the builds stand alone rather than
+                # the map standing empty.
+                try:
+                    from .graph_build import build_activity_nodes
+                    extra = build_activity_nodes(trajdir)
+                except Exception:  # noqa: BLE001 - the map still serves
+                    extra = []
+                if extra and g.get("nodes"):
+                    have = {n.get("id") for n in g["nodes"]}
+                    g["nodes"] = g["nodes"] + [n for n in extra
+                                               if n["id"] not in have]
+                elif extra:
+                    dates = sorted(n["date"] for n in extra)
+                    g = {"nodes": extra, "edges": [], "clusters": [],
+                         "goals": [], "date_min": dates[0],
+                         "date_max": dates[-1], "state": {}}
+                self._send(g)
             elif u.path == "/api/analysis":
                 self._send({"analysis": load("analysis.json"),
                             "corrections": load("corrections.json")})

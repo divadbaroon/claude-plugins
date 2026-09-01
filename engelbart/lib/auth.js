@@ -85,7 +85,10 @@ async function postJson(base, body, options = {}) {
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   let response;
   try {
-    response = await fetchImpl(`${base}/api/engelbart-device`, {
+    // The device endpoint unless a caller names another: every action the
+    // CLI takes is one POST body against one path, and the setup endpoint
+    // (web-first onboarding's pending payload) is the only other path.
+    response = await fetchImpl(`${base}${options.path || '/api/engelbart-device'}`, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
@@ -238,9 +241,14 @@ function writeEnvFile(managedRoot) {
 function openBrowser(url, options = {}) {
   const platform = options.platform || process.platform;
   const spawnImpl = options.spawnImpl || spawn;
-  const command = platform === 'darwin' ? 'open' : 'xdg-open';
+  // Windows: rundll32's FileProtocolHandler opens the default browser and takes
+  // the URL as a single argv, so a query string's `&` is safe -- unlike
+  // `cmd /c start`, where cmd would read `&` as a command separator.
+  const [command, args] = platform === 'win32'
+    ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+    : [platform === 'darwin' ? 'open' : 'xdg-open', [url]];
   try {
-    const child = spawnImpl(command, [url], { stdio: 'ignore', detached: true });
+    const child = spawnImpl(command, args, { stdio: 'ignore', detached: true });
     if (child && typeof child.unref === 'function') child.unref();
     if (child && typeof child.on === 'function') child.on('error', () => {});
     return true;
@@ -276,6 +284,7 @@ function wireClaudeCode(managedRoot, stored, options = {}) {
       credentialsPath(managedRoot),
       target.file,
       stored.claude.baseUrl,
+      options.platform || process.platform,
     );
     return claudeCode.connect({
       managedRoot,
@@ -284,6 +293,7 @@ function wireClaudeCode(managedRoot, stored, options = {}) {
       env: options.env,
       allowRealHome: options.allowRealHome,
       baseUrl: stored.claude.baseUrl,
+      platform: options.platform || process.platform,
     });
   } catch (error) {
     return { changed: false, reason: error.message };
@@ -432,6 +442,38 @@ async function rewire(base, options = {}) {
   }
 }
 
+// Web-first onboarding's half of a pairing: the member already approved a
+// setup in the browser and was handed a short-lived code, so redeeming it is
+// the whole exchange -- no browser opens, nothing polls. What follows a
+// successful redeem is establish(), the same as every other way in.
+async function redeemCode(code, options = {}) {
+  const env = options.env || process.env;
+  const base = apiBase(env);
+  const result = await postJson(base, {
+    action: 'redeem',
+    code: String(code || '').trim(),
+    label: machineLabel(options.hostname),
+  }, options);
+  return establish(base, result.token, result.email || '', options);
+}
+
+// The project the member approved on the web, if one is waiting. The claim is
+// single-use on the server, so the caller owns materializing what comes back.
+// Never fatal: an install that cannot fetch its pending setup is still a
+// working install, so a failure answers null and the local setup page stands.
+async function fetchPendingSetup(base, token, options = {}) {
+  try {
+    const result = await postJson(base, { action: 'pending' }, {
+      ...options,
+      token,
+      path: '/api/engelbart-setup',
+    });
+    return (result && typeof result.payload === 'object') ? result.payload : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 async function login(options = {}) {
   const env = options.env || process.env;
   const base = apiBase(env);
@@ -546,8 +588,10 @@ module.exports = {
   credentialsPath,
   envPath,
   fetchClaudeKey,
+  fetchPendingSetup,
   login,
   logout,
+  redeemCode,
   machineLabel,
   openBrowser,
   postJson,
