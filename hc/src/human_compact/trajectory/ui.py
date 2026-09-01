@@ -2439,6 +2439,15 @@ def _payload(trajdir=None, chat_scoped=None):
             payload["build_session"] = None
             payload["build_cost"] = None
             payload["build_runs"] = {}
+    # Whether the pool's credit just ran out -- asked outside the state lock
+    # (it is a real round trip, rate-limited inside to every ten minutes)
+    # and reported once per exhaustion, so the account flip the credential
+    # helper makes silently gets said out loud in the browser.
+    try:
+        from .. import claude_account
+        payload["credit_alert"] = claude_account.credit_alert(trajdir)
+    except Exception:  # noqa: BLE001 - a poll must not fail over a banner
+        payload["credit_alert"] = None
     return payload
 
 
@@ -2526,7 +2535,10 @@ def _preview_op(op, trajdir, chat_scoped):
     if not cwd:
         return {"ok": False, "error": "this chat is not bound to a project"}
     if kind == "preview_configure":
-        return PREVIEW.configure(root, cwd)
+        # The pane asking on its own may only have the free, read-only
+        # detection; the model fallback stays behind the reader's click.
+        return PREVIEW.configure(root, cwd,
+                                 detect_only=bool(op.get("auto")))
     if kind == "preview_pick":
         return PREVIEW.set_primary(root, cwd, str(op.get("profile_id") or ""))
     if kind == "preview_start":
@@ -2551,8 +2563,11 @@ def _preview_op(op, trajdir, chat_scoped):
     if kind == "preview_show_ui":
         # One press for "I want to see it": the steps that have to happen
         # first, then the thing that serves. It answers not_ready rather
-        # than starting something that cannot end in a page.
-        return PREVIEW.show_ui(root, cwd, session_id=_session_id)
+        # than starting something that cannot end in a page. The auto flag
+        # is the pane asking unasked, which show_ui allows only for the
+        # exact command watched working here before.
+        return PREVIEW.show_ui(root, cwd, session_id=_session_id,
+                               auto=bool(op.get("auto")))
     if kind == "preview_stop":
         return PREVIEW.stop(cwd, root, _session_id)
     if kind == "preview_forget":
@@ -2801,8 +2816,12 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         from . import dev_server as DEV
         cwd = goal_id or ""
         if kind == "dev_start":
+            # Starting it by hand is also consent to start it unasked next
+            # time (see preview.show_ui's auto); a stop is the retraction.
+            PREVIEW._set_autostart(root, cwd, True)
             return DEV.start(session_id, root, cwd, force=bool(op.get("force")))
         if kind == "dev_stop":
+            PREVIEW._set_autostart(root, cwd, False)
             return DEV.stop(session_id, root, cwd)
         if kind == "dev_log":
             return DEV.log(session_id, root, cwd)
@@ -2821,7 +2840,8 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
     if kind == "build_todos":
         ids = op.get("ids")
         return BUILD.start(session_id, root, goal_id,
-                           ids if isinstance(ids, list) else [])
+                           ids if isinstance(ids, list) else [],
+                           quick=bool(op.get("quick")))
     if kind == "check_todo":
         return _raise_understanding_check(
             session_id, root, goal_id, str(op.get("todo_id") or ""))
@@ -2843,7 +2863,8 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         return BUILD.save_settings(
             session_id, root,
             {k: op.get(k) for k in ("model", "effort", "check",
-                                    "check_model", "check_effort") if k in op})
+                                    "check_model", "check_effort",
+                                    "quick_model", "quick_effort") if k in op})
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -2971,6 +2992,11 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 return {"ok": False, "error":
                         "no project directory is recorded for this goal yet"}
             confirmed = op.get("confirmed") is True
+            # Working on this goal in this project is the folder-trust
+            # answer; carried ahead so the terminal that opens does not
+            # greet the reader with the dialog instead of the work.
+            from . import build as BUILD_TRUST
+            BUILD_TRUST._trust_folder(cwd)
             # --start gives Claude the opening message as an argument, so the
             # session begins on its own. Without it the command is typed into
             # a shell and waits, which is the other honest option.
@@ -3181,6 +3207,17 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                     "working_dir": saved.get("working_dir", ""),
                     "branch": AE._git_branch(
                         saved.get("working_dir") or who["cwd"]) or ""}
+        if kind == "claude_account":
+            # Moving `claude` between the Engelbart pool key and the
+            # member's own login. Machine-level, not goal state: it edits
+            # the same Claude Code settings `engelbart auth` writes, so the
+            # next spawned subprocess -- and the next interactive session --
+            # starts on the chosen account.
+            from .. import claude_account
+            try:
+                return claude_account.switch(str(op.get("use") or ""))
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)[:200]}
         if kind in ("set_supabase_config", "supabase_login",
                     "supabase_logout"):
             # Connecting the workspace to the reader's own Supabase, from
@@ -3890,6 +3927,17 @@ class H(BaseHTTPRequestHandler):
                     cwd = _project_identity(
                         self.server.trajdir, True, session_id).get("cwd")
                 self._send(200, _supabase_status(SB, root, cwd))
+            elif self.path.split("?", 1)[0] == "/api/claude-account":
+                # Which account `claude` runs on -- the pool key or the
+                # member's own login -- read from the same settings wiring
+                # `engelbart auth` writes. ?fresh=1 asks the pool's server
+                # for the live meter instead of the last CLI run's figures.
+                from .. import claude_account
+                try:
+                    self._send(200, claude_account.status(
+                        fresh="fresh=1" in self.path))
+                except (OSError, ValueError) as exc:
+                    self._send(200, {"ok": False, "error": str(exc)[:200]})
             elif self.path == "/api/models":
                 # What the Builds tab offers: the models the installed CLI
                 # names, the efforts, and what is chosen. Chat scope, since
