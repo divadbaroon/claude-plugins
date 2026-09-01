@@ -396,6 +396,12 @@ def normalize_understanding(value) -> dict:
             qid = question_id()
         seen.add(qid)
         out.append({"id": qid, "text": text,
+                    # A question's own screenshots: the screen it is about,
+                    # which is not always the screen the scenario was written
+                    # from. Kept on the question so the ask that goes out
+                    # carries them and the build that opens on it does too.
+                    "shots": normalize_shots(
+                        row.get("shots") if isinstance(row, dict) else None),
                     "thread": normalize_thread(
                         row.get("thread") if isinstance(row, dict) else None)})
         if len(out) >= MAX_QUESTIONS:
@@ -431,6 +437,11 @@ def render_understanding(goal) -> list:
                   " unless the work shows otherwise.", ""]
         for question in held["questions"]:
             lines.append("- " + question["text"])
+            # The screenshots the reader attached to this question, under it:
+            # what they are asking about is on the screen, and a build that
+            # never opens it is answering from the words alone.
+            for shot in question["shots"]:
+                lines.append("  - screenshot: " + shot["path"])
             for turn in question["thread"]:
                 if turn["q"] and turn["q"] != question["text"]:
                     lines.append("  - and then: " + turn["q"])
@@ -811,7 +822,48 @@ def depth(goals, gid, seen=None):
     return 1 + depth(goals, g["parent_goal_id"], seen | {gid})
 
 
+def subtree_ids(goals, gid):
+    """A goal's id and every id under it, deepest last.
+
+    A goal's children are goals, so anything that acts on one goal as a whole
+    -- the Archive's permanent delete is the only such thing -- has to know
+    what hangs off it. Cycles cannot survive sanitize(), but the seen set
+    costs nothing and a malformed file must not hang the server.
+    """
+    if not by_id(goals, gid):
+        return []
+    out, seen, edge = [], set(), [gid]
+    while edge:
+        here = edge.pop(0)
+        if here in seen:
+            continue
+        seen.add(here)
+        out.append(here)
+        edge.extend(g["id"] for g in goals.get("goals", [])
+                    if g.get("parent_goal_id") == here and g.get("id"))
+    return out
+
+
 MAX_DEPTH = 4          # a next action is a goal, one level below its subgoal
+
+# The four a goal may stand in. "archived" is what a delete writes: the record
+# is kept, out of the tree, and the Archive view is where it can be found
+# again. It used to be spelled "abandoned", which said the reader gave up
+# rather than that they put it away.
+STATUSES = ("active", "in_progress", "completed", "archived")
+ARCHIVED = "archived"
+# What the old spelling was. Goals written before the rename still carry it on
+# disk, and a browser cached before the rename still posts it; both are read as
+# "archived" rather than falling through to "active", which would resurrect
+# every goal the reader ever deleted.
+LEGACY_ARCHIVED = "abandoned"
+
+
+def norm_status(value):
+    """The stored spelling of a status, or None if it is not one of ours."""
+    if value == LEGACY_ARCHIVED:
+        return ARCHIVED
+    return value if value in STATUSES else None
 
 
 def sanitize(goals):
@@ -821,8 +873,7 @@ def sanitize(goals):
     for g in goals["goals"]:
         if g.get("parent_goal_id") not in ids:
             g["parent_goal_id"] = None
-        if g.get("status") not in ("active", "in_progress", "completed", "abandoned"):
-            g["status"] = "active"
+        g["status"] = norm_status(g.get("status")) or "active"
         # An unrecognised verdict is "core": the fold hides work, so the
         # failure to understand one must not be what hides it.
         if g.get("relevance") not in ("core", "supporting", "unrelated"):
@@ -957,9 +1008,7 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
             # only once -- created, and then never revisited, because the
             # evidence that would close it is the same evidence that made
             # it. Without this such a goal stays active for good.
-            born = o.get("status")
-            if born not in ("active", "in_progress", "completed", "abandoned"):
-                born = "active"
+            born = norm_status(o.get("status")) or "active"
             # How it stands to the objective, when the model said. Dropped
             # here until now, so every goal created by an incremental pass
             # came out "core" whatever the model judged -- and the tags on
@@ -993,9 +1042,9 @@ def apply_ops(goals, important, ops, max_new_top_level=1):
                 g["relevance_why"] = str(o.get("relevance_why") or "")[:200]
                 g["updated_at"] = _now()
                 changes.append(f"relevance {g['id']} -> {o['relevance']}")
-        elif op == "set_status" and g and o.get("status") in ("active", "in_progress", "completed", "abandoned"):
-            g["status"] = o["status"]; g["updated_at"] = _now()
-            changes.append(f"{g['title'][:36]} → {o['status']}")
+        elif op == "set_status" and g and norm_status(o.get("status")):
+            g["status"] = norm_status(o["status"]); g["updated_at"] = _now()
+            changes.append(f"{g['title'][:36]} → {g['status']}")
         elif op == "rename_goal" and g and o.get("title"):
             changes.append(f"rename {g['title'][:30]} → {o['title'][:30]}")
             g["title"] = o["title"]; g["updated_at"] = _now()

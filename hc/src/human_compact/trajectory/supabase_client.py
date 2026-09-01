@@ -972,6 +972,25 @@ def set_display_name(name: str, root: Optional[Path] = None) -> Dict[str, Any]:
     return {"ok": True, "display_name": (out or {}).get("display_name", "")}
 
 
+def set_reader_profile(profile: Dict[str, str],
+                       root: Optional[Path] = None) -> Dict[str, Any]:
+    """The four setup answers, put on the account.
+
+    The copy that survives a new laptop. The one every prompt actually
+    reads is the file in the vault -- see ``reader`` -- so this is allowed
+    to fail, and its caller keeps what was typed either way.
+    """
+    config = load_config(root)
+    session = current_session(root)
+    out = _rpc("hc_set_profile",
+               {"p_name": str(profile.get("name") or "")[:60],
+                "p_year": str(profile.get("year") or "")[:40],
+                "p_major": str(profile.get("major") or "")[:80],
+                "p_level": str(profile.get("level") or "")},
+               config, session["access_token"])
+    return {"ok": True, "profile": (out or {}).get("profile") or {}}
+
+
 def can_write(project_id: str, root: Optional[Path] = None) -> bool:
     """Whether this account may contribute to a project: its owner, or an
     editor on its roll. Asked of Postgres rather than guessed, because the
@@ -1087,3 +1106,35 @@ def sync_project(root: Optional[Path], cwd) -> Dict[str, Any]:
         {"payload": payload})
     return {"ok": True, "project_id": payload["project_id"],
             "sent": SY.counts(payload), "result": result}
+
+
+def delete_goal(root: Optional[Path], cwd, session_id: str,
+                local_id: str) -> Dict[str, Any]:
+    """One goal and its subtree, erased up here as well as on disk.
+
+    The sync never removes a goal -- an absent one is not evidence of a
+    delete -- so the Archive's permanent delete has to say so by name. The
+    remote id is derived from the project, the chat and the goal's local id,
+    the same three names the snapshot mints it from, so nothing has to be
+    looked up first.
+
+    Not minting a project id: a project that has never synced has no rows to
+    erase, and writing an id here to say so would be a mark left by a
+    delete.
+    """
+    if not cwd:
+        raise SupabaseError("this chat has no project directory")
+    if not session_id or not local_id:
+        raise SupabaseError("that goal has no id to delete by")
+    config = load_config(root)
+    if not config["url"] or not config["anon_key"]:
+        raise SupabaseError(f"fill in {config_path(root)} first")
+    session = current_session(root)
+    goal_id = SY.goal_uuid(SY.project_uuid(root, cwd, mint=False),
+                           session_id, local_id)
+    out = _rpc("hc_delete_goal", {"p_goal_id": goal_id}, config,
+               session["access_token"])
+    if isinstance(out, dict) and out.get("ok") is False:
+        raise SupabaseError(str(out.get("error") or "the delete was refused"))
+    return {"ok": True, "goal_id": goal_id,
+            "deleted": (out or {}).get("deleted", 0)}

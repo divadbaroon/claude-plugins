@@ -58,6 +58,25 @@ class GoalStructureTests(unittest.TestCase):
         )
         self.assertEqual("inferred", child["origin"])
 
+    def test_a_goal_deleted_before_the_rename_reads_as_archived(self):
+        # goals.json files written before "abandoned" became "archived" are
+        # still on disk. Read as archived, not fallen through to active --
+        # that would put every goal the reader ever deleted back in the tree.
+        goals = {"version": 1, "goals": [goal("g1")]}
+        goals["goals"][0]["status"] = "abandoned"
+
+        GM.sanitize(goals)
+
+        self.assertEqual("archived", GM.by_id(goals, "g1")["status"])
+
+    def test_a_status_nobody_uses_still_falls_back_to_active(self):
+        goals = {"version": 1, "goals": [goal("g1")]}
+        goals["goals"][0]["status"] = "shelved"
+
+        GM.sanitize(goals)
+
+        self.assertEqual("active", GM.by_id(goals, "g1")["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

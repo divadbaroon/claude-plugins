@@ -37,6 +37,17 @@
     return typeof value === "string" ? value : "";
   }
 
+  // What a delete writes: the goal is kept, out of the tree, and the Archive
+  // view is where it is found again. "abandoned" was the old spelling and is
+  // still what a store written before the rename carries, so both are read --
+  // otherwise every goal ever deleted would come back into the tree.
+  var ARCHIVED = "archived";
+
+  function isArchived(goal) {
+    var st = goal && goal.status;
+    return st === ARCHIVED || st === "abandoned";
+  }
+
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
@@ -124,7 +135,7 @@
       if (!r) {
         if (!l) return;
         // Absent from the remote tree with a local copy in hand. The server
-        // never erases a deleted goal -- it keeps it, marked abandoned, and
+        // never erases a deleted goal -- it keeps it, marked archived, and
         // the payload carries that marker -- so a goal the payload does not
         // even mention was LOST by a stale writer, not deleted by anyone.
         // Deleted: let it go. Lost (or locally created): keep ours; the
@@ -341,12 +352,23 @@
     try { localStorage.setItem(TOMB_KEY, JSON.stringify(tombs)); } catch (e) {}
   }
 
+  // Restoring from the Archive has to reach this memory too. The server can
+  // say a goal is active again, but if this side still remembers deleting it
+  // the merge below reads the goal as an absence to honour and drops it --
+  // the restore would land on disk and never appear.
+  function forgetTombs(ids) {
+    if (!ids.length) return;
+    var tombs = readTombs();
+    ids.forEach(function (id) { delete tombs[id]; });
+    try { localStorage.setItem(TOMB_KEY, JSON.stringify(tombs)); } catch (e) {}
+  }
+
   function deletedIdsOf(st) {
     // The tombstones: goals the server remembers as deleted. These are the
     // only absences mergeTrees may honour.
     var gone = Object.create(null);
     array(st && st.goals).forEach(function (goal) {
-      if (goal && goal.status === "abandoned" && typeof goal.id === "string") {
+      if (isArchived(goal) && typeof goal.id === "string") {
         gone[goal.id] = true;
       }
     });
@@ -685,7 +707,7 @@
       id: goal.id,
       title: str(goal.title),
       prio: goal.priority || "normal",
-      done: goal.status === "completed" || goal.status === "abandoned",
+      done: goal.status === "completed" || isArchived(goal),
       open: !(folded && folded[goal.id]),
       status: goal.status === "in_progress" ? "inprog" : "todo",
       notes: str(goal.notes),
@@ -713,12 +735,13 @@
     array(st && st.prompts).forEach(function (p) {
       if (p && typeof p.id === "string") byId[p.id] = p;
     });
-    // A goal the reader deleted is kept on disk as "abandoned" rather than
+    // A goal the reader deleted is kept on disk as "archived" rather than
     // erased, so nothing they wrote is lost -- but it is deleted to them, and
     // drawing it struck through under every filter makes the delete look like
-    // it failed. Leave it out of the tree; the record stays in goals.json.
+    // it failed. Leave it out of the tree; the record stays in goals.json and
+    // the Archive view is where it can be found, restored or really deleted.
     array(st && st.goals).forEach(function (goal) {
-      if (goal && goal.status === "abandoned") return;
+      if (isArchived(goal)) return;
       var parent = goal.parent_goal_id || null;
       (byParent[parent] = byParent[parent] || []).push(goal);
     });
@@ -2084,7 +2107,7 @@
 
   var ALERT_CSS = [
       ".hc-alert-stack{position:fixed;top:var(--hc-alerts-top,calc(var(--hc-top,37px) + 10px));right:16px;z-index:100002;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
-      ".hc-alert{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace;cursor:pointer}",
+      ".hc-alert{pointer-events:auto;position:relative;box-sizing:border-box;width:320px;max-width:calc(100vw - 32px);padding:9px 24px 9px 11px;border:1px solid var(--bd2,#d5d5d5);border-left:2px solid var(--acc,#a5492a);border-radius:6px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 var(--hc-sans);cursor:pointer}",
       ".hc-alert[data-hc-alert-kind=\"done\"]{border-left-color:var(--hc-ok,#1a7f37)}",
       ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
@@ -2094,17 +2117,17 @@
       ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
       ".hc-alert-detail{margin-top:3px;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-alert-goal{margin-top:2px;color:var(--fnt,#9b9b9b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".hc-alert-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:2px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 'Source Code Pro',monospace}",
+      ".hc-alert-close{position:absolute;top:4px;right:5px;width:15px;height:15px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--mut,#575757);cursor:pointer;user-select:none;font:12px/1 var(--hc-sans)}",
       ".hc-alert-close:hover{color:var(--ink,#111);background:var(--hov,#f4f4f4)}",
       // The bell, in the header slot the template leaves for it.
       ".hc-alerts{display:inline-flex;align-items:center;align-self:center}",
       ".hc-bell{position:relative;display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
       ".hc-bell:hover,.hc-bell[data-hc-bell-open]{color:var(--ink,#111)}",
-      ".hc-bell-count{display:none;position:absolute;top:-4px;right:-6px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:7px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:9px/14px 'Source Code Pro',monospace;text-align:center}",
+      ".hc-bell-count{display:none;position:absolute;top:-4px;right:-6px;min-width:14px;height:14px;padding:0 3px;box-sizing:border-box;border-radius:8px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:9px/14px var(--hc-sans);text-align:center}",
       ".hc-bell[data-hc-unread] .hc-bell-count{display:block}",
       // The center: a list under the bell, newest first, with the settings
       // that govern the banners at its foot.
-      ".hc-alert-center{position:fixed;top:var(--hc-alerts-top,calc(var(--hc-top,37px) + 6px));right:var(--hc-alerts-right,16px);z-index:100003;width:360px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-alerts-top,calc(var(--hc-top,37px) + 6px)) - 18px);display:flex;flex-direction:column;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-alert-center{position:fixed;top:var(--hc-alerts-top,calc(var(--hc-top,37px) + 6px));right:var(--hc-alerts-right,16px);z-index:100003;width:360px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-alerts-top,calc(var(--hc-top,37px) + 6px)) - 18px);display:flex;flex-direction:column;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 var(--hc-sans)}",
       ".hc-alert-center-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
       ".hc-alert-center-act{font-weight:400;color:var(--mut,#575757);cursor:pointer;user-select:none;margin-left:10px}",
       ".hc-alert-center-act:hover{color:var(--ink,#111)}",
@@ -2112,7 +2135,7 @@
       ".hc-alert-center-empty{padding:14px 11px;color:var(--mut,#575757)}",
       ".hc-alert-row{position:relative;display:block;padding:8px 11px 8px 22px;border-bottom:1px solid var(--bd,#e3e3e3);cursor:pointer}",
       ".hc-alert-row:hover{background:var(--hov,#f4f4f4)}",
-      ".hc-alert-row::before{content:'';position:absolute;left:9px;top:14px;width:6px;height:6px;border-radius:3px;background:transparent}",
+      ".hc-alert-row::before{content:'';position:absolute;left:9px;top:14px;width:6px;height:6px;border-radius:6px;background:transparent}",
       ".hc-alert-row[data-hc-alert-unread]::before{background:var(--acc,#a5492a)}",
       ".hc-alert-row[data-hc-alert-unread] .hc-alert-title{color:var(--ink,#111)}",
       ".hc-alert-row .hc-alert-title{font-weight:500;color:var(--mut,#575757)}",
@@ -2140,30 +2163,30 @@
       ".hc-settings{display:inline-flex;align-items:center;align-self:center}",
       ".hc-gear{display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
       ".hc-gear:hover,.hc-gear[data-hc-gear-open]{color:var(--ink,#111)}",
-      ".hc-settings-panel{position:fixed;top:var(--hc-settings-top,44px);right:var(--hc-settings-right,16px);z-index:100003;width:348px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-settings-top,44px) - 16px);text-align:left;display:flex;flex-direction:column;overflow-y:auto;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 12px 34px rgba(0,0,0,.18);font:12px/1.6 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-settings-panel{position:fixed;top:var(--hc-settings-top,44px);right:var(--hc-settings-right,16px);z-index:100003;width:348px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-settings-top,44px) - 16px);text-align:left;display:flex;flex-direction:column;overflow-y:auto;border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 12px 34px rgba(0,0,0,.18);font:12px/1.6 var(--hc-sans)}",
       ".hc-settings-tabs{display:flex;gap:20px;align-items:stretch;padding:0 18px;border-bottom:1px solid var(--bd,#e3e3e3)}",
-      ".hc-settings-tab{cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding:10px 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
+      ".hc-settings-tab{cursor:pointer;user-select:none;font:600 10px var(--hc-sans);letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding:10px 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
       ".hc-settings-tab:hover{color:var(--ink,#111)}",
       ".hc-settings-tab[data-hc-on]{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
       ".hc-settings-sec[data-hc-tab]{display:none}",
       ".hc-settings-sec[data-hc-tab][data-hc-on]{display:flex}",
-      ".hc-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:15px 18px 11px;font:800 14px 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--ink,#111)}",
-      ".hc-settings-act{flex:none;font:400 15px/1 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:2px 4px}",
+      ".hc-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:15px 18px 11px;font:800 14px var(--hc-sans);letter-spacing:.2px;color:var(--ink,#111)}",
+      ".hc-settings-act{flex:none;font:400 15px/1 var(--hc-sans);color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:2px 4px}",
       ".hc-settings-act:hover{color:var(--ink,#111)}",
       ".hc-settings-sec{padding:14px 18px 16px;display:flex;flex-direction:column;gap:9px;color:var(--mut,#575757)}",
       ".hc-settings-sec[data-hc-on]+.hc-settings-sec[data-hc-on]{border-top:1px solid var(--bd,#e3e3e3)}",
-      ".hc-settings-sec-head{font:600 10.5px 'Source Code Pro',monospace;letter-spacing:2px;text-transform:uppercase;color:var(--mut,#575757)}",
+      ".hc-settings-sec-head{font:600 10.5px var(--hc-sans);letter-spacing:2px;text-transform:uppercase;color:var(--mut,#575757)}",
       ".hc-settings-sec label{display:flex;align-items:center;gap:9px;cursor:pointer;color:var(--dtxt,#333)}",
-      ".hc-settings-sec input[type=number]{width:56px;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:4px 6px}",
-      ".hc-settings-sec input[type=text],.hc-settings-sec input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:7px 9px}",
+      ".hc-settings-sec input[type=number]{width:56px;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px var(--hc-sans);padding:4px 6px}",
+      ".hc-settings-sec input[type=text],.hc-settings-sec input[type=password]{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px var(--hc-sans);padding:7px 9px}",
       ".hc-settings-sec input:focus{outline:none;border-color:var(--acc,#a5492a)}",
-      ".hc-settings-sec select{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:6px 8px}",
+      ".hc-settings-sec select{width:100%;box-sizing:border-box;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px var(--hc-sans);padding:6px 8px}",
       ".hc-settings-sec select:focus{outline:none;border-color:var(--acc,#a5492a)}",
-      ".hc-settings-field{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;cursor:default;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-settings-field{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;cursor:default;font:600 9.5px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
       ".hc-settings-field>input{align-self:stretch;box-sizing:border-box}",
       ".hc-settings-hint{color:var(--fnt,#9b9b9b);font-size:10.5px;line-height:1.6;overflow-wrap:anywhere;margin-top:-3px}",
       ".hc-settings-row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}",
-      ".hc-settings-btn{cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      ".hc-settings-btn{cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:6px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
       ".hc-settings-btn[data-hc-quiet]{background:transparent;color:var(--mut,#575757);border-color:var(--bd2,#d5d5d5)}",
       ".hc-settings-btn[data-hc-quiet]:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-settings-btn[data-hc-busy]{opacity:.55;cursor:default}",
@@ -2172,11 +2195,11 @@
       ".hc-record-said{display:none}",
       ".hc-record-btn[data-hc-record-copy] .hc-record-said{display:inline;margin-left:6px;opacity:.85}",
       ".hc-record-btn[data-hc-record-copy=\"busy\"]{opacity:.55;cursor:progress}",
-      ".hc-settings-role{cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
+      ".hc-settings-role{cursor:pointer;user-select:none;font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
       ".hc-settings-role:hover{color:var(--ink,#111)}",
       ".hc-settings-code{display:none;flex-direction:column;gap:6px}",
       ".hc-settings-code[data-hc-on]{display:flex}",
-      ".hc-settings-code-box{display:block;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.6 'Source Code Pro',monospace;padding:8px 10px;word-break:break-all}",
+      ".hc-settings-code-box{display:block;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.6 var(--hc-sans);padding:8px 10px;word-break:break-all}",
       ".hc-settings-shares{display:flex;flex-direction:column;gap:5px;padding-top:2px}",
       ".hc-settings-shares:empty{display:none}",
       ".hc-settings-share-row{display:flex;gap:9px;align-items:baseline;font-size:10.5px;color:var(--mut,#575757);flex-wrap:wrap}",
@@ -2187,7 +2210,7 @@
       // the whole workspace -- goals, notes, TODO states, git -- on the
       // clipboard as markdown for a teammate's agent, and says so briefly.
       ".hc-handoff{display:inline-flex;align-items:center;align-self:center}",
-      ".hc-handoff-btn{position:relative;display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px;font:10px/1 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-handoff-btn{position:relative;display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px;font:10px/1 var(--hc-sans)}",
       ".hc-handoff-btn:hover{color:var(--ink,#111)}",
       ".hc-handoff-btn[data-hc-handoff=\"busy\"]{color:var(--mut,#575757);cursor:progress}",
       ".hc-handoff-btn[data-hc-handoff=\"copied\"]{color:var(--ok,#2f7d4f)}",
@@ -2196,7 +2219,7 @@
       ".hc-handoff-btn[data-hc-handoff] .hc-handoff-said{display:inline}",
       // On the Data tab it is a settings button first: its colours stay,
       // and the state -- assembling, copied, failed -- reads in the label.
-      ".hc-settings-panel .hc-handoff-btn,.hc-settings-panel .hc-handoff-btn[data-hc-handoff]{color:var(--onacc,#fff);padding:5px 10px;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-settings-panel .hc-handoff-btn,.hc-settings-panel .hc-handoff-btn[data-hc-handoff]{color:var(--onacc,#fff);padding:5px 10px;font:600 10px var(--hc-sans)}",
       ".hc-settings-panel .hc-handoff-btn .hc-handoff-said{margin-left:6px;opacity:.85}"
   ].join("");
 
@@ -2578,9 +2601,22 @@
     if (!job.question) {
       job.question = str(question).replace(/\s+/g, " ").replace(/^ | $/g, "");
     }
+    return understandAlertShut(goalId);
+  }
+
+  // One count off the job, and the banner when it was the last. A batch is
+  // sent one question at a time, so the count would fall to zero between two
+  // of them and say the batch was done three times over: understandSend
+  // holds a count of its own open across the whole chain and shuts it here.
+  function understandAlertShut(goalId) {
+    var job = understandOut[goalId];
+    if (!job) return [];
     job.out -= 1;
     if (job.out > 0) return [];
     delete understandOut[goalId];
+    // A held job whose every ask refused to go -- an emptied question, a
+    // scenario cleared while the chain ran -- has nothing to report.
+    if (!job.answered && !job.failed) return [];
     // One question named -- answered or not, it is the one the reader is
     // waiting on. A batch counts itself instead: four questions will not fit
     // on the one line a banner has.
@@ -3151,27 +3187,27 @@
   var PROJECT_CSS = [
       // The header spreads its children apart; the chip takes the slack on
       // its right so it stays against the brand, and the pills follow it.
-      ".hc-project{display:inline-flex;align-items:center;gap:8px;margin-left:10px;margin-right:auto;font:11px 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      ".hc-project{display:inline-flex;align-items:center;gap:8px;margin-left:10px;margin-right:auto;font:11px var(--hc-sans);color:var(--mut,#575757)}",
       ".hc-project:empty{display:none}",
       ".hc-project-sep{color:var(--fnt,#9b9b9b)}",
-      ".hc-project-name{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;color:var(--ink,#111);font-weight:600;padding:2px 4px;border-radius:4px}",
+      ".hc-project-name{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;color:var(--ink,#111);font-weight:600;padding:2px 4px;border-radius:6px}",
       ".hc-project-name:hover,.hc-project-name[data-hc-project-open]{background:var(--hov,#f2f2f2)}",
       ".hc-project-caret{font-size:8px;color:var(--fnt,#9b9b9b)}",
       // The menu under the name: facts, the overview, the project's chats.
-      ".hc-project-menu{position:fixed;top:var(--hc-project-top,42px);left:var(--hc-project-left,120px);z-index:100003;width:340px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-project-top,42px) - 16px);overflow-y:auto;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      ".hc-project-menu{position:fixed;top:var(--hc-project-top,42px);left:var(--hc-project-left,120px);z-index:100003;width:340px;max-width:calc(100vw - 32px);max-height:calc(100vh - var(--hc-project-top,42px) - 16px);overflow-y:auto;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel,#fff);color:var(--ink,#111);box-shadow:0 10px 30px rgba(0,0,0,.16);font:11px/1.5 var(--hc-sans)}",
       ".hc-project-menu-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);font-weight:600}",
       ".hc-project-menu-sub{font-weight:400;color:var(--mut,#575757);font-size:10px}",
       ".hc-project-act{padding:7px 11px;cursor:pointer;user-select:none;color:var(--ink,#111);border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-project-act:hover{background:var(--hov,#f2f2f2)}",
       ".hc-project-facts{padding:6px 11px 8px;border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-project-fact{display:flex;gap:10px;align-items:baseline;padding:2px 0}",
-      ".hc-project-fact-k{flex:none;width:62px;font:600 9px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
+      ".hc-project-fact-k{flex:none;width:62px;font:600 9px var(--hc-sans);letter-spacing:1px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
       ".hc-project-fact-v{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;color:var(--mut,#575757)}",
       ".hc-project-fact-v a{color:inherit}",
       ".hc-project-list{padding:6px 0;max-height:46vh;overflow-y:auto}",
       ".hc-project-row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;padding:7px 14px;cursor:pointer;user-select:none}",
       ".hc-project-row:hover{background:var(--hov,#f2f2f2)}",
-      ".hc-project-row-name{font:600 12.5px 'Source Code Pro',monospace;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-project-row-name{font:600 12.5px var(--hc-sans);color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-project-row[data-hc-active] .hc-project-row-name{color:var(--acc,#a5492a)}",
       ".hc-project-row-note{flex:none;font-size:10.5px;color:var(--fnt,#9b9b9b)}",
       ".hc-project-new{padding:9px 14px;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);border-top:1px solid var(--bd,#e3e3e3);font-size:12px}",
@@ -3182,19 +3218,19 @@
       ".hc-project-parent:empty{display:none}",
       ".hc-project-browse{flex:1 0 100%;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:10.5px}",
       ".hc-project-browse:hover{color:var(--ink,#111)}",
-      ".hc-project-newname{flex:1 1 auto;min-width:0;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:5px 7px}",
-      ".hc-project-newrepo{flex:1 0 100%;min-width:0;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--mut,#575757);font:10.5px 'Source Code Pro',monospace;padding:5px 7px}",
+      ".hc-project-newname{flex:1 1 auto;min-width:0;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px var(--hc-sans);padding:5px 7px}",
+      ".hc-project-newrepo{flex:1 0 100%;min-width:0;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--mut,#575757);font:10.5px var(--hc-sans);padding:5px 7px}",
       // The two questions a project nobody has worked in yet is asked, in
       // the menu that just made it.
       ".hc-project-setup{padding:2px 14px 10px;border-top:1px solid var(--bd,#e3e3e3);margin-top:2px}",
-      ".hc-project-setup-head{font:600 12px 'Source Code Pro',monospace;color:var(--ink,#111);padding:9px 0 3px}",
+      ".hc-project-setup-head{font:600 12px var(--hc-sans);color:var(--ink,#111);padding:9px 0 3px}",
       ".hc-project-setup-note{font-size:10px;color:var(--fnt,#9b9b9b);padding-bottom:8px;line-height:1.5}",
-      ".hc-project-setup-field{display:block;width:100%;box-sizing:border-box;margin-bottom:7px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:5px 7px}",
+      ".hc-project-setup-field{display:block;width:100%;box-sizing:border-box;margin-bottom:7px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 var(--hc-sans);padding:5px 7px}",
       ".hc-project-setup-field::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-project-setup-row{display:flex;align-items:center;gap:12px}",
       ".hc-project-setup-later{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:10.5px}",
       ".hc-project-setup-later:hover{color:var(--ink,#111)}",
-      ".hc-project-addbtn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:5px 9px}",
+      ".hc-project-addbtn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;color:var(--mut,#575757);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:5px 9px}",
       ".hc-project-addbtn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-project-say{padding:0 14px 8px;font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
       ".hc-project-say:empty{display:none}",
@@ -3202,17 +3238,17 @@
       // The overview: the whole window under the header. It is the
       // project's screen, not a pane of the goal's -- both rails are
       // covered, and GOALS (or Esc) brings the three columns back.
-      ".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 24px 24px;box-sizing:border-box}",
+      ".hc-overview{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 var(--hc-sans);padding:0 24px 24px;box-sizing:border-box}",
       "[data-hc-overview] .hc-overview{display:block}",
       ".hc-overview-tabs{display:flex;gap:22px;align-items:baseline;padding:12px 0 0;border-bottom:1px solid var(--bd,#e3e3e3);margin:0 -24px 16px;padding-left:24px;padding-right:24px}",
-      ".hc-overview-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
+      ".hc-overview-tab{font:600 10px var(--hc-sans);letter-spacing:1.4px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
       ".hc-overview-tab:hover{color:var(--ink,#111)}",
       ".hc-overview-tab-on{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
-      ".hc-overview-card{border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:20px 24px;margin-bottom:18px}",
+      ".hc-overview-card{border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);padding:20px 24px;margin-bottom:18px}",
       ".hc-overview-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}",
       ".hc-overview-ctxhead{display:flex;justify-content:space-between;align-items:baseline;gap:14px;margin:0 2px 10px}",
-      ".hc-overview-refreshed{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      ".hc-overview-about{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;resize:none;border:0;outline:none;background:transparent;font:12.5px/1.7 'Source Code Pro',monospace;color:var(--mut,#575757);caret-color:var(--ink,#111)}",
+      ".hc-overview-refreshed{font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-about{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;resize:none;border:0;outline:none;background:transparent;font:12.5px/1.7 var(--hc-sans);color:var(--mut,#575757);caret-color:var(--ink,#111)}",
       ".hc-overview-about::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-overview-sec{margin-top:18px;border-top:1px solid var(--bd,#e3e3e3);padding-top:14px}",
       ".hc-overview-facts{margin-top:14px;display:flex;flex-direction:column;gap:7px}",
@@ -3220,16 +3256,16 @@
       ".hc-overview-fact-k{flex:none;width:108px;color:var(--fnt,#9b9b9b);letter-spacing:1px;font-size:10.5px;padding-top:3px}",
       ".hc-overview-fact-v{color:var(--mut,#575757);overflow-wrap:anywhere;font-size:12px}",
       "a.hc-overview-fact-v{color:var(--acc,#a5492a)}",
-      ".hc-overview-name{display:block;width:100%;box-sizing:border-box;border:0;outline:none;background:transparent;padding:0;font:800 16px 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--ink,#111);caret-color:var(--ink,#111)}",
+      ".hc-overview-name{display:block;width:100%;box-sizing:border-box;border:0;outline:none;background:transparent;padding:0;font:800 16px var(--hc-sans);letter-spacing:.2px;color:var(--ink,#111);caret-color:var(--ink,#111)}",
       ".hc-overview-name::placeholder{color:var(--fnt,#9b9b9b);font-weight:600}",
-      ".hc-overview-label{font:600 11.5px 'Source Code Pro',monospace;letter-spacing:2px;color:var(--mut,#575757);text-transform:uppercase}",
+      ".hc-overview-label{font:600 11.5px var(--hc-sans);letter-spacing:2px;color:var(--mut,#575757);text-transform:uppercase}",
       ".hc-overview-label small{font-weight:400;letter-spacing:.2px;text-transform:none;color:var(--fnt,#9b9b9b);margin-left:6px}",
-      ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;font-size:15.5px!important;font-weight:600;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12.5px/1.6 'Source Code Pro',monospace;caret-color:var(--ink,#111)}",
+      ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;font-size:15.5px!important;font-weight:600;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12.5px/1.6 var(--hc-sans);caret-color:var(--ink,#111)}",
       ".hc-overview-objective::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-overview-worktree{align-items:center}",
-      ".hc-overview-wt{margin-left:6px;max-width:100%;border:1px solid var(--bd2);border-radius:3px;background:var(--panel2);color:var(--ink,#111);font:11.5px/1.5 'Source Code Pro',monospace;padding:2px 6px;cursor:pointer;outline:none}",
+      ".hc-overview-wt{margin-left:6px;max-width:100%;border:1px solid var(--bd2);border-radius:6px;background:var(--panel2);color:var(--ink,#111);font:11.5px/1.5 var(--hc-sans);padding:2px 6px;cursor:pointer;outline:none}",
       ".hc-overview-wt:hover{border-color:var(--acc)}",
-      ".hc-overview-context{display:flex;box-sizing:border-box;max-width:100%;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);min-height:320px}",
+      ".hc-overview-context{display:flex;box-sizing:border-box;max-width:100%;border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);min-height:320px}",
       ".hc-overview-srcs{flex:0 0 220px;border-right:1px solid var(--bd,#e3e3e3);padding:14px 12px}",
       ".hc-overview-src{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:6px;cursor:pointer;user-select:none;margin-bottom:2px}",
       ".hc-overview-src:hover{background:var(--hov,#f2f2f2)}",
@@ -3246,7 +3282,7 @@
       // conversation out of sixty.
       ".hc-overview-modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:24;background:rgba(0,0,0,.45);align-items:flex-start;justify-content:center;padding:9vh 20px 20px;box-sizing:border-box}",
       ".hc-overview-modal[data-hc-on]{display:flex}",
-      ".hc-overview-modal-card{width:100%;max-width:520px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:10px;background:var(--panel,#fff);box-shadow:0 18px 48px rgba(0,0,0,.28);padding:18px 20px 20px;max-height:78vh;overflow-y:auto}",
+      ".hc-overview-modal-card{width:100%;max-width:520px;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:8px;background:var(--panel,#fff);box-shadow:0 18px 48px rgba(0,0,0,.28);padding:18px 20px 20px;max-height:78vh;overflow-y:auto}",
       ".hc-overview-modal-head{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:14px}",
       ".hc-overview-modal-x{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:16px;line-height:1;padding:0 2px}",
       ".hc-overview-modal-x:hover{color:var(--ink,#111)}",
@@ -3256,7 +3292,7 @@
       ".hc-overview-kind{cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:999px;padding:3px 9px;font-size:10px;color:var(--mut,#575757)}",
       ".hc-overview-kind:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-overview-kind-on{background:var(--acc,#a5492a);border-color:var(--acc,#a5492a);color:var(--onacc,#fff)}",
-      ".hc-overview-srcpath{box-sizing:border-box;width:100%;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px 'Source Code Pro',monospace;padding:5px 7px}",
+      ".hc-overview-srcpath{box-sizing:border-box;width:100%;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px var(--hc-sans);padding:5px 7px}",
       ".hc-overview-srcchats{display:none;flex-direction:column;max-height:230px;overflow-y:auto;border:1px solid var(--bd,#e3e3e3);border-radius:6px}",
       ".hc-overview-srcchats[data-hc-on]{display:flex}",
       ".hc-overview-srcchat{display:flex;gap:9px;align-items:baseline;cursor:pointer;user-select:none;padding:6px 9px;font-size:10.5px;color:var(--mut,#575757)}",
@@ -3270,44 +3306,65 @@
       ".hc-overview-srcchat-when{flex:none;color:var(--fnt,#9b9b9b)}",
       ".hc-overview-srcbtn[data-hc-off]{display:none}",
       ".hc-overview-srcrow{display:flex;gap:9px;align-items:center}",
-      ".hc-overview-srcbtn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:4px 9px}",
+      ".hc-overview-srcbtn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;color:var(--mut,#575757);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:4px 9px}",
       ".hc-overview-srcbtn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-overview-srcbtn-quiet{border-style:dashed}",
       ".hc-overview-srcsay{font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
       ".hc-overview-srcsay[data-hc-bad]{color:var(--bad,#a12d2d)}",
-      // The two pages of the overview box. One is up at a time; which is
-      // written on the box, so a redraw cannot lose the reader's place.
-      ".hc-overview-main,.hc-saved,.hc-docs{display:none}",
-      ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on],.hc-docs[data-hc-on]{display:block}",
+      // The pages of the overview box. One is up at a time; which is written
+      // on the box, so a redraw cannot lose the reader's place.
+      ".hc-overview-main,.hc-saved,.hc-docs,.hc-archive{display:none}",
+      ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on],.hc-docs[data-hc-on],.hc-archive[data-hc-on]{display:block}",
       ".hc-docs-list{display:flex;flex-direction:column;gap:12px;max-width:680px}",
-      ".hc-docs-card{border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:14px 18px}",
-      ".hc-docs-q{font:600 12px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-docs-card{border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);padding:14px 18px}",
+      ".hc-docs-q{font:600 12px var(--hc-sans);color:var(--ink,#111)}",
       ".hc-docs-a{margin-top:5px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
-      ".hc-docs-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-docs-note{font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
       ".hc-docs-steps{margin:8px 0 0;padding-left:18px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
       ".hc-docs-step{margin-top:3px}",
       ".hc-docs-reach{margin-top:22px;border-top:1px solid var(--bd,#e3e3e3);padding-top:14px;max-width:680px}",
       ".hc-docs-reach-row{display:flex;gap:14px;padding:9px 2px;border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-docs-reach-row:last-child{border-bottom:0}",
-      ".hc-docs-reach-where{flex:none;width:64px;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding-top:2px}",
+      ".hc-docs-reach-where{flex:none;width:64px;font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b);padding-top:2px}",
       ".hc-docs-reach-at{display:block;font-size:12px;color:var(--ink,#111);overflow-wrap:anywhere}",
       "a.hc-docs-reach-at{color:var(--acc,#a5492a);text-decoration:none}",
       "a.hc-docs-reach-at:hover{text-decoration:underline}",
       ".hc-docs-reach-note{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-top:1px}",
-      ".hc-saved-note{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-saved-note{font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
       ".hc-saved-acts{display:flex;gap:9px;align-items:center;margin:0 2px 14px}",
       ".hc-saved-link{flex:1 1 auto;width:auto;max-width:520px}",
-      ".hc-saved-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);overflow:hidden}",
+      ".hc-saved-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);overflow:hidden}",
       ".hc-saved-empty{padding:22px 20px;color:var(--fnt,#9b9b9b);font-size:11.5px}",
       ".hc-saved-row{display:flex;gap:12px;align-items:baseline;padding:11px 16px;border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-saved-row:last-child{border-bottom:0}",
-      ".hc-saved-tag{flex:none;width:38px;font:600 9px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
+      ".hc-saved-tag{flex:none;width:38px;font:600 9px var(--hc-sans);letter-spacing:1px;color:var(--fnt,#9b9b9b)}",
       ".hc-saved-text{flex:1 1 auto;min-width:0}",
       ".hc-saved-name{font-size:12.5px;color:var(--ink,#111);overflow-wrap:anywhere}",
       "a.hc-saved-name{color:var(--acc,#a5492a);text-decoration:none}",
       ".hc-saved-ref{font-size:10.5px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere;margin-top:2px}",
       ".hc-saved-x{flex:none;cursor:pointer;color:var(--fnt,#9b9b9b);font-size:13px}",
       ".hc-saved-x:hover{color:var(--bad,#a12d2d)}",
+      ".hc-archive-note{font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
+      ".hc-archive-say{margin:0 2px 12px;font-size:11px;color:var(--fnt,#9b9b9b);min-height:14px}",
+      ".hc-archive-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
+      ".hc-archive-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);overflow:hidden}",
+      ".hc-archive-empty{padding:22px 20px;color:var(--fnt,#9b9b9b);font-size:11.5px}",
+      ".hc-archive-row{display:flex;gap:14px;align-items:flex-start;padding:12px 16px;border-bottom:1px solid var(--bd,#e3e3e3)}",
+      ".hc-archive-row:last-child{border-bottom:0}",
+      ".hc-archive-text{flex:1 1 auto;min-width:0}",
+      ".hc-archive-path{font:600 9px var(--hc-sans);letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:2px;overflow-wrap:anywhere}",
+      ".hc-archive-name{font-size:12.5px;color:var(--ink,#111);overflow-wrap:anywhere}",
+      ".hc-archive-warn{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-top:3px}",
+      ".hc-archive-todos{margin-top:6px;display:flex;flex-direction:column;gap:2px}",
+      ".hc-archive-todo{display:flex;gap:7px;align-items:baseline;font-size:11.5px;color:var(--mut,#575757)}",
+      ".hc-archive-dash{flex:none;color:var(--fnt,#9b9b9b)}",
+      ".hc-archive-todotext{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}",
+      ".hc-archive-state{flex:none;font:600 8.5px var(--hc-sans);letter-spacing:.5px;color:var(--fnt,#9b9b9b)}",
+      ".hc-archive-acts{flex:none;display:inline-flex;gap:12px;align-items:baseline}",
+      ".hc-archive-btn{cursor:pointer;font:600 11px var(--hc-sans);color:var(--acc,#a5492a)}",
+      ".hc-archive-btn:hover{text-decoration:underline}",
+      ".hc-archive-btn-bad{color:var(--fnt,#9b9b9b)}",
+      ".hc-archive-btn-bad:hover{color:var(--bad,#a12d2d)}",
       ".hc-overview-reading{display:none;flex:1 1 auto;min-width:0;padding:16px 20px 20px}",
       ".hc-overview-reading[data-hc-on]{display:block}",
       ".hc-overview-repo[data-hc-off]{display:none}",
@@ -3316,25 +3373,25 @@
       ".hc-overview-turn-who{flex:none;width:64px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
       ".hc-overview-turn[data-hc-role=\"user\"] .hc-overview-turn-who{color:var(--acc,#a5492a)}",
       ".hc-overview-turn-text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dtxt,#333)}",
-      ".hc-overview-addsrc{margin-top:8px;padding:7px 10px;cursor:pointer;user-select:none;font:12px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-addsrc{margin-top:8px;padding:7px 10px;cursor:pointer;user-select:none;font:12px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
       ".hc-overview-addsrc:hover{color:var(--ink,#111)}",
-      ".hc-overview-src-glyph{flex:none;width:18px;height:18px;border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 9px/18px 'Source Code Pro',monospace;text-align:center}",
+      ".hc-overview-src-glyph{flex:none;width:18px;height:18px;border-radius:6px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 9px/18px var(--hc-sans);text-align:center}",
       ".hc-overview-src-name{font-weight:600;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-overview-src-kind{font-size:9.5px;color:var(--fnt,#9b9b9b)}",
       ".hc-overview-repo{flex:1 1 auto;min-width:0;padding:16px 20px 20px}",
-      ".hc-overview-repo-name{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-overview-repo-name{font:600 13px var(--hc-sans);color:var(--ink,#111)}",
       ".hc-overview-repo-meta{font-size:10.5px;color:var(--mut,#575757);margin-top:2px;overflow-wrap:anywhere}",
       ".hc-overview-repo-meta a{color:inherit}",
       ".hc-overview-panes{display:flex;gap:18px;border-bottom:1px solid var(--bd,#e3e3e3);margin:14px 0 14px}",
-      ".hc-overview-pane-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 7px;border-bottom:2px solid transparent;margin-bottom:-1px}",
+      ".hc-overview-pane-tab{font:600 10px var(--hc-sans);letter-spacing:.6px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 7px;border-bottom:2px solid transparent;margin-bottom:-1px}",
       ".hc-overview-pane-tab:hover{color:var(--ink,#111)}",
       ".hc-overview-pane-tab-on{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
       ".hc-overview-panebody{min-width:0}",
       ".hc-overview-ask{display:flex;flex-direction:column;gap:9px}",
-      ".hc-overview-askfield{box-sizing:border-box;width:100%;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',monospace;padding:8px 10px}",
+      ".hc-overview-askfield{box-sizing:border-box;width:100%;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:12px/1.6 var(--hc-sans);padding:8px 10px}",
       ".hc-overview-askout:empty{display:none}",
       ".hc-overview-askout{border-top:1px solid var(--bd,#e3e3e3);padding-top:12px}",
-      ".hc-md{font:12.5px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);max-height:60vh;overflow-y:auto;overflow-wrap:anywhere}",
+      ".hc-md{font:12.5px/1.7 var(--hc-sans);color:var(--dtxt,#333);max-height:60vh;overflow-y:auto;overflow-wrap:anywhere}",
       ".hc-md-h{font-weight:700;color:var(--ink,#111);margin:18px 0 8px;line-height:1.35}",
       ".hc-md-h:first-child{margin-top:0}",
       ".hc-md-h1{font-size:19px;letter-spacing:-.2px}",
@@ -3349,24 +3406,24 @@
       ".hc-md-bullet{flex:none;color:var(--fnt,#9b9b9b);min-width:14px}",
       ".hc-md-itemtext{min-width:0}",
       ".hc-md-row{margin:0 0 4px;color:var(--mut,#575757)}",
-      ".hc-md-pre{margin:0 0 12px;padding:11px 13px;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px/1.6 'Source Code Pro',monospace;white-space:pre;overflow-x:auto}",
-      ".hc-md-code{padding:1px 5px;border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--acc,#a5492a);font-size:11.5px}",
+      ".hc-md-pre{margin:0 0 12px;padding:11px 13px;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px/1.6 var(--hc-sans);white-space:pre;overflow-x:auto}",
+      ".hc-md-code{padding:1px 5px;border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--acc,#a5492a);font-size:11.5px}",
       ".hc-md-link{color:var(--acc,#a5492a)}",
       ".hc-md-img{color:var(--fnt,#9b9b9b);font-style:italic}",
       ".hc-overview-sync{display:flex;align-items:center;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--bd,#e3e3e3)}",
-      ".hc-overview-sync-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      ".hc-overview-sync-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:6px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
       ".hc-overview-sync-btn[data-hc-busy]{opacity:.55;cursor:default}",
       ".hc-overview-sync-btn[data-hc-off]{background:transparent;color:var(--fnt,#9b9b9b);border-color:var(--bd2,#d5d5d5);cursor:default}",
-      ".hc-overview-sync-say{font:11px/1.5 'Source Code Pro',monospace;color:var(--mut,#575757);overflow-wrap:anywhere}",
+      ".hc-overview-sync-say{font:11px/1.5 var(--hc-sans);color:var(--mut,#575757);overflow-wrap:anywhere}",
       ".hc-overview-sync-bad{color:var(--bad,#a12d2d)}",
-      ".hc-overview-share-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:transparent;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      ".hc-overview-share-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:transparent;color:var(--mut,#575757);font:600 10px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
       ".hc-overview-share-btn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-overview-share-btn[data-hc-busy],.hc-overview-share-btn[data-hc-off]{opacity:.55;cursor:default}",
-      ".hc-overview-share-role{flex:none;cursor:pointer;user-select:none;font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
+      ".hc-overview-share-role{flex:none;cursor:pointer;user-select:none;font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;color:var(--mut,#575757);border-bottom:1px dashed var(--bd2,#d5d5d5);padding-bottom:1px}",
       ".hc-overview-share-role:hover{color:var(--ink,#111)}",
       ".hc-overview-code{margin-top:12px;display:none;flex-direction:column;gap:7px}",
       ".hc-overview-code[data-hc-on]{display:flex}",
-      ".hc-overview-code-box{display:block;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:8px 10px;word-break:break-all}",
+      ".hc-overview-code-box{display:block;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 var(--hc-sans);padding:8px 10px;word-break:break-all}",
       ".hc-overview-code-row{display:flex;gap:10px;align-items:center}",
       ".hc-overview-code-warn{font-size:10.5px;color:var(--mut,#575757)}",
       ".hc-overview-shares{margin-top:10px;display:flex;flex-direction:column;gap:4px}",
@@ -3381,21 +3438,21 @@
       // leave the reader arguing with a tree they cannot see. What it does
       // cover is the document and the TODO rail -- a brainstorm is not a
       // place to be editing rows.
-      ".hc-brainstorm{display:none;position:fixed;top:var(--hc-top,37px);left:var(--hc-bs-left,300px);right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;box-sizing:border-box}",
+      ".hc-brainstorm{display:none;position:fixed;top:var(--hc-top,37px);left:var(--hc-bs-left,300px);right:0;bottom:0;z-index:18;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 var(--hc-sans);box-sizing:border-box}",
       "[data-hc-brainstorm] .hc-brainstorm{display:flex;flex-direction:column}",
       ".hc-bs-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:22px 28px 8px}",
       ".hc-bs-col{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:14px}",
       ".hc-bs-msg{display:flex;flex-direction:column;gap:5px}",
-      ".hc-bs-who{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-who{font:600 9.5px var(--hc-sans);letter-spacing:1.2px;color:var(--fnt,#9b9b9b)}",
       ".hc-bs-body{white-space:pre-wrap;word-break:break-word;color:var(--mut,#575757);font-size:12.5px;line-height:1.75}",
       ".hc-bs-msg[data-hc-role=\"you\"] .hc-bs-body{color:var(--ink,#111)}",
       ".hc-bs-card{border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);padding:16px 18px}",
-      ".hc-bs-eyebrow{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt,#9b9b9b);margin-bottom:10px}",
-      ".hc-bs-title{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111);margin-bottom:4px}",
+      ".hc-bs-eyebrow{font:600 9.5px var(--hc-sans);letter-spacing:1.4px;color:var(--fnt,#9b9b9b);margin-bottom:10px}",
+      ".hc-bs-title{font:600 13px var(--hc-sans);color:var(--ink,#111);margin-bottom:4px}",
       ".hc-bs-sub{font-size:10.5px;color:var(--fnt,#9b9b9b);margin-bottom:8px}",
       // A heading for a field further down the card, rather than the line
       // under a title: it needs air above it, which a subtitle does not.
-      ".hc-bs-lbl{margin:17px 0 5px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-lbl{margin:17px 0 5px;font:600 9.5px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
       ".hc-bs-q{margin-bottom:16px}",
       ".hc-bs-q:last-of-type{margin-bottom:0}",
       // One row per choice, ticked in place. The `why` under a label is what
@@ -3403,12 +3460,12 @@
       ".hc-bs-opt{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border:1px solid transparent;border-radius:6px;cursor:pointer;user-select:none}",
       ".hc-bs-opt:hover{background:var(--hov,#f2f2f2)}",
       ".hc-bs-opt[data-hc-on=\"1\"]{border-color:var(--acc,#a5492a);background:var(--accbg,#f5e2d9)}",
-      ".hc-bs-mark{flex:none;width:12px;height:12px;margin-top:3px;border:1px solid var(--bd2,#d5d5d5);border-radius:50%;font:9px/12px 'Source Code Pro',monospace;text-align:center;color:var(--acc,#a5492a)}",
-      ".hc-bs-mark-many{border-radius:2px}",
+      ".hc-bs-mark{flex:none;width:12px;height:12px;margin-top:3px;border:1px solid var(--bd2,#d5d5d5);border-radius:50%;font:9px/12px var(--hc-sans);text-align:center;color:var(--acc,#a5492a)}",
+      ".hc-bs-mark-many{border-radius:6px}",
       ".hc-bs-opt[data-hc-on=\"1\"] .hc-bs-mark{border-color:var(--acc,#a5492a)}",
       ".hc-bs-opt-label{display:block;color:var(--ink,#111);font-size:12px}",
       ".hc-bs-opt-why{display:block;margin-top:2px;color:var(--fnt,#9b9b9b);font-size:10.5px;line-height:1.55}",
-      ".hc-bs-field{display:block;width:100%;box-sizing:border-box;margin-top:8px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:3px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px/1.6 'Source Code Pro',monospace;padding:7px 9px;outline:none}",
+      ".hc-bs-field{display:block;width:100%;box-sizing:border-box;margin-top:8px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11.5px/1.6 var(--hc-sans);padding:7px 9px;outline:none}",
       ".hc-bs-field::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-bs-field:focus{border-color:var(--acc,#a5492a)}",
       // Where approved rows land: searched, not scrolled through. A native
@@ -3420,27 +3477,27 @@
       ".hc-bs-pick-field{display:flex;align-items:center;gap:8px;padding:0 9px;border-bottom:1px solid var(--bd,#e3e3e3)}",
       ".hc-bs-pick-glyph{flex:none;display:flex;align-items:center;color:var(--fnt,#9b9b9b)}",
       ".hc-bs-pick:focus-within .hc-bs-pick-glyph{color:var(--acc,#a5492a)}",
-      ".hc-bs-pick-input{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;outline:none;background:transparent;color:var(--ink,#111);font:11.5px 'Source Code Pro',monospace;padding:7px 0;-webkit-appearance:none;appearance:none}",
+      ".hc-bs-pick-input{flex:1 1 auto;min-width:0;box-sizing:border-box;border:0;outline:none;background:transparent;color:var(--ink,#111);font:11.5px var(--hc-sans);padding:7px 0;-webkit-appearance:none;appearance:none}",
       ".hc-bs-pick-input::placeholder{color:var(--fnt,#9b9b9b)}",
-      ".hc-bs-pick-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:14px/1 'Source Code Pro',monospace;padding:2px}",
+      ".hc-bs-pick-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:14px/1 var(--hc-sans);padding:2px}",
       ".hc-bs-pick-clear:hover{color:var(--ink,#111)}",
       ".hc-bs-pick-field[data-hc-typed] .hc-bs-pick-clear{display:block}",
       ".hc-bs-pick-list{max-height:176px;overflow-y:auto;padding:4px}",
-      ".hc-bs-pick-row{display:flex;gap:9px;align-items:center;padding:6px 8px;border:1px solid transparent;border-radius:4px;cursor:pointer;user-select:none}",
+      ".hc-bs-pick-row{display:flex;gap:9px;align-items:center;padding:6px 8px;border:1px solid transparent;border-radius:6px;cursor:pointer;user-select:none}",
       ".hc-bs-pick-row:hover{background:var(--hov,#f2f2f2)}",
       ".hc-bs-pick-row[data-hc-on=\"1\"]{border-color:var(--acc,#a5492a);background:var(--accbg,#f5e2d9)}",
       ".hc-bs-pick-row .hc-bs-mark{margin-top:0}",
       ".hc-bs-pick-title{flex:1 1 auto;min-width:0;color:var(--ink,#111);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       ".hc-bs-pick-none{padding:7px 9px;color:var(--fnt,#9b9b9b);font-size:10.5px}",
       ".hc-bs-acts{display:flex;flex-wrap:wrap;gap:9px;align-items:center;margin-top:14px}",
-      ".hc-bs-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:transparent;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:6px 11px}",
+      ".hc-bs-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:transparent;color:var(--mut,#575757);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:6px 11px}",
       ".hc-bs-btn:hover{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
       ".hc-bs-btn-on{border-color:var(--acc,#a5492a);background:var(--acc,#a5492a);color:var(--onacc,#fff)}",
       ".hc-bs-btn-on:hover{color:var(--onacc,#fff)}",
       ".hc-bs-btn[disabled]{opacity:.45;cursor:default;border-color:var(--bd2,#d5d5d5);color:var(--fnt,#9b9b9b);background:transparent}",
       ".hc-bs-kids{margin-top:6px;padding-left:14px;display:flex;flex-direction:column;gap:3px}",
       ".hc-bs-kid{color:var(--mut,#575757);font-size:11.5px}",
-      ".hc-bs-piece{margin-top:12px;font:600 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-bs-piece{margin-top:12px;font:600 11.5px var(--hc-sans);color:var(--ink,#111)}",
       ".hc-bs-say{margin-top:8px;font-size:10.5px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
       ".hc-bs-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
       ".hc-bs-think{display:flex;align-items:center;gap:9px;color:var(--fnt,#9b9b9b);font-size:11px}",
@@ -3450,13 +3507,13 @@
       // the place to type in one does not scroll away from you.
       ".hc-bs-foot{flex:none;border-top:1px solid var(--bd,#e3e3e3);background:var(--bg,#fff);padding:12px 28px 16px}",
       ".hc-bs-tools{max-width:720px;margin:0 auto 7px;display:flex;justify-content:flex-end}",
-      ".hc-bs-new{cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:2px 4px}",
+      ".hc-bs-new{cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 9.5px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;padding:2px 4px}",
       ".hc-bs-new:hover{color:var(--acc,#a5492a)}",
       ".hc-bs-composer{max-width:720px;margin:0 auto;display:flex;gap:9px;align-items:flex-end;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);padding:8px 10px}",
       ".hc-bs-composer:focus-within{border-color:var(--acc,#a5492a)}",
-      ".hc-bs-input{flex:1 1 auto;min-width:0;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12px/1.6 'Source Code Pro',monospace;max-height:160px}",
+      ".hc-bs-input{flex:1 1 auto;min-width:0;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12px/1.6 var(--hc-sans);max-height:160px}",
       ".hc-bs-input::placeholder{color:var(--fnt,#9b9b9b)}",
-      ".hc-bs-send{flex:none;cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:4px 6px}",
+      ".hc-bs-send{flex:none;cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:4px 6px}",
       ".hc-bs-send[disabled]{opacity:.4;cursor:default}",
       ".hc-bs-send:not([disabled]){color:var(--acc,#a5492a)}"
   ].join("\n");
@@ -4039,47 +4096,47 @@
   // with the one already running rather than starting a rival.
 
   var HOME_CSS = [
-      ".hc-home{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:19;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 'Source Code Pro',ui-monospace,monospace;padding:0 24px 40px;box-sizing:border-box}",
+      ".hc-home{display:none;position:fixed;top:var(--hc-top,37px);left:0;right:0;bottom:0;z-index:19;overflow-y:auto;background:var(--bg,#fff);color:var(--ink,#111);font:12px/1.6 var(--hc-sans);padding:0 24px 40px;box-sizing:border-box}",
       "[data-hc-home] .hc-home{display:block}",
       ".hc-home-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:26px 0 6px}",
-      ".hc-home-title{font:600 15px 'Source Code Pro',monospace;color:var(--ink,#111);letter-spacing:.2px}",
+      ".hc-home-title{font:600 15px var(--hc-sans);color:var(--ink,#111);letter-spacing:.2px}",
       ".hc-home-note{font-size:11px;color:var(--fnt,#9b9b9b)}",
       ".hc-home-sub{font-size:11px;color:var(--mut,#575757);padding-bottom:18px;max-width:70ch;line-height:1.7}",
       ".hc-home-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}",
-      ".hc-home-card{position:relative;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:16px 18px 14px;cursor:pointer;user-select:none;display:flex;flex-direction:column;gap:7px;min-height:118px}",
+      ".hc-home-card{position:relative;border:1px solid var(--bd,#e3e3e3);border-radius:8px;background:var(--panel,#fff);padding:16px 18px 14px;cursor:pointer;user-select:none;display:flex;flex-direction:column;gap:7px;min-height:118px}",
       ".hc-home-card:hover{border-color:var(--acc,#a5492a)}",
       ".hc-home-card[data-hc-active]{border-color:var(--acc,#a5492a);box-shadow:inset 3px 0 0 var(--acc,#a5492a)}",
-      ".hc-home-name{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:22px}",
+      ".hc-home-name{font:600 13px var(--hc-sans);color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:22px}",
       ".hc-home-card[data-hc-active] .hc-home-name{color:var(--acc,#a5492a)}",
       ".hc-home-why{flex:1 1 auto;font-size:11px;color:var(--mut,#575757);line-height:1.6;overflow:hidden}",
       ".hc-home-why[data-hc-empty]{color:var(--fnt,#9b9b9b);font-style:italic}",
       ".hc-home-where{font-size:10px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
-      ".hc-home-facts{display:flex;gap:12px;font:10px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
+      ".hc-home-facts{display:flex;gap:12px;font:10px var(--hc-sans);letter-spacing:.6px;color:var(--fnt,#9b9b9b);text-transform:uppercase}",
       ".hc-home-here{color:var(--acc,#a5492a)}",
-      ".hc-home-x{position:absolute;top:10px;right:11px;width:18px;height:18px;line-height:17px;text-align:center;border-radius:3px;color:var(--fnt,#9b9b9b);font-size:13px;cursor:pointer;opacity:0}",
+      ".hc-home-x{position:absolute;top:10px;right:11px;width:18px;height:18px;line-height:17px;text-align:center;border-radius:6px;color:var(--fnt,#9b9b9b);font-size:13px;cursor:pointer;opacity:0}",
       ".hc-home-card:hover .hc-home-x{opacity:1}",
       ".hc-home-x:hover{background:var(--hov,#f2f2f2);color:var(--bad,#a12d2d)}",
       ".hc-home-gone-row{display:flex;gap:10px;align-items:center}",
       ".hc-home-modal{position:fixed;top:0;left:0;right:0;bottom:0;z-index:100010;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);padding:24px;box-sizing:border-box}",
-      ".hc-home-dialog{width:460px;max-width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:10px;background:var(--panel,#fff);color:var(--ink,#111);padding:20px 22px 18px;display:flex;flex-direction:column;gap:10px;box-shadow:0 18px 50px rgba(0,0,0,.3);font:12px/1.6 'Source Code Pro',ui-monospace,monospace}",
-      ".hc-home-dialog-title{font:600 14px 'Source Code Pro',monospace;color:var(--bad,#a12d2d)}",
+      ".hc-home-dialog{width:460px;max-width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:8px;background:var(--panel,#fff);color:var(--ink,#111);padding:20px 22px 18px;display:flex;flex-direction:column;gap:10px;box-shadow:0 18px 50px rgba(0,0,0,.3);font:12px/1.6 var(--hc-sans)}",
+      ".hc-home-dialog-title{font:600 14px var(--hc-sans);color:var(--bad,#a12d2d)}",
       ".hc-home-dialog-body{font-size:11.5px;color:var(--mut,#575757);line-height:1.7;overflow-wrap:anywhere}",
       ".hc-home-dialog-list{margin:0;padding-left:17px;font-size:11px;color:var(--mut,#575757);line-height:1.8}",
-      ".hc-home-dialog-warn{font:600 11px 'Source Code Pro',monospace;color:var(--bad,#a12d2d);letter-spacing:.3px;text-transform:uppercase}",
+      ".hc-home-dialog-warn{font:600 11px var(--hc-sans);color:var(--bad,#a12d2d);letter-spacing:.3px;text-transform:uppercase}",
       ".hc-home-dialog-ask{font-size:11px;color:var(--mut,#575757);overflow-wrap:anywhere}",
       ".hc-home-dialog-ask b{color:var(--ink,#111);font-weight:600}",
       ".hc-home-dialog-row{display:flex;gap:10px;align-items:center;justify-content:flex-end;padding-top:2px}",
       ".hc-home-btn[data-hc-off]{opacity:.4;cursor:not-allowed}",
       ".hc-home-btn[data-hc-off]:hover{color:var(--mut,#575757);border-color:var(--bd2,#d5d5d5)}",
-      ".hc-home-btn{cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:5px 9px;background:none}",
+      ".hc-home-btn{cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;color:var(--mut,#575757);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:5px 9px;background:none}",
       ".hc-home-btn:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
       ".hc-home-btn[data-hc-bad]:hover{color:var(--bad,#a12d2d);border-color:var(--bad,#a12d2d)}",
-      ".hc-home-add{border:1px dashed var(--bd2,#d5d5d5);border-radius:10px;padding:16px 18px;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:118px}",
+      ".hc-home-add{border:1px dashed var(--bd2,#d5d5d5);border-radius:8px;padding:16px 18px;cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font-size:12px;display:flex;align-items:center;justify-content:center;min-height:118px}",
       ".hc-home-add:hover{color:var(--ink,#111);border-color:var(--ink,#111)}",
-      ".hc-home-form{display:none;flex-direction:column;gap:8px;border:1px solid var(--acc,#a5492a);border-radius:10px;background:var(--panel,#fff);padding:16px 18px;min-height:118px}",
+      ".hc-home-form{display:none;flex-direction:column;gap:8px;border:1px solid var(--acc,#a5492a);border-radius:8px;background:var(--panel,#fff);padding:16px 18px;min-height:118px}",
       "[data-hc-home-adding] .hc-home-form{display:flex}",
       "[data-hc-home-adding] .hc-home-add{display:none}",
-      ".hc-home-field{width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:6px 8px;resize:vertical}",
+      ".hc-home-field{width:100%;box-sizing:border-box;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 var(--hc-sans);padding:6px 8px;resize:vertical}",
       ".hc-home-field::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-home-say{padding:14px 0 0;font-size:11px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
       ".hc-home-say:empty{display:none}",
@@ -6093,6 +6150,245 @@
         + " you type is saved locally." ] },
   ];
 
+  // --- the Archive ---------------------------------------------------------
+  //
+  // Deleting a goal has never erased it: the record is kept, marked archived,
+  // and left out of the tree. Until now there was nowhere to see that -- the
+  // only way back to a deleted goal was to open goals.json and read it. This
+  // page is that way back. It lists everything archived, with the TODO rows
+  // that went down with it, and offers the two things a reader can want:
+  // put it back, or really delete it.
+
+  function archiveTitle(goal) {
+    return str(goal && goal.title).trim() || "Untitled";
+  }
+
+  function archivedRows() {
+    var all = array(serverState && serverState.goals);
+    var byId = Object.create(null);
+    all.forEach(function (goal) {
+      if (goal && typeof goal.id === "string") byId[goal.id] = goal;
+    });
+    // Ancestors are read across EVERY goal, archived ones included: a subgoal
+    // is usually archived by archiving the goal above it, and a path that
+    // stopped at the first archived ancestor would say almost nothing.
+    function pathOf(goal) {
+      var parts = [], seen = Object.create(null), at = goal;
+      while (at && at.parent_goal_id && !seen[at.parent_goal_id]) {
+        seen[at.parent_goal_id] = true;
+        at = byId[at.parent_goal_id];
+        if (!at) break;
+        parts.unshift(archiveTitle(at));
+      }
+      return parts;
+    }
+    return all.filter(isArchived).map(function (goal) {
+      var parent = goal.parent_goal_id ? byId[goal.parent_goal_id] : null;
+      return {
+        id: str(goal.id),
+        title: archiveTitle(goal),
+        path: pathOf(goal),
+        // Archived because the goal above it was: restoring this one alone
+        // would put it back under a parent that is still gone, so the row
+        // says so rather than letting the reader find out afterwards.
+        orphan: !!(parent && isArchived(parent)),
+        when: str(goal.updated_at),
+        todos: array(goal.todo_items).filter(function (row) {
+          return row && str(row.text).trim();
+        })
+      };
+    }).sort(function (a, b) {
+      return a.when < b.when ? 1 : a.when > b.when ? -1 : 0;
+    });
+  }
+
+  function archivePage() {
+    return overviewBox && overviewBox.querySelector("[data-hc-archivelist]");
+  }
+
+  function archiveSay(words, bad) {
+    if (!overviewBox) return false;
+    var node = overviewBox.querySelector("[data-hc-archive-say]");
+    if (!node) return false;
+    node.textContent = str(words);
+    if (bad) node.setAttribute("data-hc-bad", "");
+    else node.removeAttribute("data-hc-bad");
+    return true;
+  }
+
+  function renderArchiveList(host) {
+    wipe(host);
+    var rows = archivedRows();
+    if (!rows.length) {
+      host.appendChild(el("div", "hc-archive-empty",
+        "Nothing archived. Deleting a goal, a subgoal or a TODO row puts it"
+        + " here rather than erasing it."));
+      return host;
+    }
+    rows.forEach(function (row) {
+      var line = el("div", "hc-archive-row");
+      line.setAttribute("data-hc-archive-row", row.id);
+      var text = el("div", "hc-archive-text");
+      if (row.path.length) {
+        text.appendChild(el("div", "hc-archive-path", row.path.join(" / ")));
+      }
+      text.appendChild(el("div", "hc-archive-name", row.title));
+      if (row.orphan) {
+        text.appendChild(el("div", "hc-archive-warn",
+          "the goal above this one is archived too — restoring this one puts"
+          + " it back at the top of the tree, not under it"));
+      }
+      if (row.todos.length) {
+        var list = el("div", "hc-archive-todos");
+        row.todos.forEach(function (todo) {
+          var item = el("div", "hc-archive-todo");
+          item.appendChild(el("span", "hc-archive-dash", "-"));
+          item.appendChild(el("span", "hc-archive-todotext", str(todo.text)));
+          var state = str(todo.status);
+          if (state) item.appendChild(el("span", "hc-archive-state", state));
+          list.appendChild(item);
+        });
+        text.appendChild(list);
+      }
+      line.appendChild(text);
+      var acts = el("div", "hc-archive-acts");
+      var back = el("span", "hc-archive-btn", "Restore");
+      back.setAttribute("role", "button");
+      back.setAttribute("title", "Put this back in the tree, active");
+      back.setAttribute("data-hc-archive-restore", row.id);
+      acts.appendChild(back);
+      var gone = el("span", "hc-archive-btn hc-archive-btn-bad", "Delete");
+      gone.setAttribute("role", "button");
+      gone.setAttribute("title", "Erase this for good — it cannot be undone");
+      gone.setAttribute("data-hc-archive-purge", row.id);
+      acts.appendChild(gone);
+      line.appendChild(acts);
+      host.appendChild(line);
+    });
+    return host;
+  }
+
+  function redrawArchive() {
+    var host = archivePage();
+    if (host && overviewPage() === "archive") renderArchiveList(host);
+  }
+
+  // Back into the tree, active. Two things have to change for that to be
+  // true: the record's status on disk, and this browser's own memory of
+  // having deleted it -- the merge honours that memory over the server, so
+  // a restore that skipped it would land and then be undone on the next poll.
+  function restoreArchived(id) {
+    var gid = str(id);
+    if (!gid) return Promise.resolve(false);
+    var row = archivedRows().filter(function (r) { return r.id === gid; })[0];
+    var name = row ? row.title : "That goal";
+    archiveSay("Restoring " + name + "…");
+    return post({ op: "restore_goal", goal_id: gid })
+      .then(function (out) {
+        if (!out || !out.ok) {
+          archiveSay((out && str(out.error)) || "That could not be restored.",
+                     true);
+          return false;
+        }
+        forgetTombs([gid]);
+        archiveSay(out.lifted
+          ? name + " is back at the top of the tree: the goal it sat under is"
+            + " still archived."
+          : name + " is back in the tree, active.");
+        var pending = refreshState();
+        if (pending && pending.then) pending.then(redrawArchive);
+        else redrawArchive();
+        return true;
+      });
+  }
+
+  // A goal and everything under it, archived or not. What a permanent delete
+  // takes is the subtree, so what the question names has to be the subtree.
+  function archiveSubtree(id) {
+    var all = array(serverState && serverState.goals);
+    var out = [str(id)], seen = Object.create(null), at = 0;
+    while (at < out.length) {
+      var here = out[at]; at += 1;
+      if (seen[here]) continue;
+      seen[here] = true;
+      all.forEach(function (goal) {
+        if (goal && goal.parent_goal_id === here && typeof goal.id === "string"
+            && !seen[goal.id]) {
+          out.push(goal.id);
+        }
+      });
+    }
+    return out;
+  }
+
+  // Erasing, which nothing else in this workspace does. The question names
+  // what goes -- the goal, what is under it, and the rows -- because after
+  // this there is no record left anywhere to check it against.
+  function purgeArchived(id) {
+    var gid = str(id);
+    if (!gid) return Promise.resolve(false);
+    var row = archivedRows().filter(function (r) { return r.id === gid; })[0];
+    var name = row ? row.title : "That goal";
+    var under = archiveSubtree(gid).length - 1;
+    var rows = row ? row.todos.length : 0;
+    var loses = [];
+    if (under) loses.push(under + (under === 1 ? " subgoal" : " subgoals"));
+    if (rows) loses.push(rows + (rows === 1 ? " TODO row" : " TODO rows"));
+    return askYesNo(
+      "Delete “" + name + "” for good?",
+      "This erases it from goals.json and from your account"
+        + (loses.length ? ", along with its " + loses.join(" and ") : "")
+        + ". Everything written on it — notes, prompt, answers — goes with"
+        + " it, and nothing restores it.",
+      "Delete for good"
+    ).then(function (yes) {
+      if (!yes) {
+        archiveSay("Nothing was deleted.");
+        return false;
+      }
+      archiveSay("Deleting " + name + "…");
+      return post({ op: "purge_goal", goal_id: gid }).then(function (out) {
+        if (!out || !out.ok) {
+          archiveSay((out && str(out.error)) || "That could not be deleted.",
+                     true);
+          return false;
+        }
+        // The merge reads an absence two ways: a tombstone means deleted, no
+        // tombstone means a stale writer lost it and the local copy should be
+        // put back. These are really gone, so they are tombstones.
+        noteTombs(array(out.deleted).filter(function (one) {
+          return typeof one === "string";
+        }));
+        archiveSay(str(out.cloud)
+          ? name + " is deleted here. Your account still has a copy: "
+            + str(out.cloud)
+          : name + " is deleted.", !!str(out.cloud));
+        var pending = refreshState();
+        if (pending && pending.then) pending.then(redrawArchive);
+        else redrawArchive();
+        return true;
+      });
+    });
+  }
+
+  function archiveNode() {
+    var page = el("div", "hc-archive");
+    page.setAttribute("data-hc-page", "archive");
+    var head = el("div", "hc-overview-ctxhead");
+    head.appendChild(el("div", "hc-overview-label", "archive"));
+    head.appendChild(el("span", "hc-archive-note",
+                        "deleted, not erased · restore or delete for good"));
+    page.appendChild(head);
+    var say = el("div", "hc-archive-say", "");
+    say.setAttribute("data-hc-archive-say", "");
+    page.appendChild(say);
+    var list = el("div", "hc-archive-list");
+    list.setAttribute("data-hc-archivelist", "");
+    renderArchiveList(list);
+    page.appendChild(list);
+    return page;
+  }
+
   function docsNode() {
     var page = el("div", "hc-docs");
     page.setAttribute("data-hc-page", "docs");
@@ -6529,12 +6825,18 @@
     var docs = el("span", "hc-overview-tab", "DOCS");
     docs.setAttribute("data-hc-overview-tab", "docs");
     docs.setAttribute("role", "button");
+    // What was deleted. A page rather than a filter on the tree, because
+    // these are exactly the goals the tree is defined as not drawing.
+    var gone = el("span", "hc-overview-tab", "ARCHIVE");
+    gone.setAttribute("data-hc-overview-tab", "archive");
+    gone.setAttribute("role", "button");
     var goals = el("span", "hc-overview-tab", "GOALS");
     goals.setAttribute("data-hc-overview-tab", "goals");
     goals.setAttribute("role", "button");
     tabs.appendChild(over);
     tabs.appendChild(shelf);
     tabs.appendChild(docs);
+    tabs.appendChild(gone);
     tabs.appendChild(goals);
     box.appendChild(tabs);
     // Everything below the tabs that is the overview proper, so the shelf
@@ -6701,6 +7003,7 @@
     context.appendChild(repo);
     main.appendChild(context);
     box.appendChild(savedNode(who));
+    box.appendChild(archiveNode());
     box.appendChild(docsNode());
     box.appendChild(addSourceModal());
     return box;
@@ -7298,7 +7601,8 @@
   function showOverviewPage(which) {
     if (!overviewBox) return false;
     var name = str(which);
-    var want = name === "saved" || name === "docs" ? name : "overview";
+    var want = (name === "saved" || name === "docs" || name === "archive")
+      ? name : "overview";
     overviewBox.setAttribute("data-hc-page-on", want);
     kids(overviewBox).forEach(function (child) {
       var page = child.getAttribute && child.getAttribute("data-hc-page");
@@ -7318,6 +7622,23 @@
     if (want === "saved") {
       var host = savedPage();
       if (host) renderSavedList(host, projectInfo() || {});
+    }
+    if (want === "archive") {
+      // Drawn from the state this page last saw, then again from the state
+      // that lands: the list is of records the tree deliberately hides, so
+      // it is the one page with nothing already on screen to check it by.
+      var gone = archivePage();
+      if (gone) {
+        renderArchiveList(gone);
+        archiveSay("");
+        var pending = refreshState();
+        if (pending && pending.then) {
+          pending.then(function () {
+            var still = archivePage();
+            if (still && overviewPage() === "archive") renderArchiveList(still);
+          });
+        }
+      }
     }
     return true;
   }
@@ -7505,6 +7826,18 @@
         var page = tab.getAttribute("data-hc-overview-tab");
         if (page === "goals") closeOverview();
         else showOverviewPage(page);
+        return;
+      }
+      var restore = closestAttr(target, "data-hc-archive-restore");
+      if (restore) {
+        stop();
+        restoreArchived(restore.getAttribute("data-hc-archive-restore"));
+        return;
+      }
+      var purge = closestAttr(target, "data-hc-archive-purge");
+      if (purge) {
+        stop();
+        purgeArchived(purge.getAttribute("data-hc-archive-purge"));
         return;
       }
       var dropSave = closestAttr(target, "data-hc-drop-saved");
@@ -8985,7 +9318,12 @@
       // A darker, flatter palette than the artifact's own dark theme. Only
       // the greys move: the accent stays the artifact's, so every control
       // that was accented still is, in both themes.
-      "[data-hc-launch] .hc[data-dark=\"true\"]{--bg:#0d1117;--panel:#0d1117;--panel2:#161b22;--ink:#e6edf3;--mut:#8b949e;--fnt:#6e7681;--bd:#21262d;--bd2:#30363d;--line:#21262d;--hov:#161b22;--dtxt:#c9d1d9}",
+      "[data-hc-launch] .hc[data-dark=\"true\"]{--bg:#0a0a0a;--panel:#0a0a0a;--panel2:#1a1a1a;--ink:#ededed;--mut:#a0a0a0;--fnt:#8f8f8f;--bd:#2e2e2e;--bd2:#454545;--line:#2e2e2e;--hov:#1f1f1f;--dtxt:#ededed;--acc:#ededed;--accbg:#1f1f1f;--acchov:#161616;--onacc:#0a0a0a;--del:#ff5e63}",
+      // Light is the artifact's own palette, so it is restated here rather
+      // than inherited: the same steps, read the other way up. --acc is the
+      // ink in both, which is what turns every accented control into the
+      // one inverted button rather than a third colour.
+      "[data-hc-launch] .hc{--bg:#fff;--panel:#fff;--panel2:#fafafa;--ink:#171717;--mut:#4d4d4d;--fnt:#8f8f8f;--bd:#eaeaea;--bd2:#c9c9c9;--line:#eaeaea;--hov:#f2f2f2;--dtxt:#171717;--acc:#171717;--accbg:#f2f2f2;--acchov:#fafafa;--onacc:#fff;--del:#e70022}",
       // On the root, not on .hc: the banner is parented on <body>, outside
       // the artifact's subtree, so anything declared inside .hc never
       // reaches it. The theme is mirrored onto the root for the same reason.
@@ -8998,8 +9336,10 @@
       // No rubber-band: the page has nothing to scroll, and a trackpad
       // bounce would carry the sticky header off while the counts, fixed
       // to the viewport, stayed -- the bar visibly coming apart.
-      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#eaf6ec;--hc-okbd:#b7dfc2;--hc-warn:#9a6700;--hc-noticetxt:#3d5c46;--hc-row:37px;--hc-top:74px;--hc-left:300px;--hc-right:330px;overscroll-behavior:none}",
-      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#3fb950;--hc-okbg:#0f2417;--hc-okbd:#1c5030;--hc-warn:#d29922;--hc-noticetxt:#8aa495}",
+      "[data-hc-launch]{--bg:#fff;--panel:#fff;--panel2:#fafafa;--ink:#171717;--mut:#4d4d4d;--fnt:#8f8f8f;--bd:#eaeaea;--bd2:#c9c9c9;--line:#eaeaea;--hov:#f2f2f2;--dtxt:#171717;--acc:#171717;--accbg:#f2f2f2;--acchov:#fafafa;--onacc:#fff;--del:#e70022}",
+      "[data-hc-launch][data-hc-theme=\"dark\"]{--bg:#0a0a0a;--panel:#0a0a0a;--panel2:#1a1a1a;--ink:#ededed;--mut:#a0a0a0;--fnt:#8f8f8f;--bd:#2e2e2e;--bd2:#454545;--line:#2e2e2e;--hov:#1f1f1f;--dtxt:#ededed;--acc:#ededed;--accbg:#1f1f1f;--acchov:#161616;--onacc:#0a0a0a;--del:#ff5e63}",
+      "[data-hc-launch]{--hc-ok:#1a7f37;--hc-okbg:#f0faf2;--hc-okbd:#b7dfc2;--hc-warn:#a64f00;--hc-noticetxt:#4d4d4d;--hc-sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;--hc-mono:'Source Code Pro',ui-monospace,SFMono-Regular,Menlo,monospace;--hc-row:37px;--hc-top:74px;--hc-left:300px;--hc-right:330px;overscroll-behavior:none}",
+      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-ok:#00ca52;--hc-okbg:#00250a;--hc-okbd:#004616;--hc-warn:#f90;--hc-noticetxt:#a0a0a0}",
       // A banner is not an overlay: it takes its own line, and the columns
       // give it back when it goes.
       "[data-hc-launch][data-hc-notice]{--hc-top:108px}",
@@ -9023,15 +9363,15 @@
       "[data-hc-launch][data-hc-notice] .hc>div:first-child{height:74px}",
       // The product name is the one serif on the page; the marker before
       // it and everything after it stay in the workspace's monospace.
-      "[data-hc-launch] .hc-brand{font:600 15px Georgia,'Iowan Old Style','Times New Roman',serif!important;letter-spacing:.1px;line-height:1}",
-      "[data-hc-launch] .hc-session{font:11px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-brand{font:600 15px var(--hc-sans)!important;letter-spacing:-.02em;line-height:1}",
+      "[data-hc-launch] .hc-session{font:11px var(--hc-sans);color:var(--mut)}",
       // A slot with nothing in it is still a slot: inline-flex leaves its
       // gap behind, so the header reads as if something failed to load
       // rather than as if nothing belongs there. Collapse the empties and
       // what remains closes up.
       "[data-hc-launch] .hc-session:empty,[data-hc-launch] .hc-chats:empty,[data-hc-launch] .hc-handoff:empty{display:none!important}",
       "[data-hc-launch] [data-hc-hasnote]{position:relative}",
-      "[data-hc-launch] .hc-analyzing{position:absolute;right:10px;bottom:7px;z-index:4;font:10px 'Source Code Pro',monospace;color:var(--fnt);white-space:nowrap;pointer-events:none;background:var(--bg);padding:2px 4px;border-radius:2px}",
+      "[data-hc-launch] .hc-analyzing{position:absolute;right:10px;bottom:7px;z-index:4;font:10px var(--hc-sans);color:var(--fnt);white-space:nowrap;pointer-events:none;background:var(--bg);padding:2px 4px;border-radius:6px}",
       "[data-hc-launch] .hc-analyzing:empty{display:none}",
       "[data-hc-launch] .hc-analyzing:not(:empty)::before{content:'\\25cc';margin-right:5px;font-size:8px;vertical-align:1px}",
       // Three states, three marks: reading, settled, broken. A backlog with
@@ -9070,17 +9410,20 @@
       // Read-only: the controls that write are taken off the page rather
       // than left to fail. Anything that only reads -- folding, selecting,
       // the search, the panes -- is untouched.
-      "[data-hc-launch][data-hc-readonly] [title=\"Delete goal\"]{display:none!important}",
+      "[data-hc-launch][data-hc-readonly] [title=\"Archive goal\"]{display:none!important}",
       "[data-hc-launch][data-hc-readonly] .hc-todo-build,[data-hc-launch][data-hc-readonly] .hc-todo-cancel,[data-hc-launch][data-hc-readonly] .hc-todo-copy,[data-hc-launch][data-hc-readonly] .hc-todo-reopen,[data-hc-launch][data-hc-readonly] .hc-todo-reply,[data-hc-launch][data-hc-readonly] .hc-todos-top{display:none!important}",
       "[data-hc-launch][data-hc-readonly] .hc-src-rm,[data-hc-launch][data-hc-readonly] .hc-overview-objective{display:none!important}",
+      // The Archive reads fine as a guest -- it is the record of what the
+      // owner deleted. Restoring and erasing are theirs.
+      "[data-hc-launch][data-hc-readonly] .hc-archive-acts{display:none!important}",
       // A guest may watch the build -- the log is the owner's account of what
       // their machine is doing -- but not open a window on that machine.
       "[data-hc-launch][data-hc-readonly] [data-hc-todo-term]{display:none!important}",
       // A caret in a field nothing will save is the cruellest part of it.
       "[data-hc-launch][data-hc-readonly] textarea,[data-hc-launch][data-hc-readonly] [contenteditable]{caret-color:transparent!important;cursor:default!important}",
-      "[data-hc-launch] .hc-ro-note{position:fixed;left:0;right:0;bottom:0;z-index:100004;display:flex;align-items:center;justify-content:center;gap:8px;padding:5px 12px;background:var(--panel2,#f6f6f6);border-top:1px solid var(--bd,#e3e3e3);color:var(--mut,#575757);font:11px/1.5 'Source Code Pro',ui-monospace,monospace}",
+      "[data-hc-launch] .hc-ro-note{position:fixed;left:0;right:0;bottom:0;z-index:100004;display:flex;align-items:center;justify-content:center;gap:8px;padding:5px 12px;background:var(--panel2,#f6f6f6);border-top:1px solid var(--bd,#e3e3e3);color:var(--mut,#575757);font:11px/1.5 var(--hc-sans)}",
       "[data-hc-launch] .hc-ro-dot{color:var(--acc,#a5492a);font-size:8px}",
-      "[data-hc-launch] .hc-who{flex:none;font:600 12.5px 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap}",
+      "[data-hc-launch] .hc-who{flex:none;font:600 12.5px var(--hc-sans);color:var(--mut);white-space:nowrap}",
       // The tabs' row is the header's own second row: a slot the template
       // leaves under the brand's row (see the header patch), filled by the
       // bridge. It used to be a strip of its own, fixed under a one-row
@@ -9109,7 +9452,7 @@
       // The tabs are set exactly as the counts at the row's other end --
       // the same size, tracking and case -- so the row reads as one row of
       // words. Which page is open is said by weight and the line under it.
-      "[data-hc-launch] .hc-viewtab{position:relative;display:inline-flex;align-items:center;height:100%;font:500 11px 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-viewtab{position:relative;display:inline-flex;align-items:center;height:100%;font:500 11px var(--hc-sans);letter-spacing:.2px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-viewtab:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-viewtab[data-hc-on]{font-weight:700;color:var(--ink)}",
       // The mark sits on the header's own rule, covering it under the open
@@ -9158,7 +9501,7 @@
       "[data-hc-launch] .hc-panel:hover,[data-hc-launch] .hc-panel-on{color:var(--ink)}",
       // Rail headings, shared by both rails.
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd);overflow:hidden}",
-      "[data-hc-launch] .hc-rail-name{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.2px;color:var(--mut)}",
+      "[data-hc-launch] .hc-rail-name{font:600 9.5px var(--hc-sans);letter-spacing:1.2px;color:var(--mut)}",
       // Two tabs and a save stamp, in place of the old single label.
       // The onboarding, over everything: until a chat says which project it
       // is for, there is nothing behind it worth reading. Styled from the
@@ -9166,30 +9509,34 @@
       // a 2px radius, the rust accent, no filled green anywhere -- because a
       // panel that asks the same question should not look like another app.
       "[data-hc-launch] .hc-onb-shade{position:fixed;inset:0;z-index:400;display:flex;align-items:center;justify-content:center;background:rgba(1,4,9,.72)}",
-      "[data-hc-launch] .hc-onb{width:min(500px,92vw);max-height:86vh;overflow:auto;background:var(--panel,#fff);border:1px solid var(--bd,#e3e3e3);border-radius:3px;padding:18px 20px 16px;box-shadow:0 18px 60px rgba(0,0,0,.45)}",
-      "[data-hc-launch] .hc-onb-title{font:600 13px 'Source Code Pro',monospace;color:var(--ink,#111)}",
-      "[data-hc-launch] .hc-onb-note{margin-top:7px;font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b);max-width:58ch}",
+      "[data-hc-launch] .hc-onb{width:min(500px,92vw);max-height:86vh;overflow:auto;background:var(--panel,#fff);border:1px solid var(--bd,#e3e3e3);border-radius:6px;padding:18px 20px 16px;box-shadow:0 18px 60px rgba(0,0,0,.45)}",
+      "[data-hc-launch] .hc-onb-title{font:600 13px var(--hc-sans);color:var(--ink,#111)}",
+      "[data-hc-launch] .hc-onb-note{margin-top:7px;font:10.5px/1.6 var(--hc-sans);color:var(--fnt,#9b9b9b);max-width:58ch}",
       "[data-hc-launch] .hc-onb-row{display:flex;flex-wrap:wrap;gap:7px;margin-top:15px;align-items:center}",
-      "[data-hc-launch] .hc-onb-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;color:var(--mut,#575757);font:600 10px 'Source Code Pro',monospace;letter-spacing:1px;text-transform:uppercase;padding:6px 10px}",
+      "[data-hc-launch] .hc-onb-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;color:var(--mut,#575757);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:6px 10px}",
       "[data-hc-launch] .hc-onb-btn:hover{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
       "[data-hc-launch] .hc-onb-btn-on{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
-      "[data-hc-launch] .hc-onb-quiet{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:10.5px 'Source Code Pro',monospace;padding:0 4px}",
-      "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:9px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 'Source Code Pro',monospace;padding:6px 8px;outline:none}",
+      "[data-hc-launch] .hc-onb-quiet{cursor:pointer;user-select:none;color:var(--fnt,#9b9b9b);font:10.5px var(--hc-sans);padding:0 4px}",
+      "[data-hc-launch] .hc-onb-field{display:block;width:100%;box-sizing:border-box;margin-top:9px;resize:vertical;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#f6f6f6);color:var(--ink,#111);font:11px/1.5 var(--hc-sans);padding:6px 8px;outline:none}",
       "[data-hc-launch] .hc-onb-field:focus{border-color:var(--acc,#a5492a)}",
-      "[data-hc-launch] .hc-onb-list{margin-top:11px;max-height:44vh;overflow:auto;border:1px solid var(--bd,#e3e3e3);border-radius:2px;background:var(--panel2,#f6f6f6)}",
+      "[data-hc-launch] .hc-onb-list{margin-top:11px;max-height:44vh;overflow:auto;border:1px solid var(--bd,#e3e3e3);border-radius:6px;background:var(--panel2,#f6f6f6)}",
       "[data-hc-launch] .hc-onb-item{display:block;padding:8px 11px;border-bottom:1px solid var(--bd,#e3e3e3);cursor:pointer}",
       "[data-hc-launch] .hc-onb-item:last-child{border-bottom:none}",
       "[data-hc-launch] .hc-onb-item:hover{background:var(--hov,#f2f2f2)}",
-      "[data-hc-launch] .hc-onb-item-name{display:block;font:600 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
-      "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:10px/1.5 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:2px;font:9.5px 'Source Code Pro',monospace;color:var(--mut,#575757)}",
-      "[data-hc-launch] .hc-onb-empty{padding:11px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      "[data-hc-launch] .hc-onb-said{margin-top:10px;font:10.5px 'Source Code Pro',monospace;color:var(--hc-warn,#a12d2d)}",
+      "[data-hc-launch] .hc-onb-item-name{display:block;font:600 11.5px var(--hc-sans);color:var(--ink,#111)}",
+      "[data-hc-launch] .hc-onb-item-why{display:block;margin-top:2px;font:10px/1.5 var(--hc-sans);color:var(--fnt,#9b9b9b)}",
+      "[data-hc-launch] .hc-onb-item-where{display:block;margin-top:2px;font:9.5px var(--hc-sans);color:var(--mut,#575757)}",
+      "[data-hc-launch] .hc-onb-empty{padding:11px;font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
+      "[data-hc-launch] .hc-onb-said{margin-top:10px;font:10.5px var(--hc-sans);color:var(--hc-warn,#a12d2d)}",
       "[data-hc-launch] .hc-rail-tabs{display:inline-flex;gap:14px;align-items:baseline}",
-      "[data-hc-launch] .hc-rail-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-tab{position:relative;font:500 11px var(--hc-sans);letter-spacing:.2px;color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-rail-tab:hover{color:var(--ink)}",
-      "[data-hc-launch] .hc-rail-tab-on{color:var(--ink)}",
-      "[data-hc-launch] .hc-rail-saved{font:10px 'Source Code Pro',monospace;letter-spacing:.4px;color:var(--fnt);margin-left:10px}",
+      "[data-hc-launch] .hc-rail-tab-on{font-weight:700;color:var(--ink)}",
+      // The mark the view tabs carry, on the rail head's own rule: one way
+      // of saying "this tab", used in both places. The offset is the head's
+      // bottom padding plus its border, so the bar lands on the line.
+      "[data-hc-launch] .hc-rail-tab-on::after{content:'';position:absolute;left:0;right:0;bottom:-11px;height:2px;background:var(--ink)}",
+      "[data-hc-launch] .hc-rail-saved{font:10px var(--hc-sans);letter-spacing:.4px;color:var(--fnt);margin-left:10px}",
       // The list: rows of editable text in one column, so a selection can
       // run across them and Cmd+A takes them all; a dash gutter that picks a
       // row for a build; a state badge at the right; a question thread under
@@ -9202,15 +9549,15 @@
       // the tile's top, not its bottom, which for an asking row is under the
       // question thread. 5px = the row's 2px top padding + half the gap
       // between a 22.8px line box and a 16px control.
-      "[data-hc-launch] .hc-todo-cancel{position:absolute;top:5px;right:4px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:4px;font:500 13px/15px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
+      "[data-hc-launch] .hc-todo-cancel{position:absolute;top:5px;right:4px;width:16px;height:16px;line-height:15px;text-align:center;border-radius:6px;font:500 13px/15px var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none;opacity:.55}",
       "[data-hc-launch] .hc-todo:hover .hc-todo-cancel{opacity:1}",
       "[data-hc-launch] .hc-todo-cancel:hover{color:var(--del);background:var(--hov)}",
-      "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px;padding:2px 6px;border-radius:5px}",
+      "[data-hc-launch] .hc-todo-row{display:flex;align-items:baseline;gap:9px;padding:2px 6px;border-radius:6px}",
       "[data-hc-launch] .hc-todo-row:hover{background:var(--hov)}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked]{background:var(--panel2)}",
-      "[data-hc-launch] .hc-todo-dash{flex:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--fnt);user-select:none;cursor:pointer;width:8px;text-align:center}",
+      "[data-hc-launch] .hc-todo-dash{flex:none;font:12px/1.9 var(--hc-sans);color:var(--fnt);user-select:none;cursor:pointer;width:8px;text-align:center}",
       "[data-hc-launch] .hc-todo-row[data-hc-todo-picked] .hc-todo-dash{color:var(--ink)}",
-      "[data-hc-launch] .hc-todo-line{flex:1 1 auto;min-width:0;min-height:1.9em;outline:none;font:12px/1.9 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-todo-line{flex:1 1 auto;min-width:0;min-height:1.9em;outline:none;font:12px/1.9 var(--hc-sans);color:var(--dtxt);caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
       // A row with no words yet has no line box, so the row's baseline
       // alignment falls back to the empty box's bottom edge: the dash drops
       // half a line and the caret sits above it. A zero-width space, drawn
@@ -9227,19 +9574,19 @@
       // The runs a row has already had, under it: quieter than the row, and
       // quieter still for what the reader said about each.
       "[data-hc-launch] .hc-todo-runs{margin:1px 0 7px;border-left:2px solid var(--bd);padding:1px 0 1px 10px;user-select:text}",
-      "[data-hc-launch] .hc-todo-run{font:11px/1.5 'Source Code Pro',monospace;color:var(--fnt)}",
-      "[data-hc-launch] .hc-todo-run-note{font:11px/1.5 'Source Code Pro',monospace;color:var(--dtxt);padding-left:12px;white-space:pre-wrap;overflow-wrap:anywhere}",
+      "[data-hc-launch] .hc-todo-run{font:11px/1.5 var(--hc-sans);color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-run-note{font:11px/1.5 var(--hc-sans);color:var(--dtxt);padding-left:12px;white-space:pre-wrap;overflow-wrap:anywhere}",
       // A rule between the list's bands: rows not yet sent, rows out with
       // the builder, rows that came back done.
       "[data-hc-launch] .hc-todo-sep{border-top:1px solid var(--bd);margin:7px 6px;user-select:none}",
-      "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.3px;user-select:none}",
+      "[data-hc-launch] .hc-todo-status{flex:none;font:500 10px/1.9 var(--hc-sans);letter-spacing:.3px;user-select:none}",
       // What the row's build spent, in its lower right. `flex-end`, not
       // the row's baseline: a row whose text wraps is two or three lines
       // tall, and the number belongs at the bottom of it, beside the last
       // line -- which is what "in the corner" means on a row that wrapped.
       // Empty until the row has been built: what a build WILL cost is the
       // build's own word, on the watch panel below the rows.
-      "[data-hc-launch] .hc-todo-cost{flex:none;align-self:flex-end;font:500 10px/1.9 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--fnt);opacity:.7;user-select:none;white-space:nowrap;cursor:default}",
+      "[data-hc-launch] .hc-todo-cost{flex:none;align-self:flex-end;font:500 10px/1.9 var(--hc-sans);letter-spacing:.2px;color:var(--fnt);opacity:.7;user-select:none;white-space:nowrap;cursor:default}",
       "[data-hc-launch] .hc-todo-row:hover .hc-todo-cost{opacity:1}",
       "[data-hc-launch] .hc-todo-cost[data-hc-todo-spent]{color:var(--mut);opacity:1}",
       "[data-hc-launch] .hc-todo-ask{user-select:text}",
@@ -9247,10 +9594,10 @@
       // The question and the answer both wrap: a long question runs onto
       // more lines, and the answer box grows as it is typed into, rather
       // than either scrolling its text out of the rail's width.
-      "[data-hc-launch] .hc-todo-question{font:12px/1.5 'Source Code Pro',monospace;color:var(--dtxt);margin-bottom:5px;white-space:pre-wrap;overflow-wrap:anywhere}",
+      "[data-hc-launch] .hc-todo-question{font:12px/1.5 var(--hc-sans);color:var(--dtxt);margin-bottom:5px;white-space:pre-wrap;overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-reply{display:flex;align-items:baseline;gap:6px}",
       "[data-hc-launch] .hc-todo-arrow{color:var(--hc-warn);font-size:11px}",
-      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;margin:0;font:12px/1.6 'Source Code Pro',monospace;color:var(--dtxt);caret-color:var(--ink);display:block;resize:none;overflow:hidden;height:auto;white-space:pre-wrap;overflow-wrap:anywhere}",
+      "[data-hc-launch] .hc-todo-answer{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;margin:0;font:12px/1.6 var(--hc-sans);color:var(--dtxt);caret-color:var(--ink);display:block;resize:none;overflow:hidden;height:auto;white-space:pre-wrap;overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-answer::placeholder{color:var(--fnt)}",
       // What the build is doing, under the rows and above the actions: a
       // state line with the run's own clock, the last thing it did, and --
@@ -9260,14 +9607,14 @@
       "[data-hc-launch] .hc-todo-watch-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--fnt)}",
       "[data-hc-launch] .hc-todo-watch[data-hc-watch-state=\"on\"] .hc-todo-watch-dot{background:var(--hc-blue, #58a6ff);animation:hc-todo-pulse 1.6s ease-in-out infinite}",
       "@keyframes hc-todo-pulse{0%,100%{opacity:1}50%{opacity:.25}}",
-      "[data-hc-launch] .hc-todo-watch-meta{flex:1;min-width:0;font:500 10.5px/1.5 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--dtxt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}",
-      "[data-hc-launch] .hc-todo-watch-btn{flex:none;padding:2px 7px;border:1px solid var(--bd2);border-radius:4px;font:600 10px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer}",
+      "[data-hc-launch] .hc-todo-watch-meta{flex:1;min-width:0;font:500 10.5px/1.5 var(--hc-sans);letter-spacing:.2px;color:var(--dtxt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}",
+      "[data-hc-launch] .hc-todo-watch-btn{flex:none;padding:2px 7px;border:1px solid var(--bd2);border-radius:6px;font:600 10px var(--hc-sans);color:var(--fnt);cursor:pointer}",
       "[data-hc-launch] .hc-todo-watch-btn:hover{color:var(--ink);border-color:var(--ink)}",
-      "[data-hc-launch] .hc-todo-watch-hide{flex:none;padding:0 3px;font:600 13px/1.2 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-todo-watch-hide{flex:none;padding:0 3px;font:600 13px/1.2 var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-watch-hide:hover{color:var(--ink)}",
-      "[data-hc-launch] .hc-todo-watch-last{margin-top:5px;font:10.5px/1.5 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-todo-watch-last{margin-top:5px;font:10.5px/1.5 var(--hc-sans);color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-todo-watch-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
-      "[data-hc-launch] .hc-todo-watch-row{display:flex;gap:8px;font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere}",
+      "[data-hc-launch] .hc-todo-watch-row{display:flex;gap:8px;font:10.5px/1.7 var(--hc-sans);color:var(--fnt);overflow-wrap:anywhere}",
       "[data-hc-launch] .hc-todo-watch-at{flex:none;color:var(--bd2)}",
       // The terminal's own row, at the foot of the panel, so the state line
       // above keeps its full width for the elapsed time and the tokens.
@@ -9279,34 +9626,34 @@
       "[data-hc-launch] .hc-dev[data-hc-dev-state=\"running\"] .hc-dev-dot{background:var(--hc-ok)}",
       "[data-hc-launch] .hc-dev[data-hc-dev-state=\"starting\"] .hc-dev-dot{background:var(--hc-blue, #58a6ff);animation:hc-todo-pulse 1.6s ease-in-out infinite}",
       "[data-hc-launch] .hc-dev[data-hc-dev-state=\"in_use\"] .hc-dev-dot{background:var(--hc-warn)}",
-      "[data-hc-launch] .hc-dev-meta{flex:1;min-width:0;font:500 10.5px/1.5 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--dtxt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}",
-      "[data-hc-launch] .hc-dev-link{flex:none;max-width:46%;font:500 10.5px/1.5 'Source Code Pro',monospace;color:var(--hc-blue, #58a6ff);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-dev-meta{flex:1;min-width:0;font:500 10.5px/1.5 var(--hc-sans);letter-spacing:.2px;color:var(--dtxt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}",
+      "[data-hc-launch] .hc-dev-link{flex:none;max-width:46%;font:500 10.5px/1.5 var(--hc-sans);color:var(--hc-blue, #58a6ff);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-dev-link:hover{text-decoration:underline}",
-      "[data-hc-launch] .hc-dev-btn{flex:none;padding:2px 7px;border:1px solid var(--bd2);border-radius:4px;font:600 10px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer}",
+      "[data-hc-launch] .hc-dev-btn{flex:none;padding:2px 7px;border:1px solid var(--bd2);border-radius:6px;font:600 10px var(--hc-sans);color:var(--fnt);cursor:pointer}",
       "[data-hc-launch] .hc-dev-btn:hover{color:var(--ink);border-color:var(--ink)}",
-      "[data-hc-launch] .hc-dev-last{margin-top:5px;font:10.5px/1.5 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-dev-last{margin-top:5px;font:10.5px/1.5 var(--hc-sans);color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-dev-last[data-hc-dev-bad]{color:var(--del)}",
       "[data-hc-launch] .hc-dev-log{margin-top:6px;max-height:132px;overflow-y:auto;border-top:1px solid var(--bd);padding-top:6px;user-select:text}",
-      "[data-hc-launch] .hc-dev-row{font:10.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);overflow-wrap:anywhere;white-space:pre-wrap}",
+      "[data-hc-launch] .hc-dev-row{font:10.5px/1.7 var(--hc-sans);color:var(--fnt);overflow-wrap:anywhere;white-space:pre-wrap}",
       // The restart check, under the watch line: the model the session
       // moved to and a spinner while it asks; the reason and the prompt to
       // paste, boxed with its own copy button, when the answer is yes.
       "[data-hc-launch] .hc-todo-restart{margin-top:8px;padding-top:8px;border-top:1px solid var(--bd);user-select:none}",
-      "[data-hc-launch] .hc-todo-restart-model{display:flex;align-items:center;gap:7px;font:11px/1.7 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-model{display:flex;align-items:center;gap:7px;font:11px/1.7 var(--hc-sans);color:var(--fnt)}",
       "[data-hc-launch] .hc-todo-restart-from{text-decoration:line-through;color:var(--mut)}",
-      "[data-hc-launch] .hc-todo-restart-to{padding:0 8px;border:1px solid var(--bd2);border-radius:5px;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-todo-restart-busy{display:flex;align-items:flex-start;gap:8px;margin-top:6px;font:11.5px/1.5 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-to{padding:0 8px;border:1px solid var(--bd2);border-radius:6px;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-todo-restart-busy{display:flex;align-items:flex-start;gap:8px;margin-top:6px;font:11.5px/1.5 var(--hc-sans);color:var(--fnt)}",
       "[data-hc-launch] .hc-todo-restart-spin{flex:none;width:11px;height:11px;margin-top:3px;box-sizing:border-box;border:1.5px solid var(--bd2);border-top-color:var(--hc-blue, #58a6ff);border-radius:50%;animation:hc-todo-spin 1s linear infinite}",
       "@keyframes hc-todo-spin{to{transform:rotate(360deg)}}",
-      "[data-hc-launch] .hc-todo-restart-why{display:flex;align-items:flex-start;gap:8px;font:11.5px/1.5 'Source Code Pro',monospace;color:var(--dtxt);user-select:text}",
+      "[data-hc-launch] .hc-todo-restart-why{display:flex;align-items:flex-start;gap:8px;font:11.5px/1.5 var(--hc-sans);color:var(--dtxt);user-select:text}",
       "[data-hc-launch] .hc-todo-restart-warn{flex:none;color:var(--hc-warn)}",
       "[data-hc-launch] .hc-todo-restart-send{margin-top:8px;border:1px solid var(--bd);border-radius:6px;background:var(--panel);overflow:hidden}",
-      "[data-hc-launch] .hc-todo-restart-send-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;border-bottom:1px solid var(--bd);font:10.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-todo-restart-send-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 10px;border-bottom:1px solid var(--bd);font:10.5px/1.6 var(--hc-sans);color:var(--fnt)}",
       "[data-hc-launch] .hc-todo-restart-copy{flex:none;font-weight:600;color:var(--hc-blue, #58a6ff);cursor:pointer}",
       "[data-hc-launch] .hc-todo-restart-copy:hover{text-decoration:underline}",
-      "[data-hc-launch] .hc-todo-restart-hide{flex:none;margin-left:auto;padding:0 3px;font:600 13px/1.2 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-todo-restart-hide{flex:none;margin-left:auto;padding:0 3px;font:600 13px/1.2 var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-restart-hide:hover{color:var(--ink)}",
-      "[data-hc-launch] .hc-todo-restart-prompt{margin:0;padding:8px 10px;font:11.5px/1.55 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}",
+      "[data-hc-launch] .hc-todo-restart-prompt{margin:0;padding:8px 10px;font:11.5px/1.55 var(--hc-sans);color:var(--dtxt);white-space:pre-wrap;overflow-wrap:anywhere;user-select:text;cursor:text}",
       "[data-hc-launch] .hc-todos-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
       // Copy sits at the top right of the list, above the rows rather than
       // in the header: a control that comes and goes with the rows moved
@@ -9314,13 +9661,13 @@
       // strip is there whether or not there is anything in the list, so
       // nothing below it moves.
       "[data-hc-launch] .hc-todos-top{flex:none;display:flex;justify-content:flex-end;padding:9px 12px 0}",
-      "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-todo-copy{padding:5px 10px;border:1px solid var(--bd2);border-radius:6px;font:600 11px var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-todo-copy:hover{color:var(--ink);border-color:var(--ink)}",
-      "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 var(--hc-sans);color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-todo-note-bad{color:var(--del)}",
       "[data-hc-launch] .hc-todo-reopen{color:var(--ink);cursor:pointer;text-decoration:underline;text-underline-offset:2px}",
-      "[data-hc-launch] .hc-todo-build{margin-left:auto;padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
-      "[data-hc-launch] .hc-todo-build[data-hc-todo-build=\"on\"]{color:#fff;background:#1f6feb;border-color:#1f6feb;cursor:pointer}",
+      "[data-hc-launch] .hc-todo-build{margin-left:auto;padding:5px 12px;border-radius:6px;font:600 11px var(--hc-sans);color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
+      "[data-hc-launch] .hc-todo-build[data-hc-todo-build=\"on\"]{color:var(--onacc);background:var(--acc);border-color:var(--acc);cursor:pointer}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
       // Four tabs, on one line and staying there. They are the rail's
       // navigation: a row of them that reflows while the reader is typing
@@ -9336,13 +9683,13 @@
       // textarea laid over it, so the caret sits on the drawn text. The box
       // takes the column's spare height and then grows with the writing.
       "[data-hc-launch] .hc-rail-notes{flex:1 1 auto;min-height:0;overflow-y:auto;display:none;flex-direction:column;gap:14px;padding:13px 14px 16px}",
-      "[data-hc-launch] .hc-notes-box{position:relative;flex:1 1 auto;min-height:260px;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)}",
-      "[data-hc-launch] .hc-notes-render{min-height:100%;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;word-break:break-word;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-notes-edit{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 'Source Code Pro',monospace;background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
-      "[data-hc-launch] .hc-notes-head{flex:none;display:flex;align-items:baseline;justify-content:space-between;gap:12px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-notes-box{position:relative;flex:1 1 auto;min-height:260px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2)}",
+      "[data-hc-launch] .hc-notes-render{min-height:100%;padding:10px 12px;font:12px/1.7 var(--hc-sans);white-space:pre-wrap;word-break:break-word;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-notes-edit{position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;padding:10px 12px;font:12px/1.7 var(--hc-sans);background:transparent;border:none;outline:none;resize:none;overflow:hidden;color:transparent;caret-color:var(--ink);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-notes-head{flex:none;display:flex;align-items:baseline;justify-content:space-between;gap:12px;font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut)}",
       // The prompts scroll inside their own box rather than pushing the
       // document off the top of the column.
-      "[data-hc-launch] .hc-notes-prompts{flex:none;max-height:240px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:2px;background:var(--panel2)}",
+      "[data-hc-launch] .hc-notes-prompts{flex:none;max-height:240px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd);border-radius:6px;background:var(--panel2)}",
       // The middle. Cards when there is something to do, a terminal when
       // something is printing, and a hole for the embedded page when one
       // is up -- the frame itself is positioned over that hole from
@@ -9350,56 +9697,56 @@
       "[data-hc-launch] .hc-preview{display:flex;flex-direction:column;margin-top:14px;min-height:0;flex:1 1 auto}",
       "[data-hc-launch] .hc-preview-mount{display:flex;flex-direction:column;gap:14px;min-height:0;flex:1 1 auto}",
       "[data-hc-launch] .hc-pv-cards{display:flex;flex-direction:column;gap:12px}",
-      "[data-hc-launch] .hc-pv-card{border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:15px 17px 16px;display:flex;flex-direction:column;gap:9px;align-items:flex-start}",
-      "[data-hc-launch] .hc-pv-kicker{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--mut)}",
-      "[data-hc-launch] .hc-pv-head{font:600 14px/1.5 'Source Code Pro',monospace;color:var(--ink)}",
-      "[data-hc-launch] .hc-pv-why{font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);max-width:70ch}",
-      "[data-hc-launch] .hc-pv-note{font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
-      "[data-hc-launch] .hc-pv-fix{font:12.5px/1.7 'Source Code Pro',monospace;color:var(--ink);max-width:70ch}",
-      "[data-hc-launch] .hc-pv-err{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--del)}",
+      "[data-hc-launch] .hc-pv-card{border:1px solid var(--bd);border-radius:6px;background:var(--panel2);padding:15px 17px 16px;display:flex;flex-direction:column;gap:9px;align-items:flex-start}",
+      "[data-hc-launch] .hc-pv-kicker{font:600 9.5px var(--hc-sans);letter-spacing:1.1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-pv-head{font:600 14px/1.5 var(--hc-sans);color:var(--ink)}",
+      "[data-hc-launch] .hc-pv-why{font:12px/1.7 var(--hc-sans);color:var(--mut);max-width:70ch}",
+      "[data-hc-launch] .hc-pv-note{font:11px var(--hc-sans);color:var(--fnt)}",
+      "[data-hc-launch] .hc-pv-fix{font:12.5px/1.7 var(--hc-sans);color:var(--ink);max-width:70ch}",
+      "[data-hc-launch] .hc-pv-err{font:11.5px/1.6 var(--hc-sans);color:var(--del)}",
       // The command, and the two things anybody does with one.
       "[data-hc-launch] .hc-pv-cmd{align-self:stretch;display:flex;align-items:center;gap:12px;flex-wrap:wrap}",
-      "[data-hc-launch] .hc-pv-cmd-text{flex:1 1 260px;min-width:0;border:1px solid var(--bd);border-radius:2px;background:var(--bg);padding:9px 12px;font:12.5px/1.6 'Source Code Pro',monospace;color:var(--ink);white-space:pre-wrap;word-break:break-all}",
+      "[data-hc-launch] .hc-pv-cmd-text{flex:1 1 260px;min-width:0;border:1px solid var(--bd);border-radius:6px;background:var(--bg);padding:9px 12px;font:12.5px/1.6 var(--hc-sans);color:var(--ink);white-space:pre-wrap;word-break:break-all}",
       "[data-hc-launch] .hc-pv-cmd-text:empty{display:none}",
       "[data-hc-launch] .hc-pv-cmd-acts{flex:none;display:flex;gap:8px}",
-      "[data-hc-launch] .hc-pv-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2);border-radius:3px;padding:6px 13px;font:600 11px 'Source Code Pro',monospace;color:var(--mut);background:var(--panel)}",
+      "[data-hc-launch] .hc-pv-btn{flex:none;cursor:pointer;user-select:none;border:1px solid var(--bd2);border-radius:6px;padding:6px 13px;font:600 11px var(--hc-sans);color:var(--mut);background:var(--panel)}",
       "[data-hc-launch] .hc-pv-btn:hover{color:var(--ink);border-color:var(--ink)}",
       "[data-hc-launch] .hc-pv-go{background:var(--acc);border-color:var(--acc);color:var(--onacc,#fff)}",
       "[data-hc-launch] .hc-pv-go:hover{filter:brightness(1.08);color:var(--onacc,#fff);border-color:var(--acc)}",
       "[data-hc-launch] .hc-pv-quiet{border-color:transparent;background:transparent;padding:6px 4px;color:var(--fnt)}",
       "[data-hc-launch] .hc-pv-quiet:hover{border-color:transparent;color:var(--acc)}",
       "[data-hc-launch] .hc-pv-alts{display:flex;align-items:center;gap:6px;flex-wrap:wrap}",
-      "[data-hc-launch] .hc-pv-alts-label{font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-pv-alts-label{font:11px var(--hc-sans);color:var(--fnt)}",
       // What is running, along the top of the pane: the address or the
       // command, and the way to stop it.
       "[data-hc-launch] .hc-pv-live{display:flex;flex-direction:column;gap:10px;min-height:0;flex:1 1 auto}",
-      "[data-hc-launch] .hc-pv-bar{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:7px 11px}",
+      "[data-hc-launch] .hc-pv-bar{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);padding:7px 11px}",
       "[data-hc-launch] .hc-pv-grow{flex:1 1 auto}",
       "[data-hc-launch] .hc-pv-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--hc-ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--hc-ok) 22%,transparent)}",
-      "[data-hc-launch] .hc-pv-url{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px 'Source Code Pro',monospace;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-pv-term{flex:1 1 auto;min-height:120px;max-height:46vh;overflow-y:auto;border:1px solid var(--bd);border-radius:3px;background:var(--bg);padding:10px 13px}",
+      "[data-hc-launch] .hc-pv-url{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px var(--hc-sans);color:var(--dtxt)}",
+      "[data-hc-launch] .hc-pv-term{flex:1 1 auto;min-height:120px;max-height:46vh;overflow-y:auto;border:1px solid var(--bd);border-radius:6px;background:var(--bg);padding:10px 13px}",
       "[data-hc-launch] .hc-pv-term-tall{min-height:280px}",
-      "[data-hc-launch] .hc-pv-term-body{margin:0;font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
-      "[data-hc-launch] .hc-pv-files{display:flex;flex-direction:column;gap:4px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:11px 13px}",
-      "[data-hc-launch] .hc-pv-file{font:12px 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-pv-term-body{margin:0;font:11.5px/1.65 var(--hc-sans);color:var(--dtxt);white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-pv-files{display:flex;flex-direction:column;gap:4px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);padding:11px 13px}",
+      "[data-hc-launch] .hc-pv-file{font:12px var(--hc-sans);color:var(--dtxt)}",
       // The hole the embedded page is drawn over. It has a ground of its
       // own so the pane does not flash the workspace behind it while the
       // frame is loading.
-      "[data-hc-launch] .hc-pv-slot{flex:1 1 auto;min-height:340px;border:1px solid var(--bd);border-radius:3px;background:#fff}",
+      "[data-hc-launch] .hc-pv-slot{flex:1 1 auto;min-height:340px;border:1px solid var(--bd);border-radius:6px;background:#fff}",
       // Gated like every other rule even though the frame hangs off
       // documentElement: that is where the skin's own attribute is set,
       // so the frame is inside it.
-      "[data-hc-launch] .hc-pv-frame{position:fixed;z-index:20;border:0;border-radius:3px;background:#fff;display:none}",
+      "[data-hc-launch] .hc-pv-frame{position:fixed;z-index:20;border:0;border-radius:6px;background:#fff;display:none}",
       // What this preview is for: the row being worked on, and what to
       // look at once it is up.
       "[data-hc-launch] .hc-pv-intent{display:flex;flex-direction:column;gap:5px;border-left:2px solid var(--acc);padding:2px 0 2px 11px}",
       "[data-hc-launch] .hc-pv-intent-top{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}",
-      "[data-hc-launch] .hc-pv-intent-kicker{flex:none;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--acc)}",
-      "[data-hc-launch] .hc-pv-intent-todo{font:600 12.5px/1.55 'Source Code Pro',monospace;color:var(--ink)}",
-      "[data-hc-launch] .hc-pv-intent-where{font:11.5px 'Source Code Pro',monospace;color:var(--mut)}",
-      "[data-hc-launch] .hc-pv-step{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-pv-expect{font:11.5px/1.6 'Source Code Pro',monospace;color:var(--acc)}",
-      "[data-hc-launch] .hc-pv-stale{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--bd2);border-radius:3px;padding:7px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-pv-intent-kicker{flex:none;font:600 9.5px var(--hc-sans);letter-spacing:1.1px;color:var(--acc)}",
+      "[data-hc-launch] .hc-pv-intent-todo{font:600 12.5px/1.55 var(--hc-sans);color:var(--ink)}",
+      "[data-hc-launch] .hc-pv-intent-where{font:11.5px var(--hc-sans);color:var(--mut)}",
+      "[data-hc-launch] .hc-pv-step{font:11.5px/1.6 var(--hc-sans);color:var(--dtxt)}",
+      "[data-hc-launch] .hc-pv-expect{font:11.5px/1.6 var(--hc-sans);color:var(--acc)}",
+      "[data-hc-launch] .hc-pv-stale{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--bd2);border-radius:6px;padding:7px 11px;font:11.5px var(--hc-sans);color:var(--mut)}",
       // The Understanding tab: the scenario the goal's work is for, and the
       // questions asked about it. Boxes to type in, unlike the Prompt tab
       // beside it, so it is laid out as the goal document is -- a heading,
@@ -9413,16 +9760,35 @@
       // read as a hole torn in the prose.
       "[data-hc-launch] .hc-rail-understand{flex:1 1 auto;min-height:0;overflow-y:auto;display:none;flex-direction:column;gap:16px;padding:13px 16px 0}",
       "[data-hc-launch] .hc-understand-sec{display:flex;flex-direction:column;gap:7px}",
-      "[data-hc-launch] .hc-understand-head{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
-      "[data-hc-launch] .hc-understand-scenario,[data-hc-launch] .hc-understand-ask,[data-hc-launch] .hc-understand-follow{display:block;width:100%;box-sizing:border-box;resize:none;overflow:hidden;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:8px 10px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--dtxt);outline:none}",
+      "[data-hc-launch] .hc-understand-head{font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-understand-scenario,[data-hc-launch] .hc-understand-ask,[data-hc-launch] .hc-understand-follow{display:block;width:100%;box-sizing:border-box;resize:none;overflow:hidden;border:0;background:none;padding:0;font:11.5px/1.6 var(--hc-sans);color:var(--dtxt);outline:none}",
+      // The scenario and a follow-up are written into a box: each is one
+      // piece of prose with nothing beside it. A question is not -- it is one
+      // of a list, the same list of one-line asks the TODOs tab keeps, and it
+      // is drawn the way that list is: a dash in the gutter and the words
+      // beside it, no border of its own. A column of boxes read as a form to
+      // be filled in; a column of dashes reads as things you are asking.
+      "[data-hc-launch] .hc-understand-scenario,[data-hc-launch] .hc-understand-follow{border:1px solid var(--bd);border-radius:6px;background:var(--panel2);padding:8px 10px}",
       "[data-hc-launch] .hc-understand-scenario{min-height:92px}",
-      "[data-hc-launch] .hc-understand-scenario:focus,[data-hc-launch] .hc-understand-ask:focus,[data-hc-launch] .hc-understand-follow:focus{border-color:var(--acc)}",
-      "[data-hc-launch] .hc-understand-q{display:flex;align-items:flex-start;gap:6px}",
-      "[data-hc-launch] .hc-understand-drop{flex:none;width:16px;padding-top:7px;text-align:center;font:12px/1 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-understand-scenario:focus,[data-hc-launch] .hc-understand-follow:focus{border-color:var(--acc)}",
+      // Sized and spaced off the TODO row it is drawn after: same 12px/1.9
+      // line box, so the dash beside it sits on the question's own first
+      // line however far the question wraps.
+      "[data-hc-launch] .hc-understand-ask{flex:1 1 auto;width:auto;min-width:0;min-height:1.9em;font:12px/1.9 var(--hc-sans);caret-color:var(--ink)}",
+      "[data-hc-launch] .hc-understand-q{display:flex;align-items:flex-start;gap:9px;padding:2px 6px;border-radius:6px}",
+      "[data-hc-launch] .hc-understand-q:hover{background:var(--hov)}",
+      "[data-hc-launch] .hc-understand-bullet{flex:none;width:8px;text-align:center;font:12px/1.9 var(--hc-sans);color:var(--fnt);user-select:none}",
+      // Quiet until the row is under the pointer, like the × on a building
+      // TODO: the list is meant to be read as questions, not as rows with a
+      // control on each one.
+      "[data-hc-launch] .hc-understand-drop{flex:none;width:16px;text-align:center;font:12px/1.9 var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none;opacity:.4}",
+      "[data-hc-launch] .hc-understand-q:hover .hc-understand-drop{opacity:1}",
       "[data-hc-launch] .hc-understand-drop:hover{color:var(--del)}",
-      "[data-hc-launch] .hc-understand-add{align-self:flex-start;font:11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      // Under the dashes and lined up with them: the link starts where the
+      // questions' own words do (6px row padding + 8px gutter + 9px gap).
+      "[data-hc-launch] .hc-understand-add{align-self:flex-start;padding-left:23px;font:11px var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-understand-add:hover{color:var(--acc)}",
-      "[data-hc-launch] .hc-understand-saved{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-understand-saved{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:10px var(--hc-sans);color:var(--fnt)}",
       // The foot of the tab, and the one control on it that sends the whole
       // thing: the scenario and every question still waiting on an answer.
       // It stays on the bottom edge while the column scrolls -- the reader
@@ -9432,7 +9798,7 @@
       // the bottom of the scrollport: everything above it passes behind it
       // and is gone, rather than reappearing in a strip below the button.
       "[data-hc-launch] .hc-understand-foot{position:sticky;bottom:0;z-index:1;display:flex;align-items:center;gap:10px;margin-top:auto;padding:10px 0 16px;background:var(--panel);border-top:1px solid var(--bd)}",
-      "[data-hc-launch] .hc-understand-send{flex:none;margin-left:auto;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px 'Source Code Pro',monospace;letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
+      "[data-hc-launch] .hc-understand-send{flex:none;margin-left:auto;cursor:pointer;user-select:none;border:1px solid var(--acc,#a5492a);border-radius:6px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;padding:7px 13px}",
       "[data-hc-launch] .hc-understand-send:hover{filter:brightness(1.08)}",
       "[data-hc-launch] .hc-understand-send[data-hc-busy]{cursor:default;filter:none;opacity:.55}",
       // A question's own thread. It hangs off the question box on a rule down
@@ -9440,30 +9806,34 @@
       // read down the questions, and an answer has to read as part of the
       // question above it rather than as the next thing in the column.
       "[data-hc-launch] .hc-understand-thread{display:flex;flex-direction:column;gap:9px;margin:2px 0 0 3px;padding-left:10px;border-left:1px solid var(--bd)}",
-      "[data-hc-launch] .hc-understand-followq{font:11px/1.55 'Source Code Pro',monospace;color:var(--mut)}",
+      "[data-hc-launch] .hc-understand-followq{font:11px/1.55 var(--hc-sans);color:var(--mut)}",
       // The answer, drawn by the markdown reader: its own scroller taken
       // away, since the column already has one, and its last block's margin
       // with it -- the rule above the foot is close enough to a paragraph
       // end without one.
-      "[data-hc-launch] .hc-understand-answer{font:11.5px/1.65 'Source Code Pro',monospace;color:var(--dtxt)}",
+      "[data-hc-launch] .hc-understand-answer{font:11.5px/1.65 var(--hc-sans);color:var(--dtxt)}",
       "[data-hc-launch] .hc-understand-answer .hc-md{max-height:none;overflow:visible;font:inherit;color:inherit}",
       "[data-hc-launch] .hc-understand-answer .hc-md>*:last-child{margin-bottom:0}",
       // The lines a shaped scenario left blank, and what would fill them.
       "[data-hc-launch] .hc-understand-blanks{display:flex;flex-direction:column;gap:3px}",
-      "[data-hc-launch] .hc-understand-blank-head{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
-      "[data-hc-launch] .hc-understand-blank{font:10.5px/1.55 'Source Code Pro',monospace;color:var(--fnt)}",
-      "[data-hc-launch] .hc-understand-go{align-self:flex-start;font:11px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-understand-blank-head{font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-understand-blank{font:10.5px/1.55 var(--hc-sans);color:var(--fnt)}",
+      "[data-hc-launch] .hc-understand-go{align-self:flex-start;font:11px var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-understand-go:hover{color:var(--acc)}",
       "[data-hc-launch] .hc-understand-go[data-hc-busy]{color:var(--mut);cursor:default}",
-      "[data-hc-launch] .hc-understand-err{font:10.5px/1.5 'Source Code Pro',monospace;color:var(--del)}",
+      "[data-hc-launch] .hc-understand-err{font:10.5px/1.5 var(--hc-sans);color:var(--del)}",
       // The screenshots a scenario is being written from, as a strip of
       // chips: what was pasted, and the way to take one back out.
       "[data-hc-launch] .hc-understand-shots{display:flex;flex-wrap:wrap;gap:6px}",
-      "[data-hc-launch] .hc-understand-shot{display:inline-flex;align-items:center;gap:5px;max-width:100%;border:1px solid var(--bd);border-radius:2px;background:var(--panel2);padding:3px 6px;font:10.5px 'Source Code Pro',monospace;color:var(--mut)}",
+      // A question's own screenshots hang under it, indented to where its
+      // words start (6px row padding + 8px gutter + 9px gap) so they read as
+      // that question's rather than as the list's.
+      "[data-hc-launch] .hc-understand-qshots{margin-left:23px}",
+      "[data-hc-launch] .hc-understand-shot{display:inline-flex;align-items:center;gap:5px;max-width:100%;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);padding:3px 6px;font:10.5px var(--hc-sans);color:var(--mut)}",
       "[data-hc-launch] .hc-understand-shot-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-understand-shot-rm{flex:none;cursor:pointer;user-select:none;color:var(--fnt)}",
       "[data-hc-launch] .hc-understand-shot-rm:hover{color:var(--del)}",
-      "[data-hc-launch] .hc-rail-count{font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-count{font:10px var(--hc-sans);color:var(--fnt)}",
       // The search bar sits directly under GOALS, with no rule between the
       // two: the heading's line moves down to under the input. The rail's
       // tree is the third child now, after the heading and the search.
@@ -9473,10 +9843,10 @@
       "[data-hc-launch] .hc-search-field:focus-within{border-color:var(--acc)}",
       "[data-hc-launch] .hc-search-glyph{flex:none;display:flex;align-items:center;color:var(--fnt)}",
       "[data-hc-launch] .hc-search-field:focus-within .hc-search-glyph{color:var(--acc)}",
-      "[data-hc-launch] .hc-search-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt);font:14px/1 'Source Code Pro',monospace;padding:2px}",
+      "[data-hc-launch] .hc-search-clear{flex:none;display:none;cursor:pointer;user-select:none;color:var(--fnt);font:14px/1 var(--hc-sans);padding:2px}",
       "[data-hc-launch] .hc-search-clear:hover{color:var(--ink)}",
       "[data-hc-launch] .hc-search-field[data-hc-typed] .hc-search-clear{display:block}",
-      "[data-hc-launch] .hc-search-input{flex:1 1 auto;display:block;width:100%;min-width:0;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:7px 0;font:11.5px 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
+      "[data-hc-launch] .hc-search-input{flex:1 1 auto;display:block;width:100%;min-width:0;box-sizing:border-box;border:none;outline:none;background:transparent;margin:0;padding:7px 0;font:11.5px var(--hc-sans);color:var(--ink);caret-color:var(--ink);-webkit-appearance:none;appearance:none}",
       "[data-hc-launch] .hc-search-input::placeholder{color:var(--fnt)}",
       "[data-hc-launch] .hc-search-input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}",
       // While a query is typed the rail shows hits in place of the tree:
@@ -9487,19 +9857,19 @@
       "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-hits{border-top:1px solid var(--bd);margin-top:9px}",
       "[data-hc-launch] .hc-rail-left[data-hc-searching] .hc-search-hits{display:block;flex:1 1 auto;min-height:0;overflow-y:auto;padding:8px 0 0}",
       "[data-hc-launch] .hc-rail-left[data-hc-searching]>:not(.hc-rail-head):not(.hc-search){display:none!important}",
-      "[data-hc-launch] .hc-search-hit{padding:5px 8px;border-radius:2px;cursor:pointer}",
+      "[data-hc-launch] .hc-search-hit{padding:5px 8px;border-radius:6px;cursor:pointer}",
       "[data-hc-launch] .hc-search-hit:hover,[data-hc-launch] .hc-search-hit[data-hc-hit-active]{background:var(--acchov)}",
       "[data-hc-launch] .hc-search-hit-title{font-size:12.5px;line-height:1.4;color:var(--ink)}",
-      "[data-hc-launch] .hc-search-hit-trail{font:10px 'Source Code Pro',monospace;color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-      "[data-hc-launch] .hc-search-hit-where{font:10.5px/1.5 'Source Code Pro',monospace;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "[data-hc-launch] .hc-search-hit-trail{font:10px var(--hc-sans);color:var(--fnt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      "[data-hc-launch] .hc-search-hit-where{font:10.5px/1.5 var(--hc-sans);color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
       "[data-hc-launch] .hc-search-hit-where b{font-weight:600;color:var(--fnt)}",
-      "[data-hc-launch] .hc-search-none{padding:10px 8px;font:11px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-search-none{padding:10px 8px;font:11px var(--hc-sans);color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-left>div:nth-child(3){padding:6px 6px 0}",
       // A tree row is one line high, so its title has to be one line: a
       // wrapped one overlapped the row under it at this width.
       "[data-hc-launch] .hc-row{white-space:nowrap}",
       "[data-hc-launch] .hc-rowtitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}",
-      "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-none{margin:12px;font:11.5px/1.6 var(--hc-sans);color:var(--fnt)}",
       // The prompt the build opens on: a block to read, not a box to type in.
       // It is the whole of the tab now, so it takes the whole of the column --
       // it used to be capped at 38vh to leave room for a field under it, and
@@ -9511,17 +9881,16 @@
       // string a build is handed, which is what it is. Printed, not typed in.
       "[data-hc-launch] .hc-rail-ctx{flex:1 1 auto;display:flex;flex-direction:column;min-height:0;border-bottom:1px solid var(--bd)}",
       "[data-hc-launch] .hc-rail-ctx-head{flex:none;display:flex;align-items:baseline;gap:7px;padding:9px 13px 7px;cursor:pointer;user-select:none}",
-      "[data-hc-launch] .hc-rail-ctx-title{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut)}",
-      "[data-hc-launch] .hc-rail-ctx-note{flex:1;min-width:0;font:10px 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      "[data-hc-launch] .hc-rail-ctx-fold{flex:none;font:10px 'Source Code Pro',monospace;color:var(--fnt)}",
+      "[data-hc-launch] .hc-rail-ctx-title{font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut)}",
+      "[data-hc-launch] .hc-rail-ctx-note{flex:1;min-width:0;font:10px var(--hc-sans);color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      "[data-hc-launch] .hc-rail-ctx-fold{flex:none;font:10px var(--hc-sans);color:var(--fnt)}",
       "[data-hc-launch] .hc-rail-ctx-head:hover .hc-rail-ctx-fold{color:var(--ink)}",
-      "[data-hc-launch] .hc-rail-ctx-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0 12px 12px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:10px 12px;font:11.5px/1.62 'Source Code Pro',ui-monospace,monospace;tab-size:2;color:var(--dtxt);white-space:pre-wrap;word-break:break-word;user-select:text}",
+      "[data-hc-launch] .hc-rail-ctx-body{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0 12px 12px;border:1px solid var(--bd);border-radius:6px;background:var(--panel2);padding:10px 12px;font:11.5px/1.62 var(--hc-sans);tab-size:2;color:var(--dtxt);white-space:pre-wrap;word-break:break-word;user-select:text}",
       "[data-hc-launch] .hc-rail-ctx[data-hc-fold] .hc-rail-ctx-body{display:none}",
       "[data-hc-launch] .hc-rail-actions{flex:none;display:flex;align-items:center;gap:10px;padding:10px 12px 0}",
-      "[data-hc-launch] .hc-rail-copy{display:block;flex:1;text-align:center;padding:7px 12px;border-radius:4px;background:var(--hc-ok);color:#fff;font:600 11.5px 'Source Code Pro',monospace;cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-rail-copy{display:block;flex:1;text-align:center;padding:7px 12px;border-radius:6px;background:var(--acc);color:var(--onacc);font:600 11.5px var(--hc-sans);cursor:pointer;user-select:none}",
       // The light fill is dark enough that only white clears AA on it; the
       // dark theme's fill is bright enough that only near-black does.
-      "[data-hc-launch][data-hc-theme=\"dark\"] .hc-rail-copy{color:#08130c}",
       "[data-hc-launch] .hc-rail-copy:hover{filter:brightness(1.08)}",
       // The strip between the title and the preview -- the sources rail,
       // the status badge, and the one-tab bar reading PREVIEW -- said
@@ -9531,9 +9900,9 @@
       // artifact and renderInheritedSources own them); only the paint goes.
       "[data-hc-launch] .hc-sources{display:none!important}",
       "[data-hc-launch] .hc-main [title=\"Click to change status\"]{display:none!important}",
-      "[data-hc-launch] .hc-sources-label{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut);margin-right:2px}",
-      "[data-hc-launch] .hc-src{display:inline-flex;align-items:center;gap:6px;max-width:280px;padding:3px 8px;border:1px solid var(--bd);border-radius:99px;background:var(--panel2);font:10.5px 'Source Code Pro',monospace;color:var(--dtxt)}",
-      "[data-hc-launch] .hc-src-tag{font:600 8px 'Source Code Pro',monospace;letter-spacing:.6px;color:var(--fnt)}",
+      "[data-hc-launch] .hc-sources-label{font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut);margin-right:2px}",
+      "[data-hc-launch] .hc-src{display:inline-flex;align-items:center;gap:6px;max-width:280px;padding:3px 8px;border:1px solid var(--bd);border-radius:99px;background:var(--panel2);font:10.5px var(--hc-sans);color:var(--dtxt)}",
+      "[data-hc-launch] .hc-src-tag{font:600 8px var(--hc-sans);letter-spacing:.6px;color:var(--fnt)}",
       // "GITHUB claude-plugins" read as two halves of one name. The colon
       // says which half is the kind and which is the thing, and it is drawn
       // rather than written so the tag's own text stays the word alone.
@@ -9547,7 +9916,7 @@
       "[data-hc-launch] .hc-src-ctx .hc-src-tag{color:var(--mut)}",
       "[data-hc-launch] .hc-src-ctx:hover{border-color:var(--acc);color:var(--acc)}",
       "[data-hc-launch] .hc-src-ctx:hover .hc-src-tag{color:var(--acc)}",
-      "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer;user-select:none}",
+      "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-src-add:hover{color:var(--acc);border-color:var(--acc)}",
       "[data-hc-launch] .hc-tabs{display:none!important}",
       // The session banner. Same nodes, same timers, same close button as
@@ -9559,6 +9928,29 @@
       "[data-hc-launch] .hc-notice-title::before{content:'\\25cf';margin-right:7px;font-size:9px;vertical-align:1px}",
       "[data-hc-launch] .hc-notice-detail{margin-top:0;color:var(--hc-noticetxt);flex:1;min-width:0}",
       "[data-hc-launch] .hc-notice-close{top:6px;right:12px;color:var(--hc-noticetxt)}",
+      // The workspace reads in the interface face. The artifact writes its
+      // own font into inline styles on nodes this stylesheet cannot name --
+      // the tree rows, the filter counts, the stamp -- so the family is
+      // asserted over the whole subtree and then handed back, below, to the
+      // places that have to keep it.
+      "[data-hc-launch] body,[data-hc-launch] .hc,[data-hc-launch] .hc *",
+      "{font-family:var(--hc-sans)!important}",
+      // Monospace is kept where the text is machine-written or machine-read
+      // -- logs, the assembled prompt, paths -- and in the notes pane, where
+      // it is not a style choice at all: that pane is a rendered layer under
+      // a transparent textarea, and a proportional face puts the caret off
+      // the character it is on the moment a **bold** run sets wider than the
+      // source it is standing over.
+      "[data-hc-launch] .hc-notes-render,[data-hc-launch] .hc-notes-edit,",
+      "[data-hc-launch] .hc-todo-run,[data-hc-launch] .hc-todo-run-note,",
+      "[data-hc-launch] .hc-todo-restart-prompt,",
+      "[data-hc-launch] .hc-dev-row,[data-hc-launch] .hc-dev-last,",
+      "[data-hc-launch] .hc-rail-ctx-body,[data-hc-launch] .hc-rail-prompt pre,",
+      "[data-hc-launch] .hc-rail-prompt textarea,[data-hc-launch] .hc pre,",
+      "[data-hc-launch] .hc code,",
+      "[data-hc-launch] .hc-cwd,[data-hc-launch] .hc-home-where,",
+      "[data-hc-launch] .hc-project-parent,[data-hc-launch] .hc-onb-item-where",
+      "{font-family:var(--hc-mono)!important}",
   ].join("");
 
   var launchApplied = false;
@@ -12080,18 +12472,21 @@
       if (todoSelection()) todoCopyEvent(event);
     }, true);
     document.addEventListener("paste", function (event) {
-      // A screenshot pasted into the scenario box: taken here, kept as a
-      // file, and cited by the scenario rather than dropped into the text as
-      // whatever the browser would have made of it. Text pastes into that
-      // box are ordinary typing and are left alone.
+      // A screenshot pasted into the scenario box or into a question: taken
+      // here, kept as a file, and cited by whichever of the two it landed in
+      // rather than dropped into the text as whatever the browser would have
+      // made of it. Text pastes into those boxes are ordinary typing and are
+      // left alone.
       var into = event.target;
-      if (into && into.getAttribute
-          && into.getAttribute("data-hc-understand") === "scenario") {
+      var field = into && into.getAttribute
+        && into.getAttribute("data-hc-understand");
+      if (field === "scenario" || field === "question") {
         var pasted = todoClipboardImages(event.clipboardData);
         if (!pasted.length) return;
         event.preventDefault();
         event.stopPropagation();
-        understandPasteImages(pasted);
+        understandPasteImages(pasted, field === "question"
+                              ? str(into.getAttribute("data-hc-question")) : "");
         return;
       }
       // An image on the clipboard, pasted into the list: ours, before the
@@ -12166,7 +12561,10 @@
       }
       var dropShot = node.getAttribute("data-hc-understand-shot-rm");
       if (dropShot !== null) {
-        understandShotDrop(dropShot);
+        // Off the question it hangs on, or off the scenario when the chip
+        // names no question.
+        understandShotDrop(dropShot,
+                           str(node.getAttribute("data-hc-question")));
         return;
       }
       // A finished row, clicked: the reader wants another go at it. No
@@ -12533,11 +12931,32 @@
   // the reason everything else here is: the artifact re-creates what it owns
   // and a panel inside it loses its listeners the first time it redraws.
 
+  // The first screen names a project rather than a category. "Start a new
+  // project / resume an existing one" was two guesses about a reader whose
+  // answer is nearly always the thing they were doing an hour ago -- so the
+  // vault is asked which project its chats were last in, and that project's
+  // name is the question. Everything else is one press behind it.
+
   var onbBox = null;
-  var onbStep = "start";      // start · used · make · pick
   var onbProjects = null;     // the reader's projects, once asked for
+  var onbLoaded = false;      // ...and whether the answer has landed. `[]`
+                              // cannot say this: an empty list is an answer.
+  var onbAsking = false;
+  var onbRecent = "";         // the project their chats were last in
   var onbBusy = false;
   var onbSaid = "";
+
+  // Come back from the setup page's bypass: they went to write the project
+  // out in a conversation, decided against it, and want the short form. Read
+  // before the first draw so they never see the question they just answered.
+  function onbQuick() {
+    try {
+      return typeof location !== "undefined"
+        && /[?&]quick=1(&|$)/.test(str(location.search));
+    } catch (e) { return false; }
+  }
+
+  var onbStep = onbQuick() ? "make" : "start";  // start · pick · make · import
 
   function onbNeeded() {
     return serverState.scope === "chat"
@@ -12572,12 +12991,36 @@
   // step. Asked for once and kept: the list does not change while a wizard
   // is open, and a spinner per redraw would flicker.
   function onbLoadProjects() {
-    if (onbProjects) return;
-    onbProjects = [];
+    if (onbLoaded || onbAsking) return;
+    onbAsking = true;
     fetchJSON("/api/projects").then(function (res) {
+      onbAsking = false;
+      onbLoaded = true;
       onbProjects = (res && res.ok && array(res.projects)) || [];
-      if (onbStep === "pick") renderOnboarding(true);
+      // Which one they were last in. The server reads it from the chats'
+      // own stamps rather than from when a record was written: a record is
+      // written when a project is made and not when it is worked in, so the
+      // newest record is routinely the least likely answer.
+      onbRecent = str(res && res.recent);
+      // Only where the list is what is on screen: a rebuild while somebody
+      // is typing a name takes the caret out of the box.
+      if (onbStep === "start" || onbStep === "pick") renderOnboarding(true);
     });
+  }
+
+  // The project the question is about, if the server named one that is still
+  // on the list. A `recent` pointing at nothing is no question.
+  function onbRecentRow() {
+    if (!onbRecent || !onbProjects) return null;
+    for (var i = 0; i < onbProjects.length; i++) {
+      if (str(onbProjects[i].cwd) === onbRecent) return onbProjects[i];
+    }
+    return null;
+  }
+
+  function onbWhy(row) {
+    var said = str(row && row.objective).replace(/\s+/g, " ").trim();
+    return said ? said.slice(0, 140) : str(row && row.cwd);
   }
 
   function onbBind(where, then) {
@@ -12633,26 +13076,72 @@
     });
   }
 
+  // A project that already exists somewhere else: a directory on this
+  // machine, or a repository to clone into one. Nothing is asked about its
+  // purpose -- the code is the description, and a folder somebody points at
+  // is a folder they can already name.
+  function onbImport() {
+    if (onbBusy) return;
+    var where = str((onbBox.querySelector("[data-hc-onb-where]") || {}).value)
+      .trim();
+    if (!where) { onbSay("give a folder or a repository"); return; }
+    onbBusy = true;
+    onbSay("");
+    // The one box carries either: the server reads a path as a path and a
+    // URL as a clone, so a reader who typed one is not asked which it was.
+    post({ op: "new_project", name: where }).then(function (res) {
+      onbBusy = false;
+      if (!res || !res.ok || !res.cwd) {
+        onbSay((res && res.error) || "that could not be imported");
+        return;
+      }
+      onbBind(res.cwd);
+    });
+  }
+
+  // The full onboarding, on the page that was written for it. It comes back
+  // here bound: that page is told which chat asked, and commits against it.
+  function onbCreate() {
+    if (typeof location === "undefined") return;
+    onbClose();
+    location.href = "/setup?new=1";
+  }
+
   function onbBody(box) {
     if (onbStep === "start") {
-      onbHead(box, "Which project is this chat for?",
-              "Engelbart keeps goals per project. Say which one this "
-              + "conversation belongs to and it stays bound to it.");
+      onbLoadProjects();
+      if (!onbLoaded) {
+        onbHead(box, "Which project is this chat for?",
+                "looking for the one you were last in…");
+        return;
+      }
+      var last = onbRecentRow();
+      // Nobody to be working on: the question would name nothing, so it is
+      // skipped and what comes after it is the whole screen.
+      if (!last) return onbOffer(box, false);
+      onbHead(box, "Are you working on “" + str(last.name || last.cwd) + "”?",
+              onbWhy(last));
       var row = el("div", "hc-onb-row");
-      row.appendChild(onbBtn("Start a new project", "new", true));
-      row.appendChild(onbBtn("Resume an existing project", "existing"));
+      row.appendChild(onbBtn(onbBusy ? "Opening…" : "Yes", "yes", true));
+      row.appendChild(onbBtn("Select a different project", "pick"));
       box.appendChild(row);
       return;
     }
-    if (onbStep === "used") {
-      onbHead(box, "Have you used Engelbart for this project before?",
-              "If you have, this chat joins the goals already there. If not, "
-              + "it starts them.");
-      var r2 = el("div", "hc-onb-row");
-      r2.appendChild(onbBtn("Yes — find it", "pick", true));
-      r2.appendChild(onbBtn("No — set it up", "make"));
-      r2.appendChild(onbBtn("Back", "back"));
-      box.appendChild(r2);
+    if (onbStep === "import") {
+      onbHead(box, "Import an existing project",
+              "A folder already on this machine, or a repository to clone. "
+              + "Its goals start empty; the code is there from the first "
+              + "moment.");
+      var where = el("input", "hc-onb-field");
+      where.setAttribute("data-hc-onb-where", "");
+      where.setAttribute("placeholder",
+                         "~/code/thing  or  git@github.com:you/thing.git");
+      where.setAttribute("spellcheck", "false");
+      box.appendChild(where);
+      var ir = el("div", "hc-onb-row");
+      ir.appendChild(onbBtn(onbBusy ? "Working…" : "Import", "import-go", true));
+      ir.appendChild(onbBtn("Back", "back"));
+      box.appendChild(ir);
       return;
     }
     if (onbStep === "make") {
@@ -12676,16 +13165,25 @@
       box.appendChild(r3);
       return;
     }
-    // pick
-    onbHead(box, "Which one is it?",
+    onbOffer(box, true);
+  }
+
+  // Everything that is not "yes": the projects they already have, and the two
+  // ways to arrive with one they do not. One screen rather than a second fork
+  // -- "have you used Engelbart for this before?" was a question about the
+  // tool, asked of somebody who has not seen it yet, and the list underneath
+  // answers it by being empty or not.
+  function onbOffer(box, back) {
+    onbHead(box, back ? "Which one is it?" : "Which project is this chat for?",
             "This chat is bound to the project you choose, and stays bound "
             + "to it across resumes.");
     onbLoadProjects();
     var list = el("div", "hc-onb-list");
-    if (!onbProjects || !onbProjects.length) {
+    if (!onbLoaded) {
+      list.appendChild(el("div", "hc-onb-empty", "looking…"));
+    } else if (!onbProjects.length) {
       list.appendChild(el("div", "hc-onb-empty",
-        onbProjects ? "no projects yet — set this one up instead"
-                    : "looking…"));
+                          "no projects yet — make the first one below"));
     } else {
       onbProjects.forEach(function (row) {
         var item = el("div", "hc-onb-item");
@@ -12702,7 +13200,12 @@
     }
     box.appendChild(list);
     var r4 = el("div", "hc-onb-row");
-    r4.appendChild(onbBtn("Back", "back"));
+    // The full conversation, not the two fields: a project described out loud
+    // arrives with goals and rows in it. The short form is still one press
+    // away, from the bypass on that page.
+    r4.appendChild(onbBtn("Create a new project", "create", true));
+    r4.appendChild(onbBtn("Import an existing project", "import"));
+    if (back) r4.appendChild(onbBtn("Back", "back"));
     box.appendChild(r4);
   }
 
@@ -12721,15 +13224,22 @@
       var act = node.getAttribute("data-hc-onb");
       event.preventDefault();
       event.stopPropagation();
-      if (act === "new") { onbStep = "make"; renderOnboarding(true); }
-      else if (act === "existing") { onbStep = "used"; renderOnboarding(true); }
-      else if (act === "pick") { onbStep = "pick"; renderOnboarding(true); }
+      if (act === "yes") {
+        var last = onbRecentRow();
+        if (last) onbBind(str(last.cwd));
+      } else if (act === "pick") { onbStep = "pick"; renderOnboarding(true); }
+      else if (act === "create") { onbCreate(); }
+      else if (act === "import") { onbStep = "import"; renderOnboarding(true); }
       else if (act === "make") { onbStep = "make"; renderOnboarding(true); }
       else if (act === "back") {
-        onbStep = onbStep === "used" ? "start"
-                : (onbStep === "pick" ? "used" : "start");
+        // Back to the list where there is one to go back to, and to the
+        // question otherwise: a reader who arrived at the short form from the
+        // bypass has no list behind them, only the first screen.
+        onbStep = (onbStep === "import" || onbStep === "make") && !onbQuick()
+          ? "pick" : "start";
         renderOnboarding(true);
       } else if (act === "continue") { onbMake(); }
+      else if (act === "import-go") { onbImport(); }
       else if (act === "bind") {
         onbBind(node.getAttribute("data-hc-onb-cwd"));
       }
@@ -13312,6 +13822,8 @@
     var typed = at ? at.value : null;
     var area = onbBox && onbBox.querySelector("[data-hc-onb-why]");
     var typedWhy = area ? area.value : null;
+    var pointed = onbBox && onbBox.querySelector("[data-hc-onb-where]");
+    var typedWhere = pointed ? pointed.value : null;
     onbClose();
     var shade = el("div", "hc-onb-shade");
     // The theme's variables are declared on the artifact's own shell, and this
@@ -13333,6 +13845,11 @@
     }
     var why2 = shade.querySelector("[data-hc-onb-why]");
     if (why2 && typedWhy !== null) why2.value = typedWhy;
+    var where2 = shade.querySelector("[data-hc-onb-where]");
+    if (where2) {
+      if (typedWhere !== null) where2.value = typedWhere;
+      where2.focus();
+    }
     return true;
   }
 
@@ -13760,11 +14277,18 @@
   // document somebody else may be reading.
   var understandFollow = {};
   var understandAsking = {};
+  // Sent, but not yet out: the questions behind the one Claude is on. A send
+  // puts them one at a time so the answers land in the order they are listed
+  // in, and a question waiting its turn says so rather than sitting there
+  // looking untouched.
+  var understandQueued = {};
   var understandError = {};
   // Why a pasted screenshot never became a chip, or why the rough words in
-  // the box would not map. About the scenario box as a whole rather than any
-  // one question, and shown under it.
+  // the box would not map -- and which box it happened in, so a paste that
+  // failed into a question is answered under that question rather than under
+  // the scenario the reader was not looking at. "" is the scenario's own.
   var understandShotError = "";
+  var understandShotErrorAt = "";
   // The scenario box being shaped: whether the call is out, what came back
   // that the reader has to fill in themselves, and a count that tells a
   // redraw from a repeat. None of it is the goal's -- a blank is a question
@@ -13798,17 +14322,29 @@
                 && typeof found.understanding === "object")
       ? found.understanding : {};
     var out = { scenario: str(held.scenario), shots: [], questions: [] };
-    array(held.shots).forEach(function (shot) {
-      if (!shot || typeof shot !== "object" || !str(shot.path)) return;
-      if (out.shots.length >= MAX_SHOTS) return;
-      out.shots.push({ path: str(shot.path), name: str(shot.name) });
+    understandShotsOf(held.shots).forEach(function (shot) {
+      out.shots.push(shot);
     });
     array(held.questions).forEach(function (row) {
       if (!row || typeof row !== "object") return;
       if (out.questions.length >= MAX_QUESTIONS) return;
       out.questions.push({ id: str(row.id) || understandQid(),
                            text: str(row.text),
+                           shots: understandShotsOf(row.shots),
                            thread: understandThread(row.thread) });
+    });
+    return out;
+  }
+
+  function understandShotsOf(value) {
+    // Screenshots as they are kept, on the scenario or on one question: a
+    // path and the name it was pasted under, capped the same way in both
+    // places.
+    var out = [];
+    array(value).forEach(function (shot) {
+      if (!shot || typeof shot !== "object" || !str(shot.path)) return;
+      if (out.length >= MAX_SHOTS) return;
+      out.push({ path: str(shot.path), name: str(shot.name) });
     });
     return out;
   }
@@ -13842,6 +14378,7 @@
         .replace(/^ | $/g, "");
       if (text) {
         out.questions.push({ id: str(row.id), text: text,
+                             shots: understandShotsOf(row && row.shots),
                              thread: understandThread(row && row.thread) });
       }
     });
@@ -13854,12 +14391,26 @@
               && node.getAttribute("data-hc-understand") !== null);
   }
 
+  function understandSettled() {
+    // An ask that never went, in the shape of one that has come back: the
+    // send chains on what understandAsk returns, and a refusal has to move
+    // the chain on to the next question rather than stop it dead.
+    return Promise.resolve();
+  }
+
+  function understandGave(counted) {
+    // A counted ask that is not going to happen gives its count back, or the
+    // job it was counted onto never closes and the banner is never said.
+    if (counted) understandAlertShut(understandGoalId);
+    return understandSettled();
+  }
+
   function understandPad() {
     // One empty question is always on offer: a tab with a scenario and no box
     // under it reads as a tab that cannot take a question at all.
     if (understandData && !understandData.questions.length) {
       understandData.questions.push({ id: understandQid(), text: "",
-                                      thread: [] });
+                                      shots: [], thread: [] });
     }
   }
 
@@ -13872,8 +14423,10 @@
     // next one, and neither is the refusal it earned.
     understandFollow = {};
     understandAsking = {};
+    understandQueued = {};
     understandError = {};
     understandShotError = "";
+    understandShotErrorAt = "";
     understandSendError = "";
     understandMapping = false;
     understandBlanks = [];
@@ -13975,7 +14528,7 @@
       return;
     }
     understandData.questions.push({ id: understandQid(), text: "",
-                                    thread: [] });
+                                    shots: [], thread: [] });
     renderTodoRail(true);
     // The box just made is the one to type in.
     var boxes = document.querySelectorAll(".hc-understand-ask");
@@ -14000,12 +14553,17 @@
       .replace(/\s+/g, " ").replace(/^ | $/g, "");
   }
 
-  function understandAsk(qid) {
+  function understandAsk(qid, counted) {
     // The question as it stands, put to Claude, and the answer kept under it.
     // A question already answered asks its follow-up box instead: the thread
     // travels with it, so "and if they are both offline?" is a question.
+    //
+    // Returns when the ask has settled, so a send can put its questions one
+    // after another; `counted` says the caller has already counted this ask
+    // onto the goal's job and it must not be counted twice.
+    delete understandQueued[qid];
     var question = understandQuestion(qid);
-    if (!question || understandAsking[qid]) return;
+    if (!question || understandAsking[qid]) return understandGave(counted);
     var thread = understandThread(question.thread);
     var words = understandPending(question);
     var scenario = str(understandData.scenario).replace(/^\s+|\s+$/g, "");
@@ -14018,7 +14576,7 @@
     }
     if (understandError[qid]) {
       renderTodoRail(true);
-      return;
+      return understandGave(counted);
     }
     // What is in the boxes is what the answer is about, so it goes first --
     // otherwise an answer can be written about a scenario the server has not
@@ -14029,13 +14587,17 @@
     // An answer takes as long as a build does, and the reader is not held
     // here while it is written: counted out now, and said once the last of
     // the batch is back (see understandAlertIn).
-    understandAlertOut(goalId);
+    if (!counted) understandAlertOut(goalId);
     renderTodoRail(true);
-    fetch("/api/ask_scenario", {
+    return fetch("/api/ask_scenario", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // Its own screenshots go with it: the answer is about what is on them,
+      // and the server is the one that decides they are really this
+      // workspace's before anything is allowed to open them.
       body: JSON.stringify({ goal: goalId, scenario: scenario,
-                             question: words, turns: thread })
+                             question: words, turns: thread,
+                             shots: understandShotsOf(question.shots) })
     }).then(function (r) { return r.json(); })
       .catch(function () { return null; })
       .then(function (res) {
@@ -14070,6 +14632,14 @@
     // still waiting on an answer, put to Claude in one go. The reader writes
     // the situation and what they want to know about it, then asks once --
     // each question is still answered on its own, under itself.
+    //
+    // One at a time, down the list. Sent together they came back in whatever
+    // order the answers happened to be written in, so the tab filled itself
+    // in from the middle and the reader could not tell what was still
+    // coming; asked in turn, the answers appear the way the questions are
+    // written. It costs the wall-clock of the whole batch to see the last
+    // one -- which the reader is not held for, and which is the price of a
+    // list that fills from the top.
     if (!understandData) return;
     var scenario = str(understandData.scenario).replace(/^\s+|\s+$/g, "");
     var pending = array(understandData.questions).filter(function (row) {
@@ -14081,7 +14651,31 @@
       renderTodoRail(true);
       return;
     }
-    pending.forEach(function (row) { understandAsk(row.id); });
+    var goalId = understandGoalId;
+    // The whole batch is counted onto the job before any of it goes, and
+    // held open by one count of the send's own: a chain counted question by
+    // question would fall to zero between two of them and say the batch was
+    // done as many times as it had questions.
+    understandAlertOut(goalId);
+    pending.forEach(function (row) {
+      understandQueued[row.id] = true;
+      understandAlertOut(goalId);
+    });
+    renderTodoRail(true);
+    return pending.reduce(function (chain, row) {
+      return chain.then(function () {
+        // The reader left this goal while the chain was running: what is
+        // still queued was queued about a scenario they are no longer
+        // looking at, and understandLoad has already emptied the queue.
+        if (understandGoalId !== goalId) {
+          understandAlertShut(goalId);
+          return understandSettled();
+        }
+        return understandAsk(row.id, true);
+      });
+    }, understandSettled()).then(function () {
+      understandAlertShut(goalId);
+    });
   }
 
   function understandMap() {
@@ -14100,10 +14694,12 @@
     if (!words && !shots.length) {
       understandShotError = "write the scenario roughly first, or paste a"
         + " screenshot of it";
+      understandShotErrorAt = "";
       renderTodoRail(true);
       return;
     }
     understandShotError = "";
+    understandShotErrorAt = "";
     understandBlanks = [];
     understandMapping = true;
     var goalId = understandGoalId;
@@ -14121,6 +14717,7 @@
         if (!res || !res.ok) {
           understandShotError = str(res && res.error)
             || "the scenario could not be shaped";
+          understandShotErrorAt = "";
           renderTodoRail(true);
           return;
         }
@@ -14133,42 +14730,67 @@
       });
   }
 
-  function understandShotAdd(shot) {
+  function understandShotsOn(qid) {
+    // Where a screenshot goes: the scenario's own strip, or the question it
+    // was pasted into. Null when the question has since been dropped.
+    if (!understandData) return null;
+    if (!qid) {
+      understandData.shots = array(understandData.shots);
+      return understandData.shots;
+    }
+    var row = understandQuestion(qid);
+    if (!row) return null;
+    row.shots = array(row.shots);
+    return row.shots;
+  }
+
+  function understandShotAdd(shot, qid) {
     if (!understandData || !shot || !str(shot.path)) return;
-    if (array(understandData.shots).length >= MAX_SHOTS) return;
-    understandData.shots = array(understandData.shots).concat(
-      [{ path: str(shot.path), name: str(shot.name) }]);
+    var held = understandShotsOn(qid);
+    if (!held || held.length >= MAX_SHOTS) return;
+    held.push({ path: str(shot.path), name: str(shot.name) });
     // A chip appearing redraws the column, and the reader is standing in the
-    // scenario box that the paste went into: they are put back where they
-    // were, at the character they were at, rather than at the end of it.
+    // box that the paste went into: they are put back where they were, at the
+    // character they were at, rather than at the end of it.
     var at = document.activeElement;
-    var back = !!(at && at.getAttribute
-                  && at.getAttribute("data-hc-understand") === "scenario")
+    var into = at && at.getAttribute
+      && at.getAttribute("data-hc-understand");
+    var back = !!(into === "scenario" || (into === "question" && qid
+                                          && at.getAttribute(
+                                            "data-hc-question") === qid))
       && [at.selectionStart, at.selectionEnd];
     understandSaveNow();
     renderTodoRail(true);
-    var box = back && document.querySelector(".hc-understand-scenario");
+    var box = back && (qid
+      ? document.querySelector(
+        ".hc-understand-ask[data-hc-question=\"" + qid + "\"]")
+      : document.querySelector(".hc-understand-scenario"));
     if (box) {
       box.focus();
       try { box.setSelectionRange(back[0], back[1]); } catch (e) { /* gone */ }
     }
   }
 
-  function understandShotDrop(path) {
-    if (!understandData) return;
-    understandData.shots = array(understandData.shots).filter(
-      function (shot) { return shot.path !== path; });
+  function understandShotDrop(path, qid) {
+    var held = understandShotsOn(qid);
+    if (!held) return;
+    var kept = held.filter(function (shot) { return shot.path !== path; });
+    if (qid) understandQuestion(qid).shots = kept;
+    else understandData.shots = kept;
     understandSaveNow();
     renderTodoRail(true);
   }
 
-  function understandPasteImages(files) {
-    // Screenshots pasted into the scenario box. Uploaded the way a row's are,
-    // to the workspace's own store, and then cited by path -- the bytes never
-    // go through an op, and what is kept is where they landed.
+  function understandPasteImages(files, qid) {
+    // Screenshots pasted into the scenario box, or into a question: what the
+    // reader is asking about is often quicker shown than described. Uploaded
+    // the way a row's are, to the workspace's own store, and then cited by
+    // path -- the bytes never go through an op, and what is kept is where
+    // they landed.
     if (!understandData || !files.length) return;
     var goalId = understandGoalId;
     understandShotError = "";
+    understandShotErrorAt = str(qid);
     var step = function (i) {
       if (i >= files.length || understandGoalId !== goalId) {
         renderTodoRail(true);
@@ -14177,10 +14799,11 @@
       todoUpload(files[i]).then(function (res) {
         if (understandGoalId !== goalId) return;
         if (res && res.ok && str(res.path)) {
-          understandShotAdd({ path: str(res.path), name: str(res.name) });
+          understandShotAdd({ path: str(res.path), name: str(res.name) }, qid);
         } else {
           understandShotError = str(res && res.error)
             || "that image could not be attached";
+          understandShotErrorAt = str(qid);
         }
         step(i + 1);
       });
@@ -14279,7 +14902,7 @@
     return line;
   }
 
-  function understandShotChip(shot) {
+  function understandShotChip(shot, qid) {
     var chip = document.createElement("span");
     chip.className = "hc-understand-shot";
     var name = document.createElement("span");
@@ -14290,9 +14913,22 @@
     rm.className = "hc-understand-shot-rm";
     rm.title = "remove this screenshot";
     rm.setAttribute("data-hc-understand-shot-rm", shot.path);
+    // Which list it is to come off. Absent on the scenario's own chips: the
+    // same path can hang on the scenario and on a question at once, and
+    // dropping one is not dropping the other.
+    if (qid) rm.setAttribute("data-hc-question", qid);
     rm.textContent = "×";
     chip.appendChild(rm);
     return chip;
+  }
+
+  function understandShotStrip(shots, qid) {
+    var strip = document.createElement("div");
+    strip.className = "hc-understand-shots";
+    shots.forEach(function (shot) {
+      strip.appendChild(understandShotChip(shot, qid));
+    });
+    return strip;
   }
 
   function understandQuestionRow(question) {
@@ -14303,6 +14939,12 @@
     block.className = "hc-understand-sec";
     var row = document.createElement("div");
     row.className = "hc-understand-q";
+    // The same dash the TODO rows carry, for the same reason: what is under
+    // it is one of a list the reader is writing, not a field in a form.
+    var bullet = document.createElement("span");
+    bullet.className = "hc-understand-bullet";
+    bullet.textContent = "-";
+    row.appendChild(bullet);
     row.appendChild(understandArea("question", question.id, question.text,
                                    "Ask something about the scenario…"));
     var drop = document.createElement("span");
@@ -14312,6 +14954,18 @@
     drop.textContent = "×";
     row.appendChild(drop);
     block.appendChild(row);
+    // What the question is about, when the reader pasted it in: under the
+    // question and indented to it, the way an answer is, so it reads as
+    // belonging to that question rather than to the scenario above them all.
+    var shots = understandShotsOf(question.shots);
+    if (shots.length) {
+      var strip = understandShotStrip(shots, question.id);
+      strip.className += " hc-understand-qshots";
+      block.appendChild(strip);
+    }
+    if (understandShotErrorAt === question.id && understandShotError) {
+      block.appendChild(understandSaid(str(understandShotError)));
+    }
     var thread = understandThread(question.thread);
     var under = block;
     if (thread.length) {
@@ -14336,9 +14990,10 @@
       // answer. An unanswered question has no control of its own: the button
       // at the foot of the tab sends the scenario and every question with it.
       under.appendChild(understandGo(
-        understandAsking[question.id] ? understandBusy() : "Follow up",
+        understandAsking[question.id] ? understandBusy()
+          : understandQueued[question.id] ? "waiting its turn…" : "Follow up",
         "data-hc-understand-ask", question.id,
-        !!understandAsking[question.id]));
+        !!(understandAsking[question.id] || understandQueued[question.id])));
       block.appendChild(under);
     }
     if (understandError[question.id]) {
@@ -14360,7 +15015,9 @@
       foot.appendChild(understandSaid(str(understandSendError)));
     }
     var busy = array(data.questions).some(function (row) {
-      return !!understandAsking[row.id];
+      // Queued counts as busy: the send is not finished until the last
+      // question in the batch has had its turn.
+      return !!(understandAsking[row.id] || understandQueued[row.id]);
     });
     var send = document.createElement("span");
     send.className = "hc-understand-send";
@@ -14414,6 +15071,7 @@
                           return shot.path;
                         }),
                         str(understandShotError),
+                        str(understandShotErrorAt),
                         str(understandSendError),
                         // The mapping by its state and its count: a shaping
                         // that came back with the blanks the last one had
@@ -14427,6 +15085,11 @@
                           // same-length one is the answers already drawn.
                           return [row.id, understandThread(row.thread).length,
                                   !!understandAsking[row.id],
+                                  !!understandQueued[row.id],
+                                  // Its own screenshots: a chip pasted onto
+                                  // one question is a redraw of the column.
+                                  understandShotsOf(row.shots).map(
+                                    function (shot) { return shot.path; }),
                                   str(understandError[row.id])];
                         })])
       : "none";
@@ -14449,19 +15112,18 @@
                                   + " or paste screenshots of it — then shape"
                                   + " it…")];
     var shots = array(data.shots);
-    if (shots.length) {
-      var strip = document.createElement("div");
-      strip.className = "hc-understand-shots";
-      shots.forEach(function (shot) {
-        strip.appendChild(understandShotChip(shot));
-      });
-      scene.push(strip);
-    }
-    if (understandShotError) {
+    if (shots.length) scene.push(understandShotStrip(shots, ""));
+    // Only the scenario's own trouble: a paste that failed into a question
+    // is answered under that question.
+    if (understandShotError && !understandShotErrorAt) {
       scene.push(understandSaid(str(understandShotError)));
     }
+    // "Shape it", not the form it is shaped into: the mapping onto
+    // GIVEN / WHEN / THEN is the tool's job, and naming it on the control
+    // read as an instruction to write the scenario that way -- which is the
+    // one thing the reader is not being asked to do.
     scene.push(understandGo(
-      understandMapping ? "shaping…" : "Shape it into GIVEN / WHEN / THEN",
+      understandMapping ? "shaping…" : "Shape it",
       "data-hc-understand-map", "", understandMapping));
     if (understandBlanks.length) {
       // The lines the reader's own words did not fill. Under the box rather
@@ -14528,7 +15190,7 @@
   // Kept in step with ui.CHAT_GROUND, which paints the same colour into the
   // mask the server serves. Two writers, one ground: the server owns the
   // frames before the unpack, this owns every frame after it.
-  var CHAT_GROUND = "#0d1117";
+  var CHAT_GROUND = "#0a0a0a";
 
   function groundColor() {
     // What the workspace will land on, decided the way the served mask decides
@@ -15249,7 +15911,7 @@
       if (p && typeof p.id === "string") byId[p.id] = p;
     });
     array(goals).forEach(function (g) {
-      if (!g || typeof g.id !== "string" || g.status === "abandoned") return;
+      if (!g || typeof g.id !== "string" || isArchived(g)) return;
       var parent = g.parent_goal_id || null;
       (byParent[parent] = byParent[parent] || []).push(g);
     });
@@ -15631,20 +16293,20 @@
   var ASKSEL_MIN = 2;
 
   var ASKSEL_CSS = [
-      ".hc-sel-pill{position:fixed;z-index:100002;display:flex;align-items:center;gap:5px;border:1px solid var(--bd2,#d5d5d5);background:var(--panel,#fff);color:var(--ink,#111);border-radius:3px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:4px 9px;cursor:pointer;font:11px 'Source Code Pro',monospace;user-select:none;white-space:nowrap}",
+      ".hc-sel-pill{position:fixed;z-index:100002;display:flex;align-items:center;gap:5px;border:1px solid var(--bd2,#d5d5d5);background:var(--panel,#fff);color:var(--ink,#111);border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.18);padding:4px 9px;cursor:pointer;font:11px var(--hc-sans);user-select:none;white-space:nowrap}",
       ".hc-sel-pill:hover{border-color:var(--acc,#c15f3c)}",
       ".hc-sel-spark{color:var(--acc,#c15f3c)}",
-      ".hc-sel-box{position:fixed;z-index:100002;width:min(380px,calc(100vw - 16px));display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--bd2,#d5d5d5);border-radius:3px;box-shadow:0 18px 60px rgba(0,0,0,.22);font-family:'Source Code Pro',monospace}",
+      ".hc-sel-box{position:fixed;z-index:100002;width:min(380px,calc(100vw - 16px));display:flex;flex-direction:column;background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--bd2,#d5d5d5);border-radius:6px;box-shadow:0 18px 60px rgba(0,0,0,.22);font-family:var(--hc-sans)}",
       ".hc-sel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 8px 6px 11px;border-bottom:1px solid var(--bd,#e6e6e6)}",
-      ".hc-sel-title{font:600 10px 'Source Code Pro',monospace;letter-spacing:.6px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
-      ".hc-sel-close{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:2px;cursor:pointer;font:14px/1 'Source Code Pro',monospace}",
+      ".hc-sel-title{font:600 10px var(--hc-sans);letter-spacing:.6px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-sel-close{width:20px;height:20px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:6px;cursor:pointer;font:14px/1 var(--hc-sans)}",
       ".hc-sel-close:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
-      ".hc-sel-quote{margin:9px 11px 0;padding-left:8px;border-left:2px solid var(--acc,#c15f3c);max-height:66px;overflow:hidden;white-space:pre-wrap;word-break:break-word;font:11px/1.55 'Source Code Pro',monospace;color:var(--dtxt,#333)}",
-      ".hc-sel-field{margin:9px 11px 0;box-sizing:border-box;width:calc(100% - 22px);resize:vertical;min-height:44px;border:1px solid var(--bd2,#d5d5d5);border-radius:2px;background:var(--panel2,#fafafa);color:var(--ink,#111);outline:none;padding:7px 9px;font:11.5px/1.6 'Source Code Pro',monospace}",
+      ".hc-sel-quote{margin:9px 11px 0;padding-left:8px;border-left:2px solid var(--acc,#c15f3c);max-height:66px;overflow:hidden;white-space:pre-wrap;word-break:break-word;font:11px/1.55 var(--hc-sans);color:var(--dtxt,#333)}",
+      ".hc-sel-field{margin:9px 11px 0;box-sizing:border-box;width:calc(100% - 22px);resize:vertical;min-height:44px;border:1px solid var(--bd2,#d5d5d5);border-radius:6px;background:var(--panel2,#fafafa);color:var(--ink,#111);outline:none;padding:7px 9px;font:11.5px/1.6 var(--hc-sans)}",
       ".hc-sel-field:focus{border-color:var(--acc,#c15f3c)}",
       ".hc-sel-row{display:flex;align-items:center;gap:8px;padding:8px 11px 10px}",
-      ".hc-sel-go{border:1px solid var(--acc,#c15f3c);background:var(--acc,#c15f3c);color:var(--onacc,#fff);border-radius:2px;padding:4px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
-      ".hc-sel-say{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      ".hc-sel-go{border:1px solid var(--acc,#c15f3c);background:var(--acc,#c15f3c);color:var(--onacc,#fff);border-radius:6px;padding:4px 12px;cursor:pointer;font:11px var(--hc-sans)}",
+      ".hc-sel-say{font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-sel-say[data-hc-bad]{color:var(--del,#b23c3c)}",
       ".hc-sel-out{margin:0 11px 11px;max-height:min(46vh,300px);overflow-y:auto;overscroll-behavior:contain}",
       ".hc-sel-out:empty{display:none}",
@@ -15652,11 +16314,11 @@
       // the answer it got, so a panel five questions deep still reads.
       ".hc-sel-turn{padding-top:9px}",
       ".hc-sel-turn+.hc-sel-turn{margin-top:9px;border-top:1px solid var(--bd,#e6e6e6)}",
-      ".hc-sel-q{font:600 11px/1.5 'Source Code Pro',monospace;color:var(--mut,#666);white-space:pre-wrap;word-break:break-word}",
+      ".hc-sel-q{font:600 11px/1.5 var(--hc-sans);color:var(--mut,#666);white-space:pre-wrap;word-break:break-word}",
       ".hc-sel-a{margin-top:5px}",
       // The answer is drawn by the same markdown reader the panes use; only
       // its own scroller is taken away, since this box already has one.
-      ".hc-sel-out .hc-md{max-height:none;overflow:visible;font:11.5px/1.65 'Source Code Pro',monospace}",
+      ".hc-sel-out .hc-md{max-height:none;overflow:visible;font:11.5px/1.65 var(--hc-sans)}",
   ].join("");
 
   function ensureAskSelStyles() {
@@ -16056,30 +16718,32 @@
 
   var DIALOG_CSS = [
       ".hc-ask{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.28);display:flex;align-items:center;justify-content:center;padding:20px}",
-      ".hc-ask-box{width:min(460px,100%);background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--bd2,#d5d5d5);border-radius:3px;box-shadow:0 18px 60px rgba(0,0,0,.2);padding:16px;font-family:'Source Code Pro',monospace}",
-      ".hc-ask-title{font:600 12px 'Source Code Pro',monospace;margin-bottom:10px;color:var(--ink)}",
-      ".hc-ask-input{width:100%;box-sizing:border-box;border:1px solid var(--bd2);border-radius:2px;background:var(--panel2);color:var(--ink);outline:none;padding:8px 10px;font:12px 'Source Code Pro',monospace}",
+      ".hc-ask-box{width:min(460px,100%);background:var(--panel,#fff);color:var(--ink,#111);border:1px solid var(--bd2,#d5d5d5);border-radius:6px;box-shadow:0 18px 60px rgba(0,0,0,.2);padding:16px;font-family:var(--hc-sans)}",
+      ".hc-ask-title{font:600 12px var(--hc-sans);margin-bottom:10px;color:var(--ink)}",
+      ".hc-ask-input{width:100%;box-sizing:border-box;border:1px solid var(--bd2);border-radius:6px;background:var(--panel2);color:var(--ink);outline:none;padding:8px 10px;font:12px var(--hc-sans)}",
       ".hc-ask-input:focus{border-color:var(--acc)}",
       ".hc-ask-row{display:flex;justify-content:flex-end;align-items:center;gap:4px;margin-top:14px}",
       ".hc-ask-kinds{display:flex;gap:6px;margin-bottom:10px}",
-      ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:2px;padding:5px 12px;cursor:pointer;font:11px 'Source Code Pro',monospace}",
+      ".hc-ask-btn{border:1px solid var(--bd2);background:transparent;color:var(--fnt);border-radius:6px;padding:5px 12px;cursor:pointer;font:11px var(--hc-sans)}",
       ".hc-ask-btn:hover{color:var(--ink)}",
       ".hc-ask-ok{background:var(--acc);border-color:var(--acc);color:var(--onacc)}",
+      ".hc-ask-body{font:11.5px/1.7 var(--hc-sans);color:var(--mut,#575757);margin-bottom:4px}",
+      ".hc-ask-bad{background:var(--bad,#a12d2d);border-color:var(--bad,#a12d2d);color:#fff}",
       ".hc-pick-box{width:min(760px,100%);display:flex;flex-direction:column;max-height:min(84vh,760px)}",
-      ".hc-pick-list{flex:1;min-height:0;margin-top:10px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa)}",
-      ".hc-pick-count{margin-top:8px;font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      ".hc-pick-row{width:100%;box-sizing:border-box;display:block;text-align:left;border:none;border-bottom:1px solid var(--bd,#e6e6e6);background:transparent;color:var(--dtxt,#333);padding:8px 11px;cursor:pointer;font:11.5px/1.6 'Source Code Pro',monospace}",
+      ".hc-pick-list{flex:1;min-height:0;margin-top:10px;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--bd,#e6e6e6);border-radius:6px;background:var(--panel2,#fafafa)}",
+      ".hc-pick-count{margin-top:8px;font:10.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
+      ".hc-pick-row{width:100%;box-sizing:border-box;display:block;text-align:left;border:none;border-bottom:1px solid var(--bd,#e6e6e6);background:transparent;color:var(--dtxt,#333);padding:8px 11px;cursor:pointer;font:11.5px/1.6 var(--hc-sans)}",
       ".hc-pick-row:last-child{border-bottom:none}",
       ".hc-pick-row:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
-      ".hc-pick-when{display:block;font:600 9px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:3px}",
+      ".hc-pick-when{display:block;font:600 9px var(--hc-sans);letter-spacing:.5px;color:var(--fnt,#9b9b9b);margin-bottom:3px}",
       ".hc-pick-text{display:block;white-space:pre-wrap;word-break:break-word}",
-      ".hc-pick-none{padding:12px 11px;font:11.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-pick-none{padding:12px 11px;font:11.5px var(--hc-sans);color:var(--fnt,#9b9b9b)}",
       ".hc-pick-box{position:relative}",
       // A chat row carries a label and the directory it worked in, and the
       // list is as long as the chats you have. The chat picker gets the
       // room for both; the prompt picker stays the size it was.
       ".hc-chatpick-box{width:min(1240px,100%);max-height:min(92vh,1080px)}",
-      ".hc-pick-close{position:absolute;top:8px;right:8px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:2px;cursor:pointer;font:15px/1 'Source Code Pro',monospace}",
+      ".hc-pick-close{position:absolute;top:8px;right:8px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--fnt,#9b9b9b);border-radius:6px;cursor:pointer;font:15px/1 var(--hc-sans)}",
       ".hc-pick-close:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
   ].join("");
 
@@ -16089,6 +16753,55 @@
     style.id = "hc-ask-style";
     style.textContent = DIALOG_CSS;
     document.head.appendChild(style);
+  }
+
+  // A question with two answers, for the one action nothing undoes. Cancel
+  // is what Escape, the backdrop and the close of the window all mean, so a
+  // reader who does anything other than press the red word keeps their goal.
+  function askYesNo(title, body, okLabel) {
+    return new Promise(function (resolve) {
+      ensureDialogStyles();
+      var overlay = document.createElement("div");
+      overlay.className = "hc-ask";
+      overlay.setAttribute("data-hc-ask-confirm", "");
+      var box = document.createElement("div");
+      box.className = "hc-ask-box";
+      var head = document.createElement("div");
+      head.className = "hc-ask-title";
+      head.textContent = str(title);
+      var said = document.createElement("div");
+      said.className = "hc-ask-body";
+      said.textContent = str(body);
+      var row = document.createElement("div");
+      row.className = "hc-ask-row";
+      var cancel = document.createElement("button");
+      cancel.className = "hc-ask-btn";
+      cancel.setAttribute("data-hc-ask-no", "");
+      cancel.textContent = "Cancel";
+      var go = document.createElement("button");
+      go.className = "hc-ask-btn hc-ask-bad";
+      go.setAttribute("data-hc-ask-yes", "");
+      go.textContent = str(okLabel) || "Delete";
+
+      function close(answer) {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(!!answer);
+      }
+      cancel.onclick = function () { close(false); };
+      go.onclick = function () { close(true); };
+      overlay.onclick = function (e) { if (e.target === overlay) close(false); };
+      overlay.onkeydown = function (e) {
+        if (e.key === "Escape") { e.preventDefault(); close(false); }
+      };
+      row.appendChild(cancel);
+      row.appendChild(go);
+      box.appendChild(head);
+      box.appendChild(said);
+      box.appendChild(row);
+      overlay.appendChild(box);
+      (document.querySelector(".hc") || document.body).appendChild(overlay);
+      setTimeout(function () { try { cancel.focus(); } catch (e) {} }, 0);
+    });
   }
 
   function ask(kind) {
@@ -16629,6 +17342,14 @@
       // guess at, and a struck-through child is one click from back.
       ["done: (e) => { e.stopPropagation(); this.set(s => ({ goals: this.up(s.goals, n.id, x => ({ ...x, done: !x.done })), editId: null }), true); },",
        "done: (e) => { e.stopPropagation(); const dn = (g) => ({ ...g, done: true, children: (g.children || []).map(dn) }); this.set(s => ({ goals: this.up(s.goals, n.id, x => x.done ? { ...x, done: false } : { ...dn(x), open: false }), editId: null }), true); },"],
+      // The control on every row said × and "Delete goal", and neither was
+      // true: the record is kept, out of the tree, and the Archive is where
+      // it goes. A box with a lid says put away; a cross says destroyed, and
+      // a reader who believes the cross does not go looking for what they
+      // lost. The click, the handler and the op are untouched -- this is the
+      // word and the glyph, not the behaviour.
+      ["<span sc-camel-on-click=\"{{ row.del }}\" title=\"Delete goal\" style=\"margin-left:auto;width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;font:500 12px 'Source Code Pro',monospace;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del);background:var(--hov)\">×</span>",
+       "<span sc-camel-on-click=\"{{ row.del }}\" title=\"Archive goal\" class=\"hc-row-archive\" style=\"margin-left:auto;width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--fnt);cursor:pointer\" style-hover=\"color:var(--del);background:var(--hov)\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect x=\"1.9\" y=\"2.4\" width=\"12.2\" height=\"3\" rx=\"0.7\"></rect><path d=\"M3.1 5.4v7.5c0 .4.3.7.7.7h8.4c.4 0 .7-.3.7-.7V5.4\"></path><path d=\"M6.4 8.5h3.2\"></path></svg></span>"],
       // The inspector's status control is the same door with a different
       // handle, so 'done' cascades and folds there as well.
       ["const setSt = (k) => sel && this.set(s => ({ goals: this.up(s.goals, sel.id, x => k === 'done' ? { ...x, done: true } : { ...x, done: false, status: k === 'inprog' ? 'inprog' : 'todo' }) }), true);",
@@ -16699,7 +17420,7 @@
   // Full width of the panel it sits above: it shares that panel's container,
   // so 100% of the container is 100% of the panel.
   var BANNER_CSS = [
-      ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:2px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:2px;font:11.5px/1.5 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
+      ".hc-banner{position:relative;box-sizing:border-box;width:100%;margin:2px 0 0;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--accbg,#f5e2d9);border:1px solid var(--acc,#a5492a);border-radius:6px;font:11.5px/1.5 var(--hc-sans);color:var(--ink,#111)}",
       ".hc-banner-what{flex:none;font-weight:600}",
       ".hc-banner-now{flex:1;min-width:0;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".hc-banner-count{flex:none;color:var(--mut,#575757)}",
@@ -16712,18 +17433,18 @@
   // browser triangle, no divider, no section heading. It was never a
   // styling problem, it was a stylesheet that was never on the page.
   var PANE_CSS = [
-      ".hc-chat-addbtn{flex:none;margin-right:7px;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-chat-addbtn{flex:none;margin-right:7px;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:6px;padding:3px 10px;cursor:pointer;font:600 10px var(--hc-sans)}",
       ".hc-chat-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       // The header's workspace-wide link: sized to the session chip it sits
       // beside, not to the pane buttons.
       ".hc-chats{display:inline-flex;align-items:center;align-self:center}",
-      ".hc-chat-linkbtn{border:1px solid var(--bd2,#d5d5d5);background:transparent;color:var(--mut,#575757);border-radius:2px;padding:2px 8px;cursor:pointer;font:600 10px 'Source Code Pro',monospace;line-height:1.4}",
+      ".hc-chat-linkbtn{border:1px solid var(--bd2,#d5d5d5);background:transparent;color:var(--mut,#575757);border-radius:6px;padding:2px 8px;cursor:pointer;font:600 10px var(--hc-sans);line-height:1.4}",
       ".hc-chat-linkbtn:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
-      ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:3px 10px;cursor:pointer;font:600 10px 'Source Code Pro',monospace}",
+      ".hc-prompt-addbtn{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:6px;padding:3px 10px;cursor:pointer;font:600 10px var(--hc-sans)}",
       ".hc-prompt-addbtn:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       ".hc-prompt-addbtn:disabled{opacity:.6;cursor:default}",
       ".hc-promptbox{margin-top:14px;padding-top:14px;border-top:1px solid var(--bd,#e6e6e6)}",
-      ".hc-promptsum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
+      ".hc-promptsum{cursor:pointer;list-style:none;display:flex;align-items:center;gap:5px;font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut,#575757)}",
       ".hc-promptsum::-webkit-details-marker{display:none}",
       ".hc-promptsum::before{content:'\\25b8';display:inline-block;font-size:9px;transition:transform .15s ease}",
       ".hc-promptbox[open]>.hc-promptsum::before{transform:rotate(90deg)}",
@@ -16731,8 +17452,8 @@
       // A conversation takes as long as it takes and reports no progress
       // of its own, so the bar sweeps rather than claiming a percentage.
       // Slow on purpose: a fast one reads as a thing about to finish.
-      ".hc-rowbar{display:block;position:relative;width:64px;height:3px;border-radius:2px;background:var(--accbg,#f5e2d9);overflow:hidden}",
-      ".hc-rowbar>span{position:absolute;top:0;bottom:0;left:0;width:45%;border-radius:2px;background:var(--acc,#a5492a);animation:hc-sweep 2.8s ease-in-out infinite}",
+      ".hc-rowbar{display:block;position:relative;width:64px;height:3px;border-radius:6px;background:var(--accbg,#f5e2d9);overflow:hidden}",
+      ".hc-rowbar>span{position:absolute;top:0;bottom:0;left:0;width:45%;border-radius:6px;background:var(--acc,#a5492a);animation:hc-sweep 2.8s ease-in-out infinite}",
       "@keyframes hc-sweep{0%{left:-45%}100%{left:100%}}",
       "@media (prefers-reduced-motion: reduce){.hc-rowbar>span{animation:none;left:0;width:100%;opacity:.5}}",
   ].join("");
@@ -16748,16 +17469,16 @@
   var LIVE_CSS = [
       ".hc-live{margin-top:0}",
       ".hc-live-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:9px}",
-      ".hc-live-head{font:600 12.5px 'Source Code Pro',ui-monospace,monospace;color:var(--ink,#111)}",
-      ".hc-live-wait{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
-      ".hc-live-ask{margin:0 0 8px;max-height:220px;overflow-y:auto;border:1px solid var(--acc,#a5492a);border-radius:2px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap}",
-      ".hc-live-title{margin-top:14px;font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1px;color:var(--mut,#575757)}",
-      ".hc-live-log{margin-top:6px;max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:2px;background:var(--panel2,#fafafa);padding:7px 10px}",
-      ".hc-live-idle{font:600 11px/1.7 'Source Code Pro',monospace;color:var(--acc,#a5492a);padding-bottom:3px}",
-      ".hc-live-did{font:11px/1.7 'Source Code Pro',monospace;color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
-      ".hc-live-check{margin-top:6px;font:11px/1.6 'Source Code Pro',monospace;color:var(--mut,#575757)}",
-      ".hc-live-foot{margin-top:8px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      ".hc-live-open{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:2px;padding:5px 12px;cursor:pointer;font:600 11px 'Source Code Pro',monospace}",
+      ".hc-live-head{font:600 12.5px var(--hc-sans);color:var(--ink,#111)}",
+      ".hc-live-wait{font:600 11px/1.7 var(--hc-sans);color:var(--acc,#a5492a);white-space:pre-wrap;word-break:break-word}",
+      ".hc-live-ask{margin:0 0 8px;max-height:220px;overflow-y:auto;border:1px solid var(--acc,#a5492a);border-radius:6px;background:var(--accbg,#f5e2d9);padding:8px 11px;font:11px/1.6 var(--hc-sans);color:var(--dtxt,#333);white-space:pre-wrap}",
+      ".hc-live-title{margin-top:14px;font:600 9.5px var(--hc-sans);letter-spacing:1px;color:var(--mut,#575757)}",
+      ".hc-live-log{margin-top:6px;max-height:320px;overflow-y:auto;border:1px solid var(--bd,#e6e6e6);border-radius:6px;background:var(--panel2,#fafafa);padding:7px 10px}",
+      ".hc-live-idle{font:600 11px/1.7 var(--hc-sans);color:var(--acc,#a5492a);padding-bottom:3px}",
+      ".hc-live-did{font:11px/1.7 var(--hc-sans);color:var(--dtxt,#333);white-space:pre-wrap;word-break:break-word}",
+      ".hc-live-check{margin-top:6px;font:11px/1.6 var(--hc-sans);color:var(--mut,#575757)}",
+      ".hc-live-foot{margin-top:8px;font:11px/1.6 var(--hc-sans);color:var(--fnt,#9b9b9b)}",
+      ".hc-live-open{flex:none;border:1px solid var(--bd2,#d5d5d5);background:var(--hov,#f4f4f4);color:var(--mut,#575757);border-radius:6px;padding:5px 12px;cursor:pointer;font:600 11px var(--hc-sans)}",
       ".hc-live-open:hover{background:var(--bd,#e6e6e6);color:var(--ink,#111)}",
       ".hc-live-open:disabled{opacity:.6;cursor:default}"
   ].join("");
@@ -17007,6 +17728,7 @@
                data: understandData && understandClean(understandData),
                saving: !!understandSaveTimer,
                asking: Object.keys(understandAsking),
+               queued: Object.keys(understandQueued),
                error: understandShotError };
     },
     understandFlushOnExit: understandFlushOnExit,

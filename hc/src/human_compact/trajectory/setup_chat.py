@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from . import goals as GM
+from . import reader as READER
 
 # The one thing the reader has to know at a blank screen: describing it
 # badly is enough to start.
@@ -41,6 +42,7 @@ SKIPPED = "skip -- decide for me"
 MAX_SAY = 1200
 MAX_TITLE = 200
 MAX_LABEL = 200
+MAX_NAME = 60
 MAX_WHY = 300
 MAX_LINE_KEY = 40
 MAX_LINE_VALUE = 600
@@ -150,7 +152,8 @@ FORM = [
     '              "why": "<why this one is worth starting on>"}],',
     '   "subgoals": [{"label": "<a piece of the chosen goal>",',
     '                 "todos": ["<one row of work in that piece>"]}],',
-    '   "todos": ["<or, where it does not break down, just the rows>"]}',
+    '   "todos": ["<or, where it does not break down, just the rows>"],',
+    '   "name": "<on the todos card only: what to call this project>"}',
     "",
     "Only the key for the card you name is read; leave the others out.",
     "",
@@ -194,6 +197,12 @@ FORM = [
     "reads. A piece is still an outcome, smaller. Where the work genuinely",
     "does not break down, send the rows flat instead and say so.",
     "",
+    "On that card, also name the project. Two or three words a folder could",
+    "be called, drawn from what they told you the work is -- not from the one",
+    "goal they picked, which is where they are starting and not what this is.",
+    "Nobody arrives wanting to invent a name, so this is yours to propose;",
+    "they can change it. Do not send a name on any other card.",
+    "",
     "Nothing you propose is saved until they approve it, so propose the thing",
     "you actually think rather than the safe version of it.",
 ]
@@ -231,13 +240,18 @@ FROM_CHAT = [
 ]
 
 
-def compose_chat(events) -> List[str]:
+def compose_chat(events, root=None) -> List[str]:
     """The prompt for the focus options: the form, then the conversation.
 
     Bounded from the oldest end, like every other read of a transcript
     here: what they were doing lately is what they are doing.
+
+    Who the labels are for rides above the conversation. A goal offered to
+    somebody who has not programmed should be an outcome in their words,
+    not the commit message they would have written themselves.
     """
-    lines = list(FROM_CHAT) + ["", "# The conversation", ""]
+    lines = list(FROM_CHAT) + READER.prompt_lines(root) \
+        + ["", "# The conversation", ""]
     rows = [e for e in (events or []) if isinstance(e, dict)]
     for row in rows[-MAX_CHAT_TURNS:]:
         who = str(row.get("role") or row.get("kind") or "").strip() or "?"
@@ -369,7 +383,7 @@ def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
             setup_model(root), timeout=SETUP_TIMEOUT_SECONDS)
-        raw = engine.generate_json("\n".join(compose_chat(usable)) + "\n")
+        raw = engine.generate_json("\n".join(compose_chat(usable, root)) + "\n")
     except PROVIDERS.ProviderError as exc:
         return {"ok": False,
                 "error": " ".join(str(exc).split())[:200] + credit_note()}
@@ -381,14 +395,20 @@ def from_chat(events, engine=None, root=None) -> Dict[str, Any]:
     return {"ok": True, "focus": focus}
 
 
-def compose(transcript, extra=()) -> List[str]:
+def compose(transcript, extra=(), root=None) -> List[str]:
     """The prompt for the next card: the form, then what has been said.
 
     Bounded from the oldest end. The next card is drawn from the last few
     turns and the plan they approved; an opening message forty turns back
     is not worth the deadline it costs to carry.
+
+    The reader's own answers sit between the two, because this is the first
+    surface they meet and the one where an unexplained word does the most
+    damage: somebody who cannot read the questions cannot answer them, and
+    a plan written past them is a plan they approve without understanding.
     """
-    lines = list(FORM) + ["", "# The conversation so far", ""]
+    lines = list(FORM) + READER.prompt_lines(root) \
+        + ["", "# The conversation so far", ""]
     rows = [r for r in (transcript or []) if isinstance(r, dict)]
     for row in rows[-MAX_TURNS:]:
         who = "them" if str(row.get("role") or "") == "you" else "you"
@@ -633,7 +653,8 @@ def normalize_card(value, due="") -> Dict[str, Any]:
                            "card": card, "questions": {"eyebrow": "",
                                                        "items": []},
                            "plan": {"description": "", "unsure": []},
-                           "goals": [], "todos": [], "subgoals": []}
+                           "goals": [], "todos": [], "subgoals": [],
+                           "name": ""}
     if card == "questions":
         held = _normalize_questions(value.get("questions"))
         out["questions"] = held
@@ -651,6 +672,12 @@ def normalize_card(value, due="") -> Dict[str, Any]:
     elif card == "todos":
         out["subgoals"] = _normalize_subgoals(value.get("subgoals"))
         out["todos"] = _normalize_todos(value.get("todos"))
+        # The name rides on this card because it is the last one: by now the
+        # model has heard the whole description, and the reader has a filled
+        # field to correct instead of an empty one to invent. Only here --
+        # a name offered halfway through is a name for a project that was
+        # still being described.
+        out["name"] = _one(value.get("name") or value.get("project"), MAX_NAME)
         if not out["subgoals"] and not out["todos"]:
             out["card"] = "none"
     return out
@@ -898,7 +925,8 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
             setup_model(root), timeout=SETUP_TIMEOUT_SECONDS)
-        raw = engine.generate_json("\n".join(compose(transcript, extra)) + "\n")
+        raw = engine.generate_json(
+            "\n".join(compose(transcript, extra, root)) + "\n")
     except PROVIDERS.ProviderError as exc:
         return {"ok": False,
                 "error": " ".join(str(exc).split())[:200] + credit_note()}
@@ -920,7 +948,7 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
                     "\n".join(compose(transcript, list(extra) + [
                         "", "You just replied with a %s card when the card"
                         " due is %s. That reply was discarded. Write the %s"
-                        " card." % (card["card"], due, due)])) + "\n")
+                        " card." % (card["card"], due, due)], root)) + "\n")
             except Exception:                            # noqa: BLE001
                 raw = {}
             card = normalize_card(raw, due)
@@ -928,7 +956,7 @@ def ask(transcript, engine=None, extra=(), root=None, shown=()) -> Dict[str, Any
             card = dict(card, card="none",
                         questions={"eyebrow": "", "items": []},
                         plan={"description": "", "unsure": []},
-                        goals=[], todos=[], subgoals=[])
+                        goals=[], todos=[], subgoals=[], name="")
             card["say"] = card["say"] or kept
     if not card["say"] and card["card"] == "none":
         return {"ok": False, "error": "the model answered with nothing"}

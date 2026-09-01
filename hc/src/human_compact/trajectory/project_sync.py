@@ -124,6 +124,17 @@ def project_uuid(root: Optional[Path], cwd, mint: bool = True) -> str:
     return minted
 
 
+def goal_uuid(project_id: str, session_id: str, local_id: str) -> str:
+    """The remote id of one goal, from the three names that make it.
+
+    Derived, never looked up: the snapshot mints goal ids this way, so any
+    caller holding the project's id, the chat and the goal's local id can
+    name the same row without a round trip. The Archive's permanent delete
+    is the one caller that needs it outside a snapshot.
+    """
+    return _uuid5(uuid.UUID(project_id), "goal", session_id, local_id)
+
+
 def snapshot(root: Optional[Path], cwd, user_id: str,
              mint: bool = True) -> Dict[str, Any]:
     """Every row of one project, ready for ``hc_sync_project``.
@@ -178,15 +189,15 @@ def snapshot(root: Optional[Path], cwd, user_id: str,
             "goal_count": int(chat.get("goal_count") or 0),
         })
 
-    def goal_uuid(session_id: str, local_id: str) -> str:
-        return _uuid5(namespace, "goal", session_id, local_id)
+    def gid_of(session_id: str, local_id: str) -> str:
+        return goal_uuid(pid, session_id, local_id)
 
     for goal in record.get("goals") or []:
         session_id = _text(goal.get("session_id"))
         local_id = _text(goal.get("id"))
         if not session_id or not local_id:
             continue
-        gid = goal_uuid(session_id, local_id)
+        gid = gid_of(session_id, local_id)
         location = goal.get("location") or {}
         parent_local = location.get("parent_id")
         goals.append({
@@ -197,7 +208,7 @@ def snapshot(root: Optional[Path], cwd, user_id: str,
             # Hierarchy is one edge. Children, siblings, depth and the
             # titles above are all walks of these edges, computed by
             # whoever needs them rather than stored n times over.
-            "parent_id": (goal_uuid(session_id, _text(parent_local))
+            "parent_id": (gid_of(session_id, _text(parent_local))
                           if isinstance(parent_local, str) and parent_local
                           else None),
             "title": _text(goal.get("title"), 2000),

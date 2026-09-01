@@ -162,12 +162,12 @@ class ProjectJsonTests(ProjectFixture):
     def test_every_goal_is_in_the_file_whatever_its_status(self):
         goals, important = chat_state.load_goals(self.session, self.root)
         for goal, status in zip(goals["goals"],
-                                ("completed", "abandoned", "in_progress")):
+                                ("completed", "archived", "in_progress")):
             goal["status"] = status
         self.assertTrue(
             chat_state.save_goals(self.session, goals, important, self.root))
         self.assertEqual({"chat-main:g1": "completed",
-                          "chat-main:g1a": "abandoned",
+                          "chat-main:g1a": "archived",
                           "chat-main:g1b": "in_progress"},
                          {g["key"]: g["status"] for g in self.written()["goals"]
                           if g["session_id"] == self.session})

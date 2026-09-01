@@ -249,9 +249,9 @@ class TreeSaveTests(unittest.TestCase):
 
     def test_a_goal_left_out_of_the_tree_is_tombstoned(self):
         # The artifact deletes by omission, and the local store answers by
-        # marking the goal abandoned and keeping it. Same answer here.
+        # marking the goal archived and keeping it. Same answer here.
         out, seen = self.apply([self.node("row-theirs")])
-        self.assertEqual([("row-mine", {"status": "abandoned"})], seen)
+        self.assertEqual([("row-mine", {"status": "archived"})], seen)
         self.assertEqual(["row-mine"], out["removed"])
 
     def test_someone_elses_goal_is_never_tombstoned_by_omission(self):
@@ -267,7 +267,14 @@ class TreeSaveTests(unittest.TestCase):
         self.assertEqual([], seen)
         self.assertEqual([], out["removed"])
 
-    def test_an_already_abandoned_goal_is_not_re_tombstoned(self):
+    def test_an_already_archived_goal_is_not_re_tombstoned(self):
+        served = self.served()
+        served["goals"][0]["status"] = "archived"
+        out, seen = self.apply([self.node("row-theirs")], served=served)
+        self.assertEqual([], seen)
+
+    def test_nor_one_a_stale_row_still_calls_abandoned(self):
+        # Rows written before the rename are still up there.
         served = self.served()
         served["goals"][0]["status"] = "abandoned"
         out, seen = self.apply([self.node("row-theirs")], served=served)

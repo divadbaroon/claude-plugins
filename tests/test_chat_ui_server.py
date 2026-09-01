@@ -2253,8 +2253,8 @@ class PreHydrationMaskTests(unittest.TestCase):
         the whole complaint the mask exists to answer.
         """
         from human_compact.trajectory import ui
-        self.assertEqual("#0d1117", ui.CHAT_GROUND,
-                         "the artifact paints .hc on #0d1117")
+        self.assertEqual("#0a0a0a", ui.CHAT_GROUND,
+                         "the artifact paints .hc on #0a0a0a")
 
     def test_the_reader_never_sees_the_onboarding_dialog_or_a_raw_binding(self):
         try:
@@ -2356,7 +2356,7 @@ class PreHydrationMaskTests(unittest.TestCase):
             browser.close()
         held = [f for f in frames if f.startswith("hidden ")]
         self.assertTrue(held, "the document was never held: %r" % (frames[:5],))
-        ground = "rgb(13, 17, 23)"
+        ground = "rgb(10, 10, 10)"
         wrong = sorted({f for f in held if not f.endswith(ground)})
         self.assertEqual(
             [], wrong,
@@ -2385,11 +2385,14 @@ class DeletedGoalBrowserTests(unittest.TestCase):
             page = browser.new_page()
             page.goto(url)
             page.wait_for_selector("text=delete this one", timeout=10000)
+            # Found by what it says it does, not by its glyph: the row
+            # control draws an archive box now, and a test that hunts
+            # for a × would go looking for the wrong thing.
             page.evaluate(
                 "() => { const t=[...document.querySelectorAll('*')]"
                 ".find(e=>e.children.length===0 && e.textContent.trim()==='delete this one');"
-                "  let row=t; for(let i=0;i<4 && row;i++){ const x=[...row.querySelectorAll('*')]"
-                "    .find(e=>e.children.length===0 && e.textContent.trim()==='\u00d7');"
+                "  let row=t; for(let i=0;i<4 && row;i++){"
+                "    const x=row.querySelector('[title=\"Archive goal\"]');"
                 "    if(x){ x.click(); return true; } row=row.parentElement; }"
                 "  return false; }")
             page.wait_for_timeout(3000)
@@ -2403,7 +2406,7 @@ class DeletedGoalBrowserTests(unittest.TestCase):
         state = json.loads((self.a / "goals.json").read_text())
         kept = [g for g in state["goals"] if g["id"] == "g2"]
         self.assertEqual(1, len(kept), "the record itself is kept, not erased")
-        self.assertEqual("abandoned", kept[0]["status"])
+        self.assertEqual("archived", kept[0]["status"])
 
 
 class FullBleedWorkspaceBrowserTests(unittest.TestCase):
@@ -2456,13 +2459,14 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
                 # The second row is the header's own, at the header's
                 # indent: the view tabs at its left end under the brand,
                 # the filter counts at its right end, flush with the tools
-                # above them. The brand is set in a serif.
+                # above them. The brand is the word at weight, in the one
+                # face the workspace is set in.
                 self.assertEqual((0, 37, 1440, 36), tuple(round(g["sub"][k]) for k in ("x", "y", "width", "height")))
                 self.assertEqual(round(g["brand"]["x"]), round(g["tabs"]["x"]))
                 self.assertEqual(37, round(g["pills"]["y"]))
                 self.assertEqual(73, round(g["pills"]["bottom"]))
                 self.assertEqual(1440 - 16, round(g["pills"]["right"]))
-                self.assertIn("Georgia", g["brandFont"])
+                self.assertIn("system-ui", g["brandFont"])
 
                 # Drag the goals divider 80px right; the rail follows.
                 edge = g["l"]["right"]
@@ -2771,12 +2775,94 @@ class ProjectOnboardingServerTests(unittest.TestCase):
         self.assertEqual(PS._resolved(two), state["project"]["cwd"])
 
 
+class RecentProjectTests(unittest.TestCase):
+    """Which project the onboarding opens on, and where that answer comes from.
+
+    Not from ``generated_at``: a record is written when a project is made or
+    renamed, so ordering by it puts the project somebody made once and never
+    opened above the one they have been in all week. The chats know -- their
+    manifests are stamped every time one is opened, bound or saved into.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.a = self.root / "chat-a"
+        write_scope(self.a, [], [], bound=False)
+
+    def project(self, name, when=""):
+        home = self.root / name
+        home.mkdir(exist_ok=True)
+        PS.save_project(self.root, str(home), {"name": name})
+        if when:
+            record = json.loads(
+                PS.project_path(self.root, str(home)).read_text())
+            record["generated_at"] = when
+            PS.project_path(self.root, str(home)).write_text(json.dumps(record))
+        return PS._resolved(home)
+
+    def chat_in(self, session, home, when):
+        spot = self.root / session
+        write_scope(spot, [], [], bound=False)
+        chat_state.bind_project(session, home, self.root)
+        manifest = json.loads((spot / "manifest.json").read_text())
+        manifest["updated_at"] = when
+        (spot / "manifest.json").write_text(json.dumps(manifest))
+
+    def test_the_recent_one_is_where_the_chats_were_not_where_a_record_is_new(self):
+        worked = self.project("worked-in", when="2020-01-01T00:00:00+00:00")
+        fresh = self.project("made-yesterday", when="2030-01-01T00:00:00+00:00")
+        self.chat_in("chat-b", worked, "2031-01-01T00:00:00+00:00")
+        with server_for(self.a) as url:
+            answer = get_json(url + "/api/projects")
+        self.assertEqual(worked, answer["recent"],
+                         "the project with the newest record is not the one "
+                         "somebody was last in")
+        self.assertEqual([worked, fresh],
+                         [row["cwd"] for row in answer["projects"]])
+
+    def test_a_project_no_chat_has_joined_still_has_its_record_to_stand_on(self):
+        # Nothing has been worked in: the records are all there is, and an
+        # order read from nothing at all would be no order.
+        old = self.project("old", when="2020-01-01T00:00:00+00:00")
+        new = self.project("new", when="2030-01-01T00:00:00+00:00")
+        with server_for(self.a) as url:
+            answer = get_json(url + "/api/projects")
+        self.assertEqual(new, answer["recent"])
+        self.assertEqual([new, old], [row["cwd"] for row in answer["projects"]])
+
+    def test_no_projects_means_nothing_to_open_on(self):
+        with server_for(self.a) as url:
+            answer = get_json(url + "/api/projects")
+        self.assertEqual("", answer["recent"])
+        self.assertEqual([], answer["projects"])
+
+    def test_the_chats_own_project_is_never_what_it_is_asked_about(self):
+        # A bound chat is not asked at all, and an unbound one has no project
+        # to be offered back to it -- but the switcher lists the active
+        # directory whether or not it has a record, so the answer has to say
+        # which of the two it is.
+        mine = self.project("mine", when="2030-01-01T00:00:00+00:00")
+        theirs = self.project("theirs", when="2020-01-01T00:00:00+00:00")
+        chat_state.bind_project("chat-a", mine, self.root)
+        with server_for(self.a) as url:
+            answer = get_json(url + "/api/projects")
+        self.assertEqual(mine, answer["active"])
+        self.assertEqual(theirs, answer["recent"])
+
+
 class OnboardingBrowserTests(unittest.TestCase):
     """An unbound chat is asked which project it is for, before anything else.
 
     The tree behind the wizard is empty either way; what an empty tree cannot
     say is whether this is a new project or one whose goals are somewhere
     else. So the question is asked first, and answering it is what binds.
+
+    What the question NAMES is the point: "start a new project or resume an
+    existing one" is two guesses about somebody whose answer is nearly always
+    the project they were in an hour ago. So the vault is asked which one
+    that was, and the first screen is its name with Yes beside it.
     """
 
     def setUp(self):
@@ -2791,7 +2877,34 @@ class OnboardingBrowserTests(unittest.TestCase):
         page.goto(url)
         page.wait_for_selector(".hc", timeout=15000)
 
-    def test_an_unbound_chat_opens_on_the_question_not_the_tree(self):
+    def two_projects(self, url):
+        """Two projects, one of them the one somebody was actually last in.
+
+        Which is not the one whose record was written last: records are
+        written when a project is made, and both of these are made in the
+        same second. A chat bound to one of them is what "last worked in"
+        means, and its manifest is stamped by hand here for the same reason
+        -- a tie broken by name is the ordering this replaced.
+        """
+        made = {}
+        for name in ("Older Thing", "Newer Thing"):
+            row = post_json(url + "/api/op",
+                            {"op": "new_project", "name": name})
+            self.assertTrue(row.get("ok"), row)
+            made[name] = row["cwd"]
+        other = Path(self.tmp.name) / "chat-b"
+        write_scope(other, [], [], bound=False)
+        chat_state.bind_project("chat-b", made["Newer Thing"],
+                                Path(self.tmp.name))
+        spot = other / "manifest.json"
+        manifest = json.loads(spot.read_text())
+        manifest["updated_at"] = "2099-01-01T00:00:00+00:00"
+        spot.write_text(json.dumps(manifest))
+        return made
+
+    def test_a_reader_with_no_projects_is_offered_the_two_ways_to_get_one(self):
+        # Nothing to have been working on: the question would name nothing, so
+        # it is skipped and what comes after it is the whole screen.
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:  # pragma: no cover
@@ -2801,13 +2914,63 @@ class OnboardingBrowserTests(unittest.TestCase):
             page = b.new_page(viewport={"width": 1400, "height": 900})
             self.open(page, url)
             page.wait_for_selector(".hc-onb", timeout=10_000)
+            page.wait_for_selector(".hc-onb-empty", timeout=10_000)
             self.assertIn("Which project is this chat for",
                           page.locator(".hc-onb-title").inner_text())
-            for label in ("Start a new project", "Resume an existing project"):
+            for label in ("Create a new project",
+                          "Import an existing project"):
                 self.assertEqual(1, page.get_by_text(label, exact=True).count())
             b.close()
 
-    def test_naming_a_new_project_binds_the_chat_and_clears_the_way(self):
+    def test_the_first_screen_asks_about_the_project_last_worked_in(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            self.two_projects(url)
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            self.open(page, url)
+            page.wait_for_selector(".hc-onb", timeout=10_000)
+            page.wait_for_function(
+                "() => /Are you working on/.test("
+                "  (document.querySelector('.hc-onb-title') || {}).textContent"
+                "  || '')", timeout=10_000)
+            self.assertIn("Newer Thing",
+                          page.locator(".hc-onb-title").inner_text())
+            page.get_by_text("Yes", exact=True).click()
+            page.wait_for_selector(".hc-onb", state="detached", timeout=15_000)
+            state = get_json(url + "/api/state")
+            b.close()
+        self.assertTrue(state["project_bound"])
+        self.assertEqual("Newer Thing", state["project"]["name"])
+
+    def test_a_different_project_is_one_press_away_and_binds_when_picked(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            self.two_projects(url)
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            self.open(page, url)
+            page.wait_for_selector(".hc-onb", timeout=10_000)
+            page.get_by_text("Select a different project", exact=True).click()
+            page.wait_for_selector(".hc-onb-item", timeout=10_000)
+            page.get_by_text("Older Thing", exact=True).first.click()
+            page.wait_for_selector(".hc-onb", state="detached", timeout=15_000)
+            state = get_json(url + "/api/state")
+            b.close()
+        self.assertTrue(state["project_bound"])
+        self.assertEqual("Older Thing", state["project"]["name"])
+
+    def test_creating_one_opens_the_conversation_with_a_bypass_that_names_it(self):
+        # "Create a new project" is the full onboarding, on the page written
+        # for it -- and that page carries the way past itself, for somebody
+        # who only wants the folder. The bypass lands back here on the two
+        # fields, which is the whole of what it promises.
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:  # pragma: no cover
@@ -2817,8 +2980,14 @@ class OnboardingBrowserTests(unittest.TestCase):
             page = b.new_page(viewport={"width": 1400, "height": 900})
             self.open(page, url)
             page.wait_for_selector(".hc-onb", timeout=10_000)
-            page.get_by_text("Start a new project", exact=True).click()
-            page.wait_for_selector("[data-hc-onb-name]", timeout=5_000)
+            page.wait_for_selector(".hc-onb-empty", timeout=10_000)
+            page.get_by_text("Create a new project", exact=True).click()
+            page.wait_for_url("**/setup?new=1", timeout=15_000)
+            # The bypass is on the setup page from its first paint: the reader
+            # who wants it does not have to answer four questions to find it.
+            page.wait_for_selector(".bypass", timeout=15_000)
+            page.click(".bypass")
+            page.wait_for_selector("[data-hc-onb-name]", timeout=15_000)
             page.fill("[data-hc-onb-name]", "Acme Router")
             page.fill("[data-hc-onb-why]", "Rules a newcomer can predict.")
             page.get_by_text("Continue", exact=True).click()
@@ -2831,30 +3000,28 @@ class OnboardingBrowserTests(unittest.TestCase):
         self.assertTrue(state["project_bound"])
         self.assertEqual("Acme Router", state["project"]["name"])
 
-    def test_an_existing_project_is_offered_and_binds_when_picked(self):
+    def test_importing_a_directory_binds_the_chat_to_it(self):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError:  # pragma: no cover
             self.skipTest("playwright is not installed")
+        here = Path(self.tmp.name) / "already-on-disk"
+        here.mkdir()
         with server_for(self.a) as url, sync_playwright() as pw:
-            made = post_json(url + "/api/op",
-                             {"op": "new_project", "name": "Older Thing"})
-            self.assertTrue(made.get("ok"), made)
             b = pw.chromium.launch(executable_path=browser_executable())
             page = b.new_page(viewport={"width": 1400, "height": 900})
             self.open(page, url)
             page.wait_for_selector(".hc-onb", timeout=10_000)
-            page.get_by_text("Resume an existing project", exact=True).click()
-            self.assertIn("used Engelbart for this project before",
-                          page.locator(".hc-onb-title").inner_text())
-            page.get_by_text("Yes — find it", exact=True).click()
-            page.wait_for_selector(".hc-onb-item", timeout=10_000)
-            page.get_by_text("Older Thing", exact=True).first.click()
+            page.wait_for_selector(".hc-onb-empty", timeout=10_000)
+            page.get_by_text("Import an existing project", exact=True).click()
+            page.wait_for_selector("[data-hc-onb-where]", timeout=5_000)
+            page.fill("[data-hc-onb-where]", str(here))
+            page.get_by_text("Import", exact=True).click()
             page.wait_for_selector(".hc-onb", state="detached", timeout=15_000)
             state = get_json(url + "/api/state")
             b.close()
         self.assertTrue(state["project_bound"])
-        self.assertEqual("Older Thing", state["project"]["name"])
+        self.assertEqual(PS._resolved(here), state["project"]["cwd"])
 
 
 class OnboardingMigrationTests(unittest.TestCase):
@@ -2922,6 +3089,76 @@ class OnboardingMigrationTests(unittest.TestCase):
                         "the answer should survive the next reload")
 
 
+class SetupPageFromAWorkspaceTests(unittest.TestCase):
+    """`/setup?new=1`: the setup page, opened by a chat that wants a project.
+
+    Two things change when it arrives that way, and both are decisions the
+    page would otherwise get wrong. It must not read the transcript -- the
+    reader pressed "create a new project", which is not "the thing this
+    conversation has been about". And the chat that asked is the one the
+    project gets bound to, which is what the page commits with.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.a = Path(self.tmp.name) / "chat-a"
+        write_scope(self.a, [], [], bound=False)
+        # A conversation with something in it: without this the page has no
+        # transcript to be tempted by, and the test would pass on nothing.
+        (self.a / "events.jsonl").write_text(json.dumps(
+            {"id": "e1", "ordinal": 1, "role": "user",
+             "text": "help me move uploads off the app server"}) + "\n")
+
+    def state(self, page):
+        return page.evaluate("() => window.__hcSetup.state()")
+
+    def test_a_chat_with_history_is_not_adopted_when_a_new_one_was_asked_for(self):
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(url + "/setup?new=1")
+            page.wait_for_function("() => !!window.__hcSetup", timeout=15_000)
+            page.wait_for_function(
+                "() => window.__hcSetup.state().who !== null", timeout=15_000)
+            seen = self.state(page)
+            b.close()
+        self.assertTrue(seen["newProject"])
+        self.assertFalse(seen["adopting"],
+                         "asked for a new project, it must not read the chat")
+        self.assertEqual(self.a.name, seen["who"]["session"],
+                         "the chat that asked is what the commit binds")
+        self.assertGreater(seen["who"]["events"], 0,
+                           "the fixture has to have a transcript to ignore")
+
+    def test_the_same_chat_is_adopted_when_nobody_asked_for_a_new_project(self):
+        # The control: without the marker, a chat with history and no project
+        # is exactly what the adopt path is for. One query parameter is the
+        # only difference between the two screens.
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:  # pragma: no cover
+            self.skipTest("playwright is not installed")
+        with server_for(self.a) as url, sync_playwright() as pw:
+            b = pw.chromium.launch(executable_path=browser_executable())
+            page = b.new_page(viewport={"width": 1400, "height": 900})
+            page.goto(url + "/setup")
+            page.wait_for_function("() => !!window.__hcSetup", timeout=15_000)
+            page.wait_for_function(
+                "() => window.__hcSetup.state().who !== null", timeout=15_000)
+            seen = self.state(page)
+            no_way_out = page.locator(".bypass").count()
+            b.close()
+        self.assertTrue(seen["adopting"])
+        self.assertFalse(seen["newProject"])
+        self.assertEqual(0, no_way_out,
+                         "a page opened after an install has nowhere to skip to")
+
+
 class OnboardingLooksLikeTheWorkspaceTests(unittest.TestCase):
     """The panel lives outside the artifact, so it must carry its own palette.
 
@@ -2965,8 +3202,8 @@ class OnboardingLooksLikeTheWorkspaceTests(unittest.TestCase):
                             "a panel with no background is the shade with words on it")
         self.assertNotEqual("rgb(0, 0, 0)", seen["title"],
                             "black text on a dark shade is the bug this fixes")
-        self.assertEqual("#0d1117", seen["want"], "the workspace is dark here")
-        self.assertEqual("rgb(13, 17, 23)", seen["panel"],
+        self.assertEqual("#0a0a0a", seen["want"], "the workspace is dark here")
+        self.assertEqual("rgb(10, 10, 10)", seen["panel"],
                          "the panel should wear the same panel colour as the shell")
         self.assertLess(seen["midX"], 3)
         self.assertLess(seen["midY"], 3)

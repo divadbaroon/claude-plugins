@@ -20,7 +20,7 @@ Rules — follow strictly:
 - todos: concrete next actions stated or clearly implied; mark done=true only
   when completion is evidenced. Unresolved questions may become todos.
 - Every goal needs evidence_ids copied from the extractions (never invented).
-- Titles: short imperative phrases. status is active|completed|abandoned.
+- Titles: short imperative phrases. status is active|completed|archived.
 - description: one sentence saying what finishing this goal would mean, in the
   user's own framing. Subgoals need one as much as top-level goals do — a
   title alone rarely says why the work exists. Leave it empty only when the
@@ -42,7 +42,7 @@ minified JSON: {"operations":[...],"note":""} where each operation is one of:
  {"op":"attach_evidence","goal_id":"","evidence_ids":[]}
  {"op":"add_todo","goal_id":"","text":"","evidence_ids":[]}
  {"op":"complete_todo","goal_id":"","text_match":""}
- {"op":"set_status","goal_id":"","status":"active|completed|abandoned"}
+ {"op":"set_status","goal_id":"","status":"active|completed|archived"}
  {"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"",
   "evidence_ids":[],"todos":[],"distinct_because":""}
 
@@ -81,7 +81,7 @@ GOAL TREE into goal correction operations. Reply ONLY with minified JSON:
  "operations":[
   {"op":"move_goal","goal_id":"","new_parent_id":"<id or null>"} |
   {"op":"merge_goals","from_id":"","into_id":""} |
-  {"op":"set_status","goal_id":"","status":"active|completed|abandoned"} |
+  {"op":"set_status","goal_id":"","status":"active|completed|archived"} |
   {"op":"rename_goal","goal_id":"","title":""} |
   {"op":"demote_to_todo","goal_id":"","parent_goal_id":""} |
   {"op":"add_todo","goal_id":"","text":""} |

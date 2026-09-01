@@ -83,13 +83,17 @@ class Base:
         alone, which is the same answer with the pictures missing.
         """
         return self.generate(prompt)
-    def generate_searching(self, prompt: str, where="") -> str:
+    def generate_searching(self, prompt: str, where="", read=None) -> str:
         """One answer that may go looking through the project for itself.
 
         For the question whose answer is in the code and nowhere else: the
         provider is pointed at a directory and left to find it. A provider
         with nothing to look with answers from the prompt alone, which is the
         same answer with the code missing.
+
+        *read* names directories outside the project that the prompt cites --
+        the workspace's own attachments, for a question asked about a
+        screenshot -- which the call is allowed to open as well.
         """
         return self.generate(prompt)
     def generate_json(self, prompt: str):
@@ -139,6 +143,12 @@ class ClaudeCLI(Base):
             command += ["--tools", SEARCH_TOOLS,
                         "--allowed-tools", SEARCH_TOOLS,
                         "--add-dir", str(search)]
+            # Anything else the prompt names, when the question came with
+            # screenshots: those live in the workspace's attachments, which is
+            # not under the project being searched, and a file the call may
+            # not open is a file it answers without.
+            for folder in read or ():
+                command += ["--add-dir", str(folder)]
             deadline = self.timeout or CLAUDE_SEARCH_TIMEOUT_SECONDS
         elif read is not None:
             # Opening the named files is the whole of this call, so the tool
@@ -196,8 +206,8 @@ class ClaudeCLI(Base):
     def generate_reading(self, prompt, read_dirs=()):
         return self._run(prompt, read=list(read_dirs or ()))
 
-    def generate_searching(self, prompt, where=""):
-        return self._run(prompt, search=str(where or ""))
+    def generate_searching(self, prompt, where="", read=None):
+        return self._run(prompt, search=str(where or ""), read=read)
 
     def generate_json(self, prompt):
         # Avoid a second full model call when a large rebuild response includes

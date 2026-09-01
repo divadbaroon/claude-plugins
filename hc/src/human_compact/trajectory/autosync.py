@@ -52,6 +52,10 @@ WRITE_OPS = frozenset({
     # Work done to a goal by the build, which writes the goal back the same
     # way a hand would: a run that finishes is an edit nobody typed.
     "build_todos", "answer_todo", "cancel_todos", "reopen_todo",
+    # The Archive's two writes. The permanent delete erases its own rows up
+    # there by name -- the sync cannot, since it reads an absent goal as one
+    # it cannot see -- but the project around it changed and should follow.
+    "purge_goal", "restore_goal",
 })
 
 _GUARD = threading.Lock()

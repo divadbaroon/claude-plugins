@@ -14,6 +14,8 @@ every field is bounded and every shape is coerced rather than trusted.
 import contextlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -420,6 +422,62 @@ class SubgoalTests(unittest.TestCase):
         parents = [g for g in goals if not g.get("parent_goal_id")]
         self.assertEqual(["a", "b"], [g["title"] for g in parents])
         self.assertEqual(1, len([g for g in goals if g.get("parent_goal_id")]))
+
+
+class NameTests(unittest.TestCase):
+    """The project's name, proposed rather than demanded.
+
+    The last thing between a reader and a project used to be an empty field
+    they had to invent a name for, at the end of a conversation in which they
+    had already said what the work was. The model says it instead, on the
+    card where it has heard everything, and the field arrives filled.
+    """
+
+    def test_the_prompt_asks_for_a_name_on_the_last_card_only(self):
+        form = "\n".join(SC.FORM)
+        self.assertIn("also name the project", form)
+        self.assertIn("Do not send a name on any other card", form)
+
+    def test_the_todos_card_carries_the_name(self):
+        out = SC.normalize_card({"card": "todos", "todos": ["one"],
+                                 "name": "Signed uploads"})
+        self.assertEqual("Signed uploads", out["name"])
+
+    def test_the_name_is_bounded_like_everything_else(self):
+        out = SC.normalize_card({"card": "todos", "todos": ["one"],
+                                 "name": "n" * 500})
+        self.assertEqual(SC.MAX_NAME, len(out["name"]))
+
+    def test_a_name_written_under_the_other_key_is_still_read(self):
+        # A model that calls it "project" has still named the project.
+        out = SC.normalize_card({"card": "todos", "todos": ["one"],
+                                 "project": "Rail polish"})
+        self.assertEqual("Rail polish", out["name"])
+
+    def test_no_name_is_an_empty_string_rather_than_a_missing_key(self):
+        # The page reads this on every card; absent would be a crash on the
+        # first one that did not carry it.
+        for card in ({}, {"card": "plan", "plan": {"description": "x"}},
+                     {"card": "todos", "todos": ["one"]}):
+            self.assertEqual("", SC.normalize_card(card)["name"])
+
+    def test_a_name_on_an_earlier_card_is_not_kept(self):
+        # Named halfway through is named for a project still being described,
+        # and it would sit in the field through every later card.
+        out = SC.normalize_card({"card": "goals", "goals": [{"label": "a"}],
+                                 "name": "Too early"})
+        self.assertEqual("", out["name"])
+
+    def test_a_card_discarded_for_being_out_of_turn_carries_no_name(self):
+        # The card is refused; nothing that rode on it may survive it.
+        class Eager:
+            def generate_json(self, prompt):
+                return {"say": "here they are", "card": "todos",
+                        "todos": ["one"], "name": "Nope"}
+        out = SC.ask([{"role": "you", "text": "a thing"}], engine=Eager(),
+                     shown=[])
+        self.assertEqual("none", out["card"])
+        self.assertEqual("", out["name"])
 
 
 class UnwrappedTests(unittest.TestCase):
@@ -949,6 +1007,639 @@ class TerminalTests(unittest.TestCase):
         self.assertFalse(out["ok"])
 
 
+NODE = shutil.which("node")
+SETUP_JS = ROOT / "hc" / "src" / "human_compact" / "trajectory" / "web" / "setup.js"
+
+# Enough of a browser to draw the page into and press its buttons. Nothing
+# here lays anything out -- what these tests ask is which nodes exist, what
+# is in them, and what pressing one of them does to the next drawing.
+HARNESS = r"""
+const fs = require("fs");
+const vm = require("vm");
+function El(tag) {
+  this.tagName = tag; this.children = []; this.style = {}; this.value = "";
+  this.className = ""; this.id = ""; this.attrs = {}; this.handlers = {};
+  this.own = "";
+  Object.defineProperty(this, "textContent", {
+    get: () => this.own + this.children.map(c => c.textContent).join(""),
+    // Assigning text is how the page clears a node: `app.textContent = ""`
+    // is the whole of a redraw, and a shim that kept the children would
+    // stack every drawing on top of the last.
+    set: (v) => { this.children = []; this.own = v == null ? "" : String(v); }
+  });
+  this.appendChild = (n) => { this.children.push(n); n.parentNode = this;
+                              return n; };
+  this.removeChild = (n) => {
+    this.children = this.children.filter(c => c !== n);
+    if (n) n.parentNode = null;
+  };
+  this.remove = () => { if (this.parentNode) this.parentNode.removeChild(this); };
+  this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
+  this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+  this.hasAttribute = (k) => k in this.attrs;
+  this.removeAttribute = (k) => { delete this.attrs[k]; };
+  this.addEventListener = (type, fn) => {
+    (this.handlers[type] = this.handlers[type] || []).push(fn);
+  };
+  this.focus = () => {}; this.select = () => {};
+  // A press: the click the page registered, plus the one `onclick` the name
+  // field swaps in when the button becomes live.
+  this.press = () => {
+    (this.handlers.click || []).forEach(f => f({ preventDefault() {} }));
+    if (this.onclick) this.onclick({ preventDefault() {} });
+  };
+  this.hit = (sel) => { const n = this.querySelector(sel);
+                        if (!n) throw new Error("no " + sel); n.press(); };
+  this.is = (sel) => {
+    const text = String(sel || "");
+    if (text.startsWith(".")) {
+      return String(this.className).split(" ").includes(text.slice(1));
+    }
+    return String(this.tagName).toUpperCase() === text.toUpperCase();
+  };
+  this.querySelector = (sel) => this.querySelectorAll(sel)[0] || null;
+  // One selector, or several separated by spaces: `.name-row .f` is the
+  // field inside the pill, which is how the page's own code finds it.
+  this.querySelectorAll = (sel) => {
+    let scope = [this];
+    String(sel || "").trim().split(/\s+/).forEach((part) => {
+      const found = [];
+      scope.forEach((from) => {
+        (function walk(n) {
+          (n.children || []).forEach((c) => {
+            if (c.is(part)) found.push(c);
+            walk(c);
+          });
+        })(from);
+      });
+      scope = found;
+    });
+    return scope;
+  };
+}
+const app = new El("div"); app.id = "app";
+const body = new El("body");
+const document = {
+  body: body, activeElement: null,
+  getElementById: (id) => (id === "app" ? app : null),
+  createElement: (t) => new El(t),
+  querySelector: (s) => app.querySelector(s),
+  addEventListener: () => {}, removeEventListener: () => {}
+};
+const calls = [];
+const sandbox = {
+  console, document, app, calls, navigator: {},
+  setTimeout: (f) => { if (f) f(); return 0; },
+  clearTimeout: () => {},
+  localStorage: { getItem: () => null, setItem: () => {} },
+  fetch: (url, opts) => {
+    calls.push(opts && opts.body ? JSON.parse(opts.body) : { url: String(url) });
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(JSON.parse(process.env.HC_REPLY || "{}"))
+    });
+  },
+  // The page's answers arrive down a promise chain several links long. A
+  // test that wants to see what a press did waits out the whole chain
+  // rather than guessing how many links it was.
+  settle: (fn) => { let p = Promise.resolve();
+                    for (let i = 0; i < 12; i++) p = p.then(() => {});
+                    return p.then(fn); },
+  // The rows on screen, in order, with the placeholder row that adds one
+  // left out -- it is a control, not a row of work.
+  rows: () => app.querySelectorAll(".row")
+    .map(r => (r.querySelector(".f") || {}).value || "").filter(t => t),
+  labels: () => app.querySelectorAll(".lbl").map(n => n.textContent)
+};
+sandbox.window = sandbox;
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), sandbox);
+Promise.resolve(vm.runInContext(process.argv[2], sandbox)).then(v =>
+  process.stdout.write(JSON.stringify(v === undefined ? null : v)));
+"""
+
+PIECES = [{"id": "p1", "label": "Signing route",
+           "todos": [{"id": "t1", "text": "Add POST /uploads/sign"}]},
+          {"id": "p2", "label": "Client",
+           "todos": [{"id": "t2", "text": "PUT straight to storage"},
+                     {"id": "t3", "text": "Drop the proxy"}]},
+          {"id": "p3", "label": "Cleanup",
+           "todos": [{"id": "t4", "text": "Delete the old handler"}]}]
+
+
+@unittest.skipUnless(NODE, "node is required for setup.js tests")
+class PagedTodoTests(unittest.TestCase):
+    """The rows, walked one goal at a time.
+
+    The last card of setup used to put every piece of the chosen goal and
+    every row under it on one screen -- which is the wall that breaking the
+    goal into pieces was for. One goal is on screen at a time now, with its
+    own rows under it and arrows to the next; the page after the last is
+    where the project gets made.
+    """
+
+    def run_js(self, expression, reply=None):
+        env = dict(os.environ, HC_REPLY=json.dumps(reply or {}))
+        done = subprocess.run([NODE, "-e", HARNESS, str(SETUP_JS), expression],
+                              capture_output=True, text=True, check=False,
+                              env=env)
+        self.assertEqual(0, done.returncode, done.stderr)
+        return json.loads(done.stdout)
+
+    def paged(self, tail, page=0, pieces=None):
+        """Draw the todos card with three pieces on it, then ask *tail*."""
+        return self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk';"
+            "st.card = {card: 'todos'};"
+            "st.pieces = %s;"
+            "st.page = %d;"
+            "st.name = 'Signed uploads';"
+            "window.__hcSetup.draw();" % (json.dumps(pieces or PIECES), page)
+            + tail)
+
+    def test_one_goal_is_on_screen_and_not_the_others(self):
+        out = self.paged("({eyebrow: labels()[0], title:"
+                         " app.querySelector('.goal-title').value,"
+                         " rows: rows()});")
+        self.assertEqual("goal 1 of 3", out["eyebrow"])
+        self.assertEqual("Signing route", out["title"])
+        self.assertEqual(["Add POST /uploads/sign"], out["rows"])
+
+    def test_the_forward_arrow_walks_to_the_next_goal(self):
+        out = self.paged("app.hit('.arrow-on');"
+                         "({eyebrow: labels()[0],"
+                         " title: app.querySelector('.goal-title').value,"
+                         " rows: rows()});")
+        self.assertEqual("goal 2 of 3", out["eyebrow"])
+        self.assertEqual("Client", out["title"])
+        self.assertEqual(["PUT straight to storage", "Drop the proxy"],
+                         out["rows"])
+
+    def test_the_back_arrow_walks_the_other_way(self):
+        out = self.paged("app.hit('.arrow');"
+                         "({eyebrow: labels()[0]});", page=2)
+        self.assertEqual("goal 2 of 3", out["eyebrow"])
+
+    def test_there_is_nowhere_back_from_the_first_goal(self):
+        out = self.paged("({dead: app.querySelector('.arrow')"
+                         ".hasAttribute('disabled')});")
+        self.assertTrue(out["dead"])
+
+    def test_the_dots_count_the_goals_and_the_page_that_makes_it(self):
+        # Three goals and the page where the project gets made: four places
+        # to be, and the dots say which one this is.
+        out = self.paged("({dots: app.querySelectorAll('.pdot')"
+                         ".map(function (d) { return d.getAttribute('data-on'); })});",
+                         page=1)
+        self.assertEqual(["0", "1", "0", "0"], out["dots"])
+
+    def test_a_dot_is_a_way_back_to_a_goal_already_seen(self):
+        out = self.paged("app.querySelectorAll('.pdot')[2].press();"
+                         "({eyebrow: labels()[0]});")
+        self.assertEqual("goal 3 of 3", out["eyebrow"])
+
+    def test_the_page_after_the_last_goal_is_where_it_is_made(self):
+        out = self.paged("({named: !!app.querySelector('.name-row'),"
+                         " forward: !!app.querySelector('.arrow-on'),"
+                         " said: app.querySelector('.card-title').textContent});",
+                         page=3)
+        self.assertTrue(out["named"])
+        # No arrow to press on: the button in the name field is the way on,
+        # and two forward affordances is one too many.
+        self.assertFalse(out["forward"])
+        self.assertEqual("4 rows across 3 goals.", out["said"])
+
+    def test_the_goals_themselves_carry_no_name_field(self):
+        # It belongs on the last page. Repeated under every goal it would
+        # read as four chances to make the same project.
+        out = self.paged("({named: !!app.querySelector('.name-row')});")
+        self.assertFalse(out["named"])
+
+    def test_dropping_the_goal_you_are_on_does_not_strand_you(self):
+        # The × takes the piece away; the page it was on no longer exists,
+        # and a page index past the end used to draw nothing at all.
+        out = self.paged("app.hit('.x');"
+                         "({eyebrow: labels()[0],"
+                         " named: !!app.querySelector('.name-row'),"
+                         " pieces: window.__hcSetup.state().pieces.length});",
+                         page=2)
+        self.assertEqual(2, out["pieces"])
+        self.assertTrue(out["named"])
+
+    def test_a_row_can_still_be_dropped_from_the_goal_it_is_on(self):
+        out = self.paged("app.querySelectorAll('.row')[1].hit('.x');"
+                         "({rows: rows()});", page=1)
+        self.assertEqual(["PUT straight to storage"], out["rows"])
+
+    def test_a_flat_list_of_rows_is_not_paged(self):
+        # Where the work did not break down there is one goal's worth of
+        # rows and nothing to walk between.
+        out = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk';"
+            "st.card = {card: 'todos'};"
+            "st.todos = [{id: 'a', text: 'one'}, {id: 'b', text: 'two'}];"
+            "st.name = 'Thing';"
+            "window.__hcSetup.draw();"
+            "({paged: !!app.querySelector('.pager'), rows: rows(),"
+            " named: !!app.querySelector('.name-row')});")
+        self.assertFalse(out["paged"])
+        self.assertEqual(["one", "two"], out["rows"])
+        self.assertTrue(out["named"])
+
+
+@unittest.skipUnless(NODE, "node is required for setup.js tests")
+class NamedForYouTests(unittest.TestCase):
+    """The name, filled in before they get to it.
+
+    The last thing between a reader and their project was an empty field
+    they had to invent a name for. The model sends one on the card that
+    carries the rows, and the field arrives with it in.
+    """
+
+    def run_js(self, expression, reply=None):
+        env = dict(os.environ, HC_REPLY=json.dumps(reply or {}))
+        done = subprocess.run([NODE, "-e", HARNESS, str(SETUP_JS), expression],
+                              capture_output=True, text=True, check=False,
+                              env=env)
+        self.assertEqual(0, done.returncode, done.stderr)
+        return json.loads(done.stdout)
+
+    def generate(self, reply, before=""):
+        """Press Generate TODOs on a goals card and see what came back."""
+        return self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk';"
+            "st.card = {card: 'goals', goals: [{label: 'Signed uploads'}]};"
+            "st.chosen = 'Signed uploads';"
+            + before +
+            "window.__hcSetup.draw();"
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Generate TODOs') === 0; })[0]"
+            "  .press();"
+            "settle(function () {"
+            "  var s = window.__hcSetup.state();"
+            "  return {name: s.name, page: s.page, touched: s.nameTouched,"
+            "          pieces: s.pieces.length,"
+            "          field: (app.querySelector('.name-row .f') || {}).value,"
+            "          hint: (app.querySelector('.hint') || {}).textContent};"
+            "});", reply)
+
+    CARD = {"ok": True, "say": "Here they are.", "card": "todos",
+            "name": "Signed uploads",
+            "subgoals": [{"label": "Signing route", "todos": ["Add the route"]},
+                         {"label": "Client", "todos": ["PUT to storage"]}]}
+
+    def test_the_name_the_model_sent_fills_the_field(self):
+        out = self.generate(self.CARD)
+        self.assertEqual("Signed uploads", out["name"])
+        self.assertEqual(2, out["pieces"])
+
+    def test_the_field_says_where_the_name_came_from(self):
+        # A name that appeared without explanation reads as a decision
+        # somebody else made; this says it is theirs to change.
+        out = self.generate(self.CARD)
+        # The name lives on the page after the last goal, so walk there.
+        self.assertEqual("Signed uploads", out["name"])
+        seen = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk'; st.card = {card: 'todos'};"
+            "st.pieces = [{id: 'p', label: 'a', todos: [{id: 't', text: 'x'}]}];"
+            "st.page = 1; st.name = 'Signed uploads';"
+            "window.__hcSetup.draw();"
+            "({field: app.querySelector('.name-row .f').value,"
+            " hint: (app.querySelector('.hint') || {}).textContent,"
+            " ready: !app.querySelector('.name-row .btn')"
+            "  .hasAttribute('disabled')});", {})
+        self.assertEqual("Signed uploads", seen["field"])
+        self.assertIn("change it", seen["hint"])
+        # And the button is live on arrival: nothing is left to type.
+        self.assertTrue(seen["ready"])
+
+    def test_a_card_with_no_name_falls_back_to_the_goal_they_chose(self):
+        card = dict(self.CARD)
+        card.pop("name")
+        out = self.generate(card)
+        self.assertEqual("Signed uploads", out["name"])
+
+    def test_the_fallback_is_a_name_and_not_a_sentence(self):
+        card = dict(self.CARD)
+        card.pop("name")
+        out = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk';"
+            "st.card = {card: 'goals', goals: []};"
+            "st.chosen = ' other';"
+            "st.other = 'Move uploads off the app server and onto storage,"
+            " signed;';"
+            "window.__hcSetup.draw();"
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Generate TODOs') === 0; })[0]"
+            "  .press();"
+            "settle(function () { return window.__hcSetup.state().name; });",
+            card)
+        # Cut at a word, and without the punctuation the sentence ended on.
+        self.assertEqual("Move uploads off the app server and onto", out)
+
+    def test_a_name_they_have_touched_is_not_written_over(self):
+        # They typed it; a later card may not decide it knows better.
+        out = self.generate(self.CARD,
+                            before="st.name = 'Mine'; st.nameTouched = true;")
+        self.assertEqual("Mine", out["name"])
+
+    def test_typing_in_the_field_makes_it_theirs(self):
+        out = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk'; st.card = {card: 'todos'};"
+            "st.todos = [{id: 'a', text: 'one'}];"
+            "st.name = 'Given';"
+            "window.__hcSetup.draw();"
+            "var f = app.querySelector('.name-row .f');"
+            "f.value = 'Given more';"
+            "f.handlers.input.forEach(function (h) { h(); });"
+            "({name: window.__hcSetup.state().name,"
+            " touched: window.__hcSetup.state().nameTouched,"
+            " hint: !!app.querySelector('.hint')});")
+        self.assertEqual("Given more", out["name"])
+        self.assertTrue(out["touched"])
+
+    def test_the_read_chat_path_hands_over_the_sentence_it_asked_for(self):
+        # That path draws no plan card, so the one sentence they typed while
+        # the chat was being read is all the next call knows about the
+        # project. Without it the only thing left to name from is the goal
+        # they picked, and a project named after where it starts is wrong.
+        out = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'adopt';"
+            "st.saidSummary = true;"
+            "st.summary = 'a tool for signing uploads';"
+            "st.focus = [{label: 'Signed uploads', why: 'y', subgoals:"
+            "  [{label: 'Signing route'}]}];"
+            "st.chosen = 'Signed uploads';"
+            "window.__hcSetup.draw();"
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Generate TODOs') === 0; })[0]"
+            "  .press();"
+            "settle(function () {"
+            "  var said = calls.filter(function (c) {"
+            "    return c.op === 'setup_say'; })[0];"
+            "  return said.transcript.map(function (m) { return m.text; });"
+            "});", self.CARD)
+        self.assertIn("The project, in a sentence: a tool for signing uploads",
+                      out)
+        self.assertTrue(any(t.startswith("Signed uploads") for t in out))
+
+    def test_a_skipped_sentence_leaves_the_transcript_alone(self):
+        out = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'adopt';"
+            "st.saidSummary = true;"
+            "st.focus = [{label: 'Signed uploads', why: 'y', subgoals: []}];"
+            "st.chosen = 'Signed uploads';"
+            "window.__hcSetup.draw();"
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Generate TODOs') === 0; })[0]"
+            "  .press();"
+            "settle(function () {"
+            "  var said = calls.filter(function (c) {"
+            "    return c.op === 'setup_say'; })[0];"
+            "  return said.transcript.map(function (m) { return m.text; });"
+            "});", self.CARD)
+        self.assertEqual(["Read this chat.", "Signed uploads"], out)
+
+    def test_an_empty_name_still_holds_the_button_shut(self):
+        # The model may send nothing and the goal may be unnamed; a project
+        # with no name is still refused rather than made under one.
+        out = self.run_js(
+            "var st = window.__hcSetup.state();"
+            "st.screen = 'talk'; st.card = {card: 'todos'};"
+            "st.todos = [{id: 'a', text: 'one'}];"
+            "window.__hcSetup.draw();"
+            "({shut: app.querySelector('.name-row .btn')"
+            "  .hasAttribute('disabled'),"
+            " hint: !!app.querySelector('.hint')});", {})
+        self.assertTrue(out["shut"])
+        # Nothing to explain when there is nothing in the field.
+        self.assertFalse(out["hint"])
+
+
+@unittest.skipUnless(NODE, "node is required for setup.js tests")
+class WhoTests(unittest.TestCase):
+    """The card that comes before the fork: who is reading this.
+
+    Everything the page says afterwards was written by a model, and a model
+    writes for whoever wrote the prompt unless it is told otherwise. Four
+    answers change that -- and they are asked once, against the account, so
+    a reader who has already given them never sees this card again.
+    """
+
+    def run_js(self, expression, reply=None):
+        env = dict(os.environ, HC_REPLY=json.dumps(reply or {}))
+        done = subprocess.run([NODE, "-e", HARNESS, str(SETUP_JS), expression],
+                              capture_output=True, text=True, check=False,
+                              env=env)
+        self.assertEqual(0, done.returncode, done.stderr)
+        return json.loads(done.stdout)
+
+    def opened(self, tail, reply=None):
+        """Let boot settle -- the card is decided by what /setup.who says."""
+        return self.run_js("settle(function () {" + tail + "});", reply)
+
+    KNOWN = {"session": "", "events": 0, "bound": True,
+             "profile": {"name": "Maya", "year": "2",
+                         "major": "Molecular Biology", "level": "plain"}}
+
+    def test_a_cold_page_opens_on_the_questions_and_not_the_fork(self):
+        out = self.opened("return {titles: app.querySelectorAll('.card-title')"
+                          "  .map(function (n) { return n.textContent; })};",
+                          {"session": "", "events": 0, "bound": True})
+        self.assertIn("What is your name?", out["titles"])
+        self.assertNotIn("Is this new work, or work you already have?",
+                         out["titles"])
+
+    def test_all_four_questions_are_on_it(self):
+        out = self.opened("return {titles: app.querySelectorAll('.card-title')"
+                          "  .map(function (n) { return n.textContent; })};")
+        for asked in ("What is your name?", "What year are you?",
+                      "What is your major?",
+                      "How technical should explanations be?"):
+            self.assertIn(asked, out["titles"])
+
+    def test_the_years_are_offered_with_somewhere_else_to_go(self):
+        out = self.opened(
+            "return {rows: app.querySelectorAll('.opt-label')"
+            "  .map(function (n) { return n.textContent; })};")
+        self.assertEqual(["First year", "Second year", "Third year",
+                          "Fourth year", "Something else"], out["rows"])
+
+    def test_choosing_something_else_opens_a_box_to_write_in(self):
+        out = self.opened(
+            "app.querySelectorAll('.opt')[4].press();"
+            "return {other: window.__hcSetup.state().yearOther,"
+            "        boxes: app.querySelectorAll('.field').length};")
+        self.assertTrue(out["other"])
+        # Name, the year they are writing, the major: three boxes, where
+        # before there were two.
+        self.assertEqual(3, out["boxes"])
+
+    def test_the_majors_are_seeded_and_narrow_as_they_type(self):
+        # Twenty-eight rows is a form. Seeding them means most readers press
+        # one instead of typing, and the filter is what keeps it to a few.
+        out = self.opened(
+            "var box = app.querySelectorAll('.field .f')[1];"
+            "box.value = 'bio';"
+            "box.handlers.input[0]({});"
+            "return {seeds: app.querySelectorAll('.seed')"
+            "  .map(function (n) { return n.textContent; })};")
+        self.assertTrue(out["seeds"])
+        for seed in out["seeds"]:
+            self.assertIn("bio", seed.lower())
+
+    def test_a_major_nobody_seeded_is_still_their_answer(self):
+        out = self.opened(
+            "var box = app.querySelectorAll('.field .f')[1];"
+            "box.value = 'Rhetoric & Molecular Origami';"
+            "box.handlers.input[0]({});"
+            "return {major: window.__hcSetup.state().profile.major,"
+            "        seeds: app.querySelectorAll('.seed').length};")
+        self.assertEqual("Rhetoric & Molecular Origami", out["major"])
+        self.assertEqual(0, out["seeds"])
+
+    def test_pressing_a_seed_fills_the_box(self):
+        out = self.opened(
+            "app.querySelectorAll('.seed')[0].press();"
+            "return {major: window.__hcSetup.state().profile.major};")
+        self.assertEqual("Computer Science", out["major"])
+
+    def test_the_slider_has_three_stops_and_starts_between_them(self):
+        out = self.opened(
+            "return {stops: app.querySelectorAll('.stop')"
+            "  .map(function (n) { return n.textContent; }),"
+            " level: window.__hcSetup.state().profile.level,"
+            " lit: app.querySelectorAll('.stop')"
+            "  .map(function (n) { return n.getAttribute('data-on'); })};")
+        self.assertEqual(["Plain language", "Some technical detail",
+                          "Fully technical"], out["stops"])
+        self.assertEqual("some", out["level"])
+        self.assertEqual(["0", "1", "0"], out["lit"])
+
+    def test_dragging_it_settles_on_the_nearest_stop(self):
+        # Continuous while it moves -- the thumb goes where the finger is --
+        # and snapped when it is let go, so three options are still a slider
+        # rather than three buttons wearing a track.
+        out = self.opened(
+            "var track = app.querySelector('.range');"
+            "track.value = '164';"
+            "track.handlers.input[0]({});"
+            "var mid = window.__hcSetup.state().profile.level;"
+            "track.handlers.change[0]({});"
+            "return {mid: mid, level: window.__hcSetup.state().profile.level,"
+            "        at: track.value,"
+            "        slide: window.__hcSetup.state().slide};")
+        self.assertEqual("full", out["mid"])
+        self.assertEqual("full", out["level"])
+        self.assertEqual("200", out["at"])
+        self.assertEqual(200, out["slide"])
+
+    def test_a_stop_can_be_pressed_instead_of_dragged_to(self):
+        out = self.opened(
+            "app.querySelectorAll('.stop')[0].press();"
+            "return {level: window.__hcSetup.state().profile.level};")
+        self.assertEqual("plain", out["level"])
+
+    def test_continue_posts_the_four_answers_and_moves_on(self):
+        out = self.opened(
+            "app.querySelectorAll('.field .f')[0].value = 'Maya';"
+            "app.querySelectorAll('.field .f')[0].handlers.input[0]({});"
+            "app.querySelectorAll('.opt')[1].press();"
+            "app.querySelectorAll('.stop')[0].press();"
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Continue') === 0; })[0].press();"
+            "return settle(function () {"
+            "  return {posted: calls.filter(function (c) {"
+            "            return c.op === 'setup_profile'; }),"
+            "          screen: window.__hcSetup.state().screen};"
+            "});", {"ok": True})
+        self.assertEqual(1, len(out["posted"]))
+        self.assertEqual({"name": "Maya", "year": "2", "major": "",
+                          "level": "plain"}, out["posted"][0]["profile"])
+        self.assertEqual("fork", out["screen"])
+
+    def test_answers_that_could_not_be_saved_stop_the_page(self):
+        # Every prompt afterwards reads them from the vault, so answers that
+        # did not land are answers that change nothing -- and a reader who
+        # thinks they were heard is worse off than one who was asked twice.
+        out = self.opened(
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Continue') === 0; })[0].press();"
+            "return settle(function () {"
+            "  return {screen: window.__hcSetup.state().screen,"
+            "          err: (app.querySelector('.err') || {}).textContent};"
+            "});", {"ok": False, "error": "the disk is full"})
+        self.assertEqual("who", out["screen"])
+        self.assertIn("disk is full", out["err"])
+
+    def test_skip_never_posts_and_never_blocks(self):
+        # Somebody who does not want to answer should not be held at the
+        # door of a tool they have not seen yet.
+        out = self.opened(
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Skip') === 0; })[0].press();"
+            "return {screen: window.__hcSetup.state().screen,"
+            "        posted: calls.filter(function (c) {"
+            "          return c.op === 'setup_profile'; }).length};")
+        self.assertEqual("fork", out["screen"])
+        self.assertEqual(0, out["posted"])
+
+    def test_a_reader_who_has_answered_is_never_asked_again(self):
+        out = self.opened(
+            "return {screen: window.__hcSetup.state().screen,"
+            "        name: window.__hcSetup.state().profile.name,"
+            "        other: window.__hcSetup.state().yearOther,"
+            "        slide: window.__hcSetup.state().slide};", self.KNOWN)
+        self.assertEqual("fork", out["screen"])
+        self.assertEqual("Maya", out["name"])
+        self.assertFalse(out["other"])
+        self.assertEqual(0, out["slide"])
+
+    def test_a_year_they_wrote_themselves_comes_back_in_its_own_box(self):
+        reply = json.loads(json.dumps(self.KNOWN))
+        reply["profile"]["year"] = "transferring"
+        out = self.opened(
+            "return {other: window.__hcSetup.state().yearOther,"
+            "        year: window.__hcSetup.state().profile.year};", reply)
+        self.assertTrue(out["other"])
+        self.assertEqual("transferring", out["year"])
+
+    def test_a_chat_with_something_in_it_is_still_asked_first(self):
+        # The other cold start: /bart in a conversation that has been going
+        # all afternoon. Reading it is what happens next, not instead --
+        # the goals it proposes are written for whoever answered here.
+        out = self.opened(
+            "app.querySelectorAll('.btn').filter(function (b) {"
+            "  return b.textContent.indexOf('Skip') === 0; })[0].press();"
+            "return {screen: window.__hcSetup.state().screen,"
+            "        adopting: window.__hcSetup.state().adopting,"
+            "        read: calls.filter(function (c) {"
+            "          return c.op === 'setup_from_chat'; }).length};",
+            {"session": "s" * 8, "events": 12, "bound": False})
+        self.assertEqual("adopt", out["screen"])
+        self.assertTrue(out["adopting"])
+        self.assertEqual(1, out["read"])
+
+    def test_a_workspace_that_will_not_answer_leaves_them_on_the_card(self):
+        # It cannot say whether they have answered, so it asks. Skip is one
+        # press away and nothing behind it depends on the answer.
+        out = self.run_js(
+            "window.fetch = function () { return Promise.reject(new Error('x')); };"
+            "window.__hcSetup.boot();"
+            "settle(function () {"
+            "  return {screen: window.__hcSetup.state().screen};"
+            "});")
+        self.assertEqual("who", out["screen"])
+
+
 class PageTests(unittest.TestCase):
     """The page itself, served by the workspace that answers its ops."""
 
@@ -978,7 +1669,7 @@ class PageTests(unittest.TestCase):
             self.assertEqual(200, status)
             self.assertIn("setup.js", body)
             # The workspace's own palette, so the page is not a second look.
-            self.assertIn("--acc:#0000ee", body)
+            self.assertIn("--acc:#171717", body)
 
     def test_the_script_is_served_beside_it(self):
         with self.server() as base:
@@ -1006,6 +1697,36 @@ class PageTests(unittest.TestCase):
             _status, body = self.get(base + "/setup.js")
         self.assertNotIn(
             "Then it is already yours. A terminal is opening for you.", body)
+
+    def test_the_page_carries_the_styles_the_paged_rows_ask_for(self):
+        # The script draws these class names; a page served without them is
+        # a goal walk with no arrows and no rows to see.
+        with self.server() as base:
+            _status, page = self.get(base + "/setup")
+        for rule in (".pager{", ".pager-dots{", ".pdot{", ".arrow{",
+                     ".arrow-on{", ".row-boxed{", "input.f.goal-title{"):
+            self.assertIn(rule, page)
+
+    def test_the_page_carries_the_styles_the_first_card_asks_for(self):
+        # The seeded majors and the register slider are drawn by class name;
+        # a page served without their rules is a native range control and a
+        # column of unstyled buttons, which is not what was designed.
+        with self.server() as base:
+            _status, page = self.get(base + "/setup")
+        for rule in (".seeds{", ".seed{", ".slider{", "input.range{",
+                     ".stops{", ".stop{", ".stop[data-on=\"1\"]{"):
+            self.assertIn(rule, page)
+
+    def test_who_is_reading_is_served_beside_which_chat_this_is(self):
+        # The page cannot know either. Both come back on one request, so a
+        # reader who has answered is taken past the first card without a
+        # second round trip to find out.
+        with self.server() as base:
+            _status, body = self.get(base + "/setup.who")
+        answer = json.loads(body)
+        self.assertIn("profile", answer)
+        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
+                         answer["profile"])
 
     def test_the_opening_question_and_its_answer_field_are_pills(self):
         with self.server() as base:

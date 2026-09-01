@@ -79,7 +79,7 @@ class RenderTests(unittest.TestCase):
              todo_items=[row("t5", "sand it", "done")]),
         goal("g3", "Later", status="active",
              todo_items=[row("t6", "not yet", "")]),
-        goal("g4", "Dropped", status="abandoned",
+        goal("g4", "Dropped", status="archived",
              todo_items=[row("t7", "never", "failed")]),
     ]
     PROMPTS = [{"id": "p1", "role": "user", "text": "make  the rail\nnice"}]
@@ -115,7 +115,7 @@ class RenderTests(unittest.TestCase):
         g1 = doc.index("### Ship the rail  `[in progress]`")
         g2 = doc.index("#### Polish  `[completed]`")
         g3 = doc.index("### Later  `[active]`")
-        g4 = doc.index("### Dropped  `[abandoned]`")
+        g4 = doc.index("### Dropped  `[archived]`")
         self.assertTrue(g1 < g2 < g3 < g4)
         self.assertIn("_id `g2` · under Ship the rail_", doc)
         self.assertIn("priority high", doc)
@@ -146,7 +146,7 @@ class RenderTests(unittest.TestCase):
     def test_the_glance_counts_goals_rows_and_names_what_to_pick_up(self):
         doc = self.doc()
         self.assertIn("- Goals: 4 total — 1 active, 1 in progress, "
-                      "1 completed, 1 abandoned", doc)
+                      "1 completed, 1 archived", doc)
         self.assertIn("- TODO rows: 6 — 2 not yet sent, 1 asking, 2 done, "
                       "1 failed", doc)
         pick = doc[doc.index("### Pick up here"):doc.index("## Goals")]
@@ -154,7 +154,7 @@ class RenderTests(unittest.TestCase):
                       "  _(under: Ship the rail)_", pick)
         self.assertIn("- [not yet sent] child of wire  _(under: Ship the rail)_", pick)
         # an unsent row under a merely active goal is not mid-flight, and
-        # a failed row under an abandoned goal is nobody's to pick up
+        # a failed row under an archived goal is nobody's to pick up
         self.assertNotIn("_(under: Later)_", pick)
         self.assertNotIn("never", pick)
 

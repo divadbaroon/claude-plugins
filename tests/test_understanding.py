@@ -48,8 +48,9 @@ class Engine:
         self.seen, self.dirs = prompt, list(read_dirs)
         return self.said
 
-    def generate_searching(self, prompt, where=""):
+    def generate_searching(self, prompt, where="", read=None):
         self.seen, self.searched = prompt, where
+        self.dirs = list(read) if read else None
         return self.said
 
     def generate(self, prompt):
@@ -67,7 +68,7 @@ class Replies:
         self.asked.append(prompt)
         return self.said[min(len(self.asked), len(self.said)) - 1]
 
-    def generate_searching(self, prompt, where=""):
+    def generate_searching(self, prompt, where="", read=None):
         return self.generate_plain(prompt)
 
     generate = generate_plain
@@ -269,7 +270,7 @@ class UnderstandingRouteTests(unittest.TestCase):
         held = self.held()["understanding"]
         self.assertEqual("Two machines, one tree.", held["scenario"])
         self.assertEqual([{"id": "qaaaa0001", "text": "Who wins a conflict?",
-                           "thread": []}], held["questions"])
+                           "shots": [], "thread": []}], held["questions"])
 
     def test_the_op_writes_the_answers_and_the_screenshots_too(self):
         out = ui._apply(
@@ -501,6 +502,83 @@ class AskAboutTheScenarioTests(unittest.TestCase):
         self.assertNotIn("asked, never answered", engine.seen)
         self.assertLess(engine.seen.index("A: The later save wins."),
                         engine.seen.index("And if both are offline?"))
+
+
+class AskWithScreenshotsTests(unittest.TestCase):
+    """A question with screenshots pasted onto it.
+
+    Half of what anyone asks about a screen is quicker shown than described,
+    so a question carries its own images -- not the scenario's -- and the call
+    is handed the files rather than a description of them.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.scope = Path(self.tmp.name) / "chat-a"
+        self.shots = self.scope / "attachments"
+        self.shots.mkdir(parents=True)
+        self.shot = self.shots / "20260831-000000-aaaa.png"
+        self.shot.write_bytes(b"\x89PNG\r\n")
+        self.shots, self.shot = self.shots.resolve(), self.shot.resolve()
+
+    def tree(self):
+        goal = GM.new_goal("g1", "Share a goal tree", None, origin="user")
+        goals = {"version": 1, "goals": [goal]}
+        GM.sanitize(goals)
+        return goals["goals"]
+
+    def test_a_questions_screenshot_is_named_for_the_call_to_open(self):
+        engine = Engine(said="The rail is showing the done band.")
+        out = ui.ask_scenario(
+            self.tree(), "g1", "Two people work one tree.",
+            "What is this panel showing?", engine=engine,
+            shots=[{"path": str(self.shot), "name": "the rail"}],
+            trajdir=self.scope)
+        self.assertTrue(out["ok"], out)
+        self.assertIn(str(self.shot), engine.seen)
+        self.assertIn("Screenshots the question is about", engine.seen)
+        # Named files are of no use to a provider not allowed to open them.
+        self.assertEqual([str(self.shots)], engine.dirs)
+
+    def test_a_screenshot_is_opened_by_a_call_that_is_also_searching(self):
+        # The common case: the project is on this machine, so the question is
+        # answered out of the code -- and the image it is about lives in the
+        # workspace's attachments, which is not under that project.
+        engine = Engine(said="It is the rail, drawn by bridge.js.")
+        out = ui.ask_scenario(
+            self.tree(), "g1", "Two people work one tree.",
+            "Which file draws this?", cwd=str(ROOT), engine=engine,
+            shots=[{"path": str(self.shot), "name": "the rail"}],
+            trajdir=self.scope)
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(str(ROOT), engine.searched)
+        self.assertEqual([str(self.shots)], engine.dirs)
+
+    def test_a_path_outside_the_workspace_is_not_named_at_all(self):
+        # The path arrives from a browser and decides what a subprocess may
+        # open: only this workspace's own attachments survive.
+        engine = Engine(said="I cannot see it.")
+        out = ui.ask_scenario(
+            self.tree(), "g1", "Two people work one tree.",
+            "What is this?", engine=engine,
+            shots=[{"path": "/etc/passwd", "name": "passwd"}],
+            trajdir=self.scope)
+        self.assertTrue(out["ok"], out)
+        self.assertNotIn("/etc/passwd", engine.seen)
+        self.assertNotIn("Screenshots the question is about", engine.seen)
+        self.assertIsNone(engine.dirs)
+
+    def test_a_questions_screenshots_open_the_build_of_its_rows(self):
+        goal = GM.new_goal("g1", "Share a goal tree", None, origin="user")
+        goal["understanding"] = {
+            "scenario": "Two people work one tree.",
+            "questions": [{"id": "qaaaa0001", "text": "What is this panel?",
+                           "shots": [{"path": str(self.shot),
+                                      "name": "the rail"}]}]}
+        lines = "\n".join(GM.render_understanding(goal))
+        self.assertIn("- What is this panel?", lines)
+        self.assertIn("  - screenshot: " + str(self.shot), lines)
 
 
 class DraftTheScenarioTests(unittest.TestCase):

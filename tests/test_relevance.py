@@ -101,8 +101,13 @@ class BornFinishedTests(unittest.TestCase):
     def test_a_goal_can_be_born_completed(self):
         self.assertEqual("completed", self.make(status="completed")["status"])
 
-    def test_and_born_abandoned(self):
-        self.assertEqual("abandoned", self.make(status="abandoned")["status"])
+    def test_and_born_archived(self):
+        self.assertEqual("archived", self.make(status="archived")["status"])
+
+    def test_and_the_word_that_used_to_mean_archived(self):
+        # A model prompted from a cached copy of the schema still says
+        # "abandoned". Read as archived, not dropped on the floor.
+        self.assertEqual("archived", self.make(status="abandoned")["status"])
 
     def test_without_a_status_it_is_open_as_before(self):
         self.assertEqual("active", self.make()["status"])
@@ -113,7 +118,7 @@ class BornFinishedTests(unittest.TestCase):
     def test_the_prompt_tells_the_model_it_may_do_this(self):
         # Allowing it in code is not enough; nothing would ever send it.
         self.assertIn("stays active for good", CSY.INCREMENTAL_PROMPT)
-        self.assertIn('"status":"active|in_progress|completed|abandoned"',
+        self.assertIn('"status":"active|in_progress|completed|archived"',
                       CSY.INCREMENTAL_PROMPT)
 
 

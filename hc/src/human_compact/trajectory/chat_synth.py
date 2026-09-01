@@ -78,7 +78,7 @@ a section empty when it supports nothing. Never invent, pad, or restate the
 title.
 
 Return ONLY minified JSON:
-{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|abandoned","parent_goal_id":null,"description":"","priority":"normal|high|urgent","relevance":"core|supporting|unrelated","relevance_why":"","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
+{"goals":[{"id":"g1","title":"","status":"active|in_progress|completed|archived","parent_goal_id":null,"description":"","priority":"normal|high|urgent","relevance":"core|supporting|unrelated","relevance_why":"","evidence_ids":[],"todos":[{"text":"","done":false,"evidence_ids":[]}],"sections":{"objective":"","in_my_words":"","decisions":[],"built":[],"blockers":[],"open_questions":[]}}],"important":{"items":[]}}
 
 OBJECTIVE:
 <<OBJECTIVE>>
@@ -98,8 +98,8 @@ Return ONLY minified JSON {"operations":[...]} using these operations:
 {"op":"attach_evidence","goal_id":"","evidence_ids":[]}
 {"op":"add_todo","goal_id":"","text":"","evidence_ids":[]}
 {"op":"complete_todo","goal_id":"","text_match":""}
-{"op":"set_status","goal_id":"","status":"active|in_progress|completed|abandoned"}
-{"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":"","status":"active|in_progress|completed|abandoned","relevance":"core|supporting|unrelated","relevance_why":""}
+{"op":"set_status","goal_id":"","status":"active|in_progress|completed|archived"}
+{"op":"new_goal","parent_goal_id":"<id or null>","title":"","description":"","evidence_ids":[],"todos":[],"distinct_because":"","status":"active|in_progress|completed|archived","relevance":"core|supporting|unrelated","relevance_why":""}
 {"op":"set_relevance","goal_id":"","relevance":"core|supporting|unrelated","relevance_why":""}
 {"op":"append_section","goal_id":"","section":"objective|in_my_words|decisions|built|blockers|open_questions","text":""}
 

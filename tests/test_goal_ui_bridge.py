@@ -1639,7 +1639,7 @@ class HoldGroundTests(BridgeTestCase):
             % json.dumps(json.dumps(saved or {})))
 
     def test_a_chat_workspace_is_held_on_its_own_dark_ground(self):
-        self.assertEqual("#0d1117", self.ground())
+        self.assertEqual("#0a0a0a", self.ground())
 
     def test_a_reader_who_chose_light_is_held_on_light(self):
         self.assertEqual("#fff", self.ground({"themeMode": "light"}))
@@ -1651,7 +1651,7 @@ class HoldGroundTests(BridgeTestCase):
             "var held = [root.style.visibility, root.style.background];"
             "window.__hcPromptUI.releaseRoot(root);"
             "out = [held, [root.style.visibility, root.style.background]];")
-        self.assertEqual(["hidden", "#0d1117"], held,
+        self.assertEqual(["hidden", "#0a0a0a"], held,
                          "a held root must hide itself and keep the ground")
         self.assertEqual(["", ""], shown,
                          "releasing must hand both back to the workspace")
@@ -1663,15 +1663,18 @@ class DeletedGoalTests(BridgeTestCase):
     STATE = {"goals": [
         {"id": "g1", "title": "keep this one", "status": "active",
          "parent_goal_id": None},
-        {"id": "g2", "title": "deleted one", "status": "abandoned",
+        {"id": "g2", "title": "deleted one", "status": "archived",
          "parent_goal_id": None},
         {"id": "g3", "title": "finished one", "status": "completed",
          "parent_goal_id": None},
+        {"id": "g4", "title": "deleted before the rename",
+         "status": "abandoned", "parent_goal_id": None},
     ], "prompts": []}
 
-    def test_an_abandoned_goal_is_left_out_of_the_tree(self):
+    def test_an_archived_goal_is_left_out_of_the_tree(self):
         titles = [n["title"] for n in self.roots(self.STATE)]
-        self.assertEqual(["keep this one", "finished one"], titles)
+        self.assertEqual(["keep this one", "finished one"], titles,
+                         "and so is one still spelt the old way")
 
     def test_a_completed_goal_is_still_drawn(self):
         done = [n for n in self.roots(self.STATE) if n["title"] == "finished one"]
@@ -1949,7 +1952,7 @@ class MergeTests(BridgeTestCase):
 
     def test_a_goal_a_stale_writer_lost_is_kept_and_a_tombstoned_one_is_not(self):
         # The server never erases a deleted goal: it stays in the payload,
-        # marked abandoned. So a goal missing from the remote TREE splits two
+        # marked archived. So a goal missing from the remote TREE splits two
         # ways -- named in the tombstones: deleted, drop it; not even
         # mentioned: a stale writer lost it, keep the local copy so the next
         # import puts it back. This is the add-a-goal-and-watch-it-vanish
@@ -2794,7 +2797,7 @@ class LiveFeedTests(BridgeTestCase):
                       "border-top:1px solid var(--bd,#e6e6e6)}", css)
         # The same heading treatment ADDITIONAL NOTES and AGENT STATUS use,
         # so it reads as their peer rather than a control inside AGENT.
-        self.assertIn("font:600 9.5px 'Source Code Pro',monospace;"
+        self.assertIn("font:600 9.5px var(--hc-sans);"
                       "letter-spacing:1px;color:var(--mut,#575757)", css)
 
     def test_the_pane_styles_do_not_depend_on_an_analysis_running(self):
@@ -5290,8 +5293,8 @@ class LaunchSkinTests(BridgeTestCase):
         # the same tracking, title case; the open one is bold and stands on
         # the header's rule.
         self.assertIn(".hc-viewtab{position:relative;display:inline-flex;"
-                      "align-items:center;height:100%;font:500 11px 'Source Code Pro',"
-                      "monospace;letter-spacing:.2px;color:var(--fnt);", css)
+                      "align-items:center;height:100%;font:500 11px var(--hc-sans);"
+                      "letter-spacing:.2px;color:var(--fnt);", css)
         self.assertNotRegex(css, r"\.hc-viewtab\{[^}]*uppercase")
         self.assertIn(".hc-viewtab[data-hc-on]{font-weight:700;color:var(--ink)}", css)
         self.assertIn(".hc-viewtab[data-hc-on]::after{content:'';position:absolute;"
@@ -5368,11 +5371,12 @@ class LaunchSkinTests(BridgeTestCase):
         self.assertEqual(sorted(LAUNCH_CLASSES), sorted(missing))
 
     def test_the_copy_button_label_clears_aa_in_both_themes(self):
-        # 11.5px bold is not "large text", so both themes owe 4.5:1 -- and
-        # the fill is a variable each theme redefines, so the label cannot be
-        # one colour. The light fill is dark enough that only white clears
-        # it; the dark theme's fill is bright enough that only near-black
-        # does. This caught a 3.69:1 label the eye read as fine.
+        # 11.5px bold is not "large text", so both themes owe 4.5:1. The
+        # button is filled with --acc and labelled with --onacc, and each
+        # theme redefines both, so the label cannot be one colour: light
+        # fills dark and labels white, dark fills light and labels near
+        # black. This caught a 3.69:1 label the eye read as fine, back when
+        # the fill was a green the label was not chosen against.
         css = self.run_js("window.__hcPromptUI.launchCss();")
 
         def first(pattern):
@@ -5380,14 +5384,16 @@ class LaunchSkinTests(BridgeTestCase):
             self.assertIsNotNone(found, pattern)
             return found.group(1)
 
-        dark = r"\[data-hc-launch\]\[data-hc-theme=\"dark\"\]"
+        # The button takes its fill and its label from the pair, so the pair
+        # is what has to clear -- read per theme off the token blocks.
+        light = r"\[data-hc-launch\] \.hc\{"
+        dark = r"\[data-hc-launch\] \.hc\[data-dark=\"true\"\]\{"
+        self.assertIn("background:var(--acc);color:var(--onacc)", css)
         pairs = [
-            (first(r"\[data-hc-launch\]\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
-             first(r"\[data-hc-launch\] \.hc-rail-copy\{"
-                   r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
-            (first(dark + r"\{[^}]*--hc-ok:(#[0-9a-fA-F]{3,6})"),
-             first(dark + r" \.hc-rail-copy\{"
-                          r"[^}]*?(?<![-\w])color:(#[0-9a-fA-F]{3,6})")),
+            (first(light + r"[^}]*--acc:(#[0-9a-fA-F]{3,6})"),
+             first(light + r"[^}]*--onacc:(#[0-9a-fA-F]{3,6})")),
+            (first(dark + r"[^}]*--acc:(#[0-9a-fA-F]{3,6})"),
+             first(dark + r"[^}]*--onacc:(#[0-9a-fA-F]{3,6})")),
         ]
         self.assertEqual(2, len({label for _, label in pairs}))
         for fill, label in pairs:
@@ -5468,9 +5474,12 @@ class LaunchSkinTests(BridgeTestCase):
         self.assertIn(".hc>div:first-child{position:sticky;top:0;z-index:19;"
                       "background:var(--bg);height:var(--hc-top);", css)
 
-    def test_the_brand_is_the_one_serif_and_the_pills_ride_in_the_header(self):
+    def test_the_brand_is_the_word_alone_and_the_pills_ride_in_the_header(self):
         css = self.run_js("window.__hcPromptUI.launchCss();")
-        self.assertRegex(css, r"\.hc-brand\{font:600 15px Georgia,[^}]*serif!important")
+        # The page is set in one face. The brand is told apart by weight and
+        # tracking rather than by being the only serif on the screen.
+        self.assertRegex(css, r"\.hc-brand\{font:600 15px var\(--hc-sans\)!important")
+        self.assertNotIn("Georgia", css)
         # No marker before the name: the brand is the word alone.
         self.assertNotIn(".hc-brand::before", css)
         # The filter counts' row is lifted into the header's second row by

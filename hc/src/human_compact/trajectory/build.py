@@ -95,6 +95,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from . import chat_state as CS
 from . import goals as GM
 from . import project_store as PS
+from . import reader as READER
 from .secure_io import atomic_write_json
 
 
@@ -286,6 +287,12 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
         lines += ["", "# Attachments", "",
                   "Files the rows above cite; read each one for the row"
                   " that names it.", shots]
+    # Who reads what this build says back, immediately above the protocol
+    # that says when to say it. A build's questions and its DONE notes are
+    # the only part of it the reader ever sees, and they are the part most
+    # likely to be written in the vocabulary of the code rather than of the
+    # person who asked for the change.
+    lines += READER.prompt_lines(root)
     lines += ["", PROTOCOL.rstrip("\n")]
     return "\n".join(lines) + "\n"
 

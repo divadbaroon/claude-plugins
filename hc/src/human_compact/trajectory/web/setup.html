@@ -8,13 +8,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+:root{--hc-sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;--hc-mono:'Source Code Pro',ui-monospace,SFMono-Regular,Menlo,monospace}
 /* The workspace's own palette, copied rather than referenced: this page is
    served before any workspace exists and cannot read one's variables. */
-.hc{--bg:#fff;--panel:#fff;--panel2:#fafafa;--ink:#111213;--mut:#575757;--fnt:#9b9b9b;--bd:#e6e6e6;--bd2:#d5d5d5;--line:#e2e2e2;--hov:#f4f4f4;--acc:#0000ee;--accbg:#e9effc;--acchov:#f4f7fe;--onacc:#fff;--del:#aa3333;--dtxt:#333;--tint:#f7f6f3}
-.hc[data-dark="true"]{--bg:#101010;--panel:#101010;--panel2:#181818;--ink:#e7e7e7;--mut:#9f9f9f;--fnt:#5f5f5f;--bd:#2a2a2a;--bd2:#3c3c3c;--line:#323232;--hov:#1c1c1c;--acc:#8ab4f8;--accbg:#1b2b4a;--acchov:#161e2e;--onacc:#0b0b0b;--del:#d97b6c;--dtxt:#cfcfcf;--tint:#151515}
+.hc{--bg:#fff;--panel:#fff;--panel2:#fafafa;--ink:#171717;--mut:#4d4d4d;--fnt:#8f8f8f;--bd:#eaeaea;--bd2:#c9c9c9;--line:#eaeaea;--hov:#f2f2f2;--acc:#171717;--accbg:#f2f2f2;--acchov:#fafafa;--onacc:#fff;--del:#e70022;--dtxt:#171717;--tint:#fafafa}
+.hc[data-dark="true"]{--bg:#0a0a0a;--panel:#0a0a0a;--panel2:#1a1a1a;--ink:#ededed;--mut:#a0a0a0;--fnt:#8f8f8f;--bd:#2e2e2e;--bd2:#454545;--line:#2e2e2e;--hov:#1f1f1f;--acc:#ededed;--accbg:#1f1f1f;--acchov:#161616;--onacc:#0a0a0a;--del:#ff5e63;--dtxt:#ededed;--tint:#1a1a1a}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{background:#fff;font-family:'Source Code Pro',ui-monospace,Menlo,monospace}
+body{background:#fff;font-family:var(--hc-sans)}
 .hc{min-height:100vh;background:var(--bg);color:var(--ink);display:flex;flex-direction:column}
 
 .wrap{flex:1;overflow-y:auto}
@@ -23,78 +24,98 @@ body{background:#fff;font-family:'Source Code Pro',ui-monospace,Menlo,monospace}
 .foot .col{padding:8px 32px 56px}
 
 /* --- the tracked micro-caps that label everything ---------------------- */
-.lbl{font:500 9px/1 'Source Code Pro',monospace;letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
+.lbl{font:500 9px/1 var(--hc-sans);letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
 .rule{height:1px;background:var(--bd);margin:9px 0 0}
 
 .hero{padding:13vh 0 6px;text-align:center}
-.hero-name{font:500 34px/1 'Source Code Pro',monospace;letter-spacing:-.4px}
-.hero-note{margin-top:16px;font:12.5px/1.75 'Source Code Pro',monospace;color:var(--mut)}
+.hero-name{font:500 34px/1 var(--hc-sans);letter-spacing:-.4px}
+.hero-note{margin-top:16px;font:12.5px/1.75 var(--hc-sans);color:var(--mut)}
 
 /* --- cards --------------------------------------------------------------*/
-.card{margin-top:20px;background:var(--panel);border:1px solid var(--bd2);border-radius:10px;overflow:hidden}
+.card{margin-top:20px;background:var(--panel);border:1px solid var(--bd2);border-radius:8px;overflow:hidden}
 .card-head{padding:13px 18px 0}
 .card-head .rule{margin-top:8px}
 .card-body{padding:14px 18px 16px}
-.card-title{font:500 14.5px/1.5 'Source Code Pro',monospace;color:var(--ink);text-wrap:pretty}
-.card-sub{margin-top:5px;font:500 9px/1 'Source Code Pro',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt)}
+.card-title{font:500 14.5px/1.5 var(--hc-sans);color:var(--ink);text-wrap:pretty}
+.card-sub{margin-top:5px;font:500 9px/1 var(--hc-sans);letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt)}
 
 /* --- messages: theirs plain, yours a filled block ---------------------- */
 .msg{padding:16px 0 0}
-.msg-them .msg-body{margin-top:7px;font:13px/1.75 'Source Code Pro',monospace;color:var(--dtxt);white-space:pre-wrap;text-wrap:pretty}
+.msg-them .msg-body{margin-top:7px;font:13px/1.75 var(--hc-sans);color:var(--dtxt);white-space:pre-wrap;text-wrap:pretty}
 .msg-opening .msg-body{display:inline-block;max-width:100%;padding:10px 15px;border:1px solid var(--bd2);border-radius:999px;background:var(--tint)}
 .msg-you{display:flex;justify-content:flex-end}
-.msg-you .msg-body{max-width:74%;margin-top:7px;padding:11px 14px;background:var(--ink);color:var(--bg);border-radius:10px;font:12.5px/1.7 'Source Code Pro',monospace;white-space:pre-wrap;text-wrap:pretty}
+.msg-you .msg-body{max-width:74%;margin-top:7px;padding:11px 14px;background:var(--ink);color:var(--bg);border-radius:8px;font:12.5px/1.7 var(--hc-sans);white-space:pre-wrap;text-wrap:pretty}
 
 /* --- an option: a row that is a box when chosen ------------------------ */
-.opt{display:flex;align-items:flex-start;gap:11px;padding:9px 12px;margin-top:5px;border:1px solid transparent;border-bottom-color:var(--bd);border-radius:7px;cursor:pointer;transition:border-color 120ms,background 120ms}
+.opt{display:flex;align-items:flex-start;gap:11px;padding:9px 12px;margin-top:5px;border:1px solid transparent;border-bottom-color:var(--bd);border-radius:8px;cursor:pointer;transition:border-color 120ms,background 120ms}
 .opt:hover{background:var(--hov)}
 .opt[data-on="1"]{border-color:var(--ink);background:var(--panel)}
-.mark{flex:none;margin-top:2px;width:11px;height:11px;border:1.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;font:7px/1 'Source Code Pro',monospace;color:var(--bg)}
+.mark{flex:none;margin-top:2px;width:11px;height:11px;border:1.5px solid var(--bd2);display:flex;align-items:center;justify-content:center;font:7px/1 var(--hc-sans);color:var(--bg)}
 .mark-one{border-radius:50%}
-.mark-many{border-radius:2px}
+.mark-many{border-radius:6px}
 .opt[data-on="1"] .mark{border-color:var(--ink);background:var(--ink)}
 .opt-text{flex:1;min-width:0}
-.opt-label{display:block;font:12.5px/1.6 'Source Code Pro',monospace;color:var(--mut)}
+.opt-label{display:block;font:12.5px/1.6 var(--hc-sans);color:var(--mut)}
 .opt[data-on="1"] .opt-label{color:var(--ink)}
-.opt-why{display:block;margin-top:3px;font:11.5px/1.6 'Source Code Pro',monospace;color:var(--fnt);text-wrap:pretty}
+.opt-why{display:block;margin-top:3px;font:11.5px/1.6 var(--hc-sans);color:var(--fnt);text-wrap:pretty}
 
 .q{padding:14px 0 4px}
 .q + .q{margin-top:6px;border-top:1px solid var(--bd)}
 
 /* --- fields -------------------------------------------------------------*/
-.field{margin-top:9px;padding:9px 12px;background:var(--tint);border:1px solid transparent;border-radius:7px}
+.field{margin-top:9px;padding:9px 12px;background:var(--tint);border:1px solid transparent;border-radius:8px}
 .field:focus-within{border-color:var(--bd2)}
-input.f,textarea.f{all:unset;display:block;width:100%;font:12.5px/1.7 'Source Code Pro',monospace;color:var(--ink);caret-color:var(--acc)}
+input.f,textarea.f{all:unset;display:block;width:100%;font:12.5px/1.7 var(--hc-sans);color:var(--ink);caret-color:var(--acc)}
 input.f::placeholder,textarea.f::placeholder{color:var(--fnt);font-style:italic}
 textarea.f{resize:none}
 
 /* --- an aside the model is unsure about, or a note --------------------- */
-.inset{margin-top:12px;padding:11px 14px;background:var(--tint);border-radius:8px;font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+.inset{margin-top:12px;padding:11px 14px;background:var(--tint);border-radius:8px;font:12px/1.7 var(--hc-sans);color:var(--mut);text-wrap:pretty}
 
 /* --- plan: prose, then the doubts under it ---------------------------- */
-.prose{margin-top:10px;font:12.5px/1.8 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
-.bullet{display:flex;gap:9px;margin-top:6px;font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+.prose{margin-top:10px;font:12.5px/1.8 var(--hc-sans);color:var(--mut);text-wrap:pretty}
+.bullet{display:flex;gap:9px;margin-top:6px;font:12px/1.7 var(--hc-sans);color:var(--mut);text-wrap:pretty}
 .bullet-dot{flex:none;color:var(--fnt)}
 .inset .lbl{margin-bottom:4px}
 
 /* --- the goal, once chosen: it opens up ------------------------------- */
-.chosen{margin:14px 0 2px;padding:14px 16px;border:1px solid var(--ink);border-radius:9px;background:var(--tint)}
-.chosen-why{margin-top:6px;font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+.chosen{margin:14px 0 2px;padding:14px 16px;border:1px solid var(--ink);border-radius:8px;background:var(--tint)}
+.chosen-why{margin-top:6px;font:12px/1.7 var(--hc-sans);color:var(--mut);text-wrap:pretty}
 .piece{display:flex;align-items:center;gap:8px;margin-top:16px;padding-bottom:2px}
 .piece:first-of-type{margin-top:8px}
 .piece .x{opacity:0}
 .piece:hover .x{opacity:1}
-input.f.piece-name{font:500 13px/1.6 'Source Code Pro',monospace;color:var(--ink)}
 .kids{margin:2px 0 0;padding-left:14px;border-left:1px solid var(--bd)}
 .kids .row{border-bottom:none;padding:5px 2px}
 
 /* --- todo rows ---------------------------------------------------------- */
 .row{display:flex;align-items:center;gap:11px;padding:8px 2px;border-bottom:1px solid var(--bd)}
 .row:last-of-type{border-bottom:none}
-.row .x{flex:none;padding:0 3px;font:12px/1 'Source Code Pro',monospace;color:var(--fnt);background:none;border:none;cursor:pointer;opacity:0}
+.row .x{flex:none;padding:0 3px;font:12px/1 var(--hc-sans);color:var(--fnt);background:none;border:none;cursor:pointer;opacity:0}
 .row:hover .x{opacity:1}
 .row .x:hover{color:var(--del)}
 .row .bullet-dot{padding-bottom:2px}
+
+/* --- one goal at a time: its title, its rows, the arrows --------------- */
+.piece-head{margin-top:4px;gap:10px}
+input.f.goal-title{font:500 22px/1.35 var(--hc-sans);letter-spacing:-.3px;color:var(--ink)}
+.row-boxed{margin-top:8px;padding:12px 15px;border:1px solid var(--bd2);border-bottom:1px solid var(--bd2);border-radius:8px;transition:border-color 120ms}
+.row-boxed:last-of-type{border-bottom:1px solid var(--bd2)}
+.row-boxed:focus-within{border-color:var(--ink)}
+/* Two classes, because the last-of-type rule above is the adder's own
+   position and would otherwise put a solid line back under it. */
+.row-boxed.row-add{border-style:dashed}
+.pager{display:flex;align-items:center;margin-top:22px;padding-top:16px;border-top:1px solid var(--bd)}
+.pager-dots{flex:1;display:flex;align-items:center;justify-content:center;gap:6px}
+.pdot{width:6px;height:6px;border-radius:999px;background:var(--bd2);cursor:pointer;transition:width 140ms,background 140ms}
+.pdot[data-on="1"]{width:20px;background:var(--ink);cursor:default}
+.arrow{flex:none;width:38px;height:38px;display:flex;align-items:center;justify-content:center;padding:0;font:15px/1 var(--hc-sans);color:var(--mut);background:transparent;border:1px solid var(--bd);border-radius:50%;cursor:pointer;transition:color 120ms,border-color 120ms}
+.arrow:hover{color:var(--ink);border-color:var(--bd2)}
+.arrow-on{color:var(--bg);background:var(--ink);border-color:var(--ink)}
+.arrow-on:hover{color:var(--bg);opacity:.86}
+.arrow[disabled]{opacity:.35;cursor:default}
+.arrow[disabled]:hover{color:var(--mut);border-color:var(--bd)}
+.arrow-gone{border-color:transparent;cursor:default}
 
 /* --- the name, and the button that lives in it ------------------------- */
 .name-row{display:flex;align-items:center;gap:10px;margin-top:9px;padding:5px 5px 5px 14px;background:var(--tint);border:1px solid var(--bd);border-radius:999px}
@@ -103,7 +124,7 @@ input.f.piece-name{font:500 13px/1.6 'Source Code Pro',monospace;color:var(--ink
 
 /* --- buttons: pills, tracked, with somewhere to go -------------------- */
 .acts{display:flex;align-items:center;gap:9px;margin-top:18px;flex-wrap:wrap}
-.btn{display:inline-flex;align-items:center;gap:7px;padding:7px 15px;font:500 9px/1 'Source Code Pro',monospace;letter-spacing:1.5px;text-transform:uppercase;color:var(--mut);background:transparent;border:1px solid var(--bd);border-radius:999px;cursor:pointer;transition:border-color 120ms,color 120ms}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:7px 15px;font:500 9px/1 var(--hc-sans);letter-spacing:1.5px;text-transform:uppercase;color:var(--mut);background:transparent;border:1px solid var(--bd);border-radius:999px;cursor:pointer;transition:border-color 120ms,color 120ms}
 .btn:hover{color:var(--ink);border-color:var(--bd2)}
 .btn-on{color:var(--bg);background:var(--ink);border-color:var(--ink)}
 .btn-on:hover{color:var(--bg);opacity:.86}
@@ -121,7 +142,7 @@ input.f.piece-name{font:500 13px/1.6 'Source Code Pro',monospace;color:var(--ink
 .send-on{background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .send[disabled]{opacity:.45;cursor:default}
 
-.think{display:flex;align-items:center;gap:9px;padding:18px 0 0;font:11.5px/1.5 'Source Code Pro',monospace;letter-spacing:.3px;color:var(--fnt)}
+.think{display:flex;align-items:center;gap:9px;padding:18px 0 0;font:11.5px/1.5 var(--hc-sans);letter-spacing:.3px;color:var(--fnt)}
 .dots{flex:none;display:grid;grid-template-columns:repeat(3,3px);grid-gap:2px;gap:2px}
 .dot{width:3px;height:3px;border-radius:50%;background:var(--ink);opacity:.18;animation:pulse 1.1s ease-in-out infinite}
 @keyframes pulse{0%,70%,100%{opacity:.18}35%{opacity:1}}
@@ -130,17 +151,51 @@ input.f.piece-name{font:500 13px/1.6 'Source Code Pro',monospace;color:var(--ink
 
 /* --- copyable command --------------------------------------------------- */
 .cmd{display:flex;align-items:center;gap:10px;margin-top:9px;padding:9px 8px 9px 14px;background:var(--tint);border-radius:999px}
-.cmd-text{flex:1;font:12.5px/1.5 'Source Code Pro',monospace;color:var(--ink);user-select:all}
-.cmd-copy{flex:none;padding:5px 12px;font:500 9px/1 'Source Code Pro',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--mut);background:var(--panel);border:1px solid var(--bd);border-radius:999px;cursor:pointer}
+.cmd-text{flex:1;font:12.5px/1.5 var(--hc-sans);color:var(--ink);user-select:all}
+.cmd-copy{flex:none;padding:5px 12px;font:500 9px/1 var(--hc-sans);letter-spacing:1.4px;text-transform:uppercase;color:var(--mut);background:var(--panel);border:1px solid var(--bd);border-radius:999px;cursor:pointer}
 .cmd-copy:hover{color:var(--ink);border-color:var(--bd2)}
-.cmd-said{display:block;margin-top:5px;padding-left:14px;font:11px/1.6 'Source Code Pro',monospace;color:var(--fnt)}
+.cmd-said{display:block;margin-top:5px;padding-left:14px;font:11px/1.6 var(--hc-sans);color:var(--fnt)}
 .step{display:flex;gap:14px;padding:11px 0}
-.step-n{flex:none;width:16px;font:500 10px/1.8 'Source Code Pro',monospace;color:var(--fnt)}
+.step-n{flex:none;width:16px;font:500 10px/1.8 var(--hc-sans);color:var(--fnt)}
 .step-b{flex:1}
-.step-t{font:12.5px/1.8 'Source Code Pro',monospace;color:var(--mut);text-wrap:pretty}
+.step-t{font:12.5px/1.8 var(--hc-sans);color:var(--mut);text-wrap:pretty}
 
-.err{margin-top:12px;font:12px/1.7 'Source Code Pro',monospace;color:var(--del)}
-.hint{margin-top:12px;font:11.5px/1.7 'Source Code Pro',monospace;color:var(--fnt);text-wrap:pretty}
+/* --- the way past the conversation, for somebody who came from a workspace
+   and would rather just name it. Fixed in the corner rather than in the flow:
+   describing the project is what this page is for, and a bypass in the column
+   would read as the next step. */
+.bypass{position:fixed;right:20px;bottom:18px;z-index:5;padding:7px 14px;font:500 9px/1 var(--hc-sans);letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt);background:var(--panel);border:1px solid var(--bd);border-radius:999px;cursor:pointer;transition:color 120ms,border-color 120ms}
+.bypass:hover{color:var(--ink);border-color:var(--bd2)}
+
+.err{margin-top:12px;font:12px/1.7 var(--hc-sans);color:var(--del)}
+.hint{margin-top:12px;font:11.5px/1.7 var(--hc-sans);color:var(--fnt);text-wrap:pretty}
+
+/* --- who is reading this: the seeded majors, and the register slider --- */
+/* Seeds sit under the box they fill in, so pressing one and typing one are
+   plainly the same act rather than two different ways to answer. */
+.seeds{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.seed{padding:5px 11px;font:11.5px/1.4 var(--hc-sans);color:var(--mut);background:transparent;border:1px solid var(--bd);border-radius:999px;cursor:pointer;transition:color 120ms,border-color 120ms,background 120ms}
+.seed:hover{color:var(--ink);border-color:var(--bd2);background:var(--hov)}
+
+/* Three stops, one continuous track: the thumb goes wherever the finger is
+   and settles on the nearest stop when it is let go. A stepped range jumps
+   between the three, which reads as three buttons wearing a slider. */
+.slider{margin-top:14px}
+input.range{-webkit-appearance:none;appearance:none;display:block;width:100%;height:20px;margin:0;padding:0;background:transparent;cursor:pointer}
+input.range:focus{outline:none}
+input.range::-webkit-slider-runnable-track{height:2px;border-radius:999px;background:var(--bd2)}
+input.range::-moz-range-track{height:2px;border-radius:999px;background:var(--bd2)}
+input.range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:15px;height:15px;margin-top:-6.5px;border-radius:50%;background:var(--ink);border:none;transition:transform 120ms}
+input.range::-moz-range-thumb{width:15px;height:15px;border-radius:50%;background:var(--ink);border:none}
+input.range:active::-webkit-slider-thumb{transform:scale(1.15)}
+input.range:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(--accbg)}
+.stops{display:flex;align-items:flex-start;gap:8px;margin-top:9px}
+/* The outer two hug their end of the track; the middle one sits over it. */
+.stop{flex:1;padding:0;font:500 9px/1.5 var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt);background:none;border:none;cursor:pointer;text-align:center;transition:color 120ms}
+.stop:first-child{text-align:left}
+.stop:last-child{text-align:right}
+.stop:hover{color:var(--mut)}
+.stop[data-on="1"]{color:var(--ink)}
 </style>
 </head>
 <body>

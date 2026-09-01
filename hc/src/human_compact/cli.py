@@ -816,7 +816,7 @@ def goals_main(argv=None):
     ap.add_argument("--redescribe", metavar="IDS",
                     help="clear these goals' descriptions first (comma-separated)")
     ap.add_argument("--all", dest="show_all", action="store_true",
-                    help="include completed/abandoned")
+                    help="include completed/archived")
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--no-interact", action="store_true")
     args = ap.parse_args(argv or [])

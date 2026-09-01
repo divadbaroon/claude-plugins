@@ -1,9 +1,9 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Trajectory</title>
 <style>
-:root{--ink:#18181b;--dim:#71717a;--faint:#a1a1aa;--edge:#e4e4e7;--violet:#7c3aed}
+:root{--ink:#171717;--dim:#4d4d4d;--faint:#8f8f8f;--edge:#eaeaea;--violet:#171717;--hc-sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;--hc-mono:'Source Code Pro',ui-monospace,SFMono-Regular,Menlo,monospace}
 *{box-sizing:border-box;margin:0}
-body{background:#fff;color:var(--ink);font:14px/1.5 -apple-system,system-ui,sans-serif;height:100vh;overflow:hidden}
+body{background:#fff;color:var(--ink);font:14px/1.5 var(--hc-sans);height:100vh;overflow:hidden}
 #wrap{display:flex;height:100vh}
 #left{flex:1;display:flex;flex-direction:column;min-width:0}
 #hdr{padding:26px 32px 10px}
@@ -18,14 +18,14 @@ body{background:#fff;color:var(--ink);font:14px/1.5 -apple-system,system-ui,sans
 #panel h2:first-child{margin-top:0}
 #state div{font-size:13px;color:#3f3f46;padding:4px 0;border-bottom:1px solid #f4f4f5}
 #state b{font-weight:550;color:var(--ink)}
-.goal{border:1px solid var(--edge);border-radius:9px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:all .15s;font-size:13px;line-height:1.4}
+.goal{border:1px solid var(--edge);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:all .15s;font-size:13px;line-height:1.4}
 .goal:hover{border-color:#d4d4d8;box-shadow:0 2px 8px rgba(0,0,0,.05)}
-.goal.on{border-color:var(--violet);background:#f5f3ff}
+.goal.on{border-color:var(--violet);background:var(--hov)}
 .goal .r{font-size:10.5px;color:var(--faint);font-weight:650;letter-spacing:.05em}
 #legend{margin-top:18px}
 #legend div{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim);padding:2px 0}
 #legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
-#tip{position:fixed;display:none;background:#18181b;color:#fafafa;border-radius:7px;padding:8px 11px;font-size:12px;z-index:40;pointer-events:none;max-width:260px}
+#tip{position:fixed;display:none;background:#18181b;color:#fafafa;border-radius:8px;padding:8px 11px;font-size:12px;z-index:40;pointer-events:none;max-width:260px}
 #tip .tt{font-weight:600}#tip .td{color:#a1a1aa;font-size:11px;margin-top:1px}
 #sheet{position:fixed;top:0;right:-440px;width:420px;height:100%;background:#fff;border-left:1px solid var(--edge);box-shadow:-12px 0 32px rgba(0,0,0,.06);padding:26px;overflow-y:auto;transition:right .22s;z-index:50}
 #sheet.open{right:0}
@@ -35,8 +35,8 @@ body{background:#fff;color:var(--ink);font:14px/1.5 -apple-system,system-ui,sans
 .ev{border:1px solid var(--edge);border-radius:8px;padding:9px 11px;margin-bottom:8px}
 .ev .d{font-size:11px;color:var(--faint)}.ev .t{font-size:12.5px;color:#3f3f46;margin-top:2px}
 .fb{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-.fb button{background:#fff;border:1px solid var(--edge);color:var(--dim);border-radius:7px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
-.fb button.on{color:var(--violet);border-color:#ddd6fe;background:#f5f3ff}
+.fb button{background:#fff;border:1px solid var(--edge);color:var(--dim);border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer}
+.fb button.on{color:var(--violet);border-color:var(--edge);background:var(--hov)}
 #x{position:absolute;top:12px;right:14px;background:none;border:none;color:var(--faint);font-size:20px;cursor:pointer}
 .corrected{font-size:12px;color:var(--violet);margin-top:8px}
 </style>
@@ -76,7 +76,7 @@ async function main(){
  const fa2=graphologyLibrary.layoutForceAtlas2;
  fa2.assign(graph,{iterations:400,settings:Object.assign(fa2.inferSettings(graph),{gravity:0.8,scalingRatio:6})});
  sigma=new Sigma(graph,document.getElementById('graph'),{
-  minCameraRatio:0.5,maxCameraRatio:2,labelFont:'-apple-system,system-ui,sans-serif',
+  minCameraRatio:0.5,maxCameraRatio:2,labelFont:'system-ui,-apple-system,sans-serif',
   labelSize:12,labelWeight:'500',labelColor:{color:'#3f3f46'},
   nodeReducer:(id,attrs)=>{const n=attrs.nd,vis=visible(n);
    const col=G.clusters[n.cluster]?G.clusters[n.cluster].color:'#94a3b8';

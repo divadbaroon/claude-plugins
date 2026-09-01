@@ -505,6 +505,52 @@ def chats_in_project(home, root: Optional[Path] = None) -> List[str]:
     return out
 
 
+def project_touched(root: Optional[Path] = None) -> Dict[str, str]:
+    """When each project's chats were last touched, newest per project.
+
+    "Which project were you last on?" is a question the project records
+    cannot answer: a record is written when the project is built or renamed,
+    which is rarely and never because somebody worked in it. A chat's
+    manifest is stamped every time it is opened, bound, saved into or moved,
+    so the newest ``updated_at`` among a project's chats is the closest
+    thing the vault has to the project somebody was last in.
+
+    Chats that name no project are skipped rather than counted against the
+    directory they sit in: an unbound chat is what the asking is for.
+    """
+    out: Dict[str, str] = {}
+    try:
+        entries = sorted(_state_base(root).iterdir(), key=lambda e: e.name)
+    except OSError:
+        return out
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        try:
+            manifest = json.loads(
+                (entry / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        said = manifest.get("project_home")
+        if not isinstance(said, str) or not said:
+            continue
+        where = _project_home(said)
+        if not where:
+            continue
+        # Bound-at is the floor: a chat bound and never saved into since has
+        # still been interacted with, and the binding is when.
+        when = ""
+        for key in ("updated_at", "project_bound_at", "created_at"):
+            value = manifest.get(key)
+            if isinstance(value, str) and value > when:
+                when = value
+        if when > out.get(where, ""):
+            out[where] = when
+    return out
+
+
 def mark_project_migrated(session_id: str, root: Optional[Path] = None) -> None:
     """Record that a chat predating the binding was taken as already bound.
 
@@ -1731,7 +1777,7 @@ def _goal_context_text(
     inactive = [
         goal
         for goal in by_parent.get(None, [])
-        if goal.get("status") in ("completed", "abandoned")
+        if goal.get("status") in ("completed", "archived")
     ]
     if inactive:
         inactive.sort(key=lambda goal: str(goal.get("updated_at") or ""), reverse=True)

@@ -23,6 +23,7 @@ from . import autosync as AUTOSYNC
 from . import brainstorm as BRAIN
 from . import preview as PREVIEW
 from . import project_store as PS
+from . import reader as READER
 from . import secure_io as SIO
 from . import setup_chat as SETUP
 
@@ -254,6 +255,22 @@ def _chat_identity(trajdir):
     if CS.paths(session_id, root).session_dir != session_dir:
         raise ValueError("invalid chat session directory")
     return session_id, root
+
+
+def _root_of(trajdir):
+    """The vault a session directory sits in, or None for "wherever".
+
+    Tolerant on purpose: its callers want the reader's profile, and a
+    workspace whose directory cannot be read back as a chat still has a
+    reader. Failing here would mean a prompt written for nobody, which is
+    the thing the profile exists to stop.
+    """
+    if not trajdir:
+        return None
+    try:
+        return _chat_identity(trajdir)[1]
+    except Exception:                                        # noqa: BLE001
+        return None
 
 
 @contextmanager
@@ -789,6 +806,13 @@ def _all_projects(root, active=""):
     what you are working on -- ~/Downloads was on it. A project is made by
     hand now; the one being looked at is on the list whether or not it has
     a record yet, because leaving it off would say it does not exist.
+
+    Newest first means most recently worked in, not most recently built:
+    `generated_at` is stamped when a record is written, which happens when a
+    project is made or renamed and not when somebody spends an afternoon in
+    it. The chats say when that was, so they are what the order is read from,
+    with the record's own stamp as the floor for a project no chat has
+    joined yet.
     """
     rows = {PS._resolved(row["cwd"]): row for row in PS.list_projects(root)}
     here = PS._resolved(active) if active else ""
@@ -800,8 +824,17 @@ def _all_projects(root, active=""):
         rows[here] = {"cwd": active, "name": Path(here).name or here,
                       "objective": "", "description": "",
                       "generated_at": "", "goals": 0, "chats": 0}
+    try:
+        touched = CS.project_touched(root)
+    except Exception:                                    # noqa: BLE001
+        # An unreadable vault is a vault with no order to it, not a switcher
+        # that refuses to list anything.
+        touched = {}
+    for key, row in rows.items():
+        row["touched_at"] = max(str(touched.get(key) or ""),
+                                str(row.get("generated_at") or ""))
     return sorted(rows.values(),
-                  key=lambda row: (row.get("generated_at") or "",
+                  key=lambda row: (row.get("touched_at") or "",
                                    row.get("name") or ""), reverse=True)
 
 
@@ -1055,7 +1088,10 @@ def _answer(lines, engine=None, read_dirs=None, search_dir=""):
 
     *search_dir* is for the prompt that does not know where its material is:
     a question about how the project behaves is answered out of the project,
-    so the call is made in that directory with the tools to search it.
+    so the call is made in that directory with the tools to search it. The two
+    go together for a question that has both -- a screenshot of the screen and
+    a question about the code behind it -- and the searching call is handed
+    the read directories as well.
     """
     from . import providers as PROVIDERS
     try:
@@ -1065,9 +1101,12 @@ def _answer(lines, engine=None, read_dirs=None, search_dir=""):
         # the difference are asked for the plain round trip; a test double
         # with one method keeps being called the one way it has.
         if search_dir:
+            # Both, when a question about the project also has screenshots
+            # pasted onto it: the call searches the project and may open the
+            # files named in the prompt, which live outside it.
             speak = getattr(engine, "generate_searching", None)
-            answer = (speak("\n".join(lines) + "\n", search_dir) if speak
-                      else engine.generate("\n".join(lines) + "\n"))
+            answer = (speak("\n".join(lines) + "\n", search_dir, read_dirs)
+                      if speak else engine.generate("\n".join(lines) + "\n"))
         elif read_dirs:
             speak = getattr(engine, "generate_reading", None)
             answer = (speak("\n".join(lines) + "\n", read_dirs) if speak
@@ -1404,7 +1443,8 @@ def scenario_cwd(cwd):
 
 
 def ask_scenario(goals, goal_id, scenario, question, objective="",
-                 turns=None, cwd="", engine=None):
+                 turns=None, cwd="", engine=None, root=None, shots=None,
+                 trajdir=None):
     """Answer one question about the scenario a goal's work is for.
 
     The Understanding tab's question boxes come here. What is being asked
@@ -1426,6 +1466,14 @@ def ask_scenario(goals, goal_id, scenario, question, objective="",
     on the answer above it. Unlike ``ask_selection``, what comes back does get
     kept -- the tab writes it onto the goal through ``set_understanding``, and
     a build of the goal's rows opens on the answers along with the questions.
+
+    *shots* are the screenshots the reader attached to this question, checked
+    against *trajdir*'s own attachments the way a drafted scenario's are. Half
+    of what anyone asks about a screen is easier shown than described, so the
+    files are named for the call to open rather than described to it -- and
+    the directory holding them is opened to the call even when it is also
+    searching the project, since the workspace keeps its attachments outside
+    whatever project the question is about.
     """
     words = " ".join(str(question or "").split())[:ASK_QUESTION_LIMIT]
     if not words:
@@ -1449,13 +1497,26 @@ def ask_scenario(goals, goal_id, scenario, question, objective="",
                 "follows is a follow-up. Everything below was said about this",
                 "same scenario; the last question is the one to answer, and it",
                 "may lean on what came before without repeating it."]
+    files = scenario_shots(trajdir, shots) if trajdir else []
     if around:
         ask += ["", "# The goal it belongs to", "", around]
     ask += ["", "# The scenario", "", said]
+    if files:
+        ask += ["", "# Screenshots the question is about", "",
+                "Open every one of these with Read before you answer. They are",
+                "what is being asked about, not decoration.", ""]
+        ask += ["- " + shot["path"] for shot in files]
     if earlier:
         ask += ["", "# What has been asked and answered so far", ""] + earlier
+    # Above the question rather than below it, so the question stays the
+    # last thing said. This tab is where somebody asks what their own
+    # program does; an answer in the vocabulary of the code answers nobody.
+    ask += READER.prompt_lines(root)
     ask += ["", "# The question", "", words]
-    out = _answer(ask, engine, search_dir=where)
+    # The attachments directory, opened to the call whichever way it is being
+    # made: named files are no use to a subprocess that may not read them.
+    holding = sorted({str(Path(shot["path"]).parent) for shot in files}) or None
+    out = _answer(ask, engine, search_dir=where, read_dirs=holding)
     if not out.get("ok"):
         return out
     said_back = scenario_answer(out["answer"])
@@ -1466,7 +1527,8 @@ def ask_scenario(goals, goal_id, scenario, question, objective="",
         # call -- and, if the second is no better, worth refusing rather than
         # writing down.
         out = _answer(ask + (SCENARIO_AGAIN_IN_CODE if where
-                             else SCENARIO_AGAIN), engine, search_dir=where)
+                             else SCENARIO_AGAIN), engine, search_dir=where,
+                      read_dirs=holding)
         if not out.get("ok"):
             return out
         said_back = scenario_answer(out["answer"])
@@ -1609,6 +1671,9 @@ def draft_scenario(trajdir, text, shots, objective="", engine=None):
         ask += ["- " + shot["path"] for shot in files]
     if notes:
         ask += ["", "# What the reader typed", "", notes]
+    # The scenario goes straight into a box they read back, so it is
+    # written in their register rather than in the repository's.
+    ask += READER.prompt_lines(_root_of(trajdir))
     out = _answer(ask, engine,
                   read_dirs=sorted({str(Path(s["path"]).parent)
                                     for s in files}) if files else None)
@@ -2627,6 +2692,11 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
     if kind == "setup_say":
         return SETUP.ask(op.get("transcript"), root=root,
                          shown=op.get("shown") or [])
+    if kind == "setup_profile":
+        # Kept in the vault, where every prompt reads it, and pushed to the
+        # account, where it survives the next laptop. The push is allowed
+        # to fail; what they typed is not allowed to be lost over it.
+        return READER.remember(op.get("profile"), root)
     if kind == "setup_from_chat":
         # The other cold start: a chat with plenty in it and no project. The
         # transcript is the description, so nothing is asked of the reader
@@ -2640,6 +2710,29 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         except (OSError, ValueError):
             events = []
         return SETUP.from_chat(events, root=root)
+    if kind == "purge_goal_remote":
+        # The disk is already done -- the rows came out under the lock. This
+        # is the other half: the same goals erased in Supabase, which the
+        # sync will never do on its own because it reads an absent goal as
+        # one it cannot see rather than one that is gone.
+        #
+        # `goal_id` carries the ids that were removed, the goal itself first.
+        # Only that one is sent: the function walks the subtree up there, and
+        # the children went with it here.
+        from . import supabase_client as SB
+        gone = goal_id if isinstance(goal_id, list) else []
+        out = {"ok": True, "deleted": gone}
+        if not gone:
+            return out
+        try:
+            who = _project_identity(_scope(trajdir), True, session_id)
+            SB.delete_goal(root, who.get("cwd"), session_id, gone[0])
+        except (SB.SupabaseError, OSError, ValueError, KeyError) as exc:
+            # Not a failed delete: the record is off this machine either way.
+            # Said, so a reader whose project syncs knows a copy is still up
+            # there rather than finding out later.
+            out["cloud"] = str(exc)
+        return out
     if kind == "preview_intent":
         # What is worth looking at in the preview, for the row being worked
         # on. The row's words were read inside the lock; the model call is
@@ -2760,6 +2853,10 @@ def _generate_prompt(session_id, root, goals, important, goal):
         ask += ["", "Its TODOs:", todos]
     if notes:
         ask += ["", "The user's notes on it:", notes[:3000]]
+    # The prompt is written for an agent but read, edited and sent by the
+    # reader: a paragraph they cannot follow is a paragraph they send
+    # without knowing what they asked for.
+    ask += READER.prompt_lines(root)
     try:
         provider = PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize")
@@ -2966,6 +3063,17 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             # what to type. Answered here rather than deferred -- it opens a
             # window and returns, and spawns nothing that outlives it.
             return SETUP.open_terminal(op.get("command"), op.get("cwd"))
+        if kind == "setup_profile":
+            # The four answers the setup page opens on. Deferred for the
+            # same reason `say` is: keeping them locally is a file write,
+            # but putting them on the account is an HTTPS round trip with
+            # a twenty-second deadline, and a workspace nobody can save
+            # into for twenty seconds is worse than a profile saved late.
+            try:
+                _sid, root = _chat_identity(trajdir)
+            except Exception:                                # noqa: BLE001
+                root = None
+            return {"__deferred__": (kind, "", root, None, op)}
         if kind in ("setup_say", "setup_commit", "setup_from_chat"):
             # The cold-start conversation. Its whole transcript comes from
             # the browser and goes back to it: setup is not a chat of the
@@ -3365,10 +3473,63 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 _save_goals(trajdir, goals, important, chat_scoped)
                 return {"ok": True, "prompt": text}
             return {"__deferred__": (kind, session_id, root, g["id"], op)}
+        if kind == "restore_goal":
+            # Out of the Archive and back into the tree. Not a set_status:
+            # the tree is drawn by walking down from the roots, and a goal
+            # whose parent is still archived is walked to by nobody -- an
+            # active record that appears nowhere, which reads as a restore
+            # that silently failed. So a goal restored out from under an
+            # archived parent comes back at the top, where it can be seen and
+            # moved. Restoring the parent first, then the child, keeps them
+            # together; that order is the reader's to choose.
+            if not g:
+                return {"ok": False, "error": "no such goal"}
+            if GM.norm_status(g.get("status")) != GM.ARCHIVED:
+                return {"ok": False, "error": "that goal is not archived"}
+            g["status"] = "active"
+            above = GM.by_id(goals, g.get("parent_goal_id") or "")
+            lifted = (above is not None
+                      and GM.norm_status(above.get("status")) == GM.ARCHIVED)
+            if lifted:
+                g["parent_goal_id"] = None
+            g["updated_at"] = GM._now()
+            GM.sanitize(goals)
+            _save_goals(trajdir, goals, important, chat_scoped)
+            return {"ok": True, "lifted": lifted}
+        if kind == "purge_goal":
+            # The one delete that erases. Everywhere else a delete archives,
+            # because a goal missing from a payload is not evidence anybody
+            # meant it gone; here the reader said so, by name, to a question
+            # that named what would be lost.
+            #
+            # Only from the Archive: erasing something still on screen would
+            # make "delete" mean two different things depending on where it
+            # was pressed. The status is checked here rather than trusted
+            # from the browser.
+            if not g:
+                return {"ok": False, "error": "no such goal"}
+            if GM.norm_status(g.get("status")) != GM.ARCHIVED:
+                return {"ok": False,
+                        "error": "only an archived goal can be deleted for good"}
+            doomed = set(GM.subtree_ids(goals, g["id"]))
+            goals["goals"] = [row for row in goals["goals"]
+                              if row.get("id") not in doomed]
+            # No sanitize() first: it would re-parent the children of the
+            # goal being erased to the top before they could be taken with
+            # it. They are gone above; what is left is a tree again.
+            GM.sanitize(goals)
+            _save_goals(trajdir, goals, important, chat_scoped)
+            if not chat_scoped:
+                # Nothing up there to erase: the vault-wide tree is not a
+                # project and never synced as one.
+                return {"ok": True, "deleted": sorted(doomed)}
+            session_id, root = _chat_identity(trajdir)
+            return {"__deferred__": ("purge_goal_remote", session_id, root,
+                                     sorted(doomed), op)}
         if kind == "rename_goal" and g and op.get("title", "").strip():
             g["title"] = op["title"].strip()[:120]
-        elif kind == "set_status" and g and op.get("status") in ("active", "in_progress", "completed", "abandoned"):
-            g["status"] = op["status"]
+        elif kind == "set_status" and g and GM.norm_status(op.get("status")):
+            g["status"] = GM.norm_status(op["status"])
         elif kind == "set_priority" and g and op.get("priority") in ("urgent", "high", "normal"):
             g["priority"] = op["priority"]
         elif kind == "set_notes" and g:
@@ -3504,7 +3665,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
 # `.hc` shell on it. The mask and the workspace meet on the same pixel at
 # reveal, so anything near-but-not-equal is a seam -- and the bridge holds the
 # same ground once the unpack has taken this mask away, from one constant.
-CHAT_GROUND = "#0d1117"
+CHAT_GROUND = "#0a0a0a"
 
 
 def preboot_mask(chat_scoped):
@@ -3598,7 +3759,11 @@ class H(BaseHTTPRequestHandler):
             # all is a question that comes ahead of which vault it would read.
             if _experimental_route(self.path) and not _experimental_enabled():
                 self._send(200, {"ok": False, "error": EXPERIMENTAL_ERROR})
-            elif self.path in ("/", "/index.html"):
+            elif self.path.split("?", 1)[0] in ("/", "/index.html"):
+                # The query is the page's own, not this handler's: the setup
+                # page's bypass comes back here with ?quick=1 on it, and a
+                # workspace that 404'd on its own address would be the last
+                # thing that reader saw.
                 html = resources.files("human_compact.trajectory").joinpath(
                     "web/goals_bundle.html").read_text(encoding="utf-8")
                 # The artifact ships its own pre-hydration body: a rust splash
@@ -3728,9 +3893,14 @@ class H(BaseHTTPRequestHandler):
                         bound = CS.project_bound(session, root)
                     except (OSError, ValueError):
                         pass
+                # ...and who is reading it. The four setup answers belong to
+                # the account rather than to a chat, so a reader who has
+                # already given them is not asked again -- the page skips
+                # its first card entirely when this comes back filled.
                 self._send(200, json.dumps({
                     "session": session, "events": events,
-                    "bound": bool(bound)}).encode("utf-8"),
+                    "bound": bool(bound),
+                    "profile": READER.load(root)}).encode("utf-8"),
                     "application/json")
             elif self.path.split("?")[0] == "/setup.js":
                 # The query is ignored rather than matched: a cache-buster
@@ -3757,10 +3927,21 @@ class H(BaseHTTPRequestHandler):
                     session_id, root = _chat_identity(self.server.trajdir)
                     who = _project_identity(
                         self.server.trajdir, True, session_id)
+                    rows = _all_projects(root, who["cwd"])
+                    # The one to open on: what the onboarding asks about
+                    # before it asks anything else, so it names a project
+                    # instead of a category. Never the chat's own -- an
+                    # unbound chat has none, and a bound one is not being
+                    # asked. Sorted by recency already, so it is the first.
+                    recent = ""
+                    for row in rows:
+                        if str(row.get("cwd") or "") != str(who["cwd"] or ""):
+                            recent = str(row.get("cwd") or "")
+                            break
                     self._send(200, {"ok": True,
                                      "active": who["cwd"],
-                                     "projects": _all_projects(
-                                         root, who["cwd"])})
+                                     "recent": recent,
+                                     "projects": rows})
             elif self.path == "/api/chats":
                 if not self.server.chat_scoped:
                     self._send(200, {"ok": False, "error": "chat scope only"})
@@ -4097,7 +4278,14 @@ class H(BaseHTTPRequestHandler):
                         "objective") or ""),
                     turns=body.get("turns"),
                     cwd="" if shared else str((state.get("project") or {}).get(
-                        "cwd") or "")))
+                        "cwd") or ""),
+                    # The screenshots on the question are files on this
+                    # machine. A shared workspace's are on somebody else's,
+                    # so that question is answered from its words, as the
+                    # scenario draft is.
+                    shots=None if shared else body.get("shots"),
+                    trajdir=None if shared else self.server.trajdir,
+                    root=_root_of(self.server.trajdir)))
             elif self.path == "/api/draft_scenario":
                 # A scenario written from screenshots, rough words, or both.
                 # The images live on this machine, so a workspace that is
@@ -4578,7 +4766,7 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
     """Map the Claude Design app's nested node tree back into the goals model.
     Node ids are preserved; legacy `t:<gid>:<i>` nodes from a browser cached
     before todos became goals are resolved to their promoted child. Nodes
-    missing from the payload are marked abandoned (history kept, never
+    missing from the payload are marked archived (history kept, never
     destroyed). Evidence links and important-item associations survive."""
     if not isinstance(nested, list):
         return {"ok": False, "error": "expected a list of nodes"}
@@ -4626,14 +4814,16 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
             seen.add(nid)
             prev = old.get(nid, {})
             done = bool(node.get("done"))
-            status = ("abandoned" if done and prev.get("status") == "abandoned" else
-                      "completed" if done else
+            was = GM.norm_status(prev.get("status"))
+            status = ("completed" if done else
                       "in_progress" if node.get("status") == "inprog" else "active")
-            # A tombstone is sticky: nothing restores a deleted goal today,
-            # so a posted tree that carries one as active is a stale echo --
-            # an in-flight merge computed before the delete -- not a restore.
-            if prev.get("status") == "abandoned":
-                status = "abandoned"
+            # A tombstone is sticky HERE: the tree the artifact posts never
+            # carries an archived goal (they are drawn nowhere in it), so one
+            # arriving as active is a stale echo -- an in-flight merge computed
+            # before the delete -- not a restore. Restoring is the Archive
+            # view's own op, which writes the status directly.
+            if was == GM.ARCHIVED:
+                status = GM.ARCHIVED
             out.append({"id": nid, "title": title, "status": status,
                         "parent_goal_id": parent_gid,
                         "evidence_ids": prev.get("evidence_ids", []),
@@ -4693,12 +4883,12 @@ def _import(nested, trajdir=None, chat_scoped=None, expected_revision=None):
                 GM.render_todos(prev.get("todo_items")), prev.get("prompt_md", ""),
                 prev.get("description", "")):
                 g["updated_at"] = GM._now()
-        # anything the app deleted -> abandoned, kept
+        # anything the app deleted -> archived, kept
         for gid, prev in old.items():
             if gid not in seen:
                 prev = dict(prev)
-                if prev.get("status") != "abandoned":
-                    prev["status"] = "abandoned"
+                if GM.norm_status(prev.get("status")) != GM.ARCHIVED:
+                    prev["status"] = GM.ARCHIVED
                     prev["updated_at"] = GM._now()
                 out.append(prev)
         goals["goals"] = out

@@ -30,7 +30,7 @@ STATE_WORDS = {
 }
 GOAL_WORDS = {
     "active": "active", "in_progress": "in progress",
-    "completed": "completed", "abandoned": "abandoned",
+    "completed": "completed", "archived": "archived",
 }
 
 
@@ -228,7 +228,7 @@ def _pick_up_rows(tree):
     failed, and unsent rows under goals that are in progress."""
     out = []
     for g, _depth, path in tree:
-        if g.get("status") in ("completed", "abandoned"):
+        if g.get("status") in ("completed", "archived"):
             continue
         for row in g.get("todo_items") or []:
             text = " ".join(str(row.get("text") or "").split())

@@ -50,9 +50,8 @@ def _apply_locally(session_id: str, local_id: str, fields: Dict[str, Any],
                 row["description"] = str(fields["description"])
             if "prompt" in fields:
                 row["prompt_md"] = str(fields["prompt"])
-            if fields.get("status") in ("active", "in_progress", "completed",
-                                        "abandoned"):
-                row["status"] = fields["status"]
+            if GM.norm_status(fields.get("status")):
+                row["status"] = GM.norm_status(fields["status"])
             if fields.get("priority") in ("urgent", "high", "normal"):
                 row["priority"] = fields["priority"]
             GM.sanitize(goals)
@@ -304,9 +303,10 @@ def apply_tree(project_id: str, nested, root: Optional[Path] = None
                                 "error": out.get("error")})
 
     # Deleting. The artifact deletes by leaving the goal out of the tree it
-    # posts, and the local store answers that by marking it abandoned and
-    # keeping it -- a tombstone, sticky, never restored. The same answer
-    # here, rather than a second meaning for delete in the shared window.
+    # posts, and the local store answers that by marking it archived and
+    # keeping it -- a tombstone, restored only from the Archive view. The same
+    # answer here, rather than a second meaning for delete in the shared
+    # window.
     #
     # Guarded on the tree being non-empty: a save that posted nothing is a
     # page in a bad state, not an instruction to bury the project.
@@ -315,10 +315,10 @@ def apply_tree(project_id: str, nested, root: Optional[Path] = None
         for gid, goal in by_id.items():
             if gid in posted or goal.get("shared_readonly"):
                 continue
-            if str(goal.get("status")) == "abandoned":
+            if GM.norm_status(goal.get("status")) == GM.ARCHIVED:
                 continue
             out = update_goal(gid, goal.get("updated_at"),
-                              {"status": "abandoned"}, root,
+                              {"status": GM.ARCHIVED}, root,
                               project_id=project_id)
             if out.get("conflict"):
                 conflicts.append(dict(out, id=gid,

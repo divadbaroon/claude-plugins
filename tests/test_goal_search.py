@@ -33,7 +33,7 @@ GOALS = [
          updated_at="2026-08-11T00:00:00+00:00"),
     goal("g3", "Linked chats", prompt_ids=["p1"],
          updated_at="2026-08-09T00:00:00+00:00"),
-    goal("g4", "Gone", status="abandoned", notes="banner"),
+    goal("g4", "Gone", status="archived", notes="banner"),
     goal("g5", "Banner copy", updated_at="2026-08-13T00:00:00+00:00"),
 ]
 PROMPTS = [{"id": "p1", "role": "user", "text": "let me pick several chats",
@@ -89,7 +89,7 @@ class SearchRankingTests(BridgeTestCase):
                  goal("c", "Router", updated_at="2026-08-02T00:00:00+00:00")]
         self.assertEqual(["b", "c", "a"], self.ids("router", goals=goals))
 
-    def test_an_abandoned_goal_is_never_a_hit(self):
+    def test_an_archived_goal_is_never_a_hit(self):
         self.assertNotIn("g4", self.ids("banner"))
 
     def test_a_hit_says_where_it_sits_and_where_it_matched(self):

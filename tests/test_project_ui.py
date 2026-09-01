@@ -825,7 +825,7 @@ class OverviewTests(BridgeTestCase):
         got = json.loads(self.run_js(
             PRELUDE + fetch_js()
             + "getComputedStyle = function () { return { getPropertyValue: function (n) {"
-            "  return { '--bg': '#0d1117', '--ink': '#e6edf3', '--panel': '#0d1117' }[n] || ''; } }; };"
+            "  return { '--bg': '#0a0a0a', '--ink': '#ededed', '--panel': '#0a0a0a' }[n] || ''; } }; };"
             + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
             + "var seen = {}; var track = function (node) { node.style.setProperty = function (k, v) { seen[k] = v; node.style[k] = v; };"
             "  node.style.getPropertyValue = function (k) { return node.style[k] || ''; }; };"
@@ -834,7 +834,7 @@ class OverviewTests(BridgeTestCase):
             "var box = document.querySelector('.hc-overview');"
             "track(box); var changed = P.syncProjectTheme(box); var again = P.syncProjectTheme(box);"
             "JSON.stringify([changed, again, seen]);"))
-        self.assertEqual([True, False, {"--bg": "#0d1117", "--ink": "#e6edf3", "--panel": "#0d1117"}], got)
+        self.assertEqual([True, False, {"--bg": "#0a0a0a", "--ink": "#ededed", "--panel": "#0a0a0a"}], got)
 
 
 if __name__ == "__main__":
@@ -957,11 +957,11 @@ class ThemeTests(BridgeTestCase):
             "[over, panel].forEach(function (n) {"
             "  n.style.setProperty = function (k, v) { n.style.props[k] = v; };"
             "  n.style.getPropertyValue = function (k) { return n.style.props[k] || ''; }; });"
-            "vars['--ink'] = '#e6edf3'; vars['--panel'] = '#0d1117';"
+            "vars['--ink'] = '#ededed'; vars['--panel'] = '#0a0a0a';"
             "app.setAttribute('data-dark', 'true');"
             "P.repaintCopies();"
             "JSON.stringify([over.style.props['--ink'], panel.style.props['--panel']]);")
-        self.assertEqual(["#e6edf3", "#0d1117"], got)
+        self.assertEqual(["#ededed", "#0a0a0a"], got)
 
     def test_a_browser_without_observers_still_gets_the_sweep(self):
         # watchTheme is the fast path, not the only one: mirrorRootState is

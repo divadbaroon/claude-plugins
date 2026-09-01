@@ -1101,6 +1101,20 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 expect(page.locator(".hc-understand-ask")).to_have_count(2)
                 page.locator(".hc-understand-ask").nth(1).fill(
                     "Where do invites live?")
+                # Each question is a TODO-shaped bullet, not a box: a dash in
+                # the gutter and the words beside it, no border of their own.
+                # The scenario above them is still a box -- it is one piece of
+                # prose, not one of a list.
+                expect(page.locator(".hc-understand-bullet")).to_have_count(2)
+                self.assertEqual(
+                    ["-", "-"],
+                    page.locator(".hc-understand-bullet").all_inner_texts())
+                self.assertEqual("0px", page.locator(".hc-understand-ask")
+                                 .first.evaluate("n => getComputedStyle(n)"
+                                                 ".borderBottomWidth"))
+                self.assertNotEqual(
+                    "0px", page.locator(".hc-understand-scenario")
+                    .evaluate("n => getComputedStyle(n).borderBottomWidth"))
                 page.wait_for_timeout(1500)
                 held = self.understanding()
                 self.assertEqual("Two people work one tree from two machines.",
@@ -1353,6 +1367,138 @@ class TodoPanelBrowserTests(unittest.TestCase):
             finally:
                 browser.close()
 
+    def test_a_send_asks_its_questions_in_the_order_they_are_listed(self):
+        # Sent together, the answers came back in whatever order they happened
+        # to be written in: the tab filled itself in from the middle and the
+        # reader could not tell what was still coming. Each question now waits
+        # for the one above it, so the second is not even asked until the
+        # first has been answered.
+        from playwright.sync_api import expect, sync_playwright
+        asked = []
+        held = []
+
+        def answer(route):
+            asked.append(json.loads(route.request.post_data))
+            if len(asked) == 1:
+                # Kept open: what the second question does while the first is
+                # out is the whole of what is under test.
+                held.append(route)
+                return
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "ok": True, "asked": asked[-1]["question"],
+                              "answer": "Invites live in the workspace."}))
+
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.route("**/api/ask_scenario", answer)
+                self.open_understanding(page, url)
+                page.locator(".hc-understand-scenario").fill(
+                    "Two people work one tree from two machines.")
+                page.locator(".hc-understand-ask").first.fill(
+                    "Who wins a conflict?")
+                page.get_by_text("+ Add question", exact=True).click()
+                page.locator(".hc-understand-ask").nth(1).fill(
+                    "Where do invites live?")
+                page.get_by_text("Ask Claude", exact=True).click()
+                # One question out, and it is the first one listed. The second
+                # is not out with it, however long we wait.
+                expect(page.locator(".hc-understand-send")).to_have_attribute(
+                    "data-hc-busy", "", timeout=15000)
+                page.wait_for_timeout(2000)
+                self.assertEqual(["Who wins a conflict?"],
+                                 [row["question"] for row in asked])
+                # It is waiting, not forgotten: one question out, one behind
+                # it, and the send busy until both have had their turn.
+                state = page.evaluate(
+                    "() => window.__hcPromptUI.understandState()")
+                self.assertEqual(1, len(state["asking"]))
+                self.assertEqual(1, len(state["queued"]))
+                held[0].fulfill(status=200,
+                                content_type="application/json",
+                                body=json.dumps({
+                                    "ok": True,
+                                    "asked": "Who wins a conflict?",
+                                    "answer": "The later write wins."}))
+                # The first answer lands, and only then does the second
+                # question go -- so the answers appear down the list, in the
+                # order the questions are written in.
+                expect(page.locator(".hc-understand-answer")).to_have_count(
+                    2, timeout=15000)
+                self.assertEqual(["Who wins a conflict?",
+                                  "Where do invites live?"],
+                                 [row["question"] for row in asked])
+                page.wait_for_timeout(1500)
+                held_now = self.understanding()["questions"]
+                self.assertEqual(
+                    [["The later write wins."],
+                     ["Invites live in the workspace."]],
+                    [[turn["a"] for turn in q["thread"]] for q in held_now])
+            finally:
+                browser.close()
+
+    def test_a_screenshot_pasted_into_a_question_hangs_on_that_question(self):
+        # What is being asked about is often quicker shown than described. The
+        # image goes on the question it was pasted into -- not on the scenario
+        # above it -- and travels with that question when it is asked.
+        from playwright.sync_api import expect, sync_playwright
+        asked = []
+
+        def answer(route):
+            asked.append(json.loads(route.request.post_data))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({
+                              "ok": True, "asked": asked[-1]["question"],
+                              "answer": "That is the done band."}))
+
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser, page = self.open(pw)
+            try:
+                page.route("**/api/ask_scenario", answer)
+                self.open_understanding(page, url)
+                page.locator(".hc-understand-scenario").fill(
+                    "Two people work one tree from two machines.")
+                page.locator(".hc-understand-ask").first.fill(
+                    "What is this panel showing?")
+                page.locator(".hc-understand-ask").first.click()
+                page.evaluate(
+                    "() => { const bytes = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,0]);"
+                    " const dt = new DataTransfer();"
+                    " dt.items.add(new File([bytes], 'Rail.png', {type: 'image/png'}));"
+                    " document.activeElement.dispatchEvent(new ClipboardEvent('paste',"
+                    "   {clipboardData: dt, bubbles: true, cancelable: true})); }")
+                expect(page.locator(".hc-understand-shot")).to_have_count(
+                    1, timeout=15000)
+                # Under the question, not on the scenario's own strip.
+                expect(page.locator(".hc-understand-qshots"
+                                    " .hc-understand-shot")).to_contain_text(
+                    "Rail.png")
+                page.wait_for_timeout(1500)
+                held = self.understanding()
+                self.assertEqual([], held["shots"])
+                shots = held["questions"][0]["shots"]
+                self.assertEqual(1, len(shots))
+                path = Path(shots[0]["path"])
+                self.assertEqual(self.trajdir.resolve() / "attachments",
+                                 path.parent)
+                self.assertEqual(b"\x89PNG", path.read_bytes()[:4])
+                # And it goes with the question when it is asked.
+                page.get_by_text("Ask Claude", exact=True).click()
+                expect(page.locator(".hc-understand-answer")).to_have_count(
+                    1, timeout=15000)
+                self.assertEqual([str(path)],
+                                 [str(s["path"]) for s in asked[0]["shots"]])
+                # Dropped off the question, and dropped on the server too.
+                page.locator(".hc-understand-qshots"
+                             " [data-hc-understand-shot-rm]").click()
+                expect(page.locator(".hc-understand-shot")).to_have_count(0)
+                page.wait_for_timeout(1500)
+                self.assertEqual(
+                    [], self.understanding()["questions"][0]["shots"])
+            finally:
+                browser.close()
+
     def test_a_pasted_screenshot_is_kept_with_the_scenario(self):
         from playwright.sync_api import expect, sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:
@@ -1421,8 +1567,11 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 self.open_understanding(page, url)
                 page.locator(".hc-understand-scenario").fill(
                     "two ppl one tree, both save")
-                page.get_by_text("Shape it into GIVEN / WHEN / THEN",
-                                 exact=True).click()
+                # The control says what it does, not what form it does it in:
+                # the reader is never told to write GIVEN / WHEN / THEN.
+                self.assertEqual(0, page.locator(".hc-rail-understand")
+                                 .get_by_text("GIVEN", exact=False).count())
+                page.get_by_text("Shape it", exact=True).click()
                 expect(page.locator(".hc-understand-scenario")).to_have_value(
                     "GIVEN two people share one tree\nWHEN both save\nTHEN",
                     timeout=15000)
@@ -1455,8 +1604,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.route("**/api/draft_scenario", shape)
                 self.open_understanding(page, url)
                 page.locator(".hc-understand-scenario").fill("the thing broke")
-                page.get_by_text("Shape it into GIVEN / WHEN / THEN",
-                                 exact=True).click()
+                page.get_by_text("Shape it", exact=True).click()
                 expect(page.locator(".hc-understand-err")).to_contain_text(
                     "did not map", timeout=15000)
                 expect(page.locator(".hc-understand-scenario")).to_have_value(
