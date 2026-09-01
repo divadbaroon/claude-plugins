@@ -3304,7 +3304,7 @@
       ".hc-docs-q::-webkit-details-marker{display:none}",
       ".hc-docs-q::before{content:'+';display:inline-block;width:16px;color:var(--fnt,#9b9b9b)}",
       ".hc-docs-card[open] .hc-docs-q::before{content:'−'}",
-      ".hc-docs-a{margin-top:5px;padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
+      ".hc-docs-a{margin-top:11px;padding-top:12px;border-top:1px solid var(--bd,#e3e3e3);padding-left:16px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
       ".hc-docs-steps{margin:8px 0 0;padding-left:18px;font-size:11.5px;line-height:1.7;color:var(--mut,#575757)}",
       ".hc-docs-step{margin-top:3px}",
       ".hc-docs-reach{margin-top:6px;margin-left:16px}",
@@ -6081,46 +6081,48 @@
 
   var DOCS_FAQ = [
     { q: "What is Engelbart?",
-      a: "Your goals, plans, and problems, inferred from your Claude Code"
-         + " conversations and kept in front of the model while you build."
-         + " Nothing is analyzed until /goals-ui runs in a chat, and the"
-         + " document it builds is injected back as context. Every field"
-         + " here is yours to retitle, rewrite, or delete -- inference"
-         + " appends under its own headings and never overwrites what you"
-         + " typed." },
-    { q: "How do I reach out if I have questions?",
-      a: "Any of these lands with a person, not a bot:",
+      a: "A live record of your goals, plans, and open problems, inferred"
+         + " from your Claude Code conversations and kept in front of the"
+         + " model as you work. No analysis takes place until /goals-ui is"
+         + " run in a chat; the document it produces is then injected back"
+         + " into that session as context. Every field is editable -- you"
+         + " can retitle, rewrite, or delete anything here, and inference"
+         + " appends under its own headings rather than overwriting what"
+         + " you have written." },
+    { q: "How do I get in touch?",
+      a: "Each of these channels reaches a member of the team directly:",
       reach: true },
     { q: "What are Engelbart tokens?",
       a: "The Claude credit issued with your Engelbart account. Goal"
-         + " inference and builds spend it -- our credit, not yours -- and"
-         + " the key that carries it is fetched per use, never written to"
-         + " this machine. Run engelbart auth in a terminal to see what is"
-         + " left." },
-    { q: "What do I do if I run out of tokens?",
-      a: "Inference and builds stop when the credit is used up -- your"
-         + " goals and notes are safe on disk, and nothing is lost.",
+         + " inference and builds draw on this credit, which we provide at"
+         + " no cost to you. The key carrying it is fetched per request and"
+         + " is never written to this machine. To check your remaining"
+         + " balance, run engelbart auth in a terminal." },
+    { q: "What happens if my tokens run out?",
+      a: "Inference and builds stop once the credit is exhausted. Your"
+         + " goals and notes remain intact on disk and no work is lost.",
       steps: [
-        "Run engelbart auth in a terminal to see what is left of your"
+        "Run engelbart auth in a terminal to check your remaining"
         + " credit.",
-        "If it reads used up, reach out to us and we will top it up.",
-        "Keep working meanwhile: the workspace still opens, and everything"
-        + " you type is saved locally." ] },
-    { q: "How do I make an Anthropic account?",
-      a: "You do not need one -- this workspace spends Engelbart's own"
-         + " credit. If you want yours anyway: claude.ai is where a Claude"
-         + " account is made, the one Claude Code's /login signs into, and"
-         + " console.anthropic.com is where API keys are issued." },
-    { q: "How do I link my own Anthropic key?",
-      a: "Run engelbart logout to disconnect our key, then hand Claude"
-         + " Code your own credential: /login inside Claude Code for a"
-         + " claude.ai account, or export ANTHROPIC_API_KEY in your shell"
-         + " for a Console key. engelbart auth wires ours back whenever"
-         + " you want to return." },
+        "If the balance is exhausted, contact us and we will restore it.",
+        "You can continue working in the meantime: the workspace remains"
+        + " available and everything you type is saved locally." ] },
+    { q: "Do I need my own Anthropic account?",
+      a: "No. This workspace runs on Engelbart's own credit. If you would"
+         + " prefer to use your own account, you can create one at"
+         + " claude.ai -- the same account Claude Code's /login authorizes"
+         + " -- and issue API keys at console.anthropic.com." },
+    { q: "How do I connect my own Anthropic key?",
+      a: "Run engelbart logout to disconnect our credential, then provide"
+         + " your own to Claude Code: use /login within Claude Code for a"
+         + " claude.ai account, or set ANTHROPIC_API_KEY in your shell"
+         + " environment for a Console key. Running engelbart auth"
+         + " reconnects our credential at any point." },
     { q: "What does Build do?",
-      a: "Picked TODO rows go to a fresh claude session in this project's"
-         + " checkout. A row that asks a question stops and waits in the"
-         + " rail; answer it there and the session continues." },
+      a: "Selected TODO rows are dispatched to a new claude session"
+         + " running in this project's checkout. If a row raises a"
+         + " question, that session pauses and the question appears in the"
+         + " rail; answering it there allows the session to continue." },
   ];
 
   // The ways to reach a person, as rows in whatever box asks for them: the
