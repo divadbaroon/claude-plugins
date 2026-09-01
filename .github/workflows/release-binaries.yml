@@ -35,7 +35,7 @@ jobs:
           fi
       - run: npm test
         working-directory: engelbart
-      - run: scripts/build-binary.sh darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl windows-x64
+      - run: scripts/build-binary.sh darwin-arm64 darwin-x64 linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl windows-x64 windows-arm64
         working-directory: engelbart
       # The compiled binary must verify and plan from its embedded wheel alone.
       - run: engelbart/dist/engelbart-linux-x64 install --dry-run

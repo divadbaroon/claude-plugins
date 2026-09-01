@@ -101,14 +101,17 @@ test('supportedTarget pins Darwin, glibc, and musl archives', () => {
     supportedTarget('linux', 'arm64', () => ({ header: {} })).key,
     'linux-arm64-musl',
   );
-  // Windows x64 is a supported target: a pinned .zip uv archive, no arm64.
+  // Windows x64 and ARM64 use their respective pinned .zip uv archives.
   const win = supportedTarget('win32', 'x64');
   assert.equal(win.key, 'win32-x64');
   assert.equal(win.platform, 'win32');
   assert.equal(win.extension, 'zip');
   assert.equal(win.sha256.length, 64);
   assert.ok(win.file.endsWith('.zip'));
-  assert.throws(() => supportedTarget('win32', 'arm64'), /unsupported platform/);
+  const winArm = supportedTarget('win32', 'arm64');
+  assert.equal(winArm.key, 'win32-arm64');
+  assert.equal(winArm.target, 'aarch64-pc-windows-msvc');
+  assert.equal(winArm.extension, 'zip');
 });
 
 test('inspectVendor rejects npm/backend skew and tampering', () => {

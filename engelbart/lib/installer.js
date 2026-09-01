@@ -101,6 +101,10 @@ const UV_ASSETS = Object.freeze({
     target: 'x86_64-pc-windows-msvc',
     sha256: 'acfde570451cfdb8689fa159a138ee805ba4e241c466432750302c86254b0984',
   },
+  'win32-arm64': {
+    target: 'aarch64-pc-windows-msvc',
+    sha256: 'a7427ea0440bb826b6716d1837ff3d173b8e7d496cb09ee8f456b4e023a2fdcd',
+  },
 });
 
 function readJson(file) {
@@ -163,9 +167,9 @@ function isMusl(reportProvider) {
 }
 
 function supportedTarget(platform, arch, reportProvider) {
-  // Windows compiles only x64 (Bun has no windows-arm64 target, and uv ships
-  // a Windows ARM build but the CLI binary would not run under it).
-  const archs = platform === 'win32' ? ['x64'] : ['arm64', 'x64'];
+  // Bun and uv both ship native Windows ARM64 binaries. Keep the architecture
+  // explicit rather than silently selecting the slower x64 emulation layer.
+  const archs = ['arm64', 'x64'];
   if (!['darwin', 'linux', 'win32'].includes(platform) || !archs.includes(arch)) {
     throw new Error(`unsupported platform: ${platform}-${arch}; human-compact supports macOS and Linux on arm64/x64, and Windows on x64`);
   }

@@ -48,7 +48,7 @@ jobs:
   cross-compile-windows:
     # The release builds every target on ubuntu, so the Windows binary it ships
     # is cross-compiled, not native. Prove that path works before a release tag
-    # depends on it: build the same windows-x64 artifact on Linux and confirm it
+    # depends on it: build both Windows artifacts on Linux and confirm they
     # and its checksum land where install.ps1 expects them.
     runs-on: ubuntu-latest
     steps:
@@ -60,10 +60,10 @@ jobs:
         with:
           bun-version: 1.4.0
       - name: Cross-compile the Windows binary on Linux
-        run: scripts/build-binary.sh windows-x64
+        run: scripts/build-binary.sh windows-x64 windows-arm64
         working-directory: engelbart
       - name: The release artifacts exist under their expected names
-        run: test -f dist/engelbart-windows-x64.exe && test -f dist/engelbart-windows-x64.exe.sha256
+        run: test -f dist/engelbart-windows-x64.exe && test -f dist/engelbart-windows-x64.exe.sha256 && test -f dist/engelbart-windows-arm64.exe && test -f dist/engelbart-windows-arm64.exe.sha256
         working-directory: engelbart
 
   windows-binary:

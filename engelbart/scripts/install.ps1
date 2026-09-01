@@ -17,9 +17,11 @@ $ProgressPreference = 'SilentlyContinue'   # the progress bar throttles the down
 
 $repo = 'divadbaroon/claude-plugins'
 $base = "https://github.com/$repo/releases/download/engelbart-latest"
-# Bun compiles only x64 for Windows (there is no windows-arm64 target), and
-# Windows-on-ARM runs x64 binaries under emulation, so one target covers both.
-$target = 'engelbart-windows-x64.exe'
+# Use a native ARM64 launcher when Windows reports an ARM64 operating system.
+# PROCESSOR_ARCHITEW6432 carries the real architecture when this script itself
+# was started from an emulated x64 process.
+$machineArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } else { 'x64' }
+$target = "engelbart-windows-$machineArch.exe"
 
 function Fail($message) { Write-Error "engelbart: $message"; exit 1 }
 

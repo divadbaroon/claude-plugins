@@ -10,7 +10,7 @@
 #   scripts/build-binary.sh darwin-arm64 linux-x64 ...
 #
 # Known targets: darwin-arm64 darwin-x64 linux-x64 linux-arm64
-#                linux-x64-musl linux-arm64-musl windows-x64
+#                linux-x64-musl linux-arm64-musl windows-x64 windows-arm64
 #
 # Requires bun on PATH (or set BUN=/path/to/bun).
 set -euo pipefail
@@ -24,7 +24,7 @@ command -v "$BUN" >/dev/null || {
 
 bun_target() {
   case "$1" in
-    darwin-arm64|darwin-x64|linux-x64|linux-arm64|linux-x64-musl|linux-arm64-musl|windows-x64)
+    darwin-arm64|darwin-x64|linux-x64|linux-arm64|linux-x64-musl|linux-arm64-musl|windows-x64|windows-arm64)
       echo "bun-$1" ;;
     *)
       echo "unknown target: $1" >&2
