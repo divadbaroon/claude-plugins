@@ -427,6 +427,7 @@
         injectionState = (st && st.injection && typeof st.injection === "object")
           ? st.injection : null;
         showNotices(st && st.notices);
+        showCreditAlert(st && st.credit_alert);
         reconcileState(st);
       })
       .catch(function () {})
@@ -1960,6 +1961,22 @@
     return fresh.length;
   }
 
+  // The account flip the credential helper makes silently -- pool exhausted,
+  // member now spending their own claude.ai account -- said out loud, once.
+  // The server dedupes per exhaustion across restarts; this flag only keeps
+  // one page from repeating it between the server's own checks.
+  var creditAlertSaid = false;
+  function showCreditAlert(alert) {
+    if (!alert || alert.kind !== "credit_exhausted") return false;
+    if (creditAlertSaid || serverState.scope !== "chat") return false;
+    creditAlertSaid = true;
+    serverNotice("credit_exhausted",
+                 "AI now runs on your own Claude account, if you are signed"
+                 + " into one. Click to see the meter or request more"
+                 + " credit.");
+    return true;
+  }
+
   // The server stamps this page with whether its own code has been edited
   // since it started. If it has, every control added by that edit is about
   // to fail against it, so the page says so once, on the way in, rather than
@@ -2088,6 +2105,7 @@
   ALERT_SAYS.session_ended = "Session ended";
   ALERT_SAYS.server_stale = "This workspace is running older code than the plugin on disk";
   ALERT_SAYS.server_gone = "This workspace is no longer running";
+  ALERT_SAYS.credit_exhausted = "Engelbart credit is used up";
 
   var ALERT_CSS = [
       ".hc-alert-stack{position:fixed;top:var(--hc-alerts-top,calc(var(--hc-top,37px) + 10px));right:16px;z-index:100002;display:flex;flex-direction:column;align-items:flex-end;gap:8px;pointer-events:none}",
@@ -2096,6 +2114,7 @@
       ".hc-alert[data-hc-alert-kind=\"failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert[data-hc-alert-kind=\"asking\"]{border-left-color:var(--hc-warn,#9a6700)}",
       ".hc-alert[data-hc-alert-kind=\"restart\"]{border-left-color:var(--hc-warn,#9a6700)}",
+      ".hc-alert[data-hc-alert-kind=\"credit_exhausted\"]{border-left-color:var(--hc-warn,#9a6700)}",
       ".hc-alert[data-hc-alert-kind=\"understood\"]{border-left-color:var(--hc-ok,#1a7f37)}",
       ".hc-alert[data-hc-alert-kind=\"understand_failed\"]{border-left-color:var(--del,#b42318)}",
       ".hc-alert-title{font-weight:600;color:var(--ink,#111)}",
@@ -2144,6 +2163,19 @@
       // The gear, in the header slot after the bell, and the settings panel
       // it opens. What governs the banners lives here, not in the center:
       // the center lists what happened; the gear is where the page is set.
+      ".hc-key-using{font:12px/1.6 'Source Code Pro',ui-monospace,monospace;color:var(--dtxt,#333);padding-bottom:2px}",
+      ".hc-key-using b{color:var(--acc,#a5492a);font-weight:700}",
+      ".hc-key-using[data-hc-bad]{color:#b3372a}",
+      ".hc-key-cards{display:flex;flex-direction:column;gap:8px}",
+      ".hc-key-card{border:1px solid var(--bd,#e3e3e3);border-radius:9px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;background:var(--panel2,#f6f6f6)}",
+      ".hc-key-card[data-hc-active]{border-color:var(--acc,#a5492a);background:var(--panel,#fff);box-shadow:0 1px 6px rgba(0,0,0,.06)}",
+      ".hc-key-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px}",
+      ".hc-key-card-name{font:700 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-key-active-tag{flex:none;font:600 8.5px 'Source Code Pro',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--acc,#a5492a);border:1px solid var(--acc,#a5492a);border-radius:999px;padding:2px 8px}",
+      ".hc-key-sub{font:11px/1.5 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      ".hc-key-meter{height:4px;border-radius:2px;background:var(--bd,#e3e3e3);overflow:hidden;margin-top:2px}",
+      ".hc-key-meter-fill{height:100%;background:var(--acc,#a5492a)}",
+      ".hc-key-ask{text-decoration:none;align-self:flex-start;margin-top:3px}",
       ".hc-settings{display:inline-flex;align-items:center;align-self:center}",
       ".hc-gear{display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
       ".hc-gear:hover,.hc-gear[data-hc-gear-open]{color:var(--ink,#111)}",
@@ -2782,6 +2814,14 @@
     markAlertRead(id, true);
     dropAlertBanner(alertBannerFor(id));
     closeAlertCenter();
+    // The credit card's whole point is the switch and the meter, and both
+    // live on the API key tab: clicking it goes there.
+    if (entry.kind === "credit_exhausted") {
+      openSettingsPanel();
+      setSettingsTab("api");
+      settingsClaudeLoad();
+      return true;
+    }
     // A session card reports on the conversation, not on a row. Reading it
     // is the whole of it: moving the rail to a goal it never named would
     // take the reader off whatever they were working on.
@@ -2873,6 +2913,11 @@
         // The sharing controls wear the same button class and are handled
         // where the sharing is; only the ones naming an account action
         // belong here.
+        if (sbBtn && sbBtn.getAttribute("data-hc-claude-do")) {
+          stop();
+          settingsClaudeSwitch(sbBtn.getAttribute("data-hc-claude-do"));
+          return;
+        }
         if (sbBtn && sbBtn.getAttribute("data-hc-sb-do") !== null) {
           stop();
           var what = sbBtn.getAttribute("data-hc-sb-do");
@@ -3215,23 +3260,57 @@
       ".hc-overview-tab{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.4px;color:var(--fnt,#9b9b9b);cursor:pointer;user-select:none;padding:0 0 9px;border-bottom:2px solid transparent;margin-bottom:-1px}",
       ".hc-overview-tab:hover{color:var(--ink,#111)}",
       ".hc-overview-tab-on{color:var(--acc,#a5492a);border-bottom-color:var(--acc,#a5492a)}",
-      ".hc-overview-card{border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);padding:20px 24px;margin-bottom:18px}",
+      // The project's page, not a card on one: a single measured column
+      // down the middle of the window. The chrome a card wears -- border,
+      // fill, radius -- said "panel among panels", which this is not; the
+      // page is the width of the reading it holds and nothing else.
+      // Sans, too. The workspace is monospace throughout because it is
+      // mostly paths and identifiers, but this screen is prose a person
+      // wrote, and the path that is left keeps the mono to itself.
+      ".hc-overview-card{max-width:780px;margin:0 auto;border:0;border-radius:0;background:transparent;padding:56px 32px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}",
+      ".hc-overview-row{display:flex;align-items:flex-start;margin-top:14px}",
+      ".hc-overview-row-first{margin-top:34px}",
+      ".hc-overview-rowlabel{flex:none;width:110px;font-size:13px;color:var(--fnt,#9b9b9b);padding-top:6px}",
+      ".hc-overview-chips{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;flex:1 1 auto}",
+      // One chip: an icon that takes the chip's own colour, and a label.
+      // max-width plus min-width:0 is what lets a long path ellipsize
+      // instead of pushing the chip through the side of the column.
+      ".hc-overview-chip{display:inline-flex;align-items:center;gap:7px;box-sizing:border-box;max-width:100%;min-width:0;background:var(--panel2,#f6f6f6);border:1px solid var(--bd2,#d5d5d5);border-radius:7px;padding:5px 10px;font-size:13px;font-weight:500;color:var(--ink,#111);text-decoration:none;cursor:pointer;user-select:none}",
+      ".hc-overview-chip svg{flex:none;color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-chip:hover{border-color:var(--acc,#a5492a)}",
+      ".hc-overview-chip[data-hc-on]{border-color:var(--acc,#a5492a);color:var(--acc,#a5492a)}",
+      ".hc-overview-chip[data-hc-on] svg{color:var(--acc,#a5492a)}",
+      ".hc-overview-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}",
+      // A fact rather than a control: it says where something is, and
+      // there is nothing behind it to open.
+      ".hc-overview-chip-flat{cursor:default}",
+      ".hc-overview-chip-flat:hover{border-color:var(--bd2,#d5d5d5)}",
+      ".hc-overview-path{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:12px;font-weight:400;color:var(--mut,#575757);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}",
+      ".hc-overview-chip-x{flex:none;color:var(--fnt,#9b9b9b);opacity:0;margin:0 -3px 0 1px;padding:0 2px}",
+      ".hc-overview-chip:hover .hc-overview-chip-x{opacity:1}",
+      ".hc-overview-chip-x:hover{color:var(--bad,#a12d2d)}",
+      ".hc-overview-seclabel{font-size:13.5px;color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-seclabel small{font-size:13.5px;color:var(--bd2,#d5d5d5)}",
       ".hc-overview-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}",
       ".hc-overview-ctxhead{display:flex;justify-content:space-between;align-items:baseline;gap:14px;margin:0 2px 10px}",
+      // The overview's own head holds nothing but the stamp, so it sits
+      // at the end of the column the card and the pane share. The shelf
+      // and the FAQ still label theirs, and still want space-between.
+      ".hc-overview-stamp{justify-content:flex-end;max-width:780px;margin:0 auto 8px}",
       ".hc-overview-refreshed{font:10.5px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
-      ".hc-overview-about{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;resize:none;border:0;outline:none;background:transparent;font:12.5px/1.7 'Source Code Pro',monospace;color:var(--mut,#575757);caret-color:var(--ink,#111)}",
+      ".hc-overview-about{display:block;width:100%;box-sizing:border-box;margin-top:8px;min-height:0;overflow:hidden;resize:none;border:0;outline:none;background:transparent;font-family:inherit;font-size:15px;line-height:1.55;color:var(--mut,#575757);caret-color:var(--ink,#111)}",
       ".hc-overview-about::placeholder{color:var(--fnt,#9b9b9b)}",
-      ".hc-overview-sec{margin-top:18px;border-top:1px solid var(--bd,#e3e3e3);padding-top:14px}",
+      ".hc-overview-sec{margin-top:32px;border-top:1px solid var(--bd,#e3e3e3);padding-top:32px}",
       ".hc-overview-facts{margin-top:14px;display:flex;flex-direction:column;gap:7px}",
       ".hc-overview-fact{display:flex;gap:14px;font-size:13px}",
       ".hc-overview-fact-k{flex:none;width:108px;color:var(--fnt,#9b9b9b);letter-spacing:1px;font-size:10.5px;padding-top:3px}",
       ".hc-overview-fact-v{color:var(--mut,#575757);overflow-wrap:anywhere;font-size:12px}",
       "a.hc-overview-fact-v{color:var(--acc,#a5492a)}",
-      ".hc-overview-name{display:block;width:100%;box-sizing:border-box;border:0;outline:none;background:transparent;padding:0;font:800 16px 'Source Code Pro',monospace;letter-spacing:.2px;color:var(--ink,#111);caret-color:var(--ink,#111)}",
+      ".hc-overview-name{display:block;width:100%;box-sizing:border-box;border:0;outline:none;background:transparent;padding:0;font-family:inherit;font-size:28px;font-weight:600;line-height:1.25;letter-spacing:-.4px;color:var(--ink,#111);caret-color:var(--ink,#111)}",
       ".hc-overview-name::placeholder{color:var(--fnt,#9b9b9b);font-weight:600}",
       ".hc-overview-label{font:600 11.5px 'Source Code Pro',monospace;letter-spacing:2px;color:var(--mut,#575757);text-transform:uppercase}",
       ".hc-overview-label small{font-weight:400;letter-spacing:.2px;text-transform:none;color:var(--fnt,#9b9b9b);margin-left:6px}",
-      ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:6px;min-height:0;overflow:hidden;font-size:15.5px!important;font-weight:600;resize:none;border:0;outline:none;background:transparent;color:var(--ink,#111);font:12.5px/1.6 'Source Code Pro',monospace;caret-color:var(--ink,#111)}",
+      ".hc-overview-objective{display:block;width:100%;box-sizing:border-box;margin-top:16px;min-height:0;overflow:hidden;resize:none;border:0;outline:none;background:transparent;font-family:inherit;font-size:15px;font-weight:400;line-height:1.7;color:var(--ink,#111);caret-color:var(--ink,#111)}",
       ".hc-overview-objective::placeholder{color:var(--fnt,#9b9b9b)}",
       // The row sits outside the facts column, so the 7px the column puts
       // between rows is written here by hand.
@@ -3243,12 +3322,20 @@
       // column the other values start on.
       ".hc-overview-wt{margin-left:-7px;flex:0 1 auto;min-width:0;max-width:100%;text-overflow:ellipsis;border:1px solid var(--bd2);border-radius:3px;background:var(--panel2);color:var(--ink,#111);font:11.5px/1.5 'Source Code Pro',monospace;padding:2px 6px;cursor:pointer;outline:none}",
       ".hc-overview-wt:hover{border-color:var(--acc)}",
-      ".hc-overview-context{display:flex;box-sizing:border-box;max-width:100%;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);min-height:320px}",
-      ".hc-overview-srcs{flex:0 0 220px;border-right:1px solid var(--bd,#e3e3e3);padding:14px 12px}",
+      // The pane the context row opens into. The 220px column of sources
+      // that used to run down its left is gone -- those are the chips on
+      // the card now -- so what is left is one pane, on the column the
+      // card above it keeps.
+      ".hc-overview-context{display:block;box-sizing:border-box;max-width:780px;margin:0 auto 24px;border:1px solid var(--bd,#e3e3e3);border-radius:10px;background:var(--panel,#fff);min-height:320px}",
       ".hc-overview-src{display:flex;gap:10px;align-items:center;padding:8px 10px;border-radius:6px;cursor:pointer;user-select:none;margin-bottom:2px}",
       ".hc-overview-src:hover{background:var(--hov,#f2f2f2)}",
-      ".hc-overview-src[data-hc-on]{background:var(--accbg,#f5e2d9)}",
+      // The open row has to read as open from across the card, not only
+      // against its neighbours: the tint alone was easy to miss, so it
+      // carries an accent bar on its leading edge and its name takes the
+      // accent too, the same accent everything else selected here wears.
+      ".hc-overview-src[data-hc-on]{background:var(--accbg,#f5e2d9);box-shadow:inset 3px 0 0 var(--acc,#a5492a)}",
       ".hc-overview-src[data-hc-on]:hover{background:var(--accbg,#f5e2d9)}",
+      ".hc-overview-src[data-hc-on] .hc-overview-src-name{color:var(--acc,#a5492a)}",
       ".hc-overview-src-text{flex:1 1 auto;min-width:0}",
       ".hc-overview-src-x{flex:none;color:var(--fnt,#9b9b9b);opacity:0;padding:0 2px}",
       ".hc-overview-src:hover .hc-overview-src-x{opacity:1}",
@@ -3293,6 +3380,10 @@
       // written on the box, so a redraw cannot lose the reader's place.
       ".hc-overview-main,.hc-saved,.hc-docs{display:none}",
       ".hc-overview-main[data-hc-on],.hc-saved[data-hc-on],.hc-docs[data-hc-on]{display:block}",
+      // The Document/Paper mount, filled inside the context card's reading
+      // pane when their rail rows are the ones open; what fills it is
+      // dressed by the hc-pv-* rules the launch skin already ships.
+      ".hc-ov-mount{display:flex;flex-direction:column;gap:14px;min-height:440px}",
       // The docs read as one centered column: the questions are the page,
       // and a column hugging the left edge of a wide window reads as a
       // sidebar to a page that is not there.
@@ -3339,7 +3430,7 @@
       ".hc-overview-turn-who{flex:none;width:64px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
       ".hc-overview-turn[data-hc-role=\"user\"] .hc-overview-turn-who{color:var(--acc,#a5492a)}",
       ".hc-overview-turn-text{min-width:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dtxt,#333)}",
-      ".hc-overview-addsrc{margin-top:8px;padding:7px 10px;cursor:pointer;user-select:none;font:12px 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-overview-addsrc{flex:none;padding:2px 6px;cursor:pointer;user-select:none;font-size:15px;line-height:1;color:var(--fnt,#9b9b9b)}",
       ".hc-overview-addsrc:hover{color:var(--ink,#111)}",
       ".hc-overview-src-glyph{flex:none;width:18px;height:18px;border-radius:3px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 9px/18px 'Source Code Pro',monospace;text-align:center}",
       ".hc-overview-src-name{font-weight:600;color:var(--ink,#111);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
@@ -3570,6 +3661,65 @@
     if (className) node.className = className;
     if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
+  }
+
+  // The line icons the overview's chips wear, built as real SVG nodes
+  // rather than parsed out of a markup string -- nothing a source is
+  // named can become markup on the page this way. Both the stroke and
+  // the fill are currentColor, so a chip colours its icon by colouring
+  // itself and the selected state needs no second rule.
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  var ICONS = {
+    folder: { d: ["M3.5 7a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2V17a2 2 0"
+                  + " 0 1-2 2h-13a2 2 0 0 1-2-2V7z"] },
+    doc: { d: ["M6 3.5h8l4 4V20.5H6V3.5z", "M14 3.5v4h4"] },
+    paper: { d: ["M6 3.5h8l4 4V20.5H6V3.5z", "M14 3.5v4h4", "M9 13h6",
+                 "M9 16.5h4"] },
+    branch: { d: ["M6.5 4.5v10", "M6.5 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+                  "M17.5 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+                  "M6.5 14.5c0-3 11-1.5 11-5.5"] },
+    chat: { d: ["M4.5 6a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v7a2 2 0 0 1-2"
+                + " 2H9l-4.5 4V6z"] },
+    // GitHub's mark is a filled glyph on a 16-unit grid, so it is the one
+    // icon here that is a fill rather than a stroke.
+    github: { fill: true, box: "0 0 16 16",
+              d: ["M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07"
+                  + ".55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49"
+                  + "-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01"
+                  + "-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07"
+                  + "-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31"
+                  + "-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82"
+                  + ".64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82"
+                  + " 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0"
+                  + " 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01"
+                  + " 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0"
+                  + "-4.42-3.58-8-8-8z"] },
+  };
+
+  function icon(name) {
+    var spec = ICONS[name] || ICONS.doc;
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("width", "13");
+    svg.setAttribute("height", "13");
+    svg.setAttribute("viewBox", spec.box || "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    if (spec.fill) {
+      svg.setAttribute("fill", "currentColor");
+    } else {
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+      svg.setAttribute("stroke-width", "1.8");
+      svg.setAttribute("stroke-linecap", "round");
+      svg.setAttribute("stroke-linejoin", "round");
+    }
+    spec.d.forEach(function (d) {
+      var path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    });
+    return svg;
   }
 
   // The chip after the brand. Built once into the slot the header patch
@@ -5578,43 +5728,63 @@
     return cut[cut.length - 1] || label;
   }
 
+  // One chip in the context row. The id is what the click handler reads,
+  // so a chip is a source row by another shape -- the list that used to
+  // run down a 220px column now runs across the card, which is the only
+  // thing that changed about it.
+  function sourceChip(id, glyph, label, title) {
+    var chip = el("span", "hc-overview-chip");
+    chip.setAttribute("data-hc-source", id);
+    chip.setAttribute("role", "button");
+    chip.setAttribute("tabindex", "0");
+    if (title) chip.setAttribute("title", title);
+    if (overviewSource === id) chip.setAttribute("data-hc-on", "");
+    chip.appendChild(icon(glyph));
+    chip.appendChild(el("span", "hc-overview-chip-name", label));
+    return chip;
+  }
+
+  // Which icon an attached source wears. Its kind is already named in the
+  // chip's title, so the icon only has to separate a repository from a
+  // conversation from a file.
+  var SOURCE_ICONS = { github: "github", repo: "github", chat: "chat",
+                       paper: "paper" };
+
   function renderSourceList(host, who) {
     wipe(host);
-    var mine = el("div", "hc-overview-src");
-    mine.setAttribute("data-hc-source", "");
-    mine.setAttribute("role", "button");
-    if (!overviewSource) mine.setAttribute("data-hc-on", "");
-    mine.appendChild(el("span", "hc-overview-src-glyph", "R"));
-    var mineText = el("div", "hc-overview-src-text");
-    mineText.appendChild(el("div", "hc-overview-src-name", who.name));
-    mineText.appendChild(el("div", "hc-overview-src-kind", "Repository"));
-    mine.appendChild(mineText);
-    host.appendChild(mine);
+    host.appendChild(sourceChip("", "github", "Repository",
+                                str(who.name) || "This repository"));
+    // The project's own work surfaces, before anything attached: the
+    // selected goal's working document and the paper it reads against.
+    // They open in the same pane a source does; the @ keeps their ids out
+    // of the space real source ids are minted in.
+    [["@document", "doc", "Document", "Working document"],
+     ["@paper", "paper", "Paper", "Reading"]].forEach(function (spec) {
+      host.appendChild(sourceChip(spec[0], spec[1], spec[2], spec[3]));
+    });
     sourceRows(who).forEach(function (row) {
       var spec = SOURCE_KINDS[str(row.type)] || SOURCE_KINDS.doc;
-      var line = el("div", "hc-overview-src");
-      line.setAttribute("data-hc-source", str(row.id));
-      line.setAttribute("role", "button");
-      line.setAttribute("title", str(row.label));
-      if (overviewSource === str(row.id)) line.setAttribute("data-hc-on", "");
-      line.appendChild(el("span", "hc-overview-src-glyph", spec.glyph));
-      var text = el("div", "hc-overview-src-text");
-      text.appendChild(el("div", "hc-overview-src-name", sourceName(row)));
-      text.appendChild(el("div", "hc-overview-src-kind", spec.kind));
-      line.appendChild(text);
-      var drop = el("span", "hc-overview-src-x", "×");
+      var chip = sourceChip(str(row.id),
+                            SOURCE_ICONS[str(row.type)] || "doc",
+                            sourceName(row),
+                            spec.kind + " · " + str(row.label));
+      // Attached sources are the only removable ones, and the × rides in
+      // the chip rather than beside it so the row stays one line of chips.
+      var drop = el("span", "hc-overview-chip-x", "×");
       drop.setAttribute("role", "button");
       drop.setAttribute("title", "Remove this source");
       drop.setAttribute("data-hc-drop-source", str(row.id));
-      line.appendChild(drop);
-      host.appendChild(line);
+      chip.appendChild(drop);
+      host.appendChild(chip);
     });
-    // The foot of the list: what a project carries beyond its own
-    // directory is attached by hand, so there has to be a way in. The form
-    // itself is not here -- it opens as a dialog over the page, because a
-    // 220px column is not where anybody picks a conversation out of sixty.
-    var add = el("div", "hc-overview-addsrc", "+ Add context");
+    // The end of the row: what a project carries beyond its own directory
+    // is attached by hand, so there has to be a way in. The form itself is
+    // not here -- it opens as a dialog over the page, because a chip is
+    // not where anybody picks a conversation out of sixty.
+    var add = el("span", "hc-overview-addsrc", "+");
     add.setAttribute("role", "button");
+    add.setAttribute("tabindex", "0");
+    add.setAttribute("title", "Add context");
     add.setAttribute("data-hc-add-source", "");
     host.appendChild(add);
     return host;
@@ -6295,10 +6465,20 @@
     if (!overviewSource) {
       reading.removeAttribute("data-hc-on");
       wipe(reading);
+      previewHideFrame();
       return true;
     }
     reading.setAttribute("data-hc-on", "");
     wipe(reading);
+    // The work surfaces: the pane is theirs whole -- the document editor
+    // and the paper viewer carry their own header bars, so nothing is
+    // written above the mount. renderOverviewPane keeps it fresh from here.
+    if (overviewSource === "@document" || overviewSource === "@paper") {
+      reading.appendChild(el("div", "hc-ov-mount"));
+      renderOverviewPane(true);
+      return true;
+    }
+    previewHideFrame();
     var row = sourceRows(projectInfo() || {}).filter(function (r) {
       return str(r.id) === overviewSource; })[0];
     if (!row) return false;
@@ -6625,31 +6805,56 @@
 
     // Where it is, what is checked out, and where it came from. Read from
     // git rather than written, so they sit apart from the two fields above
-    // as facts rather than answers.
-    var facts = el("div", "hc-overview-facts");
+    // as facts rather than answers -- one labelled row of chips, the path
+    // first because it is the one anybody scans for.
     var trees = array(who.worktrees);
-    [["directory", str(who.cwd), ""],
-     // The branch stays a fact only while there is one checkout to be on.
-     // With more than one it becomes the picker below, since then it is an
-     // answer the reader gives rather than one git gives.
-     ["branch", trees.length > 1 ? "" : str(who.branch), ""],
-     ["origin", str(who.remote), remoteHref(who.remote)]].forEach(
-      function (spec) {
-        if (!spec[1]) return;
-        var row = el("div", "hc-overview-fact");
-        row.appendChild(el("span", "hc-overview-fact-k", spec[0]));
-        if (spec[2]) {
-          var a = el("a", "hc-overview-fact-v", spec[1]);
-          a.setAttribute("href", spec[2]);
-          a.setAttribute("target", "_blank");
-          a.setAttribute("rel", "noreferrer noopener");
-          row.appendChild(a);
-        } else {
-          row.appendChild(el("span", "hc-overview-fact-v", spec[1]));
-        }
-        facts.appendChild(row);
-      });
-    if (facts.children && facts.children.length) card.appendChild(facts);
+    var dirRow = el("div", "hc-overview-row hc-overview-row-first");
+    dirRow.appendChild(el("span", "hc-overview-rowlabel", "Directory"));
+    var dirChips = el("div", "hc-overview-chips");
+    var dirChip = el("span", "hc-overview-chip hc-overview-chip-flat");
+    dirChip.setAttribute("title", str(who.cwd));
+    dirChip.appendChild(icon("folder"));
+    dirChip.appendChild(el("span", "hc-overview-path", str(who.cwd)));
+    dirChips.appendChild(dirChip);
+    // The branch stays a fact only while there is one checkout to be on.
+    // With more than one it becomes the picker below, since then it is an
+    // answer the reader gives rather than one git gives.
+    if (trees.length <= 1 && str(who.branch)) {
+      var brChip = el("span", "hc-overview-chip hc-overview-chip-flat");
+      brChip.setAttribute("title", "Checked out branch");
+      brChip.appendChild(icon("branch"));
+      brChip.appendChild(el("span", "hc-overview-chip-name", str(who.branch)));
+      dirChips.appendChild(brChip);
+    }
+    if (str(who.remote)) {
+      var href = remoteHref(who.remote);
+      var rmChip = el(href ? "a" : "span", "hc-overview-chip");
+      rmChip.setAttribute("title", str(who.remote));
+      if (href) {
+        rmChip.setAttribute("href", href);
+        rmChip.setAttribute("target", "_blank");
+        rmChip.setAttribute("rel", "noreferrer noopener");
+      } else {
+        rmChip.className = "hc-overview-chip hc-overview-chip-flat";
+      }
+      rmChip.appendChild(icon("github"));
+      rmChip.appendChild(el("span", "hc-overview-chip-name",
+                            str(who.remote)));
+      dirChips.appendChild(rmChip);
+    }
+    dirRow.appendChild(dirChips);
+    card.appendChild(dirRow);
+
+    // What the project reads against, on the row below where it lives.
+    // The chips are the source list itself -- clicking one opens it in the
+    // pane under this card, the way the column that used to hold them did.
+    var ctxRow = el("div", "hc-overview-row");
+    ctxRow.appendChild(el("span", "hc-overview-rowlabel", "Context"));
+    var srcs = el("div", "hc-overview-chips");
+    srcs.setAttribute("data-hc-srcs", "");
+    renderSourceList(srcs, who);
+    ctxRow.appendChild(srcs);
+    card.appendChild(ctxRow);
     // Which checkout the builds run in. Drawn only where there is a choice
     // to make: one worktree is not a decision, and a select with one row in
     // it reads as a setting the reader has failed to configure.
@@ -6659,8 +6864,8 @@
     // every build of this project lands on that branch instead of on
     // whichever directory the chat happened to be opened from.
     if (trees.length > 1) {
-      var wtRow = el("div", "hc-overview-fact hc-overview-worktree");
-      wtRow.appendChild(el("span", "hc-overview-fact-k", "working in"));
+      var wtRow = el("div", "hc-overview-row hc-overview-worktree");
+      wtRow.appendChild(el("span", "hc-overview-rowlabel", "Working in"));
       var pick = el("select", "hc-overview-wt");
       pick.setAttribute("data-hc-worktree", "");
       pick.setAttribute("title", "Which checkout of this repository builds"
@@ -6681,7 +6886,7 @@
     }
 
     var objSec = el("div", "hc-overview-sec");
-    var label = el("div", "hc-overview-label", "main objective");
+    var label = el("div", "hc-overview-seclabel", "Main objective ");
     label.appendChild(el("small", "", "· optional"));
     objSec.appendChild(label);
     card.appendChild(objSec);
@@ -6694,10 +6899,10 @@
     fitObjective(objective);
     main.appendChild(card);
 
-    var ctxHead = el("div", "hc-overview-ctxhead");
-    ctxHead.appendChild(el("div", "hc-overview-label", "context"));
-    // When this was drawn. A source is fetched when it is opened, not
+    // The context row above names the sources; this is only the stamp on
+    // what is drawn below it. A source is fetched when it is opened, not
     // followed, so what is on screen is as old as this line says.
+    var ctxHead = el("div", "hc-overview-ctxhead hc-overview-stamp");
     var when = el("span", "hc-overview-refreshed", "");
     when.setAttribute("data-hc-refreshed", "");
     try {
@@ -6707,10 +6912,6 @@
     ctxHead.appendChild(when);
     main.appendChild(ctxHead);
     var context = el("div", "hc-overview-context");
-    var srcs = el("div", "hc-overview-srcs");
-    srcs.setAttribute("data-hc-srcs", "");
-    renderSourceList(srcs, who);
-    context.appendChild(srcs);
     // Where a source that is not the repository is read. Hidden while the
     // repository is the one selected, which is the state the page opens in.
     var reading = el("div", "hc-overview-reading");
@@ -7276,6 +7477,9 @@
       // The repository pane's body is filled after the box is on screen and
       // named: what fills it goes looking for it through overviewBox.
       renderPane("repo");
+      // A rebuilt box comes back on whatever was open -- the repository,
+      // a source, or one of the work rows -- rather than always the repo.
+      showSource(overviewSource);
       return true;
     }
     // The theme can move while the overview is up.
@@ -7317,7 +7521,8 @@
         return true;
       }
     }
-    return themed;
+    var pane = renderOverviewPane(false);
+    return themed || pane;
   }
 
   // The box is one row and grows to its text: a fixed two rows left a
@@ -7880,8 +8085,8 @@
     // Cloud and Builds are gone from the strip: their sections still exist
     // below, but with no tab to select them they never draw. Bring a pair
     // back here to re-open one.
-    [["account", "Account"], ["alerts", "Alerts"], ["sharing", "Sharing"],
-     ["data", "Data"]].forEach(function (spec) {
+    [["account", "Account"], ["api", "API key"], ["alerts", "Alerts"],
+     ["sharing", "Sharing"], ["data", "Data"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -8075,6 +8280,42 @@
     say.textContent = "checking…";
     sb.appendChild(say);
     box.appendChild(sb);
+
+    // The API key, on a tab of its own: which key `claude` spends, what each
+    // has left, and the one button that moves between them. Drawn as cards
+    // rather than prose, and filled from /api/claude-account when the panel
+    // opens; the key itself never reaches this page.
+    var keys = document.createElement("div");
+    keys.className = "hc-settings-sec";
+    keys.setAttribute("data-hc-settings-sec", "apikey");
+    keys.setAttribute("data-hc-tab", "api");
+    var kh = document.createElement("div");
+    kh.className = "hc-settings-sec-head";
+    kh.textContent = "API key";
+    keys.appendChild(kh);
+    var kSay = document.createElement("div");
+    kSay.className = "hc-key-using";
+    kSay.setAttribute("data-hc-claude-say", "");
+    kSay.textContent = "checking…";
+    keys.appendChild(kSay);
+    var kCards = document.createElement("div");
+    kCards.className = "hc-key-cards";
+    kCards.setAttribute("data-hc-key-cards", "");
+    keys.appendChild(kCards);
+    var kRow = document.createElement("div");
+    kRow.className = "hc-settings-row";
+    kRow.style.display = "none";
+    var kBtn = document.createElement("span");
+    kBtn.className = "hc-settings-btn";
+    kBtn.setAttribute("role", "button");
+    kBtn.setAttribute("data-hc-claude-do", "");
+    kRow.appendChild(kBtn);
+    keys.appendChild(kRow);
+    var kHint = document.createElement("div");
+    kHint.className = "hc-settings-hint";
+    kHint.setAttribute("data-hc-claude-hint", "");
+    keys.appendChild(kHint);
+    box.appendChild(keys);
 
     // This project, and who else may see it. Sending it up and minting an
     // invitation are both account work -- they need the sign-in typed
@@ -8391,6 +8632,153 @@
     });
   }
 
+  // --- the API key tab: which key `claude` spends, drawn as cards ------------
+
+  function keyCard(name, active, lines, percent) {
+    var card = el("div", "hc-key-card");
+    if (active) card.setAttribute("data-hc-active", "");
+    var top = el("div", "hc-key-card-top");
+    top.appendChild(el("span", "hc-key-card-name", name));
+    if (active) top.appendChild(el("span", "hc-key-active-tag", "active"));
+    card.appendChild(top);
+    array(lines).forEach(function (line) {
+      if (line) card.appendChild(el("div", "hc-key-sub", line));
+    });
+    if (typeof percent === "number") {
+      var meter = el("div", "hc-key-meter");
+      var fill = el("div", "hc-key-meter-fill");
+      fill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+      meter.appendChild(fill);
+      card.appendChild(meter);
+    }
+    return card;
+  }
+
+  function settingsClaudeFill(state) {
+    if (!settingsPanelBox) return false;
+    var say = settingsPanelBox.querySelector("[data-hc-claude-say]");
+    var cards = settingsPanelBox.querySelector("[data-hc-key-cards]");
+    var button = settingsPanelBox.querySelector("[data-hc-claude-do]");
+    var hint = settingsPanelBox.querySelector("[data-hc-claude-hint]");
+    if (!say || !cards || !button) return false;
+    var row = button.parentNode;
+    if (row) row.style.display = "none";
+    if (hint) hint.textContent = "";
+    wipe(cards);
+    if (!state || !state.ok) {
+      say.setAttribute("data-hc-bad", "");
+      say.textContent = (state && str(state.error))
+        || "could not read which API key is in use";
+      return true;
+    }
+    say.removeAttribute("data-hc-bad");
+    if (state.foreign_helper) {
+      say.textContent = "Claude Code is wired to another credential helper"
+        + " — nothing here will touch it.";
+      return true;
+    }
+    var pool = state.using === "engelbart";
+    // The one-line verdict, with the key's name set off from the prose.
+    say.textContent = "Currently using: ";
+    say.appendChild(el("b", "", pool ? "Engelbart" : "My Claude"));
+    say.appendChild(document.createTextNode(" API key"));
+    // Engelbart's card carries the pool's meter. Claude has no readable
+    // meter -- Anthropic bills the member's own subscription -- so its card
+    // says where the spend goes instead of pretending at a number.
+    var spend = typeof state.spend_usd === "number" ? state.spend_usd : null;
+    var budget = (typeof state.budget_usd === "number" && state.budget_usd > 0)
+      ? state.budget_usd : null;
+    var engLines = [];
+    var percent;
+    if (!state.available) {
+      engLines.push("Not connected on this machine — run engelbart auth.");
+    } else if (spend !== null && budget !== null) {
+      var left = Math.max(0, budget - spend);
+      engLines.push("$" + left.toFixed(2) + " left of $" + budget.toFixed(2)
+        + " · $" + spend.toFixed(2) + " used");
+      percent = (spend / budget) * 100;
+      if (str(state.credit_status) === "exhausted") {
+        engLines.push("Credit used up — top it up to switch back.");
+      }
+    } else {
+      engLines.push("Credit pool connected.");
+    }
+    var engelbart = keyCard("Engelbart", pool, engLines, percent);
+    // Phase one of asking for more: the dashboard, which shows the same
+    // meter to the member and the program behind it. A real request queue
+    // can replace this link without the card moving.
+    if (state.available && str(state.dashboard)
+        && str(state.credit_status) === "exhausted") {
+      var ask = el("a", "hc-settings-btn hc-key-ask", "Request more credit");
+      ask.setAttribute("href", str(state.dashboard));
+      ask.setAttribute("target", "_blank");
+      ask.setAttribute("rel", "noopener");
+      engelbart.appendChild(ask);
+    }
+    var own = keyCard("My Claude", !pool,
+      ["Your claude.ai subscription — metered by Anthropic, not shown here."]);
+    // The active key sits on top: the card the tag is on answers the line
+    // above it without the eye having to hunt.
+    cards.appendChild(pool ? engelbart : own);
+    cards.appendChild(pool ? own : engelbart);
+    var restart = "Open Claude Code sessions keep their key until restarted.";
+    if (pool && state.wired) {
+      button.textContent = "Switch to My Claude";
+      button.setAttribute("data-hc-claude-do", "own");
+      if (row) row.style.display = "";
+      if (hint) hint.textContent = restart;
+    } else if (pool && hint) {
+      // Opened on the pool key by `engelbart auth` itself: that env
+      // outlives any settings edit until this workspace restarts.
+      hint.textContent = "This workspace was opened on Engelbart credit"
+        + " and keeps it until it restarts.";
+    } else if (!pool && state.available) {
+      button.textContent = "Switch to Engelbart";
+      button.setAttribute("data-hc-claude-do", "engelbart");
+      if (row) row.style.display = "";
+      if (hint) hint.textContent = restart;
+    }
+    return true;
+  }
+
+  var claudeAccountBusy = false;
+
+  function settingsClaudeLoad() {
+    return fetchJSON("/api/claude-account?fresh=1").then(function (state) {
+      settingsClaudeFill(state);
+      return state;
+    });
+  }
+
+  function settingsClaudeSwitch(which) {
+    if (!settingsPanelBox || !which || claudeAccountBusy) return false;
+    var say = settingsPanelBox.querySelector("[data-hc-claude-say]");
+    if (say) {
+      say.removeAttribute("data-hc-bad");
+      say.textContent = "switching…";
+    }
+    claudeAccountBusy = true;
+    post({ op: "claude_account", use: which }).then(function (result) {
+      claudeAccountBusy = false;
+      if (!result || !result.ok) {
+        // The cards redraw to the state that still stands; the verdict line
+        // alone carries the refusal, with the reason spelled out.
+        settingsClaudeLoad().then(function () {
+          var line = settingsPanelBox
+            && settingsPanelBox.querySelector("[data-hc-claude-say]");
+          if (line) {
+            line.setAttribute("data-hc-bad", "");
+            line.textContent = (result && str(result.error))
+              || "that did not work";
+          }
+        });
+        return;
+      }
+      settingsClaudeFill(result);
+    });
+    return true;
+  }
+
   function settingsSupabaseDo(what) {
     if (!settingsPanelBox) return false;
     var at = function (name) {
@@ -8603,6 +8991,8 @@
     // Whether it is connected, and as whom: read when the panel opens, not
     // held from the last time it did.
     settingsSupabaseLoad();
+    // And which account `claude` runs on, the same way.
+    settingsClaudeLoad();
     // And which models the installed CLI names, the same way.
     settingsBuildLoad();
     renderGear();
@@ -9127,7 +9517,7 @@
       // than left to fail. Anything that only reads -- folding, selecting,
       // the search, the panes -- is untouched.
       "[data-hc-launch][data-hc-readonly] [title=\"Delete goal\"]{display:none!important}",
-      "[data-hc-launch][data-hc-readonly] .hc-todo-build,[data-hc-launch][data-hc-readonly] .hc-todo-cancel,[data-hc-launch][data-hc-readonly] .hc-todo-copy,[data-hc-launch][data-hc-readonly] .hc-todo-reopen,[data-hc-launch][data-hc-readonly] .hc-todo-reply,[data-hc-launch][data-hc-readonly] .hc-todos-top{display:none!important}",
+      "[data-hc-launch][data-hc-readonly] .hc-todo-build,[data-hc-launch][data-hc-readonly] .hc-todo-quick,[data-hc-launch][data-hc-readonly] .hc-todo-cancel,[data-hc-launch][data-hc-readonly] .hc-todo-copy,[data-hc-launch][data-hc-readonly] .hc-todo-reopen,[data-hc-launch][data-hc-readonly] .hc-todo-reply,[data-hc-launch][data-hc-readonly] .hc-todos-top{display:none!important}",
       "[data-hc-launch][data-hc-readonly] .hc-src-rm,[data-hc-launch][data-hc-readonly] .hc-overview-objective{display:none!important}",
       // A guest may watch the build -- the log is the owner's account of what
       // their machine is doing -- but not open a window on that machine.
@@ -9375,8 +9765,13 @@
       "[data-hc-launch] .hc-todo-error{flex:1;min-width:0;font:10.5px/1.4 'Source Code Pro',monospace;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       "[data-hc-launch] .hc-todo-note-bad{color:var(--del)}",
       "[data-hc-launch] .hc-todo-reopen{color:var(--ink);cursor:pointer;text-decoration:underline;text-underline-offset:2px}",
-      "[data-hc-launch] .hc-todo-build{margin-left:auto;padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
+      "[data-hc-launch] .hc-todo-build{padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
       "[data-hc-launch] .hc-todo-build[data-hc-todo-build=\"on\"]{color:#fff;background:#1f6feb;border-color:#1f6feb;cursor:pointer}",
+      // The fast lane sits beside Build and pushes the pair to the right
+      // edge (the auto margin Build used to carry). Quiet next to Build's
+      // filled blue: the outline says "smaller than that one".
+      "[data-hc-launch] .hc-todo-quick{margin-left:auto;padding:5px 12px;border-radius:4px;font:600 11px 'Source Code Pro',monospace;color:var(--fnt);border:1px solid var(--bd2);cursor:default;user-select:none}",
+      "[data-hc-launch] .hc-todo-quick[data-hc-todo-quick=\"on\"]{color:#1f6feb;border-color:#1f6feb;cursor:pointer}",
       "[data-hc-launch] .hc-rail-prompt{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}",
       // Four tabs, on one line and staying there. They are the rail's
       // navigation: a row of them that reflows while the reader is typing
@@ -9453,6 +9848,13 @@
       "[data-hc-launch] .hc-pv-bar{flex:none;display:flex;align-items:center;gap:10px;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:7px 11px}",
       "[data-hc-launch] .hc-pv-grow{flex:1 1 auto}",
       "[data-hc-launch] .hc-pv-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--hc-ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--hc-ok) 22%,transparent)}",
+      // The build-in-flight indicator: a small spinning ring and the one
+      // word, in the Interface tab's empty card while a build is out. The
+      // motion is the whole message -- something is working; the rail's
+      // watch line has the details.
+      "@keyframes hcPvSpin{to{transform:rotate(360deg)}}",
+      "[data-hc-launch] .hc-pv-buildline{display:flex;align-items:center;gap:9px;font:12px 'Source Code Pro',monospace;color:var(--fnt);padding:4px 0}",
+      "[data-hc-launch] .hc-pv-buildline i{flex:none;width:13px;height:13px;box-sizing:border-box;border:2px solid var(--bd2);border-top-color:#1f6feb;border-radius:50%;animation:hcPvSpin .8s linear infinite}",
       "[data-hc-launch] .hc-pv-url{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px 'Source Code Pro',monospace;color:var(--dtxt)}",
       "[data-hc-launch] .hc-pv-term{flex:1 1 auto;min-height:120px;max-height:46vh;overflow-y:auto;border:1px solid var(--bd);border-radius:3px;background:var(--bg);padding:10px 13px}",
       "[data-hc-launch] .hc-pv-term-tall{min-height:280px}",
@@ -10850,10 +11252,16 @@
   function devPaint(box, goalId, state, open, lines) {
     while (box.firstChild) box.removeChild(box.firstChild);
     var status = state ? str(state.status) : "";
-    // Only where there is something to serve. A goal whose directory has no
-    // dev script gets no strip at all: a dead control that explains itself
-    // on every goal is worse than the absence of one.
-    if (!state || (!state.can_start && status !== "running")) {
+    // Only when something needs the reader. The server starts itself now
+    // (auto-detect + auto-start) and the page shows in the pane, so a
+    // healthy strip -- dot, address, Stop -- is furniture. What earns the
+    // space is trouble with something that can actually run: a server that
+    // failed, or a port held by something else. A directory with nothing
+    // to serve is not trouble, and gets no strip explaining the absence.
+    var trouble = status === "in_use"
+      || (str(state && state.error)
+          && ((state && state.can_start) || status === "running"));
+    if (!state || !trouble) {
       box.style.display = "none";
       return false;
     }
@@ -11410,11 +11818,11 @@
     if (!where) {
       // Cmd+Enter is the build wherever the caret is -- and after a pick
       // from the gutter it is in no row at all. Once: not once to land the
-      // caret and once more to build.
+      // caret and once more to build. Shift held is the fast lane.
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
         event.stopPropagation();
-        todoBuild();
+        todoBuild(event.shiftKey);
         return;
       }
       // The caret is in the host but outside every row's text (between
@@ -11473,10 +11881,11 @@
       return;
     } else if (mod && event.key === "Enter") {
       // The build draws the list itself, caret on the fresh empty row; a
-      // second redraw here would take that caret away again.
+      // second redraw here would take that caret away again. Shift held is
+      // the fast lane.
       event.preventDefault();
       event.stopPropagation();
-      todoBuild();
+      todoBuild(event.shiftKey);
       return;
     } else if (mod && (event.key === "Backspace" || event.key === "Delete")) {
       handled = todoApply(todoRemove(todoItems, index));
@@ -11783,20 +12192,23 @@
     tick();
   }
 
-  function todoBuild() {
+  function todoBuild(quick) {
     // Build starts the build. Nothing is asked first: the reader picked the
     // rows and pressed the button, and what each row is priced at is already
-    // printed in its corner, where they read it before pressing.
+    // printed in its corner, where they read it before pressing. Quick is
+    // the same press down the fast lane: slim context, the quick model, the
+    // goal's kept session -- for a change small enough to watch land in the
+    // preview rather than wait on.
     if (todoBuilding || !todoGoalId || !todoItems) return;
     var ids = todoPickedIds();
     // Nothing picked is not nothing to do: it is the whole list. Picking
     // narrows a build; it is not the price of starting one.
     if (!ids.length) ids = todoBuildable(todoItems);
     if (!ids.length) return;
-    todoBuildNow(ids);
+    todoBuildNow(ids, quick);
   }
 
-  function todoBuildNow(ids) {
+  function todoBuildNow(ids, quick) {
     // What comes next is typed into a fresh row, not into one just sent:
     // the row is there before the reader has to ask for it with Enter.
     var blank = todoBlankAfter(todoItems, ids);
@@ -11834,7 +12246,8 @@
     renderTodoRail(true);
     var goalId = todoGoalId;
     written.then(function () {
-      return post({ op: "build_todos", goal_id: goalId, ids: ids });
+      return post({ op: "build_todos", goal_id: goalId, ids: ids,
+                    quick: !!quick });
     }).then(function (res) {
       todoBuilding = false;
       if (res && res.ok && res.queued && todoGoalId === goalId && todoItems) {
@@ -12127,7 +12540,7 @@
           && railTab === "todos" && todoItems && !todoTypingTarget(node)) {
         event.preventDefault();
         event.stopPropagation();
-        todoBuild();
+        todoBuild(event.shiftKey);
       }
     }, true);
     document.addEventListener("beforeinput", function (event) {
@@ -12351,6 +12764,9 @@
         return;
       }
       if (node.className === "hc-todo-copy") { todoCopyAll(); return; }
+      if (node.className === "hc-todo-quick" || node.getAttribute("data-hc-todo-quick") !== null) {
+        todoBuild(true); return;
+      }
       if (node.className === "hc-todo-build" || node.getAttribute("data-hc-todo-build") !== null) {
         todoBuild(); return;
       }
@@ -12973,7 +13389,7 @@
     post({ op: "set_document", goal_id: goalId,
            document: { id: id, title: "Untitled" } })
       .then(function () {
-        centerTabChoice[goalId] = "document";
+        showSource("@document");
         var p = refreshState();
         if (p && p.then) p.then(function () { renderPreview(true); });
         else renderPreview(true);
@@ -13004,7 +13420,7 @@
       }).then(function (r) { return r.json(); }).then(function (res) {
         done();
         if (res && res.ok) {
-          centerTabChoice[goalId] = "paper";
+          showSource("@paper");
           var p = refreshState();
           if (p && p.then) p.then(function () { renderPreview(true); });
           else renderPreview(true);
@@ -13049,17 +13465,54 @@
       .then(function (r) { return r.json(); })
       .then(function (body) {
         if (body && typeof body === "object") previewState = body;
+        previewAuto(body);
       })
       .catch(function () { /* the server going away is the banner's news */ });
   }
 
-  function previewDo(op, extra) {
+  // What the pane does for itself, once per project per page load. Both are
+  // requests the server re-checks, never decisions made here: detection is
+  // read-only so it may simply happen; a start is allowed only for a
+  // serving command read out of the repository's own files (never a model
+  // guess), with Stop/Start as the reader's standing answer
+  // (state.autostart). A build ending clears the ledger, so a project that
+  // JUST became runnable -- the build wrote its first package.json or
+  // index.html -- is detected and started without a reload.
+  var previewAutoTried = {};
+  var previewWasBuilding = false;
+  function previewAuto(state) {
+    var building = pvBuildingNow();
+    if (previewWasBuilding && !building) {
+      previewAutoTried = {};
+      // The build just ended: show what it changed without being asked.
+      previewReloadFrame();
+    }
+    previewWasBuilding = building;
+    if (!state || state.ok === false || previewBusy) return;
+    var where = str(state.cwd || "");
+    if (!where) return;
+    var tried = previewAutoTried[where] || (previewAutoTried[where] = {});
+    if (str(state.status) === "unconfigured" && state.configured === false
+        && !tried.detect) {
+      tried.detect = true;
+      previewDo("preview_configure", { auto: true }, true);
+      return;
+    }
+    if ((str(state.status) === "ready" || str(state.status) === "stale")
+        && state.autostart !== false
+        && (state.ui || {}).available && !tried.start) {
+      tried.start = true;
+      previewDo("preview_show_ui", { auto: true }, true);
+    }
+  }
+
+  function previewDo(op, extra, quiet) {
     previewBusy = op;
     previewSaid = "";
     renderPreview(true);
     return post(Object.assign({ op: op }, extra || {})).then(function (res) {
       previewBusy = "";
-      if (!res || res.ok === false) {
+      if ((!res || res.ok === false) && !quiet) {
         previewSaid = str((res && res.error) || "that did not work");
       }
       if (op === "preview_explain" && res && res.ok) previewFix = res;
@@ -13076,7 +13529,7 @@
     previewWired = true;
     document.addEventListener("click", function (event) {
       // A center tab click: remember the reader's choice for this goal and
-      // redraw. The four tabs are always present, so this only switches which.
+      // redraw. The tabs are always present, so this only switches which.
       var tabNode = closestAttr(event.target, "data-hc-center-tab");
       if (tabNode) {
         event.preventDefault();
@@ -13175,6 +13628,14 @@
     return el("div", "hc-pv-why", text);
   }
 
+  // Whether a build is out for the selected goal right now -- the thing the
+  // Interface tab should visibly know while the reader waits on it.
+  function pvBuildingNow() {
+    var line = todoWatchLine(todoWatchRun());
+    return !!(line && line.running && !line.checking);
+  }
+
+
   function pvTerminal(lines, tall) {
     var box = el("div", "hc-pv-term" + (tall ? " hc-pv-term-tall" : ""));
     var body = el("pre", "hc-pv-term-body",
@@ -13246,15 +13707,20 @@
         || "This workspace is not pointed at a project directory."));
       return bare;
     }
-    var card = pvCard("", "This project isn’t set up to run yet.");
-    card.appendChild(pvWhy(str(state.reason)
-      || "Nothing here names a way to start it — no dev script, no Makefile"
-         + " target, no entry point I recognise."));
-    var acts = el("div", "hc-center-empty-acts");
-    acts.appendChild(pvButton(
-      previewBusy === "preview_configure" ? "looking…" : "Find how to run it",
-      "detect", "", "go"));
-    card.appendChild(acts);
+    // Detection already ran on its own (see previewAuto), so a project
+    // sitting here genuinely has nothing runnable yet — most often because
+    // nothing has been built yet. One quiet sentence, no controls — and
+    // while a build is out, just the spinner and the word: the pane fills
+    // in on its own the moment something runnable exists.
+    var card = pvCard("", "");
+    if (pvBuildingNow()) {
+      var line = el("div", "hc-pv-buildline");
+      line.appendChild(el("i"));
+      line.appendChild(el("span", "", "building"));
+      card.appendChild(line);
+    } else {
+      card.appendChild(pvWhy("Start building and your interface will appear here."));
+    }
     return card;
   }
 
@@ -13345,15 +13811,11 @@
   }
 
   function pvRunningWeb(state) {
+    // No bar: the page speaks for itself, the dev server hot-reloads what
+    // a build saves, and the rail's dev-server section is where a stop
+    // lives for the reader who wants one. Chrome above a live page was
+    // furniture nobody asked to dust.
     var wrap = el("div", "hc-pv-live");
-    var bar = el("div", "hc-pv-bar");
-    bar.appendChild(el("span", "hc-pv-dot", ""));
-    bar.appendChild(el("span", "hc-pv-url", str(state.url)));
-    bar.appendChild(el("span", "hc-pv-grow", ""));
-    bar.appendChild(pvButton("Reload", "reload", "", "quiet"));
-    bar.appendChild(pvButton("Open", "open", str(state.url), "quiet"));
-    bar.appendChild(pvButton("Stop", "stop", "", "quiet"));
-    wrap.appendChild(bar);
     var run = state.run || {};
     if (run.embeddable === false) {
       var card = pvCard("", "This server will not be embedded in another"
@@ -13509,17 +13971,42 @@
     if (previewFrame) previewFrame.style.display = "none";
   }
 
-  function previewPlaceFrame(url) {
+  function previewReloadFrame() {
+    // A dev server with hot reload already repainted; a plain static one
+    // did not. Reloading the frame when a build ends covers both -- the
+    // fresh page is what the build was for.
+    if (!previewFrame || !previewShown) return;
+    try { previewFrame.contentWindow.location.reload(); }
+    catch (err) { previewFrame.src = previewShown; }
+  }
+
+  function previewPlaceFrame(url, slotArg) {
     // The frame sits above the overview and brainstorm panels (its z-index
     // has to clear the pane it is drawn over), and the slot it covers keeps
-    // its rectangle while those panels are up -- so being on another view
-    // has to hide it explicitly, or the preview floats over every view.
-    if (overviewShown() || brainstormShown() || homeShown()) {
+    // its rectangle while those panels are up -- so a slot that belongs to
+    // a view that is not on screen has to be refused explicitly, or the
+    // preview floats over every view. The overview owns its own slot (the
+    // context card's Paper row reads through one), so the rule is by slot,
+    // not by view: an overview slot only while the overview is up, any
+    // other slot only while it is not.
+    if (brainstormShown() || homeShown()) {
       previewHideFrame();
       return;
     }
-    var slot = document.querySelector(".hc-pv-slot");
+    var slot = slotArg;
+    if (!slot) {
+      // No slot named: the center's, never the overview's -- a caller that
+      // does not say which slot it means is the center pane, and letting it
+      // fall through to the overview's slot would fight the paper for it.
+      var all = document.querySelectorAll(".hc-pv-slot");
+      for (var si = 0; si < all.length; si += 1) {
+        if (!(overviewBox && overviewBox.contains
+              && overviewBox.contains(all[si]))) { slot = all[si]; break; }
+      }
+    }
     if (!slot || !url) { previewHideFrame(); return; }
+    var inOv = !!(overviewBox && overviewBox.contains && overviewBox.contains(slot));
+    if (overviewShown() ? !inOv : inOv) { previewHideFrame(); return; }
     var box = slot.getBoundingClientRect();
     if (box.width < 40 || box.height < 40) { previewHideFrame(); return; }
     var frame = previewEnsureFrame();
@@ -13547,41 +14034,30 @@
             previewRow(), state.intent ? state.intent.expected : ""].join("|");
   }
 
-  // The center is four fixed tabs: Document, Paper, Interface, Notes. They are
-  // always all four, never removed for a goal -- the selected goal decides
-  // which is shown first and what each holds, not whether a tab exists.
-  var CENTER_TABS = [["document", "Document"], ["paper", "Paper"],
-                     ["interface", "Interface"], ["notes", "Notes"]];
+  // The center is two fixed tabs: Interface and Notes. Document and Paper
+  // used to sit here too; they now live in the overview's context card as
+  // rows of its rail (see renderOverviewPane), so the goals view keeps only
+  // what is about running and annotating the work itself.
+  var CENTER_TABS = [["interface", "Interface"], ["notes", "Notes"]];
   var centerTabChoice = Object.create(null);   // goalId -> tab the reader chose
-
-  function goalHasPaper(goalId) {
-    var rec = goalServerRecord(goalId);
-    var p = (rec && rec.paper) || {};
-    return !!(str(p.url).trim() || str(p.pdf).trim() || str(p.paper_id).trim());
-  }
 
   // goalId -> { paperId, fetchedAt, state:"loading"|"ready"|"error", data, error }
   // A canonical paper's signed URL is fetched fresh from the backend and never
   // persisted: cleared on Refresh, and refetched when the tab reopens it stale.
   var berkeleyPaperCache = Object.create(null);
 
-  // The tab a goal opens on when the reader has not chosen one: a reading goal
-  // with a paper opens on Paper, an implementation goal with a running-or-
-  // runnable interface on Interface, everything else on Document.
-  function centerDefaultTab(goalId) {
-    if (goalHasPaper(goalId)) return "paper";
-    var rec = goalServerRecord(goalId);
-    var phase = rec ? str(rec.phase) : "";
-    var runnable = previewState && previewState.status
-      && previewState.status !== "unconfigured";
-    if (phase === "implement" && runnable) return "interface";
-    return "document";
+  // The tab a goal opens on when the reader has not chosen one: Interface,
+  // always -- the pane runs and previews itself now, and an empty project
+  // greets the reader with the one line about building rather than an
+  // error. Notes stays a click away. Paper and Document open from the
+  // Overview.
+  function centerDefaultTab() {
+    return "interface";
   }
 
   function centerActiveTab(goalId) {
     var chosen = centerTabChoice[goalId];
-    if (chosen === "document" || chosen === "paper"
-        || chosen === "interface" || chosen === "notes") return chosen;
+    if (chosen === "interface" || chosen === "notes") return chosen;
     return centerDefaultTab(goalId);
   }
 
@@ -13590,7 +14066,7 @@
   function centerEnsureTabs(container) {
     if (!container) return null;
     var bar = container.querySelector(".hc-center-tabs");
-    if (bar && bar.children.length === 4) return bar;
+    if (bar && bar.children.length === CENTER_TABS.length) return bar;
     if (!bar) {
       bar = el("div", "hc-center-tabs");
       var mount = container.querySelector(".hc-preview-mount");
@@ -13622,7 +14098,7 @@
     if (serverState.scope !== "chat") return false;
     previewDelegate();
     var mount = document.querySelector(".hc-preview-mount");
-    if (!mount) { previewHideFrame(); return false; }
+    if (!mount) { previewHideFrame(); return renderOverviewPane(force); }
     var goal = todoSelectedGoal();
     var goalId = goal ? str(goal.id) : "";
     // The run state is kept fresh even off the Interface tab, so the default
@@ -13631,10 +14107,14 @@
     centerEnsureTabs(mount.parentNode);
     var tab = centerActiveTab(goalId);
     centerMarkTabs(tab);
-    if (tab === "interface") return centerRenderInterface(mount, force);
-    if (tab === "paper") return centerRenderPaper(mount, goalId, force);
-    if (tab === "notes") return centerRenderNotes(mount, goal, goalId, force);
-    return centerRenderDocument(mount, goalId, force);
+    var did = tab === "interface"
+      ? centerRenderInterface(mount, force)
+      : centerRenderNotes(mount, goal, goalId, force);
+    // The overview's Document/Paper pane rides the same refreshes: every
+    // action that redraws the center redraws it too, and it places its own
+    // frame last so the center's hide never wins over a visible paper.
+    var pane = renderOverviewPane(force);
+    return did || pane;
   }
 
   // --- Interface tab: the existing live-preview/run surface, unchanged. -----
@@ -13643,7 +14123,12 @@
   function centerRenderInterface(mount, force) {
     var state = previewState;
     if (!state) { previewHideFrame(); return false; }
-    var sig = "iface:" + previewSig(state);
+    // The building flag rides the signature so the empty card's spinner
+    // appears the poll a build starts and leaves the poll it ends -- a
+    // boolean, not the build's changing text, so the pane is not redrawn
+    // every sweep.
+    var building = pvBuildingNow();
+    var sig = "iface:" + (building ? "b1:" : "b0:") + previewSig(state);
     if (force || mount.getAttribute("data-hc-pv-sig") !== sig) {
       while (mount.firstChild) mount.removeChild(mount.firstChild);
       var intent = pvIntent(state);
@@ -13766,7 +14251,7 @@
         mount.appendChild(wrap);
         mount.setAttribute("data-hc-pv-sig", sig);
       }
-      previewPlaceFrame(src);
+      previewPlaceFrame(src, mount.querySelector(".hc-pv-slot"));
       return true;
     }
     previewHideFrame();
@@ -13880,7 +14365,7 @@
         mount.appendChild(wrap);
         mount.setAttribute("data-hc-pv-sig", sig);
       }
-      previewPlaceFrame(src);
+      previewPlaceFrame(src, mount.querySelector(".hc-pv-slot"));
       return true;
     }
 
@@ -13955,8 +14440,8 @@
   // pane under it has to move it too -- and a sweep 700ms later is a frame
   // sitting over the wrong part of the window in the meantime.
   // The one URL the floating frame should show for the active tab: the running
-  // interface on the Interface tab, the paper's PDF or link on the Paper tab,
-  // nothing anywhere else. Keeps the frame and the pane in step on every sweep.
+  // interface on the Interface tab, nothing anywhere else -- the paper's is
+  // ovFrameUrl's. Keeps the frame and the pane in step on every sweep.
   function centerFrameUrl() {
     var goalId = previewGoal();
     var tab = centerActiveTab(goalId);
@@ -13966,20 +14451,66 @@
           && (s.run || {}).embeddable !== false) return s.url;
       return "";
     }
-    if (tab === "paper") {
-      var rec = goalServerRecord(goalId);
-      var p = (rec && rec.paper) || {};
-      var pdf = str(p.pdf).trim(), url = str(p.url).trim();
-      if (pdf) return "/api/paper-pdf?path=" + encodeURIComponent(pdf);
-      if (url) return url;
+    return "";
+  }
+
+  // The one URL the frame should show while the overview is up: the paper,
+  // when the overview page is the main one and its Paper row is the one open.
+  function ovFrameUrl() {
+    if (overviewPage() !== "overview") return "";
+    if (overviewSource !== "@paper") return "";
+    var goalId = previewGoal();
+    var rec = goalServerRecord(goalId);
+    var p = (rec && rec.paper) || {};
+    var pdf = str(p.pdf).trim(), url = str(p.url).trim();
+    if (pdf) return "/api/paper-pdf?path=" + encodeURIComponent(pdf);
+    if (url) return url;
+    // A canonical Berkeley paper shows through its cached signed URL.
+    var entry = berkeleyPaperCache[goalId];
+    if (entry && entry.state === "ready" && entry.data
+        && entry.data.available && str(entry.data.signedUrl)) {
+      return str(entry.data.signedUrl);
     }
     return "";
   }
 
   function previewReflow() {
+    if (overviewShown()) {
+      var ou = ovFrameUrl();
+      var slot = overviewBox
+        && overviewBox.querySelector(".hc-ov-mount .hc-pv-slot");
+      if (ou && slot) previewPlaceFrame(ou, slot); else previewHideFrame();
+      return true;
+    }
     var u = centerFrameUrl();
     if (u) previewPlaceFrame(u); else previewHideFrame();
     return true;
+  }
+
+  // --- the overview's Document and Paper rows -------------------------------
+  // The goal's working document and the paper it reads against, moved from
+  // the goals view's center tabs into the context card: two rows of its
+  // rail, read in the same pane a source is. Same renderers, different
+  // mount; which row is open is overviewSource's, and the mount exists only
+  // while one of them is (showSource builds it).
+  function renderOverviewPane(force) {
+    if (!overviewShown() || !overviewBox) return false;
+    if (overviewPage() !== "overview") {
+      // Another page of the box is up: nothing here may keep a frame alive.
+      previewHideFrame();
+      return false;
+    }
+    if (overviewSource !== "@document" && overviewSource !== "@paper") {
+      return false;
+    }
+    var mount = overviewBox.querySelector(".hc-ov-mount");
+    if (!mount) return false;
+    var goal = todoSelectedGoal();
+    var goalId = goal ? str(goal.id) : "";
+    if (overviewSource === "@paper") {
+      return centerRenderPaper(mount, goalId, force);
+    }
+    return centerRenderDocument(mount, goalId, force);
   }
 
   function previewWatchViewport() {
@@ -14173,6 +14704,13 @@
           : picked ? "Build " + picked
           : every ? "Build all" : "Build";
         build.setAttribute("data-hc-todo-build", (picked || every) ? "on" : "off");
+        var quickBtn = actions.querySelector(".hc-todo-quick");
+        if (quickBtn) {
+          quickBtn.textContent = todoBuilding ? "…"
+            : picked ? "Quick " + picked : "Quick";
+          quickBtn.setAttribute("data-hc-todo-quick",
+                                (picked || every) ? "on" : "off");
+        }
       }
       var note = actions.querySelector(".hc-todo-error");
       if (note) {
@@ -17219,7 +17757,7 @@
        chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">{{ railName }}</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
-       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-rail-current\"></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\" style=\"opacity:.5;border:none;padding:0;font-weight:400;align-self:flex-end\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-add\" style=\"font:600 10px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);cursor:pointer;margin-right:auto;opacity:.7\">+ Add TODO</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
+       chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-rail-current\"></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\" style=\"opacity:.5;border:none;padding:0;font-weight:400;align-self:flex-end\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-add\" style=\"font:600 10px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);cursor:pointer;margin-right:auto;opacity:.7\">+ Add TODO</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-quick\" data-hc-todo-quick=\"off\" title=\"A small, fast change: slim context, the quick model, your kept session — and no restart check after (⇧⌘↩)\">Quick</span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
             : "<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"],
       // The sources this goal was written against, as a rail over the
       // document. Both lists and both remove handlers are the artifact's

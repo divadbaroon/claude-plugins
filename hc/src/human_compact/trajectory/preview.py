@@ -733,6 +733,12 @@ def start(root: Optional[Path], cwd, profile: Dict[str, Any],
     if held and held.alive():
         return {"ok": False, "error": "something is already running here",
                 "run": held.snapshot()}
+    # A serving profile started at all is consent to start it again when the
+    # same command is still the verified one (see show_ui's auto). Written
+    # before the spawn branches so every door in -- Run, Show UI, the dev
+    # handoff -- says the same thing.
+    if profile.get("serves"):
+        _set_autostart(root, where, True)
     if session_id and dev_owns(where, profile) and command == str(
             profile.get("command") or "").strip():
         # The project's own dev script: dev_server runs it, and keeps
@@ -766,6 +772,22 @@ def start(root: Optional[Path], cwd, profile: Dict[str, Any],
 UI_GRACE_S = 75.0
 
 
+def _set_autostart(root: Optional[Path], cwd, value: bool) -> None:
+    """Remember whether this project's UI starts on its own.
+
+    Written where the run config lives, because it is a fact about the
+    project rather than about one workspace window: Stop says "do not
+    restart what I just stopped" everywhere, Start says the opposite.
+    """
+    config = read_config(root, cwd)
+    if not config:
+        return
+    if bool(config.get("autostart", True)) == bool(value):
+        return
+    config["autostart"] = bool(value)
+    write_config(root, cwd, config)
+
+
 def ui_profile(config: Dict[str, Any]) -> Dict[str, Any]:
     """The profile that would put a page on screen, if this project has one.
 
@@ -782,7 +804,8 @@ def ui_profile(config: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def show_ui(root: Optional[Path], cwd, session_id: str = "") -> Dict[str, Any]:
+def show_ui(root: Optional[Path], cwd, session_id: str = "",
+            auto: bool = False) -> Dict[str, Any]:
     """Do whatever has to happen for there to be a page to look at.
 
     One press, and the steps behind it are the project's own: install what
@@ -794,10 +817,32 @@ def show_ui(root: Optional[Path], cwd, session_id: str = "") -> Dict[str, Any]:
     A project with nothing that serves gets told so. That is the honest end
     of this button, and pretending otherwise -- a spinner, a blank frame --
     is how a preview pane teaches people to distrust it.
+
+    ``auto`` is the pane starting the project on its own, so the reader sees
+    the thing without being asked to run it first. Bounded, not open: only a
+    serving command read out of the repository's OWN files ever qualifies (a
+    model's guess never starts unasked), nothing may need installing first,
+    and a Stop press turns it off for the project until a Start turns it
+    back on. A project whose run files changed is re-detected -- detection
+    is free and read-only -- and the fresh answer is what runs.
     """
     where = _resolved(cwd)
     config = read_config(root, where)
     profile = ui_profile(config)
+    if auto:
+        if config.get("autostart") is False:
+            return {"ok": False, "auto": True,
+                    "error": "autostart is off for this project"}
+        stale = bool(config.get("fingerprint")
+                     and config["fingerprint"] != fingerprint(where))
+        if stale or not config:
+            configure(root, where, detect_only=True)
+            config = read_config(root, where)
+            profile = ui_profile(config)
+        if (not profile or str(config.get("source") or "") == "model"
+                or blockers(where, profile)):
+            return {"ok": False, "auto": True,
+                    "error": "not eligible to start unasked"}
     if not profile:
         return {"ok": False, "not_ready": True,
                 "reason": ("nothing in this project serves a page yet — what"
@@ -831,6 +876,10 @@ def show_ui(root: Optional[Path], cwd, session_id: str = "") -> Dict[str, Any]:
 
 
 def stop(cwd, root: Optional[Path] = None, session_id: str = "") -> Dict[str, Any]:
+    # A Stop press is also "and do not start this on your own again": the
+    # remembered consent behind show_ui's auto ends where the reader ends
+    # the run. The next manual start remembers the opposite.
+    _set_autostart(root, cwd, False)
     proc = running(cwd)
     if proc:
         proc.stop()
@@ -1025,6 +1074,10 @@ def state(root: Optional[Path], cwd, intent: Optional[Dict[str, Any]] = None,
                "reason": ("" if serving else
                           "nothing in this project serves a page yet")},
         "stale": stale,
+        # Whether this project may start on its own when the workspace
+        # opens -- the reader's last Stop/Start press, read by the pane's
+        # auto request (which the server re-checks regardless).
+        "autostart": config.get("autostart") is not False,
         "status": status,
         "surface": _surface(status, proc, produced),
         "profile": profile,
@@ -1079,12 +1132,18 @@ def _dev_projection(where: str, config: Dict[str, Any],
     return out
 
 
-def configure(root: Optional[Path], cwd, engine=None) -> Dict[str, Any]:
+def configure(root: Optional[Path], cwd, engine=None,
+              detect_only: bool = False) -> Dict[str, Any]:
     """Work out how this project runs, and write the answer down.
 
     The detector answers first and for free. Only a project it can say
     nothing about reaches the model, and what the model is asked for is one
     command and one sentence -- not a plan, not a refactor.
+
+    ``detect_only`` is how the pane configures itself unasked: detection
+    reads the repository's own files and runs nothing, so it may happen on
+    an open -- but the model call may not, so a project the files say
+    nothing about is left for the button rather than billed on a page load.
     """
     where = _resolved(cwd)
     if not Path(where).is_dir():
@@ -1092,6 +1151,10 @@ def configure(root: Optional[Path], cwd, engine=None) -> Dict[str, Any]:
     profiles = detect(where)
     source = "repository"
     if not profiles:
+        if detect_only:
+            return {"ok": False, "not_configured": True,
+                    "error": "nothing in this project's own files names a"
+                             " way to run it"}
         asked = _ask_model(where, engine)
         if not asked.get("ok"):
             return asked
