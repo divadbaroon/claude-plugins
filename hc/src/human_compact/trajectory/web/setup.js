@@ -434,21 +434,24 @@
   function drawMajorStep(body) {
     wizardHeading(body, 2, "What is your major?");
     var proceed;
+    function refreshProceed() {
+      setWizardButton(proceed, profileMajorReady());
+    }
     var field = wizardField("input", st.profile.major, "start typing…",
       "profile-major", function () {
         st.profile.major = input.value;
-        renderMajorSeeds(seeds, input);
-        setWizardButton(proceed, profileMajorReady());
+        renderMajorSeeds(seeds, input, refreshProceed);
+        refreshProceed();
       });
     var input = field.querySelector(".profile-major");
     body.appendChild(field);
     var seeds = el("div", "seeds wizard-seeds");
     body.appendChild(seeds);
-    renderMajorSeeds(seeds, input);
+    renderMajorSeeds(seeds, input, refreshProceed);
     proceed = wizardContinue(body, profileMajorReady(), function () { st.whoStep = 3; draw(); });
   }
 
-  function renderMajorSeeds(seeds, input) {
+  function renderMajorSeeds(seeds, input, afterChoose) {
     seeds.textContent = "";
     var typed = str(st.profile.major).trim().toLowerCase();
     MAJORS.filter(function (major) {
@@ -459,7 +462,8 @@
       on(seed, "click", function () {
         st.profile.major = major;
         input.value = major;
-        renderMajorSeeds(seeds, input);
+        renderMajorSeeds(seeds, input, afterChoose);
+        if (afterChoose) afterChoose();
       });
       seeds.appendChild(seed);
     });

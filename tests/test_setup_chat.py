@@ -1554,8 +1554,11 @@ class WhoTests(unittest.TestCase):
     def test_a_seed_or_any_typed_major_is_the_answer(self):
         seeded = self.with_profile(
             "app.querySelectorAll('.seed')[0].press();"
-            "return window.__hcSetup.state().profile.major;", major="")
-        self.assertEqual("Computer Science", seeded)
+            "return {major: window.__hcSetup.state().profile.major,"
+            "        enabled: !app.querySelector('.wizard-actions .btn').hasAttribute('disabled')};",
+            major="")
+        self.assertEqual("Computer Science", seeded["major"])
+        self.assertTrue(seeded["enabled"])
         typed = self.with_profile(
             "var field = app.querySelector('.profile-major');"
             "field.value = 'Rhetoric & Molecular Origami';"
