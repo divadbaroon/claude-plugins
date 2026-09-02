@@ -1806,6 +1806,12 @@ def setup_import_main(argv=None):
     if not result.get("ok"):
         sys.stderr.write(f"hc: {result.get('error') or 'could not create the project'}\n")
         raise SystemExit(1)
+    # Who the project is for came with it. Remembered before the workspace
+    # opens, so its first prompt is already in the reader's register.
+    reader = payload.get("reader")
+    if isinstance(reader, dict) and reader:
+        from .trajectory import reader as READER
+        READER.remember(reader)
     # The workspace launcher prints one line, the URL; it is the mechanism
     # here rather than the message, so it is captured, not printed twice.
     said = io.StringIO()

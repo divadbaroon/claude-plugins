@@ -1005,9 +1005,9 @@ def set_display_name(name: str, root: Optional[Path] = None) -> Dict[str, Any]:
     return {"ok": True, "display_name": (out or {}).get("display_name", "")}
 
 
-def set_reader_profile(profile: Dict[str, str],
+def set_reader_profile(profile: Dict[str, Any],
                        root: Optional[Path] = None) -> Dict[str, Any]:
-    """The four setup answers, put on the account.
+    """The four setup answers and the graded areas, put on the account.
 
     The copy that survives a new laptop. The one every prompt actually
     reads is the file in the vault -- see ``reader`` -- so this is allowed
@@ -1019,7 +1019,8 @@ def set_reader_profile(profile: Dict[str, str],
                {"p_name": str(profile.get("name") or "")[:60],
                 "p_year": str(profile.get("year") or "")[:40],
                 "p_major": str(profile.get("major") or "")[:80],
-                "p_level": str(profile.get("level") or "")},
+                "p_level": str(profile.get("level") or ""),
+                "p_knowledge": profile.get("knowledge") or []},
                config, session["access_token"])
     return {"ok": True, "profile": (out or {}).get("profile") or {}}
 

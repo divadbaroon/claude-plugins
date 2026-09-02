@@ -1753,8 +1753,8 @@ class PageTests(unittest.TestCase):
             _status, body = self.get(base + "/setup.who")
         answer = json.loads(body)
         self.assertIn("profile", answer)
-        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
-                         answer["profile"])
+        self.assertEqual({"name": "", "year": "", "major": "", "level": "",
+                          "knowledge": []}, answer["profile"])
 
     def test_the_setup_card_path_has_no_competing_freeform_composer(self):
         with self.server() as base:

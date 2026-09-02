@@ -39,9 +39,9 @@ MAYA = {"name": "Maya", "year": "2", "major": "Molecular Biology",
 class NormalizeTests(unittest.TestCase):
     """It comes off a page and goes into a prompt, so none of it is trusted."""
 
-    def test_nothing_at_all_is_four_empty_strings(self):
-        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
-                         READER.normalize(None))
+    def test_nothing_at_all_is_an_empty_profile(self):
+        self.assertEqual({"name": "", "year": "", "major": "", "level": "",
+                          "knowledge": []}, READER.normalize(None))
 
     def test_every_field_is_bounded(self):
         held = READER.normalize({"name": "n" * 500, "year": "y" * 500,
@@ -51,13 +51,31 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(READER.MAX_MAJOR, len(held["major"]))
 
     def test_a_level_nobody_offered_is_no_level(self):
-        # The slider always lands on one of three. Anything else reached the
+        # The slider always lands on one of four. Anything else reached the
         # server another way, and would be appended to a prompt as an
         # instruction nobody wrote.
-        for bad in ("expert", "PLAIN LANGUAGE", "0", 3, None):
+        for bad in ("guru", "PLAIN LANGUAGE", "0", 3, None):
             self.assertEqual("", READER.normalize({"level": bad})["level"])
 
-    def test_the_three_stops_are_kept(self):
+    def test_expert_is_a_fourth_stop(self):
+        self.assertEqual("expert", READER.normalize({"level": "expert"})["level"])
+
+    def test_knowledge_is_bounded_and_snapped_to_the_ladder(self):
+        held = READER.normalize({"knowledge": [
+            {"area": "Transformers", "parent_field": "ML", "level": 75, "project_role": "core"},
+            {"area": "", "level": 50},                 # no area: dropped
+            {"area": "PyTorch", "level": 33},           # off the ladder: dropped
+            {"area": "x" * 200, "level": "25"},         # bounded, string level ok
+            {"area": "A", "level": 0}, {"area": "B", "level": 0}, {"area": "C", "level": 0},
+        ]})
+        self.assertEqual(3 + 1, len(held["knowledge"]))
+        self.assertEqual("Transformers", held["knowledge"][0]["area"])
+        self.assertEqual(75, held["knowledge"][0]["level"])
+        self.assertEqual(80, len(held["knowledge"][1]["area"]))
+        self.assertEqual(25, held["knowledge"][1]["level"])
+        self.assertEqual([], READER.normalize({"knowledge": "junk"})["knowledge"])
+
+    def test_every_stop_offered_is_kept(self):
         for good in READER.LEVELS:
             self.assertEqual(good, READER.normalize({"level": good})["level"])
 
@@ -72,8 +90,8 @@ class NormalizeTests(unittest.TestCase):
         # of thing, and str() would put its repr in a prompt.
         held = READER.normalize({"name": ["a", "b"], "major": {"x": 1},
                                  "year": ["2"]})
-        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
-                         held)
+        self.assertEqual({"name": "", "year": "", "major": "", "level": "",
+                          "knowledge": []}, held)
 
     def test_a_year_sent_as_a_number_is_still_a_year(self):
         # JSON has numbers, and a page that sends one has still answered.
@@ -126,13 +144,27 @@ class BlockTests(unittest.TestCase):
     def test_each_level_says_something_different(self):
         said = {level: "\n".join(READER.lines({"level": level}))
                 for level in READER.LEVELS}
-        self.assertEqual(3, len(set(said.values())))
+        self.assertEqual(len(READER.LEVELS), len(set(said.values())))
         for level, body in said.items():
             self.assertIn(READER.FOR, body)
 
     def test_a_level_with_no_name_still_carries_its_rule(self):
         body = "\n".join(READER.lines({"level": "full"}))
         self.assertIn("precise term", body)
+
+
+class KnowledgeLinesTests(unittest.TestCase):
+    def test_the_block_names_each_area_at_its_capability(self):
+        text = "\n".join(READER.lines({"name": "Maya", "level": "expert", "knowledge": [
+            {"area": "Transformers", "level": 25}, {"area": "PyTorch", "level": 75}]}))
+        self.assertIn("What they already know", text)
+        self.assertIn("Transformers: can follow it (25)", text)
+        self.assertIn("PyTorch: can use it (75)", text)
+        self.assertIn(READER.LEVEL_RULES["expert"][0], text)
+
+    def test_no_knowledge_adds_no_block(self):
+        text = "\n".join(READER.lines({"name": "Maya", "level": "plain"}))
+        self.assertNotIn("already know", text)
 
 
 class StoreTests(unittest.TestCase):
@@ -420,7 +452,7 @@ class RoundTripTests(unittest.TestCase):
              self.server() as base:
             self.op(base, {"op": "setup_profile",
                            "profile": {"name": ["not", "a", "name"],
-                                       "level": "expert"}})
+                                       "level": "guru"}})
             back = self.get(base + "/setup.who")["profile"]
         self.assertEqual("", back["level"])
         # Never the repr of whatever was posted: a list is not a shorter
