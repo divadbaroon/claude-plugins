@@ -228,8 +228,18 @@ def remember(value, root: Optional[Path] = None) -> Dict[str, Any]:
     register. The push to Supabase is the copy that survives a new laptop,
     so a failure there is reported alongside a profile that was saved --
     never instead of one.
+
+    Absent is not empty. The local setup card posts the four fields it
+    shows and says nothing about the graded areas, which it has no way to
+    display and the reader has no way to retype -- so a save that read
+    that silence as "no areas" would delete what the web onboarding found
+    the first time somebody corrected their major. A value that carries no
+    ``knowledge`` key at all keeps whatever is already on disk; an
+    explicit empty list is an answer, and clears them.
     """
     held = normalize(value)
+    if isinstance(value, dict) and "knowledge" not in value:
+        held["knowledge"] = load(root)["knowledge"]
     kept = False
     error = ""
     try:

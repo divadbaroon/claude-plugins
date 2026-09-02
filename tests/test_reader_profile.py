@@ -461,6 +461,54 @@ class RoundTripTests(unittest.TestCase):
         self.assertEqual("", back["name"])
 
 
+class KnowledgeSurvivesLocalEditsTests(unittest.TestCase):
+    """A local edit answers four questions. It must not answer a fifth.
+
+    The grades come from the web onboarding and there is nowhere on the
+    local setup card to see them, let alone retype them -- so the four
+    fields that card posts say nothing about knowledge, and a save that
+    read that silence as "none" would delete work the reader cannot get
+    back. Absent is not empty here. An explicit empty list still is.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.offline = mock.patch(
+            "human_compact.trajectory.supabase_client.set_reader_profile",
+            side_effect=RuntimeError("no account"))
+        self.offline.start()
+        self.addCleanup(self.offline.stop)
+        READER.remember(dict(MAYA, level="expert", knowledge=[
+            {"area": "Transformers", "level": 25}]), self.root)
+
+    def test_the_setup_cards_four_fields_do_not_delete_the_grades(self):
+        READER.remember({"name": "Maya", "level": "plain"}, self.root)
+        kept = READER.load(self.root)
+        self.assertEqual("plain", kept["level"])
+        self.assertEqual(1, len(kept["knowledge"]))
+        self.assertEqual("Transformers", kept["knowledge"][0]["area"])
+
+    def test_an_empty_list_is_an_answer_and_does_clear_them(self):
+        READER.remember({"name": "Maya", "level": "plain", "knowledge": []},
+                        self.root)
+        self.assertEqual([], READER.load(self.root)["knowledge"])
+
+    def test_the_account_is_sent_the_carried_copy_too(self):
+        # The row is the copy that survives a new laptop. Carrying the
+        # grades into the file but not into the sync would leave the
+        # account holding the deletion this exists to prevent.
+        sent = []
+        self.offline.stop()
+        with mock.patch("human_compact.trajectory.supabase_client"
+                        ".set_reader_profile",
+                        side_effect=lambda p, r=None: sent.append(p)):
+            READER.remember({"name": "Maya", "level": "plain"}, self.root)
+        self.offline.start()
+        self.assertEqual("Transformers", sent[0]["knowledge"][0]["area"])
+
+
 class MigrationTests(unittest.TestCase):
     """The columns the answers land in on the account."""
 
@@ -487,6 +535,48 @@ class MigrationTests(unittest.TestCase):
     def test_only_a_signed_in_reader_may_call_it(self):
         self.assertIn("revoke all on function public.hc_set_profile", self.sql)
         self.assertIn("to authenticated", self.sql)
+
+
+class KnowledgeMigrationTests(unittest.TestCase):
+    """The second migration: a fourth register, and a column for the grades.
+
+    Pinned by string match the way the first one is. The SQL is never run
+    from here -- what this catches is the migration and the client drifting
+    apart, which shows up as a profile that saves locally and silently
+    stops reaching the account.
+    """
+
+    def setUp(self):
+        self.sql = (ROOT / "supabase" / "migrations"
+                    / "20260902120000_hc_reader_knowledge.sql").read_text(
+                        encoding="utf-8")
+
+    def test_the_grades_get_a_column_of_their_own(self):
+        self.assertIn("add column if not exists knowledge jsonb", self.sql)
+        self.assertIn("default '[]'::jsonb", self.sql)
+
+    def test_the_level_column_now_admits_the_fourth_stop(self):
+        self.assertIn(
+            "check (tech_level in ('', 'plain', 'some', 'full', 'expert'))",
+            self.sql)
+
+    def test_the_four_argument_function_is_dropped_before_the_five(self):
+        # Postgres overloads rather than replaces, so a create that only
+        # adds an argument leaves the old function callable beside the new
+        # one -- and a client that stopped sending p_knowledge would go on
+        # working, writing profiles with no grades in them.
+        dropped = self.sql.index(
+            "drop function if exists public.hc_set_profile(text, text, text, text)")
+        made = self.sql.index("create or replace function public.hc_set_profile")
+        self.assertLess(dropped, made)
+        self.assertIn("p_knowledge jsonb default '[]'::jsonb", self.sql)
+
+    def test_only_a_signed_in_reader_may_call_the_new_signature(self):
+        self.assertIn("revoke all on function public.hc_set_profile"
+                      "(text, text, text, text, jsonb) from public", self.sql)
+        self.assertIn("grant execute on function public.hc_set_profile"
+                      "(text, text, text, text, jsonb) to authenticated",
+                      self.sql)
 
 
 if __name__ == "__main__":
