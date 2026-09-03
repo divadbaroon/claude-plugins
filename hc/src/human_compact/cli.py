@@ -1797,21 +1797,14 @@ def setup_import_main(argv=None):
     if not isinstance(payload, dict):
         sys.stderr.write("hc: the setup payload is not an object\n")
         raise SystemExit(1)
-    from .trajectory import setup_chat as SETUP
-    result = SETUP.commit(None, payload.get("name"), payload.get("plan"),
-                          payload.get("goals"), payload.get("chosen"),
-                          payload.get("todos"), payload.get("subgoals") or [],
-                          bind="", paper=payload.get("paper"),
-                          provenance=payload.get("provenance"))
+    # One commit path for every way a web setup arrives -- piped in by the
+    # installer, retried from the saved file, or claimed by a chat's first
+    # /bart -- so the project is the same whichever door it came through.
+    from .trajectory import web_setup as WS
+    result = WS.materialize(payload)
     if not result.get("ok"):
         sys.stderr.write(f"hc: {result.get('error') or 'could not create the project'}\n")
         raise SystemExit(1)
-    # Who the project is for came with it. Remembered before the workspace
-    # opens, so its first prompt is already in the reader's register.
-    reader = payload.get("reader")
-    if isinstance(reader, dict) and reader:
-        from .trajectory import reader as READER
-        READER.remember(reader)
     # The workspace launcher prints one line, the URL; it is the mechanism
     # here rather than the message, so it is captured, not printed twice.
     said = io.StringIO()
@@ -1856,6 +1849,19 @@ def chat_ui_main(argv=None):
         CS.mark_goals_ui_invoked(args.session)
     except (OSError, ValueError, TypeError, TimeoutError) as exc:
         raise SystemExit(f"could not initialize chat state: {exc}") from exc
+
+    # A project finished on the web comes before the question a new chat is
+    # otherwise asked. The site's last screen sends the reader here -- "run
+    # claude, type /bart" -- holding a setup they have already approved, so
+    # a chat with no binding asks the account for it first and binds itself
+    # to what comes back. Quiet when there is no account or nothing waiting:
+    # the ordinary onboarding is then the right thing, not an error.
+    claimed = ""
+    try:
+        from .trajectory import web_setup as WS
+        claimed = WS.claim_for_chat(args.session)
+    except Exception:  # noqa: BLE001 - /bart opens with or without the web
+        claimed = ""
 
     # The workspace is where the user reads their goals; the mirror is where
     # they read them once it is closed. Only the manifest knows where Claude
@@ -1998,8 +2004,10 @@ def chat_ui_main(argv=None):
         webbrowser.open(url)
     # The URL last: the hook that prints this reads back the last line that
     # looks like one, and a note above it rides along in what the reader sees.
-    if note:
-        print("note: " + note)
+    # One note: the hook shows the first it finds, so two are joined.
+    said = "; ".join(part for part in (claimed, note) if part)
+    if said:
+        print("note: " + said)
     print(url)
     return 0
 

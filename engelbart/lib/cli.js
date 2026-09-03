@@ -192,6 +192,13 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
       : await (deps.openSetup || openSetup)({
         launcher, env: setupEnv, output, spawn: deps.spawn,
       });
+    if (options.code && options.noOpen) {
+      // Same situation as the installer's: a code plus --no-open is the
+      // browser flow, and the browser is where the setup continues.
+      output.write(`\nConnected as ${result.email || 'your Engelbart account'}. `
+        + 'Go back to your browser tab to keep setting up your project.\n');
+      return 0;
+    }
     output.write(opened
       ? `\nNext: Setting up your first project: ${opened}\n`
       : '\nNext: Run `hc setup-ui` to set up your first project.\n');
@@ -510,6 +517,13 @@ async function run(deps = {}) {
     } else if (imported) {
       // The recovery instructions are already on stderr; repeating them as
       // a "Next" would bury the command they name.
+    } else if (options.code && options.noOpen && account) {
+      // The web flow's own install line: the reader is mid-setup in a
+      // browser tab, the site saves their project only at the end, and the
+      // chat's first /bart claims it. Pointing them at a setup page or a
+      // command here would start a second setup beside the one they are in.
+      output.write(`\nConnected as ${account.email || 'your Engelbart account'}. `
+        + 'Go back to your browser tab to keep setting up your project.\n');
     } else {
       const next = opened
         ? `Setting up your first project: ${opened}`
