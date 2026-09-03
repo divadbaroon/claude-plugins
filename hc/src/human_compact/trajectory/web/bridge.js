@@ -2198,6 +2198,22 @@
       ".hc-key-sub{font:11px/1.5 'Source Code Pro',monospace;color:var(--mut,#575757)}",
       ".hc-key-meter{height:4px;border-radius:2px;background:var(--bd,#e3e3e3);overflow:hidden;margin-top:2px}",
       ".hc-key-meter-fill{height:100%;background:var(--acc,#a5492a)}",
+      // The Expertise pane: who the tool writes for, and one card per
+      // graded area. Nothing in here takes a click.
+      ".hc-exp-who{display:flex;flex-direction:column;gap:5px;padding-bottom:2px}",
+      ".hc-exp-name{font:700 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-exp-register{display:flex;align-items:baseline;gap:8px}",
+      ".hc-exp-register-label{font:600 10px 'Source Code Pro',monospace;letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-exp-register-at{font:700 11.5px 'Source Code Pro',monospace;color:var(--acc,#a5492a)}",
+      ".hc-exp-areas{display:flex;flex-direction:column;gap:8px}",
+      ".hc-exp-card{border:1px solid var(--bd,#e3e3e3);border-radius:9px;padding:10px 12px;display:flex;flex-direction:column;gap:5px;background:var(--panel2,#f6f6f6)}",
+      ".hc-exp-card-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px}",
+      ".hc-exp-area{font:700 11.5px 'Source Code Pro',monospace;color:var(--ink,#111)}",
+      ".hc-exp-says{font:11px 'Source Code Pro',monospace;color:var(--acc,#a5492a);white-space:nowrap}",
+      ".hc-exp-field{font:10.5px/1.5 'Source Code Pro',monospace;color:var(--fnt,#9b9b9b)}",
+      ".hc-exp-role{font:11px/1.5 'Source Code Pro',monospace;color:var(--mut,#575757)}",
+      ".hc-exp-meter{height:4px;border-radius:2px;background:var(--bd,#e3e3e3);overflow:hidden;margin-top:2px}",
+      ".hc-exp-meter-fill{height:100%;background:var(--acc,#a5492a)}",
       ".hc-key-ask{text-decoration:none;align-self:flex-start;margin-top:3px}",
       ".hc-settings{display:inline-flex;align-items:center;align-self:center}",
       ".hc-gear{display:inline-flex;align-items:center;cursor:pointer;color:var(--fnt,#9b9b9b);user-select:none;padding:2px}",
@@ -8418,8 +8434,11 @@
     // Cloud and Builds are gone from the strip: their sections still exist
     // below, but with no tab to select them they never draw. Bring a pair
     // back here to re-open one.
+    // Cloud, Builds and Sharing are gone from the strip: their sections
+    // still exist below, but with no tab to select them they never draw.
+    // Bring a pair back here to re-open one.
     [["account", "Account"], ["api", "API key"], ["alerts", "Alerts"],
-     ["sharing", "Sharing"], ["data", "Data"]].forEach(function (spec) {
+     ["expertise", "Expertise"], ["data", "Data"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -8649,6 +8668,38 @@
     kHint.setAttribute("data-hc-claude-hint", "");
     keys.appendChild(kHint);
     box.appendChild(keys);
+
+    // Who the tool is writing for, and what the web onboarding found they
+    // already know. Read-only on purpose: the four answers are typed on the
+    // setup page and the graded areas are a diagnostic's output, so a field
+    // here would be a second place to disagree with the prompts. This pane
+    // is the reader checking what every explanation is pitched at.
+    var exp = document.createElement("div");
+    exp.className = "hc-settings-sec";
+    exp.setAttribute("data-hc-settings-sec", "expertise");
+    exp.setAttribute("data-hc-tab", "expertise");
+    var eh = document.createElement("div");
+    eh.className = "hc-settings-sec-head";
+    eh.textContent = "Expertise";
+    exp.appendChild(eh);
+    var eSay = document.createElement("div");
+    eSay.className = "hc-settings-say";
+    eSay.setAttribute("data-hc-reader-say", "");
+    eSay.textContent = "reading\u2026";
+    exp.appendChild(eSay);
+    var eWho = document.createElement("div");
+    eWho.className = "hc-exp-who";
+    eWho.setAttribute("data-hc-reader-who", "");
+    exp.appendChild(eWho);
+    var eAreas = document.createElement("div");
+    eAreas.className = "hc-exp-areas";
+    eAreas.setAttribute("data-hc-reader-areas", "");
+    exp.appendChild(eAreas);
+    var eHint = document.createElement("div");
+    eHint.className = "hc-settings-hint";
+    eHint.setAttribute("data-hc-reader-hint", "");
+    exp.appendChild(eHint);
+    box.appendChild(exp);
 
     // This project, and who else may see it. Sending it up and minting an
     // invitation are both account work -- they need the sign-in typed
@@ -9076,6 +9127,90 @@
 
   var claudeAccountBusy = false;
 
+  // --- the Expertise tab: who the tool writes for, drawn as bars -----------
+
+  // One graded area. The ladder's stops are 0/25/50/75/100, which is already
+  // a percentage, so the bar is the number rather than a rescaling of it and
+  // cannot drift from the words beside it.
+  function readerAreaCard(area) {
+    var card = el("div", "hc-exp-card");
+    var top = el("div", "hc-exp-card-top");
+    top.appendChild(el("span", "hc-exp-area", str(area.area)));
+    top.appendChild(el("span", "hc-exp-says", str(area.says)));
+    card.appendChild(top);
+    var field = str(area.parent_field);
+    if (field) card.appendChild(el("div", "hc-exp-field", field));
+    var meter = el("div", "hc-exp-meter");
+    var fill = el("div", "hc-exp-meter-fill");
+    var at = Number(area.level);
+    fill.style.width = (at >= 0 && at <= 100 ? at : 0) + "%";
+    meter.appendChild(fill);
+    card.appendChild(meter);
+    var role = str(area.project_role);
+    if (role) card.appendChild(el("div", "hc-exp-role", role));
+    return card;
+  }
+
+  function settingsReaderFill(state) {
+    if (!settingsPanelBox) return false;
+    var say = settingsPanelBox.querySelector("[data-hc-reader-say]");
+    var who = settingsPanelBox.querySelector("[data-hc-reader-who]");
+    var areas = settingsPanelBox.querySelector("[data-hc-reader-areas]");
+    var hint = settingsPanelBox.querySelector("[data-hc-reader-hint]");
+    if (!say || !who || !areas || !hint) return false;
+    wipe(who);
+    wipe(areas);
+    say.removeAttribute("data-hc-bad");
+    if (!state || !state.ok) {
+      say.setAttribute("data-hc-bad", "");
+      say.textContent = "could not read the profile";
+      hint.textContent = "";
+      return true;
+    }
+    // A reader who skipped the questions gets the same nothing the prompts
+    // get: no lines rather than a pane apologising for knowing nobody.
+    if (!state.answered) {
+      say.textContent = "not filled in";
+      hint.textContent = "The setup page asks four things \u2014 your name,"
+        + " your year, what you study, and how technical you want"
+        + " explanations. Until it is answered, prompts read exactly as they"
+        + " did before this existed.";
+      return true;
+    }
+    var profile = state.profile || {};
+    say.textContent = state.graded
+      ? "Graded by the web onboarding"
+      : "Answered on the setup page";
+    var line = [str(profile.name), str(state.year_said), str(profile.major)]
+      .filter(function (part) { return !!part; }).join("  \u00b7  ");
+    if (line) who.appendChild(el("div", "hc-exp-name", line));
+    if (state.level_label) {
+      var reg = el("div", "hc-exp-register");
+      reg.appendChild(el("span", "hc-exp-register-label", "Explanations"));
+      reg.appendChild(el("span", "hc-exp-register-at", str(state.level_label)));
+      who.appendChild(reg);
+    }
+    array(state.knowledge).forEach(function (area) {
+      areas.appendChild(readerAreaCard(area || {}));
+    });
+    // Two different situations, said differently: a profile with grades came
+    // from the diagnostic, and one without was typed. Neither is editable
+    // here, so the line says where it is editable instead.
+    hint.textContent = state.graded
+      ? "Graded from short answers you gave during setup. Every explanation"
+        + " in this workspace starts where these levels say to."
+      : "Answered on the setup page. The web onboarding also grades what you"
+        + " already know, area by area.";
+    return true;
+  }
+
+  function settingsReaderLoad() {
+    return fetchJSON("/api/reader").then(function (state) {
+      settingsReaderFill(state);
+      return state;
+    });
+  }
+
   function settingsClaudeLoad() {
     return fetchJSON("/api/claude-account?fresh=1").then(function (state) {
       settingsClaudeFill(state);
@@ -9326,6 +9461,9 @@
     settingsSupabaseLoad();
     // And which account `claude` runs on, the same way.
     settingsClaudeLoad();
+    // And who it is all being written for, the same way: the profile is
+    // rewritten by an import, so it is read per opening rather than held.
+    settingsReaderLoad();
     // And which models the installed CLI names, the same way.
     settingsBuildLoad();
     renderGear();
