@@ -303,6 +303,7 @@ class ChildrenAreNotArraysTests(unittest.TestCase):
         source = (_Path(__file__).resolve().parents[1] / "hc" / "src"
                   / "human_compact" / "trajectory" / "web" / "bridge.js").read_text()
         found = re.findall(r"array\(([A-Za-z.]*)\.children\)", source)
-        # `node` here is a goal, not an element: its children are a list in
-        # the state the server sent.
-        self.assertEqual(["node"], found)
+        # Both are goals, not elements: their children are a list in the
+        # state the server sent. `node` maps a goal into the tree; `goal` is
+        # the one a subgoal is being added under.
+        self.assertEqual(["node", "goal"], found)
