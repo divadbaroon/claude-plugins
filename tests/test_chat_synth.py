@@ -273,6 +273,17 @@ class ChatSynthesisTests(unittest.TestCase):
         self.assertIn("FEATURE-FILE-SENTINEL", context)
         self.assertNotIn("OUTSIDE-SECRET", context)
 
+    def test_project_context_survives_a_command_that_ends_like_a_file(self):
+        # A tool call's whole shell command is one nested string; one that
+        # ends in ".txt" used to be stat'ed and raise ENAMETOOLONG, which
+        # took the whole analysis down with "could not read this chat".
+        source = self.cwd / "notes.md"
+        source.write_text("NOTES-SENTINEL")
+        command = "grep '^# fail' " + "x" * 1500 + "/scratchpad/all.txt"
+        events = [{"text": json.dumps({"command": command, "path": "notes.md"})}]
+        context = S.project_context(str(self.cwd), events)
+        self.assertIn("NOTES-SENTINEL", context)
+
     def test_bounded_batches_do_not_advance_past_unsent_events(self):
         for index in range(6):
             self.hook("UserPromptSubmit", prompt=f"prompt-{index}-" + "x" * 80)

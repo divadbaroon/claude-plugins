@@ -3,58 +3,58 @@
   "hooks": {
     "SessionStart": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "timeout": 5 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "timeout": 5 }
       ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "timeout": 5 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "timeout": 5 }
       ] }
     ],
     "UserPromptExpansion": [
       { "matcher": "bart", "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "timeout": 45 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "timeout": 45 }
       ] }
     ],
     "PostToolBatch": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "async": true, "timeout": 30 },
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\" --inject-only", "args": [], "timeout": 5 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "async": true, "timeout": 30 },
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs", "--inject-only"], "timeout": 5 }
       ] }
     ],
     "SubagentStart": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\" --inject-only", "args": [], "timeout": 5 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs", "--inject-only"], "timeout": 5 }
       ] }
     ],
     "SubagentStop": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "async": true, "timeout": 30 }
       ] }
     ],
     "Stop": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "async": true, "timeout": 30 }
       ] }
     ],
     "TaskCreated": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "async": true, "timeout": 30 }
       ] }
     ],
     "TaskCompleted": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "async": true, "timeout": 30 }
       ] }
     ],
     "PostCompact": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "async": true, "timeout": 30 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "async": true, "timeout": 30 }
       ] }
     ],
     "SessionEnd": [
       { "hooks": [
-        { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs\"", "args": [], "timeout": 5 }
+        { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"], "timeout": 5 }
       ] }
     ]
   }

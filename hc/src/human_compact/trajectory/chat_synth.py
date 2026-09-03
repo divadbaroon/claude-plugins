@@ -26,6 +26,9 @@ MAX_CONTEXT_CHARS = 12_000
 MAX_EVENT_TEXT = 2_000
 MAX_REFRESH_PASSES = 3
 _CONTEXT_NAMES = ("AGENTS.md", "CLAUDE.md", "README.md")
+# Longer than any path a repo holds; PATH_MAX on the platforms we run on.
+_MAX_PATH_CHARS = 1024
+
 _TEXT_SUFFIXES = {
     ".md", ".txt", ".rst", ".py", ".js", ".jsx", ".ts", ".tsx",
     ".json", ".toml", ".yaml", ".yml", ".html", ".css", ".sh",
@@ -206,19 +209,24 @@ def _referenced_files(cwd: Path, events: Iterable[Dict[str, Any]]) -> List[Path]
     out, seen = [], set()
     for raw in candidates:
         value = raw.strip().removeprefix("file://")
-        if not value or Path(value).suffix.lower() not in _TEXT_SUFFIXES:
+        # Every nested string in a tool call is a candidate, so a whole shell
+        # command that happens to end in ".txt" arrives here too. A name that
+        # long is not a file, and asking the filesystem about it raises
+        # ENAMETOOLONG, which is not one of the errors pathlib swallows.
+        if (not value or len(value) > _MAX_PATH_CHARS or "\n" in value
+                or Path(value).suffix.lower() not in _TEXT_SUFFIXES):
             continue
         unresolved = Path(value).expanduser()
         if not unresolved.is_absolute():
             unresolved = cwd / unresolved
-        if unresolved.is_symlink():
-            continue
         try:
+            if unresolved.is_symlink():
+                continue
             resolved = unresolved.resolve()
             resolved.relative_to(cwd)
+            if not resolved.is_file() or resolved in seen:
+                continue
         except (OSError, ValueError):
-            continue
-        if not resolved.is_file() or resolved in seen:
             continue
         seen.add(resolved)
         out.append(resolved)
