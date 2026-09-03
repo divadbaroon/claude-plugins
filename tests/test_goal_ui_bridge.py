@@ -1006,9 +1006,10 @@ class TodoCostTests(BridgeTestCase):
                json.dumps(self.row("x" * 80, status="done", tokens=2000))))
         self.assertEqual("2k tok", out[0])
         self.assertEqual("false", out[1], "an island, like the gutter")
-        # After the badge a built row wears, and last of all.
+        # After the badge a built row wears, after the owner chip, and last
+        # of all -- the corner is the row's last word about itself.
         self.assertEqual(["hc-todo-dash", "hc-todo-line", "hc-todo-status",
-                          "hc-todo-cost"], out[2])
+                          "hc-todo-owner", "hc-todo-cost"], out[2])
 
     def test_an_unbuilt_row_s_corner_is_there_and_empty(self):
         # Drawn, so a measured number can land in it without a redraw under
@@ -5773,3 +5774,193 @@ class DevServerStripTests(BridgeTestCase):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         self.assertIn(".hc-dev{flex:none", css)
         self.assertIn('.hc-dev[data-hc-dev-state="running"] .hc-dev-dot', css)
+
+
+class TodoOwnerTests(BridgeTestCase):
+    """Who each TODO row is for, and what the chip that says so offers.
+
+    A row is the reader's unless they hand it to the agent: ``owner`` on the
+    row, "agent" or absent. Absent is what every row already meant, so no
+    stored tree changes shape. The chip is an island on the row's line like
+    the gutter and the corner, and the menu it opens aims the build system
+    that was already here at one row -- there is no second runner.
+    """
+
+    def row(self, text, **rest):
+        row = {"id": "taaaa0001", "text": text, "depth": 0, "status": "",
+               "question": ""}
+        row.update(rest)
+        return row
+
+    def chip(self, row):
+        state = {"scope": "chat", "goals": [], "prompts": []}
+        return self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "var spot = node.querySelector('.hc-todo-owner');"
+            "out = [spot.textContent, spot.getAttribute('contenteditable'),"
+            "  spot.getAttribute('data-hc-todo-owner'), spot.title,"
+            "  spot.getAttribute('data-hc-todo-agent') !== null,"
+            "  spot.getAttribute('data-agent-label') !== null];"
+            % (json.dumps(state), json.dumps(row)))
+
+    def items(self, row):
+        state = {"scope": "chat", "goals": [], "prompts": []}
+        return self.run_js(
+            "window.__hcPromptUI.acceptState(%s);"
+            "out = window.__hcPromptUI.todoList.ownerItems(%s).map("
+            "  function (i) { return [i.label, !!i.strong, !!i.divider]; });"
+            % (json.dumps(state), json.dumps(row)))
+
+    def test_a_row_with_no_owner_is_the_reader_s(self):
+        # The legacy row, and the row setup writes: nobody assigned it, so
+        # it is theirs. The chip says so and takes no caret.
+        said = self.chip(self.row("Add the route"))
+        self.assertEqual("You", said[0])
+        self.assertEqual("false", said[1], "an island, like the gutter")
+        self.assertEqual("taaaa0001", said[2])
+        self.assertEqual("Reassign", said[3])
+        self.assertFalse(said[4])
+        self.assertFalse(said[5], "nothing to run, so nothing to coach")
+
+    def test_a_row_handed_over_says_agent(self):
+        said = self.chip(self.row("Add the route", owner="agent"))
+        self.assertEqual("Agent", said[0])
+        self.assertEqual("Run or reassign", said[3])
+        self.assertTrue(said[4])
+        # Handed over and still waiting: this is the chip the coach points at.
+        self.assertTrue(said[5])
+
+    def test_the_coach_mark_only_marks_a_row_that_can_be_run(self):
+        # Already out with the builder, or finished, or empty: each is a row
+        # with no run waiting to be started, so none wears the coach anchor.
+        for rest in ({"status": "building"}, {"status": "queued"},
+                     {"status": "done"}):
+            row = self.row("Add the route", owner="agent", **rest)
+            self.assertFalse(self.chip(row)[5], rest)
+        blank = self.row("   ", owner="agent")
+        self.assertFalse(self.chip(blank)[5], "an empty row is not work")
+
+    def test_the_reader_s_row_is_offered_only_the_handover(self):
+        self.assertEqual([["Give to agent", False, False]],
+                         self.items(self.row("Add the route")))
+
+    def test_the_agent_s_row_is_offered_the_run_and_the_way_back(self):
+        out = self.items(self.row("Add the route", owner="agent"))
+        self.assertEqual([["Run with agent", True, False],
+                          ["Do myself", False, True]], out)
+
+    def test_a_row_with_no_run_left_is_offered_only_the_way_back(self):
+        # Out with the builder, finished, or with nothing written on it:
+        # offering "Run with agent" would be offering a second run of
+        # something already running, or a build of an empty line.
+        for rest in ({"status": "building"}, {"status": "queued"},
+                     {"status": "done"}):
+            row = self.row("Add the route", owner="agent", **rest)
+            self.assertEqual([["Do myself", False, False]],
+                             self.items(row), rest)
+        self.assertEqual([["Do myself", False, False]],
+                         self.items(self.row("  ", owner="agent")))
+
+    def coach(self, tail, seen=False):
+        return self.run_js(
+            ("store['engelbart.coachRunSeen'] = '1';" if seen else "")
+            + "window.__hcPromptUI.acceptState(%s);"
+              % json.dumps({"scope": "chat", "goals": [], "prompts": []})
+            + tail)
+
+    def test_the_hint_points_at_a_row_waiting_on_the_agent(self):
+        # The chip carries the anchor, so the hint has something to find.
+        out = self.coach(
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "document.body.appendChild(node);"
+            "window.__hcPromptUI.todoList.coachPlace();"
+            "out = [window.__hcPromptUI.todoList.coachShown(),"
+            "  (document.querySelector('.hc-coach') || {}).textContent];"
+            % json.dumps(dict(self.row("Draft the route"), owner="agent")))
+        self.assertTrue(out[0])
+        self.assertEqual("Open the Agent menu to run it", out[1])
+
+    def test_a_reader_who_has_seen_it_is_not_shown_it_again(self):
+        out = self.coach(
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "document.body.appendChild(node);"
+            "window.__hcPromptUI.todoList.coachPlace();"
+            "out = window.__hcPromptUI.todoList.coachShown();"
+            % json.dumps(dict(self.row("Draft the route"), owner="agent")),
+            seen=True)
+        self.assertFalse(out)
+
+    def test_with_no_row_waiting_there_is_nothing_to_point_at(self):
+        # The reader's own row carries no anchor: they have not handed
+        # anything over, so there is no run for them to go and find.
+        out = self.coach(
+            "var node = window.__hcPromptUI.todoList.rowNode(%s, false);"
+            "document.body.appendChild(node);"
+            "window.__hcPromptUI.todoList.coachPlace();"
+            "out = window.__hcPromptUI.todoList.coachShown();"
+            % json.dumps(self.row("Read the paper")))
+        self.assertFalse(out)
+
+    def test_the_owner_survives_the_round_trip_to_the_server(self):
+        # The rail's copy is compared field for field against the server's,
+        # so the field must be written in the same place and only when set.
+        out = self.run_js(
+            "var rows = window.__hcPromptUI.todoList.copyRows(%s);"
+            "out = [rows[0].owner === undefined, rows[1].owner,"
+            "  Object.keys(rows[1])];"
+            % json.dumps([self.row("Mine"),
+                          dict(self.row("Theirs"), id="taaaa0002",
+                               owner="agent")]))
+        self.assertTrue(out[0], "absent on a row nobody handed over")
+        self.assertEqual("agent", out[1])
+        self.assertEqual(["id", "text", "depth", "status", "question",
+                          "owner"], out[2],
+                         "the order the server writes its rows in")
+
+
+class ArtifactPaneTests(BridgeTestCase):
+    """The large pane: where finished work appears.
+
+    It is the artifact surface -- builds and previews -- and nothing else.
+    Empty, it says so in those terms rather than naming a control the reader
+    is supposed to go and find, because the pane fills itself in the moment
+    there is something runnable to show.
+    """
+
+    def body(self, state):
+        return self.run_js(
+            "var node = window.__hcPromptUI.previewBody(%s);"
+            "var texts = [];"
+            "(function walk(n) { if (String(n.textContent || '').trim())"
+            "   texts.push(String(n.textContent).trim());"
+            "  (n.children || []).forEach(walk); })(node);"
+            "out = texts;" % json.dumps(state))
+
+    def test_an_empty_pane_says_what_it_is_for(self):
+        said = self.body({"status": "unconfigured", "surface": "web"})
+        self.assertIn("No artifact yet", said)
+        self.assertIn("Builds and previews will appear here.", said)
+
+    def test_it_offers_no_controls_to_press(self):
+        # Detection has already run on its own, so there is nothing here for
+        # the reader to do -- and a button that only restates that is worse
+        # than the sentence alone.
+        out = self.run_js(
+            "var node = window.__hcPromptUI.previewBody(%s);"
+            "var found = [];"
+            "(function walk(n) { if (String(n.className || '')"
+            "   .indexOf('hc-pv-btn') >= 0) found.push(n.className);"
+            "  (n.children || []).forEach(walk); })(node);"
+            "out = found;"
+            % json.dumps({"status": "unconfigured", "surface": "web"}))
+        self.assertEqual([], out)
+
+    def test_a_workspace_with_no_project_says_that_instead(self):
+        # A different emptiness, and one the reader can act on: it is not
+        # that nothing has been built, it is that there is nothing to build.
+        said = self.body({"status": "unconfigured", "surface": "empty",
+                          "reason": "No project directory."})
+        self.assertIn("No interface for this goal.", said)
+        self.assertIn("No project directory.", said)
+        self.assertNotIn("No artifact yet", said)

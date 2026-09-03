@@ -3629,7 +3629,30 @@
       ".hc-bs-input::placeholder{color:var(--fnt,#9b9b9b)}",
       ".hc-bs-send{flex:none;cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:4px 6px}",
       ".hc-bs-send[disabled]{opacity:.4;cursor:default}",
-      ".hc-bs-send:not([disabled]){color:var(--acc,#a5492a)}"
+      ".hc-bs-send:not([disabled]){color:var(--acc,#a5492a)}",
+      // --- docked under the goal tree -----------------------------------
+      // The same panel, laid along the foot of the workspace instead of over
+      // it: the tree stays on screen and keeps its full width, because the
+      // thing being talked about is the thing that must remain visible.
+      "[data-hc-bs-dock] .hc-brainstorm{top:auto;left:0;right:0;bottom:0;border-top:1px solid var(--bd,#e3e3e3);background:var(--bg,#fff)}",
+      // Folded, the panel is one line: the composer, and nothing above it.
+      // The thread is not scrolled out of the way, it is not drawn -- a
+      // conversation half-visible behind a line reads as a rendering fault.
+      "[data-hc-bs-dock] .hc-bs-scroll{display:none}",
+      "[data-hc-bs-dock] .hc-bs-foot{padding:8px 16px}",
+      "[data-hc-bs-dock] .hc-bs-tools{margin-bottom:0}",
+      "[data-hc-bs-dock] .hc-bs-new{display:none}",
+      "[data-hc-bs-dock] .hc-bs-dockhide{cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 9.5px var(--hc-sans);letter-spacing:1.2px;text-transform:uppercase;padding:2px 4px}",
+      "[data-hc-bs-dock] .hc-bs-dockhide:hover{color:var(--acc,#a5492a)}",
+      // Grown into: the conversation comes back, at a height that shows the
+      // last few turns without taking the tree off the screen.
+      "[data-hc-bs-dock][data-hc-bs-open] .hc-brainstorm{max-height:min(52vh,460px)}",
+      "[data-hc-bs-dock][data-hc-bs-open] .hc-bs-scroll{display:block;max-height:none;padding:14px 16px 6px}",
+      "[data-hc-bs-dock][data-hc-bs-open] .hc-bs-new{display:inline}",
+      "[data-hc-bs-dock][data-hc-bs-open] .hc-bs-tools{margin-bottom:7px;gap:12px}",
+      // The dock stands over the foot of the workspace, so the columns end
+      // above it rather than behind it.
+      "[data-hc-launch][data-hc-bs-dock] .hc-rail-left,[data-hc-launch][data-hc-bs-dock] .hc-rail-right,[data-hc-launch][data-hc-bs-dock] .hc-main{height:calc(100vh - var(--hc-top) - var(--hc-bs-dock,46px))!important}"
   ].join("\n");
 
   var projectBound = false;
@@ -4874,9 +4897,15 @@
     ensureProjectStyles();
     bindBrainstorm();
     root.setAttribute("data-hc-brainstorm", "");
+    // Opened as a page, it is not a dock any more: the same conversation,
+    // given the whole screen. Left on, the dock's layout would make that
+    // whole screen one line tall.
+    root.removeAttribute("data-hc-bs-dock");
+    root.removeAttribute("data-hc-bs-open");
     if (!bs.msgs.length) bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
     renderBrainstorm();
     drawBrainstorm();
+    bsDockSync();
     // Where they left off, if they have been here before. Once per project:
     // after that the conversation on screen is the newer of the two, and
     // reading the file again could only put an older one over it.
@@ -4955,7 +4984,105 @@
     if (!root || !root.removeAttribute) return false;
     var was = brainstormShown();
     root.removeAttribute("data-hc-brainstorm");
+    root.removeAttribute("data-hc-bs-dock");
+    root.removeAttribute("data-hc-bs-open");
     return was;
+  }
+
+  // --- the same brainstorm, docked under the goal tree ----------------------
+  // Thinking out loud belongs beside the thing being thought about, so on the
+  // Goals page the panel is not a page of its own: it is a line at the foot of
+  // the workspace, which grows into the conversation when it is written in and
+  // folds back to a line when it is not. Nothing about the conversation
+  // changes -- same messages, same cards, same round, same writes. Only where
+  // it stands.
+
+  function bsDocked() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute
+              && root.getAttribute("data-hc-bs-dock") !== null);
+  }
+
+  function bsDockOpen() {
+    var root = document.documentElement;
+    return !!(root && root.getAttribute
+              && root.getAttribute("data-hc-bs-open") !== null);
+  }
+
+  // What the reader is looking at, which is what they are about to talk
+  // about. The selected goal names it; with nothing selected the subject is
+  // the project, and the placeholder says so rather than naming nothing.
+  function bsDockSubject() {
+    var goal = todoSelectedGoal();
+    var title = goal ? str(goal.title).trim() : "";
+    return title ? "\u201C" + title + "\u201D" : "the project";
+  }
+
+  function openBrainstormDock() {
+    var who = projectInfo();
+    var root = document.documentElement;
+    if (!who || !root || !root.setAttribute) return false;
+    if (serverState.scope !== "chat") return false;
+    ensureProjectStyles();
+    bindBrainstorm();
+    root.setAttribute("data-hc-brainstorm", "");
+    root.setAttribute("data-hc-bs-dock", "");
+    if (!bs.msgs.length) bs.msgs = [{ role: "engelbart", text: BS_OPEN }];
+    renderBrainstorm();
+    drawBrainstorm();
+    bsDockSync();
+    if (bs.loaded !== str(who.cwd)) brainstormRestore(str(who.cwd));
+    return true;
+  }
+
+  // Grown into, or folded back. Folding does not end the conversation or
+  // put anything away: the line half-typed is still in bs.draft and comes
+  // back with the field, which is the whole point of a dock over a page.
+  function bsDockShow(open) {
+    var root = document.documentElement;
+    if (!root || !root.setAttribute || !bsDocked()) return false;
+    if (open) root.setAttribute("data-hc-bs-open", "");
+    else root.removeAttribute("data-hc-bs-open");
+    bsDockSync();
+    if (open) drawBrainstorm();
+    return true;
+  }
+
+  // The placeholder follows the selection, and the fold control says which
+  // way it goes. Done in place rather than by redrawing the composer: the
+  // reader is typing in it.
+  function bsDockSync() {
+    if (!brainstormBox || !brainstormBox.querySelector) return false;
+    var field = brainstormBox.querySelector("[data-hc-bs-input]");
+    if (field && field.setAttribute) {
+      field.setAttribute("placeholder", bsDocked()
+        ? "Brainstorm about " + bsDockSubject() + "\u2026"
+        : "say anything \u2014 or answer the card above");
+    }
+    var hide = brainstormBox.querySelector("[data-hc-bs-act=\"dockhide\"]");
+    if (hide) hide.textContent = bsDockOpen() ? "Hide" : "Open";
+    bsDockMeasure();
+    return true;
+  }
+
+  // How much of the window the dock is standing on, so the columns above it
+  // end where it starts. Measured rather than assumed: the composer grows
+  // with what is typed into it, and a guessed height is a strip of the tree
+  // permanently under the panel or a gap permanently above it.
+  function bsDockMeasure() {
+    var root = document.documentElement;
+    // Measuring is a thing a browser does. Where there is no layout there is
+    // no height to read, and the stylesheet's own fallback is the answer.
+    if (!root || !root.style || !root.style.setProperty
+        || !root.style.removeProperty) return false;
+    if (!bsDocked() || !brainstormBox || !brainstormBox.getBoundingClientRect) {
+      root.style.removeProperty("--hc-bs-dock");
+      return false;
+    }
+    var box = brainstormBox.getBoundingClientRect();
+    var tall = Math.round((box && box.height) || 0);
+    if (tall > 0) root.style.setProperty("--hc-bs-dock", tall + "px");
+    return true;
   }
 
   // The sweep's half: the box exists, is parented, and wears the theme. It
@@ -5029,6 +5156,12 @@
     var fresh = el("button", "hc-bs-new", "New brainstorm");
     fresh.setAttribute("data-hc-bs-act", "new");
     tools.appendChild(fresh);
+    // The way back to a line, when the panel is docked under the tree. It
+    // is drawn always and shown by the dock's own stylesheet, so folding
+    // does not depend on the composer having been built while docked.
+    var fold = el("button", "hc-bs-dockhide", "Hide");
+    fold.setAttribute("data-hc-bs-act", "dockhide");
+    tools.appendChild(fold);
     foot.appendChild(tools);
     var wrap = el("div", "hc-bs-composer");
     var field = el("textarea", "hc-bs-input");
@@ -5130,6 +5263,9 @@
         // in the field that decides it, and a sweep would take the caret
         // away.
         bsSyncSend();
+        // A composer two lines tall stands two lines higher; the columns
+        // above it follow, or the row being typed slides under the dock.
+        bsDockMeasure();
         return;
       }
       if (target.getAttribute("data-hc-bs-goalq") !== null) {
@@ -5156,11 +5292,29 @@
         bsSyncSend();
       }
     }, true);
-    document.addEventListener("keydown", function (event) {
-      if (!event || event.key !== "Enter" || event.shiftKey) return;
-      var target = event.target;
+    // Written in, so shown: a docked line the reader has put a caret in is
+    // a conversation they have started, and the thread above it is the half
+    // of it they need to read.
+    document.addEventListener("focusin", function (event) {
+      var target = event && event.target;
       if (!target || !target.getAttribute) return;
       if (target.getAttribute("data-hc-bs-input") === null) return;
+      if (bsDocked() && !bsDockOpen()) bsDockShow(true);
+    }, true);
+    document.addEventListener("keydown", function (event) {
+      var target = event && event.target;
+      if (!target || !target.getAttribute) return;
+      if (target.getAttribute("data-hc-bs-input") === null) return;
+      // Escape leaves the line rather than sending it: the dock folds and
+      // the caret goes back to the page. What was typed is kept -- it is
+      // still the draft, and the field comes back holding it.
+      if (event.key === "Escape" && bsDocked()) {
+        stopEvent(event);
+        if (target.blur) target.blur();
+        bsDockShow(false);
+        return;
+      }
+      if (event.key !== "Enter" || event.shiftKey) return;
       stopEvent(event);
       brainstormSend();
     }, true);
@@ -5201,6 +5355,7 @@
 
   function brainstormAct(what) {
     if (what === "send") return brainstormSend();
+    if (what === "dockhide") return bsDockShow(!bsDockOpen());
     if (what === "new") return brainstormNew();
     if (what === "retry") return brainstormRound();
     if (what === "dismiss") { bs.card = null; return drawBrainstorm(); }
@@ -5429,6 +5584,7 @@
     var scroll = brainstormBox
       && brainstormBox.querySelector(".hc-bs-scroll");
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    bsDockMeasure();
     return true;
   }
 
@@ -8153,7 +8309,15 @@
         } else if (view === "docs") {
           closeBrainstorm(); openOverview(); showOverviewPage("docs");
         } else if (view === "brainstorm") openBrainstorm();
-        else { closeBrainstorm(); closeOverview(); }
+        else {
+          closeBrainstorm();
+          closeOverview();
+          // The goal tree, with the brainstorm along its foot: on this view
+          // thinking out loud is a line under the work rather than a page
+          // away from it. Folded, so it is an invitation and not an
+          // interruption -- and the Brainstorm tab still opens it whole.
+          if (view === "goals") openBrainstormDock();
+        }
         renderViewTabs();
         // The sweep would catch up in 700ms; the frame changing views with
         // the click means the preview never floats over the wrong one.
@@ -9845,14 +10009,14 @@
       // The brainstorm keeps the goals rail and covers everything right of
       // it, so the counts -- which are fixed to the window's right edge --
       // would float over the conversation. They go with the rest of it.
-      "[data-hc-launch][data-hc-brainstorm] .hc-titlerow{display:none!important}",
+      "[data-hc-launch][data-hc-brainstorm]:not([data-hc-bs-dock]) .hc-titlerow{display:none!important}",
       // How much of the screen the tree gets while brainstorming: about a
       // third, or the reader's own rail width where they have already
       // dragged it wider. Written as the rail's flex-basis AND as where the
       // panel starts, from the one variable, so the two cannot disagree.
       // Taken off the moment the panel closes -- their own width is theirs.
       "[data-hc-launch]{--hc-bs-left:max(var(--hc-left),32vw)}",
-      "[data-hc-launch][data-hc-brainstorm] .hc-rail-left{flex:0 0 var(--hc-bs-left)!important}",
+      "[data-hc-launch][data-hc-brainstorm]:not([data-hc-bs-dock]) .hc-rail-left{flex:0 0 var(--hc-bs-left)!important}",
       // Read-only: the controls that write are taken off the page rather
       // than left to fail. Anything that only reads -- folding, selecting,
       // the search, the panes -- is untouched.
@@ -10035,6 +10199,14 @@
       "[data-hc-launch] .hc-todo-cost{flex:none;align-self:flex-end;font:500 10px/1.9 var(--hc-sans);letter-spacing:.2px;color:var(--fnt);opacity:.7;user-select:none;white-space:nowrap;cursor:default}",
       "[data-hc-launch] .hc-todo-row:hover .hc-todo-cost{opacity:1}",
       "[data-hc-launch] .hc-todo-cost[data-hc-todo-spent]{color:var(--mut);opacity:1}",
+      // Who the row is for, at the end of its line. Quiet until the row is
+      // hovered or the row is the agent's: a list of twenty rows that all
+      // say "You" is twenty words the reader has to read past to find the
+      // one that does not.
+      "[data-hc-launch] .hc-todo-owner{flex:none;align-self:flex-end;font:600 9.5px/1.9 var(--hc-sans);letter-spacing:.4px;color:var(--fnt);opacity:0;user-select:none;white-space:nowrap;cursor:pointer;padding:0 5px;border:1px solid transparent;border-radius:5px}",
+      "[data-hc-launch] .hc-todo-row:hover .hc-todo-owner{opacity:.75}",
+      "[data-hc-launch] .hc-todo-owner:hover{opacity:1;background:var(--hov);border-color:var(--bd2)}",
+      "[data-hc-launch] .hc-todo-owner[data-hc-todo-agent]{opacity:1;color:var(--acc);border-color:var(--bd)}",
       "[data-hc-launch] .hc-todo-ask{user-select:text}",
       "[data-hc-launch] .hc-todo-ask{margin:2px 0 8px;border-left:2px solid var(--hc-warn);padding:2px 0 2px 10px}",
       // The question and the answer both wrap: a long question runs onto
@@ -10603,6 +10775,11 @@
       var copy = { id: str(row.id) || todoNewId(), text: str(row.text),
                    depth: row.depth | 0, status: str(row.status),
                    question: str(row.question) };
+      // Who the row is for. Absent means the reader, which is what a row
+      // with no owner has always meant, so the field appears only on a row
+      // handed to the agent -- and in the position the server writes it,
+      // between the question and the screenshots.
+      if (str(row.owner) === "agent") copy.owner = "agent";
       // Only when there is something to hold, on both sides of the wire:
       // the server leaves the field off a row without one, and the rail's
       // "has anything changed" is a field-for-field comparison.
@@ -12884,6 +13061,23 @@
     // its own rail, after which every key went to a node with no handlers.
     if (todoDelegated || !document.addEventListener) return;
     todoDelegated = true;
+    // An open owner menu is dismissed the two ways every menu is: Escape, or
+    // a press anywhere that is not the menu. Registered before the handlers
+    // below so it is not skipped by one of their early returns.
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && todoOwnerClose()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
+    document.addEventListener("mousedown", function (event) {
+      var node = event.target;
+      if (!todoOwnerMenu) return;
+      if (node && node.closest
+          && (node.closest(".hc-todo-ownmenu")
+              || node.closest("[data-hc-todo-owner]"))) return;
+      todoOwnerClose();
+    }, true);
     document.addEventListener("keydown", function (event) {
       var node = event.target;
       if (node === todoHost()) { todoKey(event); return; }
@@ -13094,6 +13288,13 @@
         todoNoting = null;
         renderTodoRail(true);
       }
+      var ownerFor = node.getAttribute("data-hc-todo-owner");
+      if (ownerFor !== null) {
+        event.preventDefault();
+        event.stopPropagation();
+        todoOwnerOpen(ownerFor, node);
+        return;
+      }
       var dash = node.getAttribute("data-hc-todo-dash");
       if (dash !== null) {
         todoTogglePick(dash);
@@ -13228,6 +13429,160 @@
     } catch (e) { return "true"; }
   })();
 
+  // --- who each row is for -------------------------------------------------
+  // A row is the reader's unless they hand it to the agent. That is the whole
+  // model: `owner` on the row, "agent" or absent, saved through the rail's own
+  // write like its text. What the agent then DOES with it is the build system
+  // that was already here -- "Run with agent" is the Build button aimed at one
+  // row, not a second way to run things.
+
+  // The menu open over a row's owner chip, by row id, with the corner it was
+  // opened from. Null when none is open.
+  var todoOwnerMenu = null;
+
+  function todoOwnerAgent(row) { return str(row && row.owner) === "agent"; }
+
+  // Out with the builder, so "Do myself" has a run to take back.
+  function todoOwnerBusy(row) {
+    return !!row && (row.status === "building" || row.status === "queued");
+  }
+
+  function todoOwnerSet(id, agent) {
+    var at = todoIndexOfId(id);
+    var row = todoItems && todoItems[at];
+    if (!row) return;
+    if (agent) row.owner = "agent";
+    else {
+      // Taking a row back from an agent that is mid-run takes the run back
+      // too. Leaving it building under a "You" label would be the label
+      // lying about what is happening to the row.
+      if (todoOwnerBusy(row)) todoCancel(at);
+      delete row.owner;
+    }
+    todoSaveSoon();
+  }
+
+  function todoOwnerItems(row) {
+    if (!todoOwnerAgent(row)) {
+      return [{ label: "Give to agent", act: function () {
+        todoOwnerSet(row.id, true);
+      } }];
+    }
+    var items = [];
+    // A done row has nothing left to run, and a row already out with the
+    // builder is running: neither is offered a run.
+    if (row.status !== "done" && !todoOwnerBusy(row)
+        && str(row.text).trim()) {
+      items.push({ label: "Run with agent", strong: true, act: function () {
+        // The real build, narrowed to this row. Owner first, so a row run
+        // straight from "Give to agent" is the agent's before it leaves.
+        var at = todoIndexOfId(row.id);
+        if (todoItems && todoItems[at]) todoItems[at].owner = "agent";
+        todoBuildNow([row.id], false);
+      } });
+    }
+    items.push({ label: "Do myself", divider: items.length > 0,
+                 act: function () { todoOwnerSet(row.id, false); } });
+    return items;
+  }
+
+  // --- the one hint ---------------------------------------------------------
+  // Handing a row to the agent is discoverable; running it is not, because
+  // the run lives behind the chip that says who the row is for. So the first
+  // time a reader has a row waiting on the agent and has never opened that
+  // menu, the chip is pointed at once. Seen once, never again -- on this
+  // machine, which is where the reader who needs it is.
+
+  var COACH_KEY = "engelbart.coachRunSeen";
+  var coachNode = null;
+
+  function coachSeen() {
+    try { return localStorage.getItem(COACH_KEY) === "1"; }
+    catch (e) { return true; }
+  }
+
+  function coachMark() {
+    try { localStorage.setItem(COACH_KEY, "1"); } catch (e) {}
+    coachHide();
+  }
+
+  function coachHide() {
+    if (coachNode && coachNode.parentNode) {
+      coachNode.parentNode.removeChild(coachNode);
+    }
+    coachNode = null;
+    return true;
+  }
+
+  // Placed against the chip it points at, and taken down the moment there is
+  // no such chip -- a row that was run, taken back, or scrolled out of the
+  // list leaves nothing for the hint to be about.
+  function coachPlace() {
+    if (coachSeen()) return coachHide();
+    var chip = document.querySelector("[data-agent-label]");
+    if (!chip || !chip.getBoundingClientRect) return coachHide();
+    var box = chip.getBoundingClientRect();
+    if (!box || !box.width) return coachHide();
+    if (!coachNode || !inLiveDocument(coachNode)) {
+      coachHide();
+      ensurePaneStyles();
+      coachNode = el("div", "hc-coach", "Open the Agent menu to run it");
+      coachNode.setAttribute("data-hc-coach", "");
+      (document.body || document.documentElement).appendChild(coachNode);
+    }
+    coachNode.style.top = Math.round(box.top - 34) + "px";
+    coachNode.style.left = Math.round(Math.max(
+      8, Math.min(box.right - 178, window.innerWidth - 186))) + "px";
+    return true;
+  }
+
+  function todoOwnerClose() {
+    if (!todoOwnerMenu) return false;
+    todoOwnerMenu = null;
+    var open = document.querySelector(".hc-todo-ownmenu");
+    if (open && open.parentNode) open.parentNode.removeChild(open);
+    return true;
+  }
+
+  function todoOwnerOpen(id, chip) {
+    // A second click on the same chip puts the menu away, which is what a
+    // menu button does everywhere else on this page.
+    if (todoOwnerMenu && todoOwnerMenu.id === id) { todoOwnerClose(); return; }
+    todoOwnerClose();
+    var at = todoIndexOfId(id);
+    var row = todoItems && todoItems[at];
+    if (!row) return;
+    var items = todoOwnerItems(row);
+    if (!items.length) return;
+    todoOwnerMenu = { id: id };
+    // They found it. It has nothing left to say.
+    coachMark();
+    ensurePaneStyles();
+    var menu = document.createElement("div");
+    menu.className = "hc-todo-ownmenu";
+    var box = chip.getBoundingClientRect();
+    // Under the chip, right edges aligned, and never off the right of the
+    // window -- the same placement the menu has in the reference.
+    menu.style.top = Math.round(box.bottom + 4) + "px";
+    menu.style.left = Math.round(Math.max(
+      8, Math.min(box.right - 158, window.innerWidth - 166))) + "px";
+    items.forEach(function (item) {
+      var line = document.createElement("div");
+      line.className = "hc-todo-ownitem";
+      if (item.divider) line.setAttribute("data-hc-divider", "");
+      if (item.strong) line.setAttribute("data-hc-strong", "");
+      line.textContent = item.label;
+      line.addEventListener("click", function (event) {
+        event.stopPropagation();
+        todoOwnerClose();
+        item.act();
+        renderTodoRail(true);
+      });
+      menu.appendChild(line);
+    });
+    document.body.appendChild(menu);
+  }
+
   function todoRowNode(row, head) {
     var wrap = document.createElement("div");
     wrap.className = "hc-todo";
@@ -13294,6 +13649,24 @@
       badge.style.color = state[1];
       line.appendChild(badge);
     }
+    // Who the row is for, and the way to change it. Another island: the
+    // caret cannot enter it, and clicking it opens the menu rather than
+    // placing a cursor in the middle of the word "Agent".
+    var agent = todoOwnerAgent(row);
+    var owner = document.createElement("span");
+    owner.className = "hc-todo-owner";
+    owner.setAttribute("contenteditable", "false");
+    owner.setAttribute("data-hc-todo-owner", row.id);
+    if (agent) owner.setAttribute("data-hc-todo-agent", "");
+    owner.textContent = agent ? "Agent" : "You";
+    owner.title = agent ? "Run or reassign" : "Reassign";
+    // The one chip the coach mark points at: a row handed to the agent and
+    // waiting, which is the moment the reader has something to run and no
+    // reason yet to know how.
+    if (agent && !row.status && str(row.text).trim()) {
+      owner.setAttribute("data-agent-label", "");
+    }
+    line.appendChild(owner);
     // What this row will cost to build, in its lower right -- or what it did
     // cost, once it has been built. An island like the gutter and the badge:
     // the caret cannot enter it, and it is kept in step as the reader types
@@ -14225,18 +14598,23 @@
     }
     // Detection already ran on its own (see previewAuto), so a project
     // sitting here genuinely has nothing runnable yet — most often because
-    // nothing has been built yet. One quiet sentence, no controls — and
-    // while a build is out, just the spinner and the word: the pane fills
-    // in on its own the moment something runnable exists.
-    var card = pvCard("", "");
+    // nothing has been built yet. The pane says what it is for and what
+    // will fill it, and offers no controls: it fills in on its own the
+    // moment something runnable exists. While a build is out it says only
+    // that, since the answer is on its way.
     if (pvBuildingNow()) {
+      var busy = pvCard("", "");
       var line = el("div", "hc-pv-buildline");
       line.appendChild(el("i"));
       line.appendChild(el("span", "", "building"));
-      card.appendChild(line);
-    } else {
-      card.appendChild(pvWhy("Start building and your interface will appear here."));
+      busy.appendChild(line);
+      return busy;
     }
+    // Named for what the pane holds rather than for what is missing from
+    // it: this is where finished work appears, and "no artifact yet" says
+    // both that there is none and that there is somewhere for one to go.
+    var card = pvCard("", "No artifact yet");
+    card.appendChild(pvWhy("Builds and previews will appear here."));
     return card;
   }
 
@@ -15253,13 +15631,14 @@
     }
     renderTodoWatch(host);
     renderDev(host, todoGoalId);
+    coachPlace();
     if (!goal || !todoItems) {
       while (list.firstChild) list.removeChild(list.firstChild);
       return true;
     }
     var shape = todoItems.map(function (row) {
       return [row.id, row.depth, row.status, row.question, !!todoPicked[row.id],
-              +row.tokens || 0];
+              +row.tokens || 0, str(row.owner)];
     });
     var drawn = list.getAttribute("data-hc-todo-shape");
     if (!force && drawn === JSON.stringify(shape) && list.children.length) {
@@ -18800,6 +19179,19 @@
       ".hc-promptsum::before{content:'\\25b8';display:inline-block;font-size:9px;transition:transform .15s ease}",
       ".hc-promptbox[open]>.hc-promptsum::before{transform:rotate(90deg)}",
       ".hc-promptsum:hover{color:var(--acc,#a5492a)}",
+      // The row-ownership menu. It hangs off the document rather than the
+      // rail -- a row near the bottom of a scrolled list must still get a
+      // whole menu -- so its rules live here rather than in the launch
+      // sheet, every rule of which is gated on the workspace root.
+      ".hc-todo-ownmenu{position:fixed;z-index:9000;min-width:150px;padding:4px;background:var(--panel,#fff);border:1px solid var(--bd2,#d5d5d5);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18)}",
+      ".hc-todo-ownitem{padding:6px 10px;border-radius:5px;font:500 11.5px var(--hc-sans);color:var(--mut,#575757);cursor:pointer;white-space:nowrap}",
+      ".hc-todo-ownitem[data-hc-strong]{color:var(--ink,#111);font-weight:600}",
+      ".hc-todo-ownitem[data-hc-divider]{margin-top:4px;padding-top:8px;border-top:1px solid var(--bd,#e6e6e6)}",
+      ".hc-todo-ownitem:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
+      // The hint that points at that menu the first time there is a row
+      // waiting behind it. Not a control: it takes no clicks and is gone
+      // the moment the menu it names is opened.
+      ".hc-coach{position:fixed;z-index:8999;pointer-events:none;padding:4px 9px;border-radius:6px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px var(--hc-sans);letter-spacing:.3px;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.2)}",
       // A conversation takes as long as it takes and reports no progress
       // of its own, so the bar sweeps rather than claiming a percentage.
       // Slow on purpose: a fast one reads as a thing about to finish.
@@ -19061,6 +19453,7 @@
     renderTodoRail: renderTodoRail,
     renderPreview: renderPreview,
     previewState: function () { return previewState; },
+    previewBody: pvBody,
     previewSeed: function (value) {
       previewState = value;
       previewAt = Date.now();
@@ -19110,6 +19503,10 @@
       cancelHeads: todoCancelHeads,
       cancelIds: todoCancelIds,
       rowNode: todoRowNode,
+      copyRows: todoCopyRows,
+      ownerItems: todoOwnerItems,
+      coachPlace: coachPlace,
+      coachShown: function () { return !!coachNode; },
       cost: todoCostText,
       costLabel: todoTokenLabel,
       duration: buildDuration,
@@ -19210,6 +19607,12 @@
     overviewPage: overviewPage,
     brainstorm: {
       open: openBrainstorm,
+      openDock: openBrainstormDock,
+      docked: bsDocked,
+      dockOpen: bsDockOpen,
+      dockShow: bsDockShow,
+      dockSubject: bsDockSubject,
+      dockSync: bsDockSync,
       close: closeBrainstorm,
       shown: brainstormShown,
       render: renderBrainstorm,
