@@ -5542,11 +5542,13 @@ class LaunchSkinTests(BridgeTestCase):
             "  function (k) { return props[k] || ''; };"
             + tail)
 
-    def test_the_rails_start_at_a_quarter_of_the_window_each(self):
-        # 1 : 2 : 1 -- the harness has no window width, so the default falls
-        # back to 1440 and a quarter of that.
+    def test_the_goals_panel_opens_wide_and_the_prompt_rail_away(self):
+        # The goals panel holds three indented levels, so it has a width of
+        # its own rather than a quarter of the window. The prompt rail is not
+        # part of this layout: its toggle brings it back, and the TODO rows
+        # the tree writes go through it either way.
         self.assertEqual(
-            {"left": 360, "right": 360, "hideLeft": False, "hideRight": False},
+            {"left": 455, "right": 360, "hideLeft": False, "hideRight": True},
             self.layout("window.__hcPromptUI.railLayout();"))
 
     def test_a_dragged_width_is_clamped_kept_and_drawn(self):
@@ -5558,9 +5560,9 @@ class LaunchSkinTests(BridgeTestCase):
             "var d = ui.setRailWidth('right', 'nonsense');"
             "[a, b, c, d, props['--hc-left'], props['--hc-right'],"
             " JSON.parse(localStorage.getItem('hc-launch-layout-v2'))];")
-        self.assertEqual([380, 200, 720, 360, "200px", "360px",
-                          {"left": 200, "right": 360,
-                           "hideLeft": False, "hideRight": False}], out)
+        self.assertEqual([380, 320, 720, 360, "320px", "360px",
+                          {"left": 320, "right": 360,
+                           "hideLeft": False, "hideRight": True}], out)
 
     def test_a_drag_writes_the_variable_and_leaves_the_store_for_the_end(self):
         # The pointer reports faster than the screen redraws, and a store
@@ -5607,7 +5609,9 @@ class LaunchSkinTests(BridgeTestCase):
             "[slot.children.length,"
             " slot.children.map(function (b) {"
             "   return [b.getAttribute('data-hc-panel'), b.className]; })];")
-        self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel hc-panel-on"]]],
+        # The prompt rail starts away, so its toggle starts unlit; the goals
+        # panel was lit until setRailHidden put it out.
+        self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel"]]],
                          out)
 
     def test_the_injection_card_says_only_what_the_state_proves(self):
@@ -5939,7 +5943,7 @@ class ArtifactPaneTests(BridgeTestCase):
 
     def test_an_empty_pane_says_what_it_is_for(self):
         said = self.body({"status": "unconfigured", "surface": "web"})
-        self.assertIn("No artifact yet", said)
+        self.assertIn("NO ARTIFACT YET", said)
         self.assertIn("Builds and previews will appear here.", said)
 
     def test_it_offers_no_controls_to_press(self):
@@ -5963,7 +5967,7 @@ class ArtifactPaneTests(BridgeTestCase):
                           "reason": "No project directory."})
         self.assertIn("No interface for this goal.", said)
         self.assertIn("No project directory.", said)
-        self.assertNotIn("No artifact yet", said)
+        self.assertNotIn("NO ARTIFACT YET", said)
 
 
 class TreeTodoTests(BridgeTestCase):
@@ -6114,3 +6118,620 @@ class TreeTodoRunTests(BridgeTestCase):
         # The goal above it has children and no rows of its own, so it is
         # offered a subgoal rather than a todo -- the shape the tree reads in.
         self.assertNotIn("__addtodo_g1", labels)
+
+
+# The tree the left panel draws, as the spec describes it: one goal open at a
+# time, its subgoals under it, their todos under those. Every test here mounts
+# a .hc-tree host, puts a tree in the store, and reads back the rows.
+TREE_GOALS = [
+    {"id": "gA", "title": "Fix interface not showing up", "done": False,
+     "desc": "The preview comes up blank.", "status": "inprog",
+     "todo_items": [], "children": [
+         {"id": "sA1", "title": "Find why the Codebook view fails to render",
+          "done": False, "desc": "", "status": "todo", "children": [],
+          "todo_items": [
+              {"id": "taaaa0001", "depth": 0, "status": "done", "question": "",
+               "text": "Reproduce the blank interface in the live preview",
+               "owner": "agent"},
+              {"id": "taaaa0002", "depth": 0, "status": "", "question": "",
+               "text": "Trace the Codebook render path for the failure",
+               "owner": "agent"},
+              {"id": "taaaa0003", "depth": 0, "status": "", "question": "",
+               "text": "Ship the fix and confirm the preview shows"}]}]},
+    {"id": "gB", "title": "Open goal workspace UI for this chat", "done": False,
+     "desc": "", "status": "todo", "todo_items": [], "children": []},
+]
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class GoalTreeTests(BridgeTestCase):
+    """The left panel: goals, subgoals and todos as one accordion.
+
+    The artifact draws a flat list of goal titles and nothing else, so its
+    list is hidden in this scope and renderGoalTree draws in its place. Reads
+    come from the store; goal writes go back through the artifact's own
+    setter, which watchGoals carries to /api/import, and a todo's own fields
+    go through the rail, which is the one editor the server agrees with.
+    """
+
+    # Enough of a page for the panel to draw into, with a tree in the store.
+    SETUP = (
+        "window.__hcPromptUI.acceptState({scope:'chat',goals:[],prompts:[]});"
+        "store['hc-vault-ui-v1'] = JSON.stringify({goals: %s, selId: 'gA'});"
+        "store['hc-vault-ui-sync-v1'] = JSON.stringify({revision:'r1', goals: %s});"
+        "var saved = null;"
+        "window.__hcSetGoals = function (g, sel) {"
+        "  saved = g;"
+        "  var s = JSON.parse(store['hc-vault-ui-v1']);"
+        "  s.goals = g; if (typeof sel === 'string') s.selId = sel;"
+        "  store['hc-vault-ui-v1'] = JSON.stringify(s); };"
+        "var host = document.createElement('div');"
+        "host.className = 'hc-tree'; app.appendChild(host);"
+        "var T = window.__hcPromptUI.tree;"
+        "T.reset(); T.install();"
+        "window.__hcPromptUI.tour.close(); window.__hcPromptUI.tour.install();"
+        # The harness's stub elements take no listeners of their own, so the
+        # panel binds everything at the document -- and a test drives it the
+        # same way, by handing the document an event aimed at a node.
+        "var at = function (type, ev) { listeners"
+        "  .filter(function (l) { return l[0] === type; })"
+        "  .forEach(function (l) { l[1](ev); }); };"
+        "var click = function (node) { at('click', { target: node,"
+        "  preventDefault: function () {}, stopPropagation: function () {} }); };"
+        "var fire = function (type, node) { at(type, { type: type, target: node,"
+        "  preventDefault: function () {}, stopPropagation: function () {} }); };"
+        "var key = function (k, node, mods) { at('keydown', Object.assign("
+        "  { key: k, target: node, preventDefault: function () {},"
+        "    stopPropagation: function () {} }, mods || {})); };"
+    )
+
+    def tree(self, tail, goals=None):
+        body = json.dumps(goals if goals is not None else TREE_GOALS)
+        return self.run_js((self.SETUP % (body, body)) + tail)
+
+    # The rows, as [class, text, goal, open?, done?], in draw order.
+    ROWS = (
+        "var deep = function (n) { return String(n.textContent || '') +"
+        "  (n.children||[]).map(deep).join(''); };"
+        "var rows = function () { var out = [];"
+        "  (function walk(n){ (n.children||[]).forEach(function(c){"
+        "    var cls = String(c.className);"
+        "    if (cls.indexOf('hc-tr ') === 0 || cls.indexOf('hc-tadd ') === 0"
+        "        || cls === 'hc-tlabel')"
+        "      out.push([cls.replace('hc-tr hc-tr-','').replace('hc-tadd hc-tadd-','+'),"
+        "                deep(c)]);"
+        "    walk(c); }); })(host); return out; };"
+    )
+
+    def test_the_open_goal_shows_its_subgoals_and_their_todos(self):
+        got = self.tree(self.ROWS + "T.render(true); out = rows();")
+        self.assertEqual(
+            ["hc-tlabel", "goal", "sub", "todo", "todo", "todo",
+             "+todo", "+sub", "goal", "+goal"],
+            [r[0] for r in got])
+        self.assertEqual("Goals", got[0][1])
+        self.assertIn("Fix interface not showing up", got[1][1])
+        self.assertIn("1 / 3", got[1][1], "the goal counts its subgoals' work")
+        self.assertIn("1 / 3", got[2][1], "and the subgoal counts its own")
+        # Banded like the rail: work first, what is finished last.
+        self.assertIn("Trace the Codebook render path", got[3][1])
+        self.assertIn("Agent", got[3][1])
+        self.assertIn("Reproduce the blank interface", got[5][1])
+        self.assertIn("You", got[4][1], "a row nobody handed over is the reader's")
+
+    def test_only_one_goal_is_open_and_a_second_click_closes_it(self):
+        got = self.tree(
+            self.ROWS +
+            "T.render(true); var first = rows().length;"
+            "T.selectGoal('gB'); var onB = rows().map(function(r){return r[0];});"
+            "T.selectGoal('gB'); var shut = rows().map(function(r){return r[0];});"
+            "out = [first, onB, shut, T.opened()];")
+        self.assertEqual(10, got[0])
+        # gB has nothing under it, so opening it collapses gA's five rows.
+        self.assertEqual(["hc-tlabel", "goal", "goal", "+todo", "+sub", "+goal"],
+                         got[1])
+        self.assertEqual(["hc-tlabel", "goal", "goal", "+goal"], got[2])
+        self.assertEqual("", got[3], "closed by hand, so nothing is open")
+
+    def test_picking_a_todo_makes_the_workspace_about_its_goal(self):
+        # A todo has no artifact of its own -- the run that built something
+        # was the goal's -- so selecting one selects the goal, which is what
+        # puts that build in the middle pane.
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelectorAll('[data-hc-trow=todo]')[0];"
+            "click(row);"
+            "out = [JSON.parse(store['hc-vault-ui-v1']).selId,"
+            "       row.getAttribute('data-hc-goal')];")
+        self.assertEqual(["gA", "sA1"], got,
+                         "the row belongs to the subgoal, the page to the goal")
+
+    def test_a_subgoal_folds_its_own_todos_without_closing_the_goal(self):
+        got = self.tree(
+            self.ROWS +
+            "T.render(true);"
+            "T.foldSub('gA', 'sA1'); var shut = rows().map(function(r){return r[0];});"
+            "T.foldSub('gA', 'sA1'); var open = rows().map(function(r){return r[0];});"
+            "out = [shut, open, T.opened()];")
+        self.assertEqual(["hc-tlabel", "goal", "sub", "+sub", "goal", "+goal"],
+                         got[0])
+        self.assertEqual("gA", got[2], "the goal it belongs to stayed open")
+        self.assertEqual(10, len(got[1]))
+
+    def test_the_wire_stops_at_the_last_row_of_a_branch(self):
+        got = self.tree(
+            "T.render(true);"
+            "var wires = host.querySelectorAll('.hc-twire');"
+            "out = wires.map(function (w) {"
+            "  return w.getAttribute('data-hc-last') !== null; });")
+        # One per nested row: the subgoal, then its three todos. Only the last
+        # todo ends the branch.
+        self.assertEqual([False, False, False, True], got)
+
+    def test_a_goal_with_no_work_counts_nothing_and_says_so(self):
+        got = self.tree(
+            "T.render(true);"
+            "var counts = host.querySelectorAll('.hc-tcount');"
+            "out = counts.map(function (c) { return c.textContent; });")
+        self.assertEqual(["1 / 3", "1 / 3", ""], got)
+
+    def test_a_goal_that_carries_its_own_todos_draws_them_under_itself(self):
+        # How a chat's goals arrive: rows on the goal, no subgoal between.
+        goals = [{"id": "g1", "title": "Ship it", "done": False, "desc": "",
+                  "children": [], "todo_items": [
+                      {"id": "tbbbb0001", "text": "Write it", "depth": 0,
+                       "status": "", "question": ""}]}]
+        got = self.tree(
+            self.ROWS +
+            "T.reset(); T.opened('g1'); T.render(true);"
+            "out = [rows(), host.querySelector('.hc-tr-todo')"
+            "  .getAttribute('data-hc-own') !== null];", goals=goals)
+        self.assertEqual(["hc-tlabel", "goal", "todo", "+todo", "+sub", "+goal"],
+                         [r[0] for r in got[0]])
+        self.assertTrue(got[1], "drawn at the subgoal's indent, not the todo's")
+
+    def test_the_three_adders_open_one_at_a_time_and_enter_saves(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tadd=sub]'));"
+            "var one = T.adding();"
+            "click(host.querySelector('[data-hc-tadd=goal]'));"
+            "var two = T.adding();"
+            "var field = host.querySelector('[data-hc-tadd-in]');"
+            "field.value = 'A new goal';"
+            "key('Enter', field);"
+            "out = [one.kind, two.kind, T.adding(),"
+            "       saved.length, saved[saved.length - 1].title];")
+        self.assertEqual("sub", got[0])
+        self.assertEqual("goal", got[1], "the second adder replaced the first")
+        self.assertIsNone(got[2], "and saving closed it")
+        self.assertEqual(3, got[3])
+        self.assertEqual("A new goal", got[4])
+
+    def test_escape_cancels_an_adder_and_writes_nothing(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tadd=goal]'));"
+            "var field = host.querySelector('[data-hc-tadd-in]');"
+            "field.value = 'Never';"
+            "key('Escape', field);"
+            "out = [T.adding(), saved];")
+        self.assertIsNone(got[0])
+        self.assertIsNone(got[1], "nothing was handed to the setter")
+
+    def test_a_subgoal_is_added_under_the_goal_it_was_asked_for(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tadd=sub]'));"
+            "var field = host.querySelector('[data-hc-tadd-in]');"
+            "field.value = 'Check the build';"
+            "key('Enter', field);"
+            "out = [saved[0].children.length,"
+            "       saved[0].children[saved[0].children.length - 1].title];")
+        self.assertEqual([2, "Check the build"], got)
+
+    def test_an_empty_adder_saves_nothing(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tadd=goal]'));"
+            "var field = host.querySelector('[data-hc-tadd-in]');"
+            "field.value = '   ';"
+            "key('Enter', field);"
+            "out = [T.adding(), saved];")
+        self.assertEqual([None, None], got)
+
+    def test_a_todo_added_from_the_tree_lands_in_the_rail_s_rows(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tadd=todo]'));"
+            "var field = host.querySelector('[data-hc-tadd-in]');"
+            "field.value = 'Check the console';"
+            "key('Enter', field);"
+            "out = T.railRows().map("
+            "  function (r) { return r.text; });")
+        self.assertEqual(["Trace the Codebook render path for the failure",
+                          "Ship the fix and confirm the preview shows",
+                          "Check the console",
+                          "Reproduce the blank interface in the live preview"],
+                         got)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class GoalTreeMenuTests(BridgeTestCase):
+    """Right-click a row: rename, move it, or delete it.
+
+    The menu is the only place a row is deleted from -- there is no hover x
+    and no trash icon on the row itself -- so what it offers, and what it
+    refuses to offer, is the whole of that contract.
+    """
+
+    SETUP = GoalTreeTests.SETUP
+    tree = GoalTreeTests.tree
+
+    def items(self, kind, gid, tid):
+        return self.tree(
+            "T.render(true);"
+            "out = T.menuItems(%s, %s, %s, 'x').map(function (i) {"
+            "  return [i.label, !!i.off, !!i.danger, i.hint || '']; });"
+            % (json.dumps(kind), json.dumps(gid), json.dumps(tid)))
+
+    def test_every_row_is_offered_the_same_four_things(self):
+        said = self.items("todo", "sA1", "taaaa0002")
+        self.assertEqual(["Rename", "Move up", "Move down", "Delete"],
+                         [i[0] for i in said])
+        self.assertTrue(said[3][2], "delete is the destructive one")
+        self.assertIn(said[3][3], ("\u2318\u232b", "Ctrl \u232b"))
+
+    def test_a_move_with_no_neighbour_is_shown_but_not_offered(self):
+        # Banded, so 0002 is the first row on screen and 0001 -- done --
+        # the last: what the menu greys follows what the panel draws.
+        first = self.items("todo", "sA1", "taaaa0002")
+        last = self.items("todo", "sA1", "taaaa0001")
+        self.assertTrue(first[1][1], "nothing above the first row")
+        self.assertFalse(first[2][1])
+        self.assertFalse(last[1][1])
+        self.assertTrue(last[2][1], "nothing below the last")
+
+    def test_moving_a_todo_reorders_the_rows_the_rail_holds(self):
+        got = self.tree(
+            "T.render(true);"
+            "var ok = T.moveTodo('sA1', 'taaaa0003', -1);"
+            "out = [ok, T.railRows().map("
+            "  function (r) { return r.id; })];")
+        self.assertTrue(got[0])
+        self.assertEqual(["taaaa0003", "taaaa0002", "taaaa0001"], got[1])
+
+    def test_moving_a_goal_reorders_the_tree(self):
+        got = self.tree("T.render(true); var ok = T.move('gB', -1);"
+                        "out = [ok, saved.map(function (g) { return g.id; })];")
+        self.assertEqual([True, ["gB", "gA"]], got)
+
+    def test_deleting_a_goal_drops_it_from_the_tree(self):
+        # Which is what the import reads as archiving it: nothing is erased.
+        got = self.tree("T.render(true); var ok = T.del('goal', 'gA', 'gA');"
+                        "out = [ok, saved.map(function (g) { return g.id; })];")
+        self.assertEqual([True, ["gB"]], got)
+
+    def test_deleting_a_todo_goes_through_the_rail(self):
+        got = self.tree(
+            "T.render(true); var ok = T.del('todo', 'sA1', 'taaaa0002');"
+            "out = [ok, T.railRows().map("
+            "  function (r) { return r.id; })];")
+        self.assertEqual([True, ["taaaa0003", "taaaa0001"]], got)
+
+    def test_the_menu_draws_the_four_items_and_greys_the_dead_one(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "T.openMenu(row, 200, 300);"
+            "var menu = document.querySelector('.hc-tmenu');"
+            "out = (menu.children || []).map(function (c) {"
+            "  return [String(c.children[0].textContent),"
+            "          c.getAttribute('data-hc-off') !== null,"
+            "          c.getAttribute('data-hc-danger') !== null]; });")
+        self.assertEqual(["Rename", "Move up", "Move down", "Delete"],
+                         [i[0] for i in got])
+        self.assertTrue(got[1][1], "gA is already first")
+        self.assertTrue(got[3][2])
+
+    def test_a_dead_item_does_nothing_and_leaves_the_menu_up(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "T.openMenu(row, 0, 0);"
+            "var picked = T.pickMenu(1);"
+            "out = [picked, !!T.menu(), saved];")
+        self.assertEqual([False, True, None], got)
+
+    def test_picking_a_live_item_acts_and_puts_the_menu_away(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelectorAll('[data-hc-trow=goal]')[1];"
+            "T.openMenu(row, 0, 0);"
+            "var picked = T.pickMenu(1);"
+            "out = [picked, !!T.menu(),"
+            "       !!document.querySelector('.hc-tmenu'),"
+            "       saved.map(function (g) { return g.id; })];")
+        self.assertEqual([True, False, False, ["gB", "gA"]], got)
+
+    def test_a_right_click_on_a_row_opens_the_menu_for_that_row(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelectorAll('[data-hc-trow=todo]')[1];"
+            "fire('contextmenu', row);"
+            "out = [T.menu().kind, T.menu().id,"
+            "       !!document.querySelector('.hc-tmenu')];")
+        self.assertEqual(["todo", "taaaa0003", True], got)
+
+    def test_rename_puts_an_input_where_the_title_was(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "T.openMenu(row, 0, 0); T.pickMenu(0);"
+            "var field = host.querySelector('[data-hc-tedit-in]');"
+            "var was = field.value;"
+            "field.value = 'Fix the blank preview';"
+            "key('Enter', field);"
+            "out = [was, T.editing(), saved[0].title];")
+        self.assertEqual("Fix interface not showing up", got[0])
+        self.assertIsNone(got[1])
+        self.assertEqual("Fix the blank preview", got[2])
+
+    def test_a_rename_escaped_leaves_the_title_alone(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "T.openMenu(row, 0, 0); T.pickMenu(0);"
+            "var field = host.querySelector('[data-hc-tedit-in]');"
+            "field.value = 'Never';"
+            "key('Escape', field);"
+            "out = [T.editing(), saved];")
+        self.assertEqual([None, None], got)
+
+    def test_the_delete_shortcut_ignores_a_caret_in_a_field(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tadd=goal]'));"
+            "var field = host.querySelector('[data-hc-tadd-in]');"
+            "key('Backspace', field, { metaKey: true });"
+            "out = saved;")
+        self.assertIsNone(got, "Backspace belonged to what was being typed")
+
+    def test_the_delete_shortcut_takes_the_focused_row(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "key('Backspace', row, { metaKey: true });"
+            "out = saved.map(function (g) { return g.id; });")
+        self.assertEqual(["gB"], got)
+
+    def test_a_bare_backspace_on_a_row_deletes_nothing(self):
+        got = self.tree(
+            "T.render(true);"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "key('Backspace', row);"
+            "out = saved;")
+        self.assertIsNone(got)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class GoalTreeInfoTests(BridgeTestCase):
+    """The mark on a row, and the card it opens.
+
+    Progressive disclosure and nothing else: what the row is, and -- for
+    something only suggested -- why it was suggested. No actions live here.
+    """
+
+    SETUP = GoalTreeTests.SETUP
+    tree = GoalTreeTests.tree
+
+    def test_the_mark_is_on_every_row(self):
+        got = self.tree(
+            "T.render(true);"
+            "out = host.querySelectorAll('.hc-tinfo').map(function (m) {"
+            "  return m.getAttribute('data-hc-tinfo'); });")
+        self.assertEqual(["goal", "sub", "todo", "todo", "todo", "goal"], got)
+
+    def test_the_card_says_the_title_and_the_description(self):
+        got = self.tree(
+            "T.render(true);"
+            "var mark = host.querySelector('[data-hc-tinfo=goal]');"
+            "T.openTip(mark, true);"
+            "var card = document.querySelector('.hc-ttip');"
+            "out = [card.querySelector('.hc-ttip-t').textContent,"
+            "       card.querySelector('.hc-ttip-d').textContent,"
+            "       !!card.querySelector('.hc-ttip-wl'),"
+            "       mark.getAttribute('data-hc-pin') !== null];")
+        self.assertEqual("Fix interface not showing up", got[0])
+        self.assertEqual("The preview comes up blank.", got[1])
+        self.assertFalse(got[2], "nothing suggested it, so there is no why")
+        self.assertTrue(got[3])
+
+    def test_a_row_with_no_description_says_so_rather_than_nothing(self):
+        got = self.tree(
+            "T.render(true);"
+            "T.openTip(host.querySelector('[data-hc-tinfo=sub]'), true);"
+            "out = document.querySelector('.hc-ttip-d').textContent;")
+        self.assertEqual("No description yet.", got)
+
+    def test_a_suggested_row_carries_why_it_was_suggested(self):
+        goals = [{"id": "g1", "title": "Ship it", "done": False, "desc": "",
+                  "suggested": True, "why": "You said the preview was blank.",
+                  "children": [], "todo_items": []}]
+        got = self.tree(
+            "T.reset(); T.opened('g1'); T.render(true);"
+            "T.openTip(host.querySelector('.hc-tinfo'), true);"
+            "var card = document.querySelector('.hc-ttip');"
+            "out = [card.querySelector('.hc-ttip-wl').textContent,"
+            "       card.querySelector('.hc-ttip-w').textContent];",
+            goals=goals)
+        self.assertEqual(["Why this?", "You said the preview was blank."], got)
+
+    def test_a_second_click_on_a_pinned_card_puts_it_away(self):
+        got = self.tree(
+            "T.render(true);"
+            "var mark = host.querySelector('[data-hc-tinfo=goal]');"
+            "click(mark); var one = !!T.tip();"
+            "click(mark); var two = !!T.tip();"
+            "out = [one, two, !!document.querySelector('.hc-ttip')];")
+        self.assertEqual([True, False, False], got)
+
+    def test_opening_the_card_does_not_select_the_row_under_it(self):
+        got = self.tree(
+            "T.render(true);"
+            "click(host.querySelector('[data-hc-tinfo=goal]'));"
+            "out = [T.opened(), !!T.tip()];")
+        self.assertEqual(["gA", True], got,
+                         "the mark answered; the row never heard the click")
+
+    def test_the_card_never_offers_an_action(self):
+        got = self.tree(
+            "T.render(true);"
+            "T.openTip(host.querySelector('.hc-tinfo'), true);"
+            "var card = document.querySelector('.hc-ttip');"
+            "out = (card.children || []).map(function (c) {"
+            "  return [String(c.className), c.getAttribute('role')]; });")
+        for cls, role in got:
+            self.assertIsNone(role, "%s is not a control" % cls)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class GoalTourTests(BridgeTestCase):
+    """Six cards on a reader's first workspace, and never again unless asked.
+
+    Non-blocking is the whole design: no scrim, the card stands beside what
+    it describes, and the ring is a node of its own over the target rather
+    than a border on it -- so nothing underneath moves, and nothing
+    underneath stops answering while a step is up.
+    """
+
+    SETUP = GoalTreeTests.SETUP
+    tree = GoalTreeTests.tree
+
+    def card(self):
+        return ("var card = window.__hcPromptUI.tour.card();"
+                "var text = function (cls) { return (card.children || [])"
+                "  .filter(function (c) { return String(c.className) === cls; })"
+                "  .map(function (c) { return String(c.textContent); }); };")
+
+    def test_it_walks_six_steps_with_the_copy_it_was_given(self):
+        got = self.tree(
+            "var R = window.__hcPromptUI.tour; R.start();"
+            "out = R.steps.map(function (s) { return s.title; });")
+        self.assertEqual(
+            ["Welcome to Engelbart", "The Goals panel", "You or Agent",
+             "See what gets built", "Not sure what to do next? Brainstorm.",
+             "Change the plan anytime"], got)
+
+    def test_the_first_card_counts_itself_and_offers_the_way_in(self):
+        got = self.tree(
+            "var R = window.__hcPromptUI.tour; R.start();" + self.card() +
+            "out = [text('hc-tour-n')[0], text('hc-tour-t')[0],"
+            "       text('hc-tour-p'),"
+            "       (card.querySelector('.hc-tour-acts').children || []).map("
+            "         function (b) { return String(b.textContent); })];")
+        self.assertEqual("1 of 6", got[0])
+        self.assertEqual("Welcome to Engelbart", got[1])
+        self.assertEqual(
+            ["Engelbart breaks your project into manageable steps and keeps"
+             " its context over time.",
+             "Take a quick tour to see how it works."], got[2])
+        self.assertEqual(["Skip tour", "Take the tour"], got[3],
+                         "nothing to go back to on the first card")
+
+    def test_the_last_card_says_start_working_and_finishing_sets_the_flag(self):
+        got = self.tree(
+            "var R = window.__hcPromptUI.tour; R.start();"
+            "for (var i = 0; i < 5; i++) R.step(1);" + self.card() +
+            "var acts = (card.querySelector('.hc-tour-acts').children || []).map("
+            "  function (b) { return String(b.textContent); });"
+            "var was = R.done();"
+            "var at = R.at();"
+            "R.step(1);"
+            "out = [at, acts, was, R.done(), R.showing(),"
+            "       store['engelbart.tourDone']];")
+        self.assertEqual(5, got[0])
+        self.assertEqual(["Skip tour", "Back", "Start working"], got[1])
+        self.assertFalse(got[2])
+        self.assertTrue(got[3])
+        self.assertFalse(got[4], "the card is gone")
+        self.assertEqual("1", got[5])
+
+    def test_skipping_ends_it_the_same_way_as_finishing(self):
+        got = self.tree(
+            "var R = window.__hcPromptUI.tour; R.start();"
+            "var skip = window.__hcPromptUI.tour.card()"
+            "  .querySelector('[data-hc-tour-b=skip]');"
+            "click(skip);"
+            "out = [R.showing(), R.done(), !!R.card(),"
+            "       !!document.querySelector('.hc-tour')];")
+        self.assertEqual([False, True, False, False], got)
+
+    def test_a_step_with_no_target_draws_no_ring(self):
+        got = self.tree(
+            "var R = window.__hcPromptUI.tour; R.start();"
+            "var first = !!R.ring();"
+            "R.step(1);"
+            "out = [first, !!R.ring(), R.steps[1].at];")
+        self.assertEqual([False, True, ".hc-tree"], got)
+
+    def test_the_ring_is_its_own_node_over_the_target(self):
+        # Never a border on the target: a border is a layout change, and the
+        # thing being pointed at would move as it was pointed at.
+        got = self.tree(
+            "T.render(true);"
+            "var R = window.__hcPromptUI.tour; R.start(); R.step(1);"
+            "var ring = R.ring();"
+            "out = [String(ring.className), ring.parentNode === document.body,"
+            "       host.getAttribute('style'),"
+            "       ring.getAttribute('aria-hidden')];")
+        self.assertEqual("hc-tour-ring", got[0])
+        self.assertTrue(got[1])
+        self.assertIsNone(got[2], "the tree itself was not touched")
+        self.assertEqual("true", got[3])
+
+    def test_the_step_about_the_owner_menu_opens_a_goal_to_show_one(self):
+        got = self.tree(
+            "T.reset(); T.opened(''); T.render(true);"
+            "var shut = host.querySelectorAll('[data-hc-town]').length;"
+            "var R = window.__hcPromptUI.tour; R.start();"
+            "for (var i = 0; i < 2; i++) R.step(1);"
+            "out = [shut, T.opened(),"
+            "       host.querySelectorAll('[data-hc-town]').length];")
+        self.assertEqual(0, got[0], "nothing open, so no chip to point at")
+        self.assertEqual("gA", got[1])
+        self.assertEqual(3, got[2])
+
+    def test_it_runs_once_and_the_guide_button_is_the_way_back(self):
+        got = self.tree(
+            "T.render(true);"
+            "var R = window.__hcPromptUI.tour;"
+            "var first = R.maybe();"
+            "var ran = R.showing();"
+            "R.finish();"
+            "var again = R.maybe();"
+            "var slot = document.createElement('span');"
+            "slot.className = 'hc-guide'; app.appendChild(slot);"
+            "window.__hcPromptUI.renderGuide();"
+            "click(slot.querySelector('[data-hc-guide]'));"
+            "out = [first, ran, again, R.showing(), R.at(),"
+            "       String(slot.querySelector('.hc-guide-b').textContent) +"
+            "       (slot.querySelector('.hc-guide-l').textContent)];")
+        self.assertTrue(got[0])
+        self.assertTrue(got[1], "the harness fires the 400ms wait at once")
+        self.assertFalse(got[2], "done once is done")
+        self.assertTrue(got[3], "but Guide asks for it again")
+        self.assertEqual(0, got[4], "and it starts at the beginning")
+        self.assertIn("Guide", got[5])
+
+    def test_escape_puts_away_a_menu_before_it_puts_away_the_tour(self):
+        got = self.tree(
+            "T.render(true);"
+            "var R = window.__hcPromptUI.tour; R.start();"
+            "var row = host.querySelector('[data-hc-trow=goal]');"
+            "T.openMenu(row, 0, 0);"
+            "key('Escape', document.body);"
+            "var stillOn = R.showing();"
+            "key('Escape', document.body);"
+            "out = [stillOn, !!T.menu(), R.showing(), R.done()];")
+        self.assertEqual([True, False, False, True], got)

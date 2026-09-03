@@ -1854,6 +1854,9 @@
             + hideLabelsIn(paneTabBar(), ["AGENT", "REVIEW", "PROMPT"])
             + (renderOnboarding(false) ? 1 : 0)
             + (renderTodoRail(false) ? 1 : 0)
+            + (renderGoalTree(false) ? 1 : 0)
+            + (renderGuide() ? 1 : 0)
+            + (tourMaybe() ? 1 : 0)
             + (renderPreview(false) ? 1 : 0)
             + (applyPageTitle() ? 1 : 0)) > 0;
   }
@@ -3630,11 +3633,14 @@
       ".hc-bs-send{flex:none;cursor:pointer;user-select:none;border:0;background:transparent;color:var(--fnt,#9b9b9b);font:600 10px var(--hc-sans);letter-spacing:1px;text-transform:uppercase;padding:4px 6px}",
       ".hc-bs-send[disabled]{opacity:.4;cursor:default}",
       ".hc-bs-send:not([disabled]){color:var(--acc,#a5492a)}",
-      // --- docked under the goal tree -----------------------------------
-      // The same panel, laid along the foot of the workspace instead of over
-      // it: the tree stays on screen and keeps its full width, because the
-      // thing being talked about is the thing that must remain visible.
-      "[data-hc-bs-dock] .hc-brainstorm{top:auto;left:0;right:0;bottom:0;border-top:1px solid var(--bd,#e3e3e3);background:var(--bg,#fff)}",
+      // --- pinned to the foot of the goals panel -------------------------
+      // The same panel, standing at the bottom of the goals column rather
+      // than over the workspace: what is being talked about is the tree, and
+      // the composer belongs against the tree, not across the artifact.
+      // Its width is the column's, so dragging the divider carries it.
+      "[data-hc-bs-dock] .hc-brainstorm{top:auto;left:0;right:auto;bottom:0;width:var(--hc-left,455px);box-sizing:border-box;border-top:1px solid var(--bd,#e3e3e3);border-right:1px solid var(--bd,#e3e3e3);background:var(--bg,#fff)}",
+      // A column that is not on screen has no foot to stand on.
+      "[data-hc-launch][data-hc-hide-left][data-hc-bs-dock] .hc-brainstorm{display:none!important}",
       // Folded, the panel is one line: the composer, and nothing above it.
       // The thread is not scrolled out of the way, it is not drawn -- a
       // conversation half-visible behind a line reads as a rendering fault.
@@ -3650,9 +3656,13 @@
       "[data-hc-bs-dock][data-hc-bs-open] .hc-bs-scroll{display:block;max-height:none;padding:14px 16px 6px}",
       "[data-hc-bs-dock][data-hc-bs-open] .hc-bs-new{display:inline}",
       "[data-hc-bs-dock][data-hc-bs-open] .hc-bs-tools{margin-bottom:7px;gap:12px}",
-      // The dock stands over the foot of the workspace, so the columns end
-      // above it rather than behind it.
-      "[data-hc-launch][data-hc-bs-dock] .hc-rail-left,[data-hc-launch][data-hc-bs-dock] .hc-rail-right,[data-hc-launch][data-hc-bs-dock] .hc-main{height:calc(100vh - var(--hc-top) - var(--hc-bs-dock,46px))!important}"
+      // The composer stands on the goals column alone, so that column ends
+      // above it. The artifact beside it keeps its full height -- there is
+      // nothing standing on that one.
+      "[data-hc-launch][data-hc-bs-dock] .hc-rail-left{height:calc(100vh - var(--hc-top) - var(--hc-bs-dock,46px))!important}",
+      "[data-hc-bs-dock] .hc-bs-composer{max-width:none;border-radius:8px;padding:10px 12px}",
+      "[data-hc-bs-dock] .hc-bs-input{font-size:13px}",
+      "[data-hc-bs-dock] .hc-bs-foot{padding:10px 20px 12px}"
   ].join("\n");
 
   var projectBound = false;
@@ -5013,8 +5023,15 @@
   // about. The selected goal names it; with nothing selected the subject is
   // the project, and the placeholder says so rather than naming nothing.
   function bsDockSubject() {
-    var goal = todoSelectedGoal();
-    var title = goal ? str(goal.title).trim() : "";
+    // The narrowest thing selected, which is the thing being looked at: a
+    // subgoal if one is picked out in the tree, otherwise its goal, and the
+    // project when nothing is.
+    var sub = treeSelSub && todoFind(readLocalGoals(), treeSelSub);
+    var title = sub ? str(sub.title).trim() : "";
+    if (!title) {
+      var goal = todoSelectedGoal();
+      title = goal ? str(goal.title).trim() : "";
+    }
     return title ? "\u201C" + title + "\u201D" : "the project";
   }
 
@@ -10105,6 +10122,10 @@
       // being dragged, so the frames stand aside for the length of it.
       "[data-hc-launch][data-hc-dragging] iframe{pointer-events:none}",
       // The two panel toggles in the header, before the theme switch.
+      "[data-hc-launch] .hc-guide{order:-2;display:inline-flex;align-items:center;align-self:center;padding-right:10px}",
+      "[data-hc-launch] .hc-guide-b{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border:1px solid var(--bd2);border-radius:12px;font:12px var(--hc-sans);color:var(--mut);cursor:pointer;user-select:none;white-space:nowrap}",
+      "[data-hc-launch] .hc-guide-b:hover{color:var(--ink);border-color:var(--acc)}",
+      "[data-hc-launch] .hc-guide-q{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border:1px solid currentColor;border-radius:50%;font-size:9px;line-height:1}",
       "[data-hc-launch] .hc-panels{order:-1;display:inline-flex;align-items:center;gap:8px;padding-right:8px;border-right:1px solid var(--bd);align-self:center}",
       "[data-hc-launch][data-hc-overview] .hc-panels{display:none}",
       "[data-hc-launch] .hc-panel{display:inline-flex;cursor:pointer;color:var(--fnt);user-select:none}",
@@ -10359,6 +10380,9 @@
       "[data-hc-launch] .hc-pv-doctitle{flex:1 1 auto;min-width:0;background:transparent;border:0;outline:none;font:600 13px 'Source Code Pro',monospace;color:var(--ink)}",
       "[data-hc-launch] .hc-pv-doctitle::placeholder{color:var(--mut)}",
       "[data-hc-launch] .hc-pv-docbody{flex:1 1 auto;min-height:340px;width:100%;box-sizing:border-box;resize:none;border:1px solid var(--bd);border-radius:3px;background:var(--panel2);padding:14px 16px;font:13px/1.75 'Source Code Pro',monospace;color:var(--dtxt);outline:none;white-space:pre-wrap;word-break:break-word}",
+      "[data-hc-launch] .hc-pv-empty{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;text-align:center}",
+      "[data-hc-launch] .hc-pv-empty-l{font:500 9px var(--hc-sans);letter-spacing:1.6px;color:var(--fnt)}",
+      "[data-hc-launch] .hc-pv-empty-w{font:13px var(--hc-sans);color:var(--mut)}",
       "[data-hc-launch] .hc-pv-kicker{font:600 9.5px 'Source Code Pro',monospace;letter-spacing:1.1px;color:var(--mut)}",
       "[data-hc-launch] .hc-pv-head{font:600 14px/1.5 'Source Code Pro',monospace;color:var(--ink)}",
       "[data-hc-launch] .hc-pv-why{font:12px/1.7 'Source Code Pro',monospace;color:var(--mut);max-width:70ch}",
@@ -10587,6 +10611,85 @@
       "[data-hc-launch] .hc-src-add{padding:3px 9px;border:1px dashed var(--bd2);border-radius:99px;font:10.5px var(--hc-sans);color:var(--fnt);cursor:pointer;user-select:none}",
       "[data-hc-launch] .hc-src-add:hover{color:var(--acc);border-color:var(--acc)}",
       "[data-hc-launch] .hc-tabs{display:none!important}",
+      // --- the goals tree ----------------------------------------------
+      // Its own greys, because the tree is the one surface with three
+      // levels of type on it: a hairline between goals, a lighter wire
+      // inside one, and a hover that has to read under both.
+      "[data-hc-launch]{--hc-tline:#eaeaea;--hc-twire:#dcdcdc;--hc-thov:#f4f4f4;--hc-tdim:#c9c9c9}",
+      "[data-hc-launch][data-hc-theme=\"dark\"]{--hc-tline:#272727;--hc-twire:#2e2e2e;--hc-thov:#141414;--hc-tdim:#454545}",
+      "[data-hc-launch] div.hc-tree{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 20px 8px!important;font-family:var(--hc-sans)}",
+      "[data-hc-launch] .hc-tree-old{display:none!important}",
+      "[data-hc-launch] .hc-tlabel{height:26px;box-sizing:border-box;padding:12px 4px 0;display:flex;align-items:flex-end;font:500 12px var(--hc-sans);color:var(--fnt)}",
+      "[data-hc-launch] .hc-tgoal{border-top:1px solid var(--hc-tline)}",
+      "[data-hc-launch] .hc-tgoal:first-of-type{margin-top:8px}",
+      // Three row heights, one row model: a flex line with the wire behind
+      // it, the title taking the slack, and the count pinned right.
+      "[data-hc-launch] .hc-tr{position:relative;display:flex;align-items:flex-start;gap:8px;border-radius:4px;cursor:pointer;outline:none}",
+      "[data-hc-launch] .hc-tr:hover,[data-hc-launch] .hc-tr[data-hc-sel]{background:var(--hc-thov)}",
+      "[data-hc-launch] .hc-tr-goal{min-height:44px;box-sizing:border-box;padding:13px 4px}",
+      "[data-hc-launch] .hc-tr-sub{min-height:36px;box-sizing:border-box;padding:9px 4px 9px 26px}",
+      "[data-hc-launch] .hc-tr-todo{min-height:32px;box-sizing:border-box;padding:7px 4px 7px 50px}",
+      "[data-hc-launch] .hc-tr-todo[data-hc-own]{padding-left:26px}",
+      // The wire: a line down from the parent and a tick into this row. A
+      // last child stops the line at its own tick rather than running the
+      // branch past the row that ends it.
+      "[data-hc-launch] .hc-twire{position:absolute;left:14px;top:0;bottom:0;width:1px;background:var(--hc-twire);pointer-events:none}",
+      "[data-hc-launch] .hc-tr-todo:not([data-hc-own])>.hc-twire{left:38px}",
+      "[data-hc-launch] .hc-twire[data-hc-last]{bottom:auto;height:var(--hc-tick,18px)}",
+      "[data-hc-launch] .hc-twire::after{content:'';position:absolute;left:0;top:var(--hc-tick,18px);width:10px;height:1px;background:var(--hc-twire)}",
+      // Left of every row is completion and nothing else: a circle, a check
+      // when it is done, and a turning ring while an agent has it out.
+      "[data-hc-launch] .hc-ttick{flex:none;box-sizing:border-box;border:1px solid var(--hc-tdim);border-radius:50%;cursor:pointer;position:relative}",
+      "[data-hc-launch] .hc-tr-sub>.hc-ttick{width:14px;height:14px;margin-top:2px}",
+      "[data-hc-launch] .hc-tr-todo>.hc-ttick{width:12px;height:12px;margin-top:3px}",
+      "[data-hc-launch] .hc-tr-goal>.hc-ttick{display:none}",
+      "[data-hc-launch] .hc-ttick[data-hc-done]{background:var(--ink);border-color:var(--ink)}",
+      "[data-hc-launch] .hc-ttick[data-hc-done]::after{content:'\\2713';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:8px;line-height:1;color:var(--bg)}",
+      "[data-hc-launch] .hc-tr-todo>.hc-ttick[data-hc-done]::after{font-size:7px}",
+      "[data-hc-launch] .hc-ttick[data-hc-run]{border-style:dashed;border-color:var(--fnt);animation:hc-tspin 2.4s linear infinite}",
+      "@keyframes hc-tspin{to{transform:rotate(360deg)}}",
+      // The goal's chevron. Always drawn, so no title moves when a goal
+      // gains its first subgoal; quiet when there is nothing under it.
+      "[data-hc-launch] .hc-tchev{flex:none;width:12px;margin-top:1px;font-size:12px;line-height:16px;text-align:center;color:var(--fnt);transition:transform 120ms}",
+      "[data-hc-launch] .hc-tr-goal[data-hc-open]>.hc-tchev{transform:rotate(90deg)}",
+      "[data-hc-launch] .hc-tchev[data-hc-none]{opacity:.55}",
+      "[data-hc-launch] .hc-tbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}",
+      "[data-hc-launch] .hc-tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:18px}",
+      "[data-hc-launch] .hc-tbody>.hc-tt{flex:none}",
+      "[data-hc-launch] .hc-tr-goal .hc-tt{font-size:14px;font-weight:400;color:var(--mut)}",
+      "[data-hc-launch] .hc-tr-goal[data-hc-open] .hc-tt{font-weight:500;color:var(--ink)}",
+      "[data-hc-launch] .hc-tr-sub .hc-tt{font-size:14px;color:var(--ink)}",
+      "[data-hc-launch] .hc-tr-todo .hc-tt{font-size:13px;color:var(--mut)}",
+      "[data-hc-launch] .hc-tr[data-hc-done] .hc-tt{color:var(--fnt);text-decoration:line-through}",
+      "[data-hc-launch] .hc-tdesc{font-size:12px;line-height:16px;color:var(--fnt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+      // A subgoal folds its own todos away, which has nothing to do with
+      // which goal is open.
+      "[data-hc-launch] .hc-tfold{flex:none;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1;color:var(--fnt);cursor:pointer;transition:transform 120ms}",
+      "[data-hc-launch] .hc-tfold[data-hc-shut]{transform:rotate(-90deg)}",
+      "[data-hc-launch] .hc-tfold[data-hc-none]{opacity:.55}",
+      // Progressive disclosure: the mark keeps its space so nothing shifts
+      // when a row is pointed at, and shows only then.
+      "[data-hc-launch] .hc-tinfo{flex:none;width:16px;height:16px;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:12px;line-height:1;color:var(--fnt);cursor:pointer;opacity:0;transition:opacity 120ms}",
+      "[data-hc-launch] .hc-tr:hover>.hc-tinfo,[data-hc-launch] .hc-tr:focus-within>.hc-tinfo,[data-hc-launch] .hc-tinfo[data-hc-pin]{opacity:1}",
+      "[data-hc-launch] .hc-tcount{flex:none;margin-left:auto;padding-left:8px;font-size:12px;line-height:18px;color:var(--fnt);font-variant-numeric:tabular-nums;text-align:right}",
+      // Right of a todo is who it is for, and that is also where its run
+      // starts: see todoOwnerItems.
+      "[data-hc-launch] .hc-town{flex:none;margin-left:auto;padding-left:8px;min-width:60px;display:flex;align-items:baseline;justify-content:flex-end;gap:3px;font-size:12px;line-height:18px;color:var(--fnt);cursor:pointer;white-space:nowrap}",
+      "[data-hc-launch] .hc-town:hover{color:var(--ink)}",
+      "[data-hc-launch] .hc-town-c{font-size:8px;opacity:.8}",
+      "[data-hc-launch] .hc-town-busy{cursor:default}",
+      "[data-hc-launch] .hc-town-busy:hover{color:var(--fnt)}",
+      // Three adders, three weights: the further down the tree a thing is,
+      // the quieter the invitation to make one.
+      "[data-hc-launch] .hc-tadd{display:flex;align-items:center;gap:8px;border-radius:4px;cursor:pointer;font-size:13px;color:var(--hc-tdim)}",
+      "[data-hc-launch] .hc-tadd-x{flex:none;width:12px;text-align:center;line-height:1}",
+      "[data-hc-launch] .hc-tadd-todo{min-height:28px;padding:0 4px 0 50px}",
+      "[data-hc-launch] .hc-tadd-todo[data-hc-own]{padding-left:26px}",
+      "[data-hc-launch] .hc-tadd-sub{min-height:36px;padding:0 4px 0 26px}",
+      "[data-hc-launch] .hc-tadd-goal{min-height:44px;padding:0 4px;border-top:1px solid var(--hc-tline);border-bottom:1px solid var(--hc-tline);color:var(--mut)}",
+      "[data-hc-launch] .hc-tadd:hover{color:var(--ink)}",
+      "[data-hc-launch] .hc-tadd-in{flex:1;min-width:0;border:none;outline:none;background:transparent;padding:0;font:13px var(--hc-sans);color:var(--ink)}",
+      "[data-hc-launch] .hc-tadd-in::placeholder{color:var(--hc-tdim)}",
       // The session banner. Same nodes, same timers, same close button as
       // the toast it replaces -- a bar under the header rather than a card
       // in the corner, because it reports on the whole workspace.
@@ -13952,6 +14055,1181 @@
     return pane;
   }
 
+  // --- the goals tree ------------------------------------------------------
+  // The left panel as one accordion: every goal, the subgoals under the goal
+  // that is open, and each subgoal's todos. The artifact draws a flat list of
+  // goal titles and nothing else, so in this scope its list is hidden and
+  // this draws in its place -- one tree on screen, and one place that decides
+  // its shape.
+  //
+  // Reads come from the store. Goal writes go back the way every other goal
+  // edit does: window.__hcSetGoals, which watchGoals() carries to
+  // /api/import. A todo's own fields are the exception -- `todo_items` is a
+  // rail field (RAIL_FIELDS), so those go through the rail (__hcTreeTodo
+  // above), whose save path the server already agrees with.
+
+  // Which goal is drawn open. Null until the first draw adopts the selected
+  // one; "" once the reader has closed it by hand. Only ever one.
+  var treeOpen = null;
+  // "<goalId>:<subId>" for a subgoal whose todos are folded away. Kept apart
+  // from which goal is open, so closing a goal does not forget how its
+  // subgoals were left.
+  var treeSubShut = Object.create(null);
+  var treeSelSub = "";
+  var treeSelTodo = "";
+  // The one adder that is open: { kind: "goal"|"sub"|"todo", gid, sid }.
+  // Only one, so Enter and Escape always mean the row the caret is in.
+  var treeAdd = null;
+  // What the last draw was of. A redraw that would produce the same thing is
+  // skipped: this runs on a 700ms sweep, and replacing the rows under a
+  // reader's pointer for no reason is what makes a list feel loose.
+  var treeDrawn = "";
+
+  function treeHost() { return document.querySelector(".hc-tree"); }
+
+  // The rows a node carries, without the blank ones the rail keeps for its
+  // own caret: an empty row is a place to type, not work.
+  //
+  // Banded the way the rail bands them -- work, then what is out with the
+  // builder, then what is finished. Not because the tree wants sections, but
+  // because the rail rewrites the stored order to this on its first load of a
+  // goal (todoLoad), and a tree that drew the stored order would show one
+  // order until a row was touched and a different one after. There is one
+  // list, so it is drawn one way.
+  function treeRows(node) {
+    return todoSectioned(
+      todoNormalize(node && node.todo_items).filter(function (row) {
+        return str(row.text).trim() !== "";
+      }));
+  }
+
+  // Direct children are the subgoals. A tree deeper than that flattens to the
+  // same level rather than disappearing: the panel draws three levels and the
+  // store allows more, and a row nobody can see is worse than a row drawn one
+  // indent short of where it belongs.
+  function treeSubs(goal) {
+    var out = [];
+    (function walk(list) {
+      array(list).forEach(function (child) {
+        if (!child || typeof child.id !== "string") return;
+        out.push(child);
+        walk(child.children);
+      });
+    })(goal && goal.children);
+    return out;
+  }
+
+  function treeDone(node) { return !!(node && node.done); }
+
+  // k / n for a goal: its work, if it has any, and its subgoals otherwise.
+  // Todos hang off whichever node owns them -- the goal itself when it has no
+  // subgoals, which is how a chat's own goals arrive -- so both are counted.
+  function treeCount(goal) {
+    var rows = treeRows(goal);
+    var subs = treeSubs(goal);
+    subs.forEach(function (sub) { rows = rows.concat(treeRows(sub)); });
+    if (rows.length) {
+      return { k: rows.filter(function (r) { return r.status === "done"; }).length,
+               n: rows.length };
+    }
+    return { k: subs.filter(treeDone).length, n: subs.length };
+  }
+
+  function treeRunning(row) {
+    return !!row && (row.status === "building" || row.status === "queued");
+  }
+
+  // --- writes ---------------------------------------------------------------
+
+  // Every goal write lands here: the tree as the store holds it, changed, and
+  // handed to the artifact's own setter. watchGoals() sees the store change
+  // and imports it, so nothing else has to be told an edit happened. Answers
+  // whether anything was written.
+  function treeWrite(change, selId) {
+    var setter = (typeof window !== "undefined") ? window.__hcSetGoals : null;
+    if (typeof setter !== "function") return false;
+    var goals = clone(readLocalGoals());
+    if (change(goals) === false) return false;
+    setter(goals, typeof selId === "string" ? selId : undefined);
+    renderGoalTree(true);
+    return true;
+  }
+
+  // The list a node sits in and where in it, which is what moving and
+  // deleting both need. Null when the id is not in the tree.
+  function treeSeatOf(goals, id) {
+    var seat = null;
+    (function walk(list, parent) {
+      array(list).forEach(function (node) {
+        if (!node || seat) return;
+        if (node.id === id) {
+          seat = { list: list, at: list.indexOf(node),
+                   node: node, parent: parent };
+          return;
+        }
+        walk(node.children, node);
+      });
+    })(goals, null);
+    return seat;
+  }
+
+  // The same shape the artifact's own node() builds, plus the two fields the
+  // server round-trips that it leaves off. A goal created here has to render
+  // and save exactly like one that came back from /api/state.
+  function treeNewNode(title) {
+    return { id: "g" + Date.now().toString(36)
+                 + Math.floor(Math.random() * 90 + 10),
+             title: str(title), prio: "normal", done: false, open: true,
+             status: "todo", notes: "", desc: "", todo_items: [],
+             labels: [], children: [] };
+  }
+
+  function treeAddGoal(title) {
+    var node = treeNewNode(title);
+    treeOpen = node.id;
+    return treeWrite(function (goals) { goals.push(node); }, node.id);
+  }
+
+  function treeAddSub(goalId, title) {
+    var node = treeNewNode(title);
+    return treeWrite(function (goals) {
+      var goal = todoFind(goals, goalId);
+      if (!goal) return false;
+      goal.children = array(goal.children).concat([node]);
+    }, goalId);
+  }
+
+  function treeMove(id, delta) {
+    return treeWrite(function (goals) {
+      var seat = treeSeatOf(goals, id);
+      if (!seat || seat.at < 0) return false;
+      var to = seat.at + delta;
+      if (to < 0 || to >= seat.list.length) return false;
+      seat.list.splice(seat.at, 1);
+      seat.list.splice(to, 0, seat.node);
+    });
+  }
+
+  function treeMoveTodo(goalId, todoId, delta) {
+    if (!treeTodoEnter(goalId)) return false;
+    var at = todoIndexOfId(str(todoId));
+    var to = at + delta;
+    if (at < 0 || to < 0 || to >= todoItems.length) return false;
+    var row = todoItems.splice(at, 1)[0];
+    todoItems.splice(to, 0, row);
+    todoItems = todoSectioned(todoItems);
+    todoSaveSoon();
+    renderTodoRail(true);
+    renderGoalTree(true);
+    return true;
+  }
+
+  function treeRenameNode(kind, goalId, id, title) {
+    var text = str(title).trim();
+    if (!text) return false;
+    if (kind === "todo") {
+      if (!treeTodoEnter(goalId)) return false;
+      var row = treeTodoAt(id);
+      if (!row) return false;
+      row.text = text;
+      todoSaveSoon();
+      renderTodoRail(true);
+      renderGoalTree(true);
+      return true;
+    }
+    return treeWrite(function (goals) {
+      var node = todoFind(goals, id);
+      if (!node) return false;
+      node.title = text;
+    });
+  }
+
+  // Ticking a goal or a subgoal. A todo has its own path through the rail
+  // (treeTodoToggle), because its state is the rail's to write.
+  function treeToggleDone(id) {
+    return treeWrite(function (goals) {
+      var node = todoFind(goals, id);
+      if (!node) return false;
+      node.done = !node.done;
+      node.status = node.done ? "done" : "todo";
+    });
+  }
+
+  // --- selection ------------------------------------------------------------
+
+  function treeSelectGoal(id) {
+    // A second click on the goal that is open closes it. The selection stays:
+    // the panel is folded, not deselected.
+    treeOpen = (treeOpen === id) ? "" : id;
+    treeSelSub = "";
+    treeSelTodo = "";
+    treeAdd = null;
+    treeWrite(function () {}, id);
+  }
+
+  function treeSelectSub(goalId, subId) {
+    treeSelSub = subId;
+    treeSelTodo = "";
+    treeAdd = null;
+    treeWrite(function () {}, goalId);
+  }
+
+  function treeSubKey(goalId, subId) { return goalId + ":" + subId; }
+
+  function treeSubToggle(goalId, subId) {
+    var key = treeSubKey(goalId, subId);
+    if (treeSubShut[key]) delete treeSubShut[key];
+    else treeSubShut[key] = true;
+    return renderGoalTree(true);
+  }
+
+  // --- drawing --------------------------------------------------------------
+
+  // The wire down the left of a nested row: a line from the parent and a tick
+  // into this row. The line stops half-way down the last child, so a branch
+  // ends at its last row rather than running past it.
+  function treeWire(last, y) {
+    var wire = el("span", "hc-twire");
+    wire.setAttribute("aria-hidden", "true");
+    if (last) wire.setAttribute("data-hc-last", "");
+    if (wire.style && wire.style.setProperty) {
+      wire.style.setProperty("--hc-tick", y + "px");
+    }
+    return wire;
+  }
+
+  function treeTick(done, running, title) {
+    var tick = el("span", "hc-ttick");
+    tick.setAttribute("role", "button");
+    tick.setAttribute("tabindex", "-1");
+    tick.setAttribute("title", title);
+    if (running) tick.setAttribute("data-hc-run", "");
+    else if (done) tick.setAttribute("data-hc-done", "");
+    return tick;
+  }
+
+  function treeInfoNode(kind, id) {
+    var mark = el("span", "hc-tinfo", "ⓘ");
+    mark.setAttribute("role", "button");
+    mark.setAttribute("tabindex", "-1");
+    mark.setAttribute("data-hc-tinfo", kind);
+    mark.setAttribute("data-hc-tinfo-id", id);
+    mark.setAttribute("title", "What this is");
+    return mark;
+  }
+
+  // The title, or an input in its place while the row is being renamed.
+  function treeTitleNode(kind, id, text) {
+    if (!treeEdit || treeEdit.kind !== kind || treeEdit.id !== str(id)) {
+      return el("span", "hc-tt", text);
+    }
+    var field = document.createElement("input");
+    field.className = "hc-tt hc-tedit-in";
+    field.type = "text";
+    field.value = str(text);
+    field.setAttribute("data-hc-tedit-in", kind);
+    field.setAttribute("spellcheck", "false");
+    return field;
+  }
+
+  function treeCountNode(count) {
+    var span = el("span", "hc-tcount");
+    if (count && count.n) span.textContent = count.k + " / " + count.n;
+    return span;
+  }
+
+  // The owner control, which is also the run control: see todoOwnerItems.
+  // While a row is out with the builder it says so and opens nothing -- there
+  // is no ownership question to answer mid-run.
+  function treeOwnerNode(goalId, row) {
+    if (treeRunning(row)) {
+      return el("span", "hc-town hc-town-busy", "Running…");
+    }
+    var agent = todoOwnerAgent(row);
+    var chip = el("span", "hc-town");
+    chip.setAttribute("role", "button");
+    chip.setAttribute("tabindex", "-1");
+    chip.setAttribute("data-hc-town", row.id);
+    chip.setAttribute("data-hc-goal", goalId);
+    chip.setAttribute("title", agent ? "Run or reassign" : "Reassign");
+    if (agent) chip.setAttribute("data-agent-label", "");
+    chip.appendChild(el("span", "hc-town-t", agent ? "Agent" : "You"));
+    chip.appendChild(el("span", "hc-town-c", "⌄"));
+    return chip;
+  }
+
+  // An adder draws as its label until it is clicked, and as an input after.
+  // Only one is open at a time, so Enter and Escape are never ambiguous.
+  function treeAdderNode(kind, gid, sid, label, place) {
+    var open = !!treeAdd && treeAdd.kind === kind
+      && str(treeAdd.gid) === str(gid || "");
+    var row = el("div", "hc-tadd hc-tadd-" + kind);
+    row.setAttribute("data-hc-tadd", kind);
+    row.setAttribute("data-hc-goal", str(gid || ""));
+    row.setAttribute("data-hc-sub", str(sid || ""));
+    row.appendChild(el("span", "hc-tadd-x", "+"));
+    if (!open) {
+      row.appendChild(el("span", "hc-tadd-l", label));
+      return row;
+    }
+    var field = document.createElement("input");
+    field.className = "hc-tadd-in";
+    field.type = "text";
+    field.setAttribute("placeholder", place);
+    field.setAttribute("data-hc-tadd-in", kind);
+    field.setAttribute("spellcheck", "false");
+    row.appendChild(field);
+    return row;
+  }
+
+  function treeTodoNode(goalId, row, last) {
+    var line = el("div", "hc-tr hc-tr-todo");
+    line.setAttribute("data-hc-trow", "todo");
+    line.setAttribute("data-hc-goal", goalId);
+    line.setAttribute("data-hc-todo", row.id);
+    line.setAttribute("tabindex", "0");
+    if (treeSelTodo === row.id) line.setAttribute("data-hc-sel", "");
+    if (row.status === "done") line.setAttribute("data-hc-done", "");
+    line.appendChild(treeWire(last, 16));
+    line.appendChild(treeTick(row.status === "done", treeRunning(row),
+                              row.status === "done" ? "Mark not done"
+                                                    : "Mark done"));
+    line.appendChild(treeTitleNode("todo", row.id, str(row.text)));
+    line.appendChild(treeInfoNode("todo", row.id));
+    line.appendChild(treeOwnerNode(goalId, row));
+    return line;
+  }
+
+  function treeSubNode(goal, sub, last) {
+    var rows = treeRows(sub);
+    var shut = !!treeSubShut[treeSubKey(goal.id, sub.id)];
+    var line = el("div", "hc-tr hc-tr-sub");
+    line.setAttribute("data-hc-trow", "sub");
+    line.setAttribute("data-hc-goal", goal.id);
+    line.setAttribute("data-hc-sub", sub.id);
+    line.setAttribute("tabindex", "0");
+    if (treeSelSub === sub.id) line.setAttribute("data-hc-sel", "");
+    if (sub.done) line.setAttribute("data-hc-done", "");
+    line.appendChild(treeWire(last && (shut || !rows.length), 18));
+    line.appendChild(treeTick(sub.done, false,
+                              sub.done ? "Mark not done" : "Mark done"));
+    line.appendChild(treeTitleNode("sub", sub.id, str(sub.title) || "Untitled"));
+    var chev = el("span", "hc-tfold", "⌄");
+    chev.setAttribute("role", "button");
+    chev.setAttribute("tabindex", "-1");
+    chev.setAttribute("data-hc-tfold", sub.id);
+    chev.setAttribute("title", shut ? "Show its todos" : "Hide its todos");
+    if (shut) chev.setAttribute("data-hc-shut", "");
+    if (!rows.length) chev.setAttribute("data-hc-none", "");
+    line.appendChild(chev);
+    line.appendChild(treeInfoNode("sub", sub.id));
+    line.appendChild(treeCountNode({
+      k: rows.filter(function (r) { return r.status === "done"; }).length,
+      n: rows.length
+    }));
+    return line;
+  }
+
+  function treeGoalNode(goal, open) {
+    var line = el("div", "hc-tr hc-tr-goal");
+    line.setAttribute("data-hc-trow", "goal");
+    line.setAttribute("data-hc-goal", goal.id);
+    line.setAttribute("tabindex", "0");
+    if (open) line.setAttribute("data-hc-open", "");
+    if (goal.done) line.setAttribute("data-hc-done", "");
+    var chev = el("span", "hc-tchev", "›");
+    chev.setAttribute("aria-hidden", "true");
+    if (!treeSubs(goal).length && !treeRows(goal).length) {
+      chev.setAttribute("data-hc-none", "");
+    }
+    line.appendChild(chev);
+    var body = el("span", "hc-tbody");
+    body.appendChild(treeTitleNode("goal", goal.id, str(goal.title) || "Untitled"));
+    if (str(goal.desc).trim()) {
+      body.appendChild(el("span", "hc-tdesc", str(goal.desc).trim()));
+    }
+    line.appendChild(body);
+    line.appendChild(treeInfoNode("goal", goal.id));
+    line.appendChild(treeCountNode(treeCount(goal)));
+    return line;
+  }
+
+  // What the panel would draw, as a string. Cheap to compare and exact: if
+  // this has not changed there is nothing on screen to redo.
+  function treeSignature(goals) {
+    var parts = [treeOpen, treeSelSub, treeSelTodo,
+                 treeAdd ? treeAdd.kind + treeAdd.gid : "",
+                 treeEdit ? treeEdit.kind + treeEdit.id : ""];
+    var rowPart = function (row) {
+      parts.push(row.id, row.text, row.status, str(row.owner));
+    };
+    array(goals).forEach(function (goal) {
+      var count = treeCount(goal);
+      parts.push(goal.id, goal.title, goal.desc, goal.done ? 1 : 0,
+                 count.k + "/" + count.n);
+      if (treeOpen !== goal.id) return;
+      treeRows(goal).forEach(rowPart);
+      treeSubs(goal).forEach(function (sub) {
+        parts.push(sub.id, sub.title, sub.done ? 1 : 0,
+                   treeSubShut[treeSubKey(goal.id, sub.id)] ? 1 : 0);
+        treeRows(sub).forEach(rowPart);
+      });
+    });
+    return parts.join("");
+  }
+
+  function renderGoalTree(force) {
+    if (serverState.scope !== "chat") return false;
+    var host = treeHost();
+    if (!host) return false;
+    var goals = readLocalGoals();
+    // The first draw adopts whatever the artifact has selected, so the panel
+    // opens on the goal the rest of the page is already about.
+    if (treeOpen === null) treeOpen = selectedGoalId() || "";
+    var signature = treeSignature(goals);
+    if (!force && signature === treeDrawn && host.firstChild) return false;
+    treeDrawn = signature;
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(el("div", "hc-tlabel", "Goals"));
+    array(goals).forEach(function (goal) {
+      var open = treeOpen === goal.id;
+      var block = el("div", "hc-tgoal");
+      block.appendChild(treeGoalNode(goal, open));
+      if (open) {
+        // A goal's own todos, when it carries them rather than a subgoal --
+        // which is how a chat's goals arrive, and how they read.
+        var own = treeRows(goal);
+        var subs = treeSubs(goal);
+        own.forEach(function (row, i) {
+          var node = treeTodoNode(goal.id, row, i === own.length - 1);
+          node.setAttribute("data-hc-own", "");
+          block.appendChild(node);
+        });
+        if (own.length || !subs.length) {
+          var adder = treeAdderNode("todo", goal.id, "", "Add todo",
+                                    "Todo, Enter to save, Esc to cancel");
+          adder.setAttribute("data-hc-own", "");
+          block.appendChild(adder);
+        }
+        subs.forEach(function (sub, si) {
+          var last = si === subs.length - 1;
+          block.appendChild(treeSubNode(goal, sub, last));
+          if (treeSubShut[treeSubKey(goal.id, sub.id)]) return;
+          var rows = treeRows(sub);
+          rows.forEach(function (row, i) {
+            block.appendChild(treeTodoNode(sub.id, row,
+                                           last && i === rows.length - 1));
+          });
+          block.appendChild(treeAdderNode(
+            "todo", sub.id, "", "Add todo",
+            "Todo, Enter to save, Esc to cancel"));
+        });
+        block.appendChild(treeAdderNode(
+          "sub", goal.id, "", "Add subgoal",
+          "Subgoal, Enter to save, Esc to cancel"));
+      }
+      host.appendChild(block);
+    });
+    host.appendChild(treeAdderNode("goal", "", "", "Add goal",
+                                   "Goal, Enter to save, Esc to cancel"));
+    var field = host.querySelector("[data-hc-tadd-in]")
+      || host.querySelector("[data-hc-tedit-in]");
+    if (field && field.focus) field.focus();
+    if (field && field.select && treeEdit) field.select();
+    coachPlace();
+    return true;
+  }
+
+  // --- what the panel answers ----------------------------------------------
+  // Every control answers at the document, the way the rest of this file
+  // does: the rows are replaced on every draw, so a listener bound to one
+  // would be gone the next time it was needed.
+
+  function treeUp(node, attr) {
+    while (node && node !== document) {
+      if (node.getAttribute && node.getAttribute(attr) !== null) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function treeHas(node, cls) {
+    while (node && node !== document) {
+      var name = " " + str(node.className) + " ";
+      if (name.indexOf(" " + cls + " ") >= 0) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function treeTyping(node) {
+    var tag = str(node && node.tagName).toUpperCase();
+    if (tag === "INPUT" || tag === "TEXTAREA") return true;
+    var ce = node && node.getAttribute
+      && node.getAttribute("contenteditable");
+    return ce !== null && ce !== undefined && ce !== "false";
+  }
+
+  function treeAddCommit(field) {
+    if (!treeAdd || !field) return false;
+    var text = str(field.value).trim();
+    var spec = treeAdd;
+    treeAdd = null;
+    if (!text) { renderGoalTree(true); return false; }
+    if (spec.kind === "goal") return treeAddGoal(text);
+    if (spec.kind === "sub") return treeAddSub(spec.gid, text);
+    // A todo lands where the rail would have put it: at the end of the list
+    // its goal holds, with the text it was given.
+    if (!treeTodoEnter(spec.gid)) return false;
+    todoItems.push(todoRow(text, 0));
+    todoItems = todoSectioned(todoItems);
+    todoSaveSoon();
+    renderTodoRail(true);
+    renderGoalTree(true);
+    return true;
+  }
+
+  function treeClicked(target) {
+    var host = treeHost();
+    if (!host || !host.contains || !host.contains(target)) return false;
+
+    // An adder, opened. Clicking inside its own field is not a re-open.
+    var adder = treeUp(target, "data-hc-tadd");
+    if (adder) {
+      if (treeUp(target, "data-hc-tadd-in")) return false;
+      treeAdd = { kind: adder.getAttribute("data-hc-tadd"),
+                  gid: adder.getAttribute("data-hc-goal"),
+                  sid: adder.getAttribute("data-hc-sub") };
+      renderGoalTree(true);
+      return true;
+    }
+
+    // The mark, which says what a row is. A second click on a card that
+    // is already pinned puts it away, the way a menu button does.
+    var mark = treeUp(target, "data-hc-tinfo");
+    if (mark) {
+      if (treeTip && treeTip.pinned
+          && treeTip.id === mark.getAttribute("data-hc-tinfo-id")) {
+        return treeTipClose();
+      }
+      return treeTipOpen(mark, true);
+    }
+
+    // The owner chip, which is also where a run starts.
+    var chip = treeUp(target, "data-hc-town");
+    if (chip) {
+      treeTodoOwner(chip.getAttribute("data-hc-goal"),
+                    chip.getAttribute("data-hc-town"), chip);
+      return true;
+    }
+
+    // A subgoal's own fold, which is not the goal's.
+    var fold = treeUp(target, "data-hc-tfold");
+    if (fold) {
+      var srow = treeUp(fold, "data-hc-sub");
+      return treeSubToggle(srow.getAttribute("data-hc-goal"),
+                           fold.getAttribute("data-hc-tfold"));
+    }
+
+    var row = treeUp(target, "data-hc-trow");
+    if (!row) return false;
+    var kind = row.getAttribute("data-hc-trow");
+    var tick = !!treeHas(target, "hc-ttick");
+    if (kind === "todo") {
+      if (tick) {
+        treeTodoToggle(row.getAttribute("data-hc-goal"),
+                       row.getAttribute("data-hc-todo"));
+        return renderGoalTree(true);
+      }
+      // Picking a row makes the workspace about the goal it belongs to --
+      // which is what puts that goal's build in the middle pane. A todo has
+      // no artifact of its own; the run that produced one is the goal's.
+      treeSelTodo = row.getAttribute("data-hc-todo");
+      var owner = row.getAttribute("data-hc-goal");
+      var seat = treeSeatOf(readLocalGoals(), owner);
+      var top = seat && seat.parent ? seat.parent.id : owner;
+      treeWrite(function () {}, top);
+      return true;
+    }
+    if (kind === "sub") {
+      if (tick) return treeToggleDone(row.getAttribute("data-hc-sub"));
+      treeSelectSub(row.getAttribute("data-hc-goal"),
+                    row.getAttribute("data-hc-sub"));
+      return true;
+    }
+    if (tick) return treeToggleDone(row.getAttribute("data-hc-goal"));
+    treeSelectGoal(row.getAttribute("data-hc-goal"));
+    return true;
+  }
+
+  // --- deleting, renaming, and the menu that offers both -------------------
+  // A goal is not erased: dropping it from the tree is what the import reads
+  // as archiving it, which is what deleting a goal has always meant here, and
+  // the Archive view is where it can be found again. A subgoal or a todo
+  // really goes.
+
+  function treeDelete(kind, goalId, id) {
+    if (kind === "todo") {
+      if (!treeTodoEnter(goalId)) return false;
+      var at = todoIndexOfId(str(id));
+      if (at < 0) return false;
+      todoItems.splice(at, 1);
+      todoItems = todoSectioned(todoItems);
+      todoSaveSoon();
+      renderTodoRail(true);
+      renderGoalTree(true);
+      return true;
+    }
+    return treeWrite(function (goals) {
+      var seat = treeSeatOf(goals, id);
+      if (!seat || seat.at < 0) return false;
+      seat.list.splice(seat.at, 1);
+    });
+  }
+
+  // Whether a row has a neighbour to trade places with, so the menu can grey
+  // the move it cannot make rather than offering one that does nothing.
+  function treeCanMove(kind, goalId, id, delta) {
+    if (kind === "todo") {
+      var rows = treeRows(todoFind(readLocalGoals(), goalId));
+      var seat = -1;
+      rows.forEach(function (row, i) { if (row.id === id) seat = i; });
+      return seat >= 0 && seat + delta >= 0 && seat + delta < rows.length;
+    }
+    var found = treeSeatOf(readLocalGoals(), id);
+    return !!found && found.at + delta >= 0
+      && found.at + delta < found.list.length;
+  }
+
+  // The rename in flight: which row, so the draw puts an input where its
+  // title was. One at a time, like the adders.
+  var treeEdit = null;
+
+  function treeEditOpen(kind, goalId, id, text) {
+    treeAdd = null;
+    treeEdit = { kind: kind, gid: str(goalId), id: str(id), text: str(text) };
+    renderGoalTree(true);
+    return true;
+  }
+
+  function treeEditCommit(field) {
+    if (!treeEdit || !field) return false;
+    var spec = treeEdit;
+    var text = str(field.value).trim();
+    treeEdit = null;
+    if (!text || text === spec.text) { renderGoalTree(true); return false; }
+    return treeRenameNode(spec.kind, spec.gid, spec.id, text);
+  }
+
+  // The menu a right-click opens, and the one the owner chip opens, are one
+  // menu: opening either closes the other, so the panel never has two.
+  var treeMenu = null;
+
+  function treeMenuClose() {
+    if (!treeMenu) return false;
+    treeMenu = null;
+    var open = document.querySelector(".hc-tmenu");
+    if (open && open.parentNode) open.parentNode.removeChild(open);
+    return true;
+  }
+
+  // The delete shortcut, said the way this machine says it.
+  function treeDeleteHint() {
+    var mac = false;
+    try {
+      mac = /Mac|iPhone|iPad/.test(str(navigator && navigator.platform)
+                                   || str(navigator && navigator.userAgent));
+    } catch (e) { mac = false; }
+    return mac ? "⌘⌫" : "Ctrl ⌫";
+  }
+
+  function treeMenuItems(kind, goalId, id, text) {
+    return [
+      { label: "Rename", act: function () {
+        treeEditOpen(kind, goalId, id, text);
+      } },
+      { label: "Move up", off: !treeCanMove(kind, goalId, id, -1),
+        act: function () {
+          if (kind === "todo") treeMoveTodo(goalId, id, -1);
+          else treeMove(id, -1);
+        } },
+      { label: "Move down", off: !treeCanMove(kind, goalId, id, 1),
+        act: function () {
+          if (kind === "todo") treeMoveTodo(goalId, id, 1);
+          else treeMove(id, 1);
+        } },
+      { label: "Delete", divider: true, danger: true, hint: treeDeleteHint(),
+        act: function () { treeDelete(kind, goalId, id); } }
+    ];
+  }
+
+  function treeMenuOpen(row, x, y) {
+    var kind = row.getAttribute("data-hc-trow");
+    var goalId = row.getAttribute("data-hc-goal");
+    var id = kind === "todo" ? row.getAttribute("data-hc-todo")
+      : kind === "sub" ? row.getAttribute("data-hc-sub") : goalId;
+    todoOwnerClose();
+    treeMenuClose();
+    var title = row.querySelector(".hc-tt");
+    var items = treeMenuItems(kind, goalId, id, title ? title.textContent : "");
+    treeMenu = { kind: kind, id: id, items: items };
+    ensurePaneStyles();
+    var menu = el("div", "hc-tmenu");
+    menu.setAttribute("data-hc-tmenu", kind);
+    menu.style.left = Math.round(Math.max(
+      8, Math.min(x, (window.innerWidth || 1288) - 176))) + "px";
+    menu.style.top = Math.round(Math.max(8, y)) + "px";
+    items.forEach(function (item, i) {
+      var line = el("div", "hc-tmenu-i");
+      line.setAttribute("data-hc-tmenu-i", String(i));
+      if (item.divider) line.setAttribute("data-hc-divider", "");
+      if (item.danger) line.setAttribute("data-hc-danger", "");
+      if (item.off) line.setAttribute("data-hc-off", "");
+      line.appendChild(el("span", "hc-tmenu-l", item.label));
+      if (item.hint) line.appendChild(el("span", "hc-tmenu-k", item.hint));
+      menu.appendChild(line);
+    });
+    (document.body || document.documentElement).appendChild(menu);
+    return true;
+  }
+
+  function treeMenuPick(index) {
+    var item = treeMenu && treeMenu.items[index];
+    if (!item || item.off) return false;
+    treeMenuClose();
+    item.act();
+    return true;
+  }
+
+  // --- what a row is, without leaving the row ------------------------------
+  // Progressive disclosure, and nothing more: the mark says what the row is
+  // and why it was suggested. No actions live here -- everything a reader can
+  // DO to a row is on the row or in its menu, and a popover that also acted
+  // would be a third place to look for the same controls.
+
+  var treeTip = null;
+
+  function treeTipClose() {
+    if (!treeTip) return false;
+    treeTip = null;
+    var open = document.querySelector(".hc-ttip");
+    if (open && open.parentNode) open.parentNode.removeChild(open);
+    var pinned = document.querySelector("[data-hc-pin]");
+    if (pinned) pinned.removeAttribute("data-hc-pin");
+    return true;
+  }
+
+  // What the mark on a row has to say: its title, what it is, and -- for
+  // something the brainstorm has only proposed -- why it was proposed.
+  function treeTipOf(kind, goalId, id) {
+    var goals = readLocalGoals();
+    if (kind === "todo") {
+      var owner = todoFind(goals, goalId);
+      var row = null;
+      treeRows(owner).forEach(function (r) { if (r.id === id) row = r; });
+      if (!row) return null;
+      return { title: str(row.text), desc: "", why: "",
+               suggested: !!row.suggested };
+    }
+    var node = todoFind(goals, id);
+    if (!node) return null;
+    return { title: str(node.title) || "Untitled", desc: str(node.desc),
+             why: str(node.why), suggested: !!node.suggested };
+  }
+
+  function treeTipOpen(mark, pin) {
+    var kind = mark.getAttribute("data-hc-tinfo");
+    var id = mark.getAttribute("data-hc-tinfo-id");
+    var row = treeUp(mark, "data-hc-trow");
+    if (!row) return false;
+    var said = treeTipOf(kind, row.getAttribute("data-hc-goal"), id);
+    if (!said) return false;
+    treeTipClose();
+    treeTip = { id: id, pinned: !!pin };
+    if (pin) mark.setAttribute("data-hc-pin", "");
+    ensurePaneStyles();
+    var tip = el("div", "hc-ttip");
+    tip.setAttribute("data-hc-ttip", id);
+    tip.appendChild(el("div", "hc-ttip-t", said.title));
+    tip.appendChild(el("div", "hc-ttip-d",
+                       said.desc.trim() || "No description yet."));
+    if (said.suggested && said.why.trim()) {
+      tip.appendChild(el("div", "hc-ttip-wl", "Why this?"));
+      tip.appendChild(el("div", "hc-ttip-w", said.why.trim()));
+    }
+    var box = mark.getBoundingClientRect ? mark.getBoundingClientRect() : null;
+    var high = window.innerHeight || 800;
+    var wide = window.innerWidth || 1288;
+    if (box) {
+      // Below the mark, unless there is not room for the card down there --
+      // then above it, which is the only other place it fits.
+      var below = high - box.bottom >= 280;
+      tip.style.left = Math.round(Math.max(
+        8, Math.min(box.left, wide - 308))) + "px";
+      if (below) tip.style.top = Math.round(box.bottom + 6) + "px";
+      else tip.style.bottom = Math.round(high - box.top + 6) + "px";
+      if (!below) tip.setAttribute("data-hc-above", "");
+    }
+    (document.body || document.documentElement).appendChild(tip);
+    return true;
+  }
+
+  var treeBound = false;
+
+  function installGoalTree() {
+    if (treeBound || !document.addEventListener) return false;
+    treeBound = true;
+
+    document.addEventListener("click", function (e) {
+      var pick = treeUp(e.target, "data-hc-tmenu-i");
+      if (pick) {
+        if (e.stopPropagation) e.stopPropagation();
+        treeMenuPick(parseInt(pick.getAttribute("data-hc-tmenu-i"), 10));
+        return;
+      }
+      if (treeClicked(e.target)) {
+        if (e.stopPropagation) e.stopPropagation();
+        return;
+      }
+      // Anywhere else is outside both: a menu and a pinned card go away.
+      treeMenuClose();
+      if (treeTip && treeTip.pinned && !treeUp(e.target, "data-hc-ttip")) {
+        treeTipClose();
+      }
+    });
+
+    document.addEventListener("contextmenu", function (e) {
+      var host = treeHost();
+      if (!host || !host.contains || !host.contains(e.target)) return;
+      var row = treeUp(e.target, "data-hc-trow");
+      if (!row) return;
+      if (e.preventDefault) e.preventDefault();
+      treeMenuOpen(row, e.clientX || 0, e.clientY || 0);
+    });
+
+    // Hover opens the card after a beat, so running the pointer down the
+    // tree does not flash six of them. Leaving closes it, unless the pointer
+    // has landed on the card itself -- which is the only way to read a long
+    // description without pinning it first.
+    var tipWait = null;
+    var tipShut = null;
+    var tipHold = function () {
+      if (tipShut) { clearTimeout(tipShut); tipShut = null; }
+    };
+    document.addEventListener("mouseover", function (e) {
+      if (treeUp(e.target, "data-hc-ttip")) { tipHold(); return; }
+      var mark = treeUp(e.target, "data-hc-tinfo");
+      if (!mark || (treeTip && treeTip.pinned)) return;
+      tipHold();
+      if (tipWait) clearTimeout(tipWait);
+      tipWait = setTimeout(function () {
+        tipWait = null;
+        if (!treeTip || !treeTip.pinned) treeTipOpen(mark, false);
+      }, 150);
+    });
+    document.addEventListener("mouseout", function (e) {
+      if (!treeUp(e.target, "data-hc-tinfo")
+          && !treeUp(e.target, "data-hc-ttip")) return;
+      if (tipWait) { clearTimeout(tipWait); tipWait = null; }
+      if (!treeTip || treeTip.pinned) return;
+      tipHold();
+      tipShut = setTimeout(function () {
+        tipShut = null;
+        if (treeTip && !treeTip.pinned) treeTipClose();
+      }, 200);
+    });
+
+    // The tree scrolling under a card leaves it pointing at nothing.
+    document.addEventListener("scroll", function () {
+      if (treeTip) treeTipClose();
+      treeMenuClose();
+    }, true);
+
+    document.addEventListener("keydown", function (e) {
+      var field = treeUp(e.target, "data-hc-tadd-in");
+      var edit = treeUp(e.target, "data-hc-tedit-in");
+      if (field || edit) {
+        if (e.key === "Enter") {
+          if (e.preventDefault) e.preventDefault();
+          if (field) treeAddCommit(field);
+          else treeEditCommit(edit);
+        } else if (e.key === "Escape") {
+          if (e.preventDefault) e.preventDefault();
+          treeAdd = null;
+          treeEdit = null;
+          renderGoalTree(true);
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        // The nearest thing first, and only that one: a menu, then a card
+        // that was pinned open, then the tour. Two handlers could not do
+        // this -- listeners fire in the order they were bound, so whichever
+        // went first would close its own thing before the other could ask
+        // whether it should, and one Escape would take both.
+        if (treeMenuClose() || todoOwnerClose()) return;
+        if (treeTipClose()) return;
+        if (tourShowing()) tourFinish();
+        return;
+      }
+      // Deleting the row that has the focus. Never while a caret is in
+      // something: Backspace belongs to whatever is being typed in.
+      var row = treeUp(e.target, "data-hc-trow");
+      if (!row || treeTyping(e.target)) return;
+      var wants = e.key === "Delete"
+        || (e.key === "Backspace" && (e.metaKey || e.ctrlKey));
+      if (!wants) return;
+      if (e.preventDefault) e.preventDefault();
+      var kind = row.getAttribute("data-hc-trow");
+      treeDelete(kind, row.getAttribute("data-hc-goal"),
+                 kind === "todo" ? row.getAttribute("data-hc-todo")
+                   : kind === "sub" ? row.getAttribute("data-hc-sub")
+                     : row.getAttribute("data-hc-goal"));
+    });
+
+    // Blur saves, which is what the three adders promise. The draw that
+    // follows is what takes the field away.
+    document.addEventListener("focusout", function (e) {
+      var field = treeUp(e.target, "data-hc-tadd-in");
+      if (field) { treeAddCommit(field); return; }
+      var edit = treeUp(e.target, "data-hc-tedit-in");
+      if (edit) treeEditCommit(edit);
+    });
+
+    return true;
+  }
+
+  // --- the tour ------------------------------------------------------------
+  // Six cards, on the first load of a workspace and never again unless the
+  // reader asks. It does not block: there is no scrim, the card sits beside
+  // what it is pointing at rather than over it, and every control underneath
+  // still answers -- a reader who wants to open the owner menu while step
+  // three is describing it can, which is the point of describing it.
+
+  var TOUR_KEY = "engelbart.tourDone";
+
+  var TOUR = [
+    { title: "Welcome to Engelbart",
+      body: ["Engelbart breaks your project into manageable steps and keeps"
+             + " its context over time.",
+             "Take a quick tour to see how it works."] },
+    { title: "The Goals panel", at: ".hc-tree",
+      body: ["Your project is organized into goals, subgoals, and todos.",
+             "Todos are the concrete steps where work gets done."] },
+    { title: "You or Agent", at: "[data-agent-label]", open: true,
+      body: ["You can do a todo yourself or give it to the Agent.",
+             "Open this menu to switch ownership or run Agent work."] },
+    { title: "See what gets built", at: ".hc-main",
+      body: ["When Agent work produces something, its build or preview"
+             + " appears here.",
+             "Open a finished todo to bring its artifact back."] },
+    { title: "Not sure what to do next? Brainstorm.", at: ".hc-bs-composer",
+      body: ["Describe what you’re thinking. Engelbart can suggest goals,"
+             + " subgoals, and todos directly in your project."] },
+    { title: "Change the plan anytime", at: ".hc-tree",
+      body: ["Right-click a goal, subgoal, or todo to rename, move, or"
+             + " delete it.",
+             "Use the + actions to add new ones."] }
+  ];
+
+  // Which step is on screen, or -1 for none.
+  var tourAt = -1;
+  var tourNode = null;
+  var tourRing = null;
+
+  function tourDone() {
+    try { return localStorage.getItem(TOUR_KEY) === "1"; }
+    catch (e) { return true; }
+  }
+
+  function tourFinish() {
+    try { localStorage.setItem(TOUR_KEY, "1"); } catch (e) {}
+    return tourClose();
+  }
+
+  function tourClose() {
+    tourAt = -1;
+    [tourNode, tourRing].forEach(function (node) {
+      if (node && node.parentNode) node.parentNode.removeChild(node);
+    });
+    tourNode = null;
+    tourRing = null;
+    return true;
+  }
+
+  function tourShowing() { return tourAt >= 0; }
+
+  // Step three is about the owner chip, and there is no chip to point at
+  // while every goal is folded. Opening the first goal is part of the step.
+  function tourReveal(step) {
+    if (!step.open || treeOpen) return false;
+    var goals = readLocalGoals();
+    if (!goals.length) return false;
+    treeOpen = goals[0].id;
+    renderGoalTree(true);
+    return true;
+  }
+
+  // The ring, drawn as its own node over the target rather than as a border
+  // on it: a border would move the thing it is describing.
+  function tourPlace(step) {
+    var host = document.body || document.documentElement;
+    var box = null;
+    if (step.at) {
+      var target = document.querySelector(step.at);
+      if (target && target.getBoundingClientRect) {
+        box = target.getBoundingClientRect();
+        if (!box || (!box.width && !box.height)) box = null;
+      }
+    }
+    if (tourRing && tourRing.parentNode) tourRing.parentNode.removeChild(tourRing);
+    tourRing = null;
+    var wide = window.innerWidth || 1288;
+    var high = window.innerHeight || 800;
+    if (box) {
+      tourRing = el("div", "hc-tour-ring");
+      tourRing.setAttribute("aria-hidden", "true");
+      var top = Math.max(4, box.top - 4);
+      var left = Math.max(4, box.left - 4);
+      tourRing.style.top = Math.round(top) + "px";
+      tourRing.style.left = Math.round(left) + "px";
+      tourRing.style.width = Math.round(
+        Math.min(box.width + 8, wide - left - 4)) + "px";
+      tourRing.style.height = Math.round(
+        Math.min(box.height + 8, high - top - 4)) + "px";
+      host.appendChild(tourRing);
+    }
+    // Beside the target, on whichever side has room; the welcome card, which
+    // points at nothing, sits over the middle of the workspace.
+    if (!box) {
+      tourNode.style.left = Math.round(Math.max(12, (wide - 320) / 2)) + "px";
+      tourNode.style.top = Math.round(Math.max(12, high / 2 - 80 - 100)) + "px";
+      return true;
+    }
+    var right = box.right + 20;
+    var left2 = right + 320 <= wide - 12 ? right
+      : (box.left - 340 >= 12 ? box.left - 340 : null);
+    if (left2 === null) {
+      tourNode.style.left = Math.round(Math.max(
+        12, Math.min(box.left, wide - 332))) + "px";
+      tourNode.style.top = Math.round(Math.min(box.bottom + 12,
+                                               high - 220)) + "px";
+      return true;
+    }
+    tourNode.style.left = Math.round(left2) + "px";
+    tourNode.style.top = Math.round(Math.max(
+      12, Math.min(box.top, high - 260))) + "px";
+    return true;
+  }
+
+  function tourButton(label, act, kind) {
+    var button = el("span", "hc-tour-b", label);
+    button.setAttribute("role", "button");
+    button.setAttribute("tabindex", "0");
+    button.setAttribute("data-hc-tour-b", act);
+    if (kind) button.setAttribute("data-hc-tour-kind", kind);
+    return button;
+  }
+
+  function tourDraw() {
+    var step = TOUR[tourAt];
+    if (!step) return tourClose();
+    tourReveal(step);
+    if (tourNode && tourNode.parentNode) {
+      tourNode.parentNode.removeChild(tourNode);
+    }
+    ensurePaneStyles();
+    tourNode = el("div", "hc-tour");
+    tourNode.setAttribute("data-hc-tour", String(tourAt + 1));
+    tourNode.setAttribute("role", "dialog");
+    tourNode.appendChild(el("div", "hc-tour-n",
+                            (tourAt + 1) + " of " + TOUR.length));
+    tourNode.appendChild(el("div", "hc-tour-t", step.title));
+    step.body.forEach(function (line) {
+      tourNode.appendChild(el("div", "hc-tour-p", line));
+    });
+    var acts = el("div", "hc-tour-acts");
+    acts.appendChild(tourButton("Skip tour", "skip", "text"));
+    if (tourAt > 0) acts.appendChild(tourButton("Back", "back", "outline"));
+    acts.appendChild(tourButton(
+      tourAt === 0 ? "Take the tour"
+        : tourAt === TOUR.length - 1 ? "Start working" : "Next",
+      "next", "primary"));
+    tourNode.appendChild(acts);
+    (document.body || document.documentElement).appendChild(tourNode);
+    tourPlace(step);
+    return true;
+  }
+
+  function tourStart() {
+    if (serverState.scope !== "chat") return false;
+    tourAt = 0;
+    return tourDraw();
+  }
+
+  function tourStep(delta) {
+    var to = tourAt + delta;
+    if (to < 0) return false;
+    if (to >= TOUR.length) return tourFinish();
+    tourAt = to;
+    return tourDraw();
+  }
+
+  // The first load of a workspace, and only that one. Late enough that the
+  // panel it points at has been drawn.
+  function tourMaybe() {
+    if (tourShowing() || tourDone()) return false;
+    if (serverState.scope !== "chat" || !treeHost()) return false;
+    setTimeout(function () {
+      if (!tourShowing() && !tourDone()) tourStart();
+    }, 400);
+    return true;
+  }
+
+  // The way back in: a button in the header, beside what the workspace saved.
+  function renderGuide() {
+    if (serverState.scope !== "chat") return false;
+    var slot = document.querySelector(".hc-guide");
+    if (!slot) return false;
+    if (slot.children && slot.children.length) return false;
+    var button = el("span", "hc-guide-b");
+    button.setAttribute("role", "button");
+    button.setAttribute("tabindex", "0");
+    button.setAttribute("data-hc-guide", "");
+    button.setAttribute("title", "Show the six-step tour again");
+    button.appendChild(el("span", "hc-guide-q", "?"));
+    button.appendChild(el("span", "hc-guide-l", "Guide"));
+    slot.appendChild(button);
+    return true;
+  }
+
+  var tourBound = false;
+
+  function installTour() {
+    if (tourBound || !document.addEventListener) return false;
+    tourBound = true;
+    document.addEventListener("click", function (e) {
+      if (treeUp(e.target, "data-hc-guide")) { tourStart(); return; }
+      var button = treeUp(e.target, "data-hc-tour-b");
+      if (!button) return;
+      if (e.stopPropagation) e.stopPropagation();
+      var act = button.getAttribute("data-hc-tour-b");
+      if (act === "skip") tourFinish();
+      else if (act === "back") tourStep(-1);
+      else tourStep(1);
+    });
+    // Escape is not bound here: the tree's own handler decides what the key
+    // means, in order, and ends at the tour. See installGoalTree.
+    // The card is placed against a rectangle, and a rectangle that moved is
+    // a card pointing at nothing.
+    if (window.addEventListener) {
+      window.addEventListener("resize", function () {
+        if (tourShowing()) tourPlace(TOUR[tourAt]);
+      });
+    }
+    return true;
+  }
+
   // --- onboarding: which project is this chat for? -------------------------
   //
   // A chat used to belong to the directory it was started in, which made
@@ -14700,9 +15978,15 @@
     // Named for what the pane holds rather than for what is missing from
     // it: this is where finished work appears, and "no artifact yet" says
     // both that there is none and that there is somewhere for one to go.
-    var card = pvCard("", "No artifact yet");
-    card.appendChild(pvWhy("Builds and previews will appear here."));
-    return card;
+    //
+    // Centred and unboxed, unlike every other state here: the others are
+    // cards because they have something to say about a project, and a
+    // border drawn around nothing only points at the nothing.
+    var empty = el("div", "hc-pv-empty");
+    empty.appendChild(el("div", "hc-pv-empty-l", "NO ARTIFACT YET"));
+    empty.appendChild(el("div", "hc-pv-empty-w",
+                        "Builds and previews will appear here."));
+    return empty;
   }
 
   function pvUnconfigured(state) {
@@ -17334,11 +18618,16 @@
   // v2: the rails open at a quarter of the window each (a 1:2:1 split), so
   // a layout saved by the shell that shipped narrower ones is not reused.
   var LAYOUT_KEY = "hc-launch-layout-v2";
-  var RAIL_MIN = { left: 200, right: 240 };
-  var RAIL_MAX = { left: 720, right: 720 };
+  // The goals panel holds three levels of row now -- goal, subgoal, todo,
+  // each indented past the last -- so a quarter of a narrow window is no
+  // longer a width it can be read at. Its own floor, ceiling and default,
+  // and the prompt rail keeps the ones it had.
+  var RAIL_MIN = { left: 320, right: 240 };
+  var RAIL_MAX = { left: 760, right: 720 };
   var layout = null;
 
   function railDefault(side) {
+    if (side === "left") return 455;
     var width = (typeof window !== "undefined" && window.innerWidth) || 1440;
     var quarter = Math.round(width / 4);
     return Math.min(RAIL_MAX[side], Math.max(RAIL_MIN[side], quarter));
@@ -17360,7 +18649,10 @@
       left: clampWidth("left", saved.left != null ? saved.left : RAIL_DEFAULT.left),
       right: clampWidth("right", saved.right != null ? saved.right : RAIL_DEFAULT.right),
       hideLeft: saved.hideLeft === true,
-      hideRight: saved.hideRight === true,
+      // Away unless the reader has asked for it. The rail is still the one
+      // editor of the TODO rows -- the tree hands every row write to it --
+      // so this hides a panel, not a system.
+      hideRight: saved.hideRight !== false,
     };
     return layout;
   }
@@ -17948,6 +19240,8 @@
       applyLayout();
       renderPanelToggles();
       installRailDrag();
+      installGoalTree();
+      installTour();
       renderSessionChip();
       renderViewTabs();
       renderInheritedSources();
@@ -18680,7 +19974,7 @@
        chat ? "<div class=\"hc-shell\" style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"
             : "<div style=\"display:{{ mainDisp }};gap:16px;align-items:flex-start;margin-top:14px\">"],
       ["<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">",
-       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">{{ railName }}</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, notes, TODOs, prompts\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
+       chat ? "<div class=\"hc-rail-left\" style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">\n<div class=\"hc-rail-head\"><span class=\"hc-rail-name\">{{ railName }}</span><span class=\"hc-rail-count\">{{ goalCount }}</span></div><div class=\"hc-search\"><div class=\"hc-search-field\"><span class=\"hc-search-glyph\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><circle cx=\"6.8\" cy=\"6.8\" r=\"4.4\"></circle><path d=\"M10.2 10.2 L14 14\" stroke-linecap=\"round\"></path></svg></span><input class=\"hc-search-input\" type=\"search\" placeholder=\"Search goals, subgoals, todos\u2026\" spellcheck=\"false\" autocomplete=\"off\" aria-label=\"Search goals\"><span class=\"hc-search-clear\" role=\"button\" title=\"Clear\" aria-label=\"Clear search\">\u00d7</span></div><div class=\"hc-search-hits\"></div></div>"
             : "<div style=\"display:{{ leftDisp }};flex-direction:column;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;flex:{{ leftFlex }};min-width:0;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 10px 6px\">"],
       ["<div style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">",
        chat ? "<div class=\"hc-rail-right\"><div class=\"hc-rail-head\"><span class=\"hc-rail-tabs\"></span><span class=\"hc-rail-saved\"></span></div><div class=\"hc-todos\"><div class=\"hc-todos-top\"><span class=\"hc-todo-copy\" style=\"opacity:.5;border:none;padding:0;font-weight:400;align-self:flex-end\">Copy all</span></div><div class=\"hc-todos-list\"></div><div class=\"hc-todos-actions\"><span class=\"hc-todo-add\" style=\"font:600 10px 'Source Code Pro',monospace;letter-spacing:.5px;color:var(--fnt);cursor:pointer;margin-right:auto;opacity:.7\">+ Add TODO</span><span class=\"hc-todo-error\"></span><span class=\"hc-todo-quick\" data-hc-todo-quick=\"off\" title=\"A small, fast change: slim context, the quick model, your kept session — and no restart check after (⇧⌘↩)\">Quick</span><span class=\"hc-todo-build\" data-hc-todo-build=\"off\">Build all</span></div></div><div class=\"hc-rail-notes\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\">\n<div class=\"hc-notes-box\">\n<div class=\"hc-notes-render\">{{ notesOverlay }}</div>\n<textarea class=\"hc-notes-edit\" value=\"{{ notesVal }}\" sc-camel-on-change=\"{{ notesChange }}\" spellcheck=\"false\" placeholder=\"Write in markdown \u2014 # heading, - list, - [ ] task, **bold**, `code`\"></textarea>\n</div>\n</sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to write notes on it.</div></sc-if></div><div class=\"hc-rail-prompt\"><sc-if value=\"{{ hasSel }}\" hint-placeholder-val=\"{{ true }}\"><div class=\"hc-rail-actions\"><span sc-camel-on-click=\"{{ copyPrompt }}\" class=\"hc-rail-copy\">{{ copyPromptLabel }}</span></div></sc-if><sc-if value=\"{{ noSel }}\" hint-placeholder-val=\"{{ false }}\"><div class=\"hc-rail-none\">Select a goal to see the prompt for it.</div></sc-if></div><div class=\"hc-rail-understand\"></div></div>\n<div class=\"hc-main\" style=\"display:{{ rightDisp }};flex:{{ rightFlex }};min-width:300px;position:sticky;top:16px;height:calc(100vh - 185px);min-height:300px;box-sizing:border-box;overflow-y:auto;background:transparent;border:1px solid var(--bd);border-radius:2px;padding:16px 18px 18px\">"
@@ -18736,7 +20030,7 @@
       // header's own child, so it holds still with the header, and the
       // artifact draws it back with the header on every render.
       ["</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>",
-       chat ? "</span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\" title=\"saved {{ updatedLabel }}\">saved \u2713</span></div><div class=\"hc-subbar\"><span class=\"hc-viewtabs\"></span></div>"
+       chat ? "</span><span class=\"hc-guide\"></span><span class=\"hc-panels\"></span><span class=\"hc-session\"></span><span class=\"hc-chats\"></span><span class=\"hc-handoff\"></span><span class=\"hc-alerts\"></span><span class=\"hc-settings\"></span><span class=\"hc-updated\" style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\" title=\"saved {{ updatedLabel }}\">saved \u2713</span></div><div class=\"hc-subbar\"><span class=\"hc-viewtabs\"></span></div>"
             : "</span><span style=\"font:11px 'Source Code Pro',monospace;color:var(--fnt)\">updated {{ updatedLabel }}</span></div>"],
       ["Goals, subgoals, and suggested tasks inferred from your Claude Code history.", "A holistic view of your goals, subgoals, and suggested tasks \u2014 inferred from your Claude Code\u00a0conversation\u00a0history."],
       ["The source conversations your goals and state are derived from.", "Your Claude Code conversations, preserved beyond Claude\u2019s default 30-day history and used to derive your goals."],
@@ -19032,6 +20326,13 @@
       // live only inside the artifact card, so pressing run opened a
       // pane that said to press run. The anchors now exist either way,
       // and the invitation only shows when nothing is happening.
+      // The tree the panel actually draws. The artifact renders a flat
+      // list of goal titles; renderGoalTree draws goals, subgoals and
+      // todos as one accordion in its place, so the artifact's own list
+      // is named here only so the stylesheet can put it away.
+      ["<div ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">",
+       chat ? "<div class=\"hc-tree\"></div>\n<div class=\"hc-tree-old\" ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">"
+            : "<div ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">"],
       ["<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if>",
        "<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px\"><div class=\"hc-live\"></div><div class=\"hc-live-rest\"></div></div><sc-if value=\"{{ artIdle }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if></sc-if>"],
       ["artEmpty: !art, hasArtifact: !!art,",
@@ -19391,6 +20692,36 @@
       // The hint that points at that menu the first time there is a row
       // waiting behind it. Not a control: it takes no clicks and is gone
       // the moment the menu it names is opened.
+      // Non-blocking by construction: no scrim, and the ring is a node of
+      // its own over the target rather than a border on it -- a border would
+      // move the thing it is pointing at, and nothing underneath stops
+      // answering while a step describes it.
+      ".hc-tour{position:fixed;z-index:9100;width:320px;box-sizing:border-box;padding:15px 17px 13px;background:var(--panel,#fff);border:1px solid var(--bd2,#d5d5d5);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5)}",
+      ".hc-tour-n{font:12px var(--hc-sans);color:var(--fnt,#8f8f8f)}",
+      ".hc-tour-t{margin-top:6px;font:500 15px var(--hc-sans);color:var(--ink,#111)}",
+      ".hc-tour-p{margin-top:8px;font:13px/1.55 var(--hc-sans);color:var(--mut,#a1a1a1)}",
+      ".hc-tour-acts{margin-top:15px;display:flex;align-items:center;gap:9px}",
+      ".hc-tour-b{cursor:pointer;user-select:none;font:13px var(--hc-sans);color:var(--mut,#a1a1a1);padding:5px 4px;border-radius:6px}",
+      ".hc-tour-b:hover{color:var(--ink,#111)}",
+      ".hc-tour-b[data-hc-tour-kind=\"outline\"]{margin-left:auto;padding:5px 12px;border:1px solid var(--bd2,#d5d5d5)}",
+      ".hc-tour-b[data-hc-tour-kind=\"primary\"]{padding:5px 13px;border-radius:6px;background:var(--acc,#111);color:var(--onacc,#fff);font-weight:500}",
+      ".hc-tour-acts>.hc-tour-b[data-hc-tour-kind=\"primary\"]:nth-child(2){margin-left:auto}",
+      ".hc-tour-ring{position:fixed;z-index:9099;pointer-events:none;border:1.5px solid var(--ink,#ededed);border-radius:8px;box-shadow:0 0 0 5px rgba(237,237,237,.14)}",
+      ".hc-tmenu{position:fixed;z-index:9000;min-width:168px;padding:4px;background:var(--panel,#fff);border:1px solid var(--bd2,#d5d5d5);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5)}",
+      ".hc-tmenu-i{display:flex;align-items:center;gap:16px;height:30px;padding:0 10px;border-radius:5px;font:13px var(--hc-sans);color:var(--mut,#575757);cursor:pointer;white-space:nowrap}",
+      ".hc-tmenu-i:hover{background:var(--hov,#f4f4f4);color:var(--ink,#111)}",
+      ".hc-tmenu-i[data-hc-divider]{margin-top:4px;padding-top:4px;border-top:1px solid var(--bd,#e6e6e6)}",
+      ".hc-tmenu-i[data-hc-danger]{color:var(--del,#ff5e63)}",
+      ".hc-tmenu-i[data-hc-danger]:hover{color:var(--del,#ff5e63)}",
+      ".hc-tmenu-i[data-hc-off]{opacity:.35;cursor:default}",
+      ".hc-tmenu-i[data-hc-off]:hover{background:transparent;color:var(--mut,#575757)}",
+      ".hc-tmenu-l{flex:1;min-width:0}",
+      ".hc-tmenu-k{flex:none;margin-left:auto;font-size:12px;opacity:.7}",
+      ".hc-ttip{position:fixed;z-index:9001;width:300px;box-sizing:border-box;padding:11px 13px;background:var(--panel,#fff);border:1px solid var(--bd2,#d5d5d5);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5)}",
+      ".hc-ttip-t{font:500 14px var(--hc-sans);color:var(--ink,#111)}",
+      ".hc-ttip-d{margin-top:5px;font:13px/1.5 var(--hc-sans);color:var(--mut,#a1a1a1)}",
+      ".hc-ttip-wl{margin-top:9px;font:500 12px var(--hc-sans);color:var(--fnt,#8f8f8f)}",
+      ".hc-ttip-w{margin-top:3px;font:13px/1.5 var(--hc-sans);color:var(--mut,#a1a1a1)}",
       ".hc-coach{position:fixed;z-index:8999;pointer-events:none;padding:4px 9px;border-radius:6px;background:var(--acc,#a5492a);color:var(--onacc,#fff);font:600 10px var(--hc-sans);letter-spacing:.3px;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.2)}",
       // A conversation takes as long as it takes and reports no progress
       // of its own, so the bar sweeps rather than claiming a percentage.
@@ -19651,6 +20982,72 @@
                readSection: docSectionRead,
                writeSection: docSectionWrite },
     renderTodoRail: renderTodoRail,
+    renderGoalTree: renderGoalTree,
+    renderGuide: renderGuide,
+    tour: {
+      steps: TOUR,
+      start: tourStart,
+      step: tourStep,
+      close: tourClose,
+      finish: tourFinish,
+      install: installTour,
+      maybe: tourMaybe,
+      showing: tourShowing,
+      at: function () { return tourAt; },
+      done: tourDone,
+      ring: function () { return tourRing; },
+      card: function () { return tourNode; }
+    },
+    tree: {
+      render: renderGoalTree,
+      install: installGoalTree,
+      subs: treeSubs,
+      rows: treeRows,
+      count: treeCount,
+      signature: treeSignature,
+      opened: function (id) { if (id !== undefined) treeOpen = id; return treeOpen; },
+      selectGoal: treeSelectGoal,
+      selectSub: treeSelectSub,
+      foldSub: treeSubToggle,
+      addGoal: treeAddGoal,
+      addSub: treeAddSub,
+      move: treeMove,
+      moveTodo: treeMoveTodo,
+      rename: treeRenameNode,
+      toggleDone: treeToggleDone,
+      adding: function () { return treeAdd; },
+      // The rows the rail is holding for whichever goal the tree last
+      // wrote to -- which is where a tree edit to a todo actually lands.
+      railRows: function () {
+        return todoItems ? todoCopyRows(todoItems) : null;
+      },
+      editing: function () { return treeEdit; },
+      del: treeDelete,
+      canMove: treeCanMove,
+      menuItems: treeMenuItems,
+      openMenu: treeMenuOpen,
+      pickMenu: treeMenuPick,
+      closeMenu: treeMenuClose,
+      menu: function () { return treeMenu; },
+      deleteHint: treeDeleteHint,
+      tipOf: treeTipOf,
+      openTip: treeTipOpen,
+      closeTip: treeTipClose,
+      tip: function () { return treeTip; },
+      // A fresh panel, for a test that wants one: the module keeps which
+      // goal is open across draws, which is the whole point of it.
+      reset: function () {
+        treeOpen = null;
+        treeSubShut = Object.create(null);
+        treeSelSub = "";
+        treeSelTodo = "";
+        treeAdd = null;
+        treeEdit = null;
+        treeMenuClose();
+        treeTipClose();
+        treeDrawn = "";
+      }
+    },
     renderPreview: renderPreview,
     previewState: function () { return previewState; },
     previewBody: pvBody,
