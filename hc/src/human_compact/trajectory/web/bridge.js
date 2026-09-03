@@ -10199,6 +10199,18 @@
       "[data-hc-launch] .hc-todo-cost{flex:none;align-self:flex-end;font:500 10px/1.9 var(--hc-sans);letter-spacing:.2px;color:var(--fnt);opacity:.7;user-select:none;white-space:nowrap;cursor:default}",
       "[data-hc-launch] .hc-todo-row:hover .hc-todo-cost{opacity:1}",
       "[data-hc-launch] .hc-todo-cost[data-hc-todo-spent]{color:var(--mut);opacity:1}",
+      // The tree's own rows: how far a goal has got, and who each row is
+      // for. The owner chip is quiet until the row is hovered or the row is
+      // the agent's -- a column of twenty identical \"You\"s is twenty words
+      // to read past to find the one that is not.
+      "[data-hc-launch] .hc-row-prog{opacity:.75}",
+      "[data-hc-launch] .hc-row-owner{opacity:0;color:var(--fnt);border:1px solid transparent}",
+      "[data-hc-launch] .hc-row-owner[data-hc-row-owner=\"1\"]{opacity:1;color:var(--acc);border-color:var(--bd)}",
+      "[data-hc-launch] div:hover>.hc-row-owner{opacity:.8}",
+      "[data-hc-launch] .hc-row-owner:hover{opacity:1;background:var(--hov);border-color:var(--bd2)}",
+      // Both sit at the row's right, and only one of them can have the
+      // margin that puts it there or they fight over it.
+      "[data-hc-launch] .hc-row-prog+.hc-row-owner{margin-left:8px!important}",
       // Who the row is for, at the end of its line. Quiet until the row is
       // hovered or the row is the agent's: a list of twenty rows that all
       // say "You" is twenty words the reader has to read past to find the
@@ -13533,6 +13545,81 @@
     coachNode.style.top = Math.round(box.top - 34) + "px";
     coachNode.style.left = Math.round(Math.max(
       8, Math.min(box.right - 178, window.innerWidth - 186))) + "px";
+    return true;
+  }
+
+  // --- the tree's own TODO rows --------------------------------------------
+  // The goal tree draws each goal's rows under it, which is where the work
+  // actually reads. It may not WRITE them there: `todo_items` is a rail
+  // field (see RAIL_FIELDS), so anything the artifact changes about a row is
+  // overwritten by the store on its next save. So the tree renders from
+  // state and hands every write back here, to the one editor -- the rail --
+  // whose save path the server already agrees with.
+  //
+  // Each write loads the goal into the rail first, so the rows being changed
+  // are the rows the rail holds. Loading the goal the rail is already on is
+  // refused: it would throw away rows the reader is part-way through typing.
+
+  function treeTodoEnter(goalId) {
+    var id = str(goalId);
+    if (!id) return false;
+    if (todoGoalId === id && todoItems) return true;
+    var node = todoFind(readLocalGoals(), id);
+    if (!node) return false;
+    // Anything outstanding on the goal being left belongs to that goal.
+    todoSaveNow();
+    todoLoad({ id: id, items: todoNormalize(node.todo_items) });
+    return true;
+  }
+
+  function treeTodoAt(id) {
+    var at = todoIndexOfId(str(id));
+    return at < 0 ? null : todoItems[at];
+  }
+
+  // Ticked in the tree. A row out with the builder is not ticked by hand --
+  // the build says when it is done -- so the click is refused there rather
+  // than writing a "done" the next state sweep would take straight back.
+  function treeTodoToggle(goalId, todoId) {
+    if (!treeTodoEnter(goalId)) return false;
+    var row = treeTodoAt(todoId);
+    if (!row || row.status === "building" || row.status === "queued") {
+      return false;
+    }
+    row.status = row.status === "done" ? "" : "done";
+    row.question = "";
+    todoItems = todoSectioned(todoItems);
+    todoSaveSoon();
+    renderTodoRail(true);
+    return true;
+  }
+
+  function treeTodoOwner(goalId, todoId, chip) {
+    if (!treeTodoEnter(goalId)) return false;
+    if (!treeTodoAt(todoId) || !chip) return false;
+    todoOwnerOpen(str(todoId), chip);
+    return true;
+  }
+
+  // A row added from the tree lands where the rail would have put it: at the
+  // end of the goal's list, empty, with the caret in it.
+  function treeTodoAdd(goalId) {
+    if (!treeTodoEnter(goalId)) return false;
+    var blank = null;
+    array(todoItems).forEach(function (row) {
+      if (!row.status && !str(row.text).trim()) blank = row;
+    });
+    if (!blank) {
+      blank = todoRow("", 0);
+      todoItems.push(blank);
+      todoItems = todoSectioned(todoItems);
+    }
+    // Where the caret goes is decided before the draw, not after: the draw
+    // is what puts it there.
+    var at = todoIndexOfId(blank.id);
+    if (at >= 0) todoFocusAt = { index: at, caret: 0 };
+    railTab = "todos";
+    renderTodoRail(true);
     return true;
   }
 
@@ -19040,6 +19127,110 @@
       ["if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (typing) return; nav(e.key === 'ArrowUp'); return; }\n",
        "if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { if (typing) return; nav(e.key === 'ArrowUp'); return; }\n"
        + "      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { if (typing) return; const step = window.__hcPromptUI && window.__hcPromptUI.treeStep(this.state.goals, this._rowIds || [], this.state.selId, e.key === 'ArrowLeft'); if (!step) return; e.preventDefault(); if (step.fold) this.set(s => ({ goals: this.up(s.goals, step.fold.id, x => ({ ...x, open: step.fold.open })) })); else this.set(() => ({ selId: step.selId, editId: null })); const ids = this._rowIds || [], nx = ids.indexOf(step.selId), el = this._treeEl; if (el && nx >= 0) { const top = nx * 29, bot = top + 29; if (top < el.scrollTop) el.scrollTop = top; else if (bot > el.scrollTop + el.clientHeight) el.scrollTop = bot - el.clientHeight; } return; }\n"],
+      // --- the work, in the tree ----------------------------------------
+      // A goal's TODO rows are drawn under it rather than only in the rail:
+      // the tree is where the work is read, and a row that lives one panel
+      // away from the goal it belongs to is a row nobody looks at. Every
+      // WRITE still goes to the rail (see __hcTreeTodo) -- `todo_items` is
+      // a rail field, so an edit made here would be overwritten by the
+      // store on the artifact's next save.
+      //
+      // How far each goal has got, as "done / all" over the rows in its
+      // whole subtree. Only where there are rows: a goal with no work under
+      // it says nothing rather than "0 / 0".
+      ["rowRef: (el) => { (this._rowEls = this._rowEls || {})[n.id] = el; }, canDel: true,",
+       "rowRef: (el) => { (this._rowEls = this._rowEls || {})[n.id] = el; }, canDel: true,"
+       + " prog: (function(){var d=0,t=0;var cnt=function(x){((x&&x.todo_items)||[]).forEach(function(r){t++;if(r&&r.status==='done')d++;});((x&&x.children)||[]).forEach(cnt);};cnt(n);return t?(d+' / '+t):'';})(),"],
+      // The rows themselves, under the goal they belong to, then the way to
+      // add one. Emitted after the goal's children so the shape reads
+      // goal -> subgoal -> work, which is the order it is thought about in.
+      ["      if (open) walk(kids, d + 1);",
+       "      if (open) walk(kids, d + 1);\n"
+       + "      if (open) (function(){\n"
+       + "        var mine = (n.todo_items || []).filter(function (r) { return r && r.id; });\n"
+       + "        var self = this;\n"
+       + "        mine.forEach(function (r) {\n"
+       + "          var done = r.status === 'done';\n"
+       + "          var out = r.status === 'building' || r.status === 'queued';\n"
+       + "          rows.push({\n"
+       + "            id: '__todo_' + r.id, isReal: false, isAdd: false, isTodo: true,\n"
+       + "            title: r.text || '', rawTitle: r.text || '',\n"
+       + "            pad: ((d + 1) * 22) + 'px', guide: 'none', caret: '',\n"
+       + "            check: done ? '\u2713' : '', circB: done ? 'var(--ink)' : 'var(--fnt)',\n"
+       + "            bg: 'transparent', hovBg: 'var(--acchov)', fw: '400',\n"
+       + "            tcol: done ? 'var(--mut)' : 'var(--ink)',\n"
+       + "            deco: done ? 'line-through' : 'none',\n"
+       + "            isSel: false, isEdit: false, showTitle: true, canDel: false,\n"
+       + "            dragOp: '1', dropShadow: 'none', prog: '',\n"
+       + "            owner: r.owner === 'agent' ? 'Agent' : 'You',\n"
+       + "            ownerOn: r.owner === 'agent' ? '1' : '',\n"
+       + "            state: out ? (r.status === 'queued' ? 'queued' : 'Running\u2026') : '',\n"
+       + "            ownerClick: function (e) { if (e && e.stopPropagation) e.stopPropagation();"
+       + " if (window.__hcTreeTodo) window.__hcTreeTodo.owner(n.id, r.id, e && e.currentTarget); },\n"
+       + "            done: function (e) { if (e && e.stopPropagation) e.stopPropagation();"
+       + " if (window.__hcTreeTodo) window.__hcTreeTodo.toggle(n.id, r.id); },\n"
+       + "            sel: function () { self.set(function () { return { selId: n.id }; }); },\n"
+       + "            toggle: function () {}, edit: function () {}, del: function () {},\n"
+       + "            addSub: function () {}, key: function () {}, blur: function () {},\n"
+       + "            ref: function () {}, dragStart: function () {}, rowRef: function () {}\n"
+       + "          });\n"
+       + "        });\n"
+       + "        if (!mine.length && kids.length) return;\n"
+       + "        rows.push({\n"
+       + "          id: '__addtodo_' + n.id, isReal: false, isAdd: true, isTodo: false,\n"
+       + "          addLabel: 'Add todo', pad: ((d + 1) * 22) + 'px', guide: 'none',\n"
+       + "          caret: '', check: '', circB: 'transparent', bg: 'transparent',\n"
+       + "          hovBg: 'var(--hov)', fw: '400', tcol: 'var(--mut)', deco: 'none',\n"
+       + "          isSel: false, isEdit: false, showTitle: false, title: '', rawTitle: '',\n"
+       + "          canDel: false, dragOp: '1', dropShadow: 'none', prog: '', owner: '', ownerOn: '', state: '',\n"
+       + "          sel: function () { self.set(function () { return { selId: n.id }; });"
+       + " if (window.__hcTreeTodo) window.__hcTreeTodo.add(n.id); },\n"
+       + "          ownerClick: function () {}, toggle: function () {}, done: function () {},\n"
+       + "          edit: function () {}, del: function () {}, addSub: function () {},\n"
+       + "          key: function () {}, blur: function () {}, ref: function () {},\n"
+       + "          dragStart: function () {}, rowRef: function () {}\n"
+       + "        });\n"
+       + "      }).call(this);"],
+      // A TODO row is ticked the same way a goal is, and wears the same
+      // mark -- it is the same gesture on the same kind of thing. It needs
+      // its own control only because the goal's is gated on `isReal`, which
+      // a row that is not a goal is not.
+      ['<sc-if value="{{ row.isReal }}" hint-placeholder-val="{{ true }}"><span sc-camel-on-click="{{ row.done }}" title="Toggle complete" style="width:13px;height:13px;flex:none;border:1.5px solid {{ row.circB }};border-radius:50%;box-sizing:border-box;color:var(--mut);font:8.5px/10px \'Source Code Pro\',monospace;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ row.check }}</span></sc-if>',
+       '<sc-if value="{{ row.isReal }}" hint-placeholder-val="{{ true }}"><span sc-camel-on-click="{{ row.done }}" title="Toggle complete" style="width:13px;height:13px;flex:none;border:1.5px solid {{ row.circB }};border-radius:50%;box-sizing:border-box;color:var(--mut);font:8.5px/10px \'Source Code Pro\',monospace;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ row.check }}</span></sc-if>' + '<sc-if value="{{ row.isTodo }}" hint-placeholder-val="{{ false }}">'
+       + '<span sc-camel-on-click="{{ row.done }}" title="Toggle complete" '
+       + 'style="width:13px;height:13px;flex:none;border:1.5px solid {{ row.circB }};'
+       + 'border-radius:50%;box-sizing:border-box;color:var(--mut);'
+       + 'font:8.5px/10px \'Source Code Pro\',monospace;display:flex;'
+       + 'align-items:center;justify-content:center;cursor:pointer">'
+       + '{{ row.check }}</span></sc-if>'],
+      // What the row has to say for itself, at its right: how far a goal
+      // has got, whether a row is out with the builder, and who it is for.
+      // Each is drawn only when it has something to say, so an ordinary row
+      // is exactly as bare as it was. The title it hangs off is the one the
+      // launch shell renamed a moment ago in chat scope, and the bare one
+      // everywhere else -- an anchor that named only the chat spelling
+      // missed on every global vault.
+      [chat ? '<sc-if value="{{ row.showTitle }}" hint-placeholder-val="{{ true }}"><span class="hc-rowtitle" style="font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}">{{ row.title }}</span></sc-if>'
+            : '<sc-if value="{{ row.showTitle }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}">{{ row.title }}</span></sc-if>',
+       (chat ? '<sc-if value="{{ row.showTitle }}" hint-placeholder-val="{{ true }}"><span class="hc-rowtitle" style="font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}">{{ row.title }}</span></sc-if>'
+             : '<sc-if value="{{ row.showTitle }}" hint-placeholder-val="{{ true }}"><span style="font-size:12.5px;color:{{ row.tcol }};font-weight:{{ row.fw }};text-decoration:{{ row.deco }}">{{ row.title }}</span></sc-if>')
+       + '<sc-if value="{{ row.state }}" hint-placeholder-val="{{ \'\' }}">'
+       + '<span style="flex:none;margin-left:8px;font:500 10px \'Source Code Pro\',monospace;'
+       + 'color:var(--acc)">{{ row.state }}</span></sc-if>'
+       + '<sc-if value="{{ row.prog }}" hint-placeholder-val="{{ \'\' }}">'
+       + '<span class="hc-row-prog" style="flex:none;margin-left:auto;'
+       + 'font:500 10.5px \'Source Code Pro\',monospace;color:var(--fnt)">'
+       + '{{ row.prog }}</span></sc-if>'
+       + '<sc-if value="{{ row.owner }}" hint-placeholder-val="{{ \'\' }}">'
+       + '<span sc-camel-on-click="{{ row.ownerClick }}" class="hc-row-owner" '
+       + 'data-hc-row-owner="{{ row.ownerOn }}" title="Reassign" '
+       + 'style="flex:none;margin-left:auto;font:600 9.5px \'Source Code Pro\',monospace;'
+       + 'letter-spacing:.4px;cursor:pointer;padding:1px 6px;border-radius:5px">'
+       + '{{ row.owner }} \u2304</span></sc-if>'],
+      // A TODO row is not a goal: it is not somewhere the arrow keys go, and
+      // asking the tree for its path would find nothing.
+      ["this._rowIds = rows.filter(r => !r.isAdd).map(r => r.id);",
+       "this._rowIds = rows.filter(r => !r.isAdd && !r.isTodo).map(r => r.id);"],
       // Done means the whole branch is done: the row's check marks every
       // child too and folds the branch shut. Unchecking reopens only the
       // goal itself -- what each child was before is not something to
@@ -19116,6 +19307,15 @@
       return false;
     }
   }
+
+  // What the goal tree calls when one of its TODO rows is acted on. Named on
+  // the window because the artifact's markup is a string this file patches:
+  // a handler there can only reach code it can name.
+  window.__hcTreeTodo = {
+    toggle: treeTodoToggle,
+    owner: treeTodoOwner,
+    add: treeTodoAdd
+  };
 
   window.__hcAsk = ask;
   window.__hcAskSource = askSource;

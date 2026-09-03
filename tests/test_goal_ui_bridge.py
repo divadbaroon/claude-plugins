@@ -5964,3 +5964,153 @@ class ArtifactPaneTests(BridgeTestCase):
         self.assertIn("No interface for this goal.", said)
         self.assertIn("No project directory.", said)
         self.assertNotIn("No artifact yet", said)
+
+
+class TreeTodoTests(BridgeTestCase):
+    """A goal's TODO rows, drawn in the tree under the goal they belong to.
+
+    The tree is where the work is read, and a row that lives one panel away
+    from its goal is a row nobody looks at. Every WRITE still goes to the
+    rail: `todo_items` is a rail field, so an edit made in the artifact would
+    be overwritten by the store on the artifact's next save.
+    """
+
+    def source(self, scope="chat"):
+        return self.patched_bundle("out = out;", scope=scope)
+
+    def test_the_row_builder_emits_a_goal_s_own_rows_under_it(self):
+        src = self.source()
+        self.assertIn("__todo_", src)
+        self.assertIn("window.__hcTreeTodo.toggle(n.id, r.id)", src)
+        self.assertIn("window.__hcTreeTodo.owner(n.id, r.id", src)
+        self.assertIn("window.__hcTreeTodo.add(n.id)", src)
+
+    def test_a_todo_row_is_ticked_the_way_a_goal_is(self):
+        # Its own control, because the goal's is gated on `isReal` and a row
+        # that is not a goal is not that.
+        src = self.source()
+        self.assertIn('<sc-if value="{{ row.isTodo }}"', src)
+
+    def test_the_row_says_how_far_it_has_got_and_who_it_is_for(self):
+        src = self.source()
+        self.assertIn('{{ row.prog }}', src)
+        self.assertIn('{{ row.owner }}', src)
+        self.assertIn('{{ row.state }}', src)
+
+    def test_the_arrow_keys_do_not_walk_onto_a_todo_row(self):
+        # _rowIds feeds tree navigation, which asks the goal tree for a path
+        # by id. A TODO id is not in that tree and would find nothing.
+        src = self.source()
+        self.assertIn("rows.filter(r => !r.isAdd && !r.isTodo)", src)
+        self.assertNotIn("rows.filter(r => !r.isAdd).map(r => r.id)", src)
+
+    def test_both_scopes_get_the_rows(self):
+        # The anchor names the row title, which the launch shell renames in
+        # chat scope and leaves alone everywhere else.
+        for scope in ("chat", None):
+            self.assertIn("__todo_", self.source(scope), scope)
+
+    def test_progress_counts_only_a_goal_that_has_work_under_it(self):
+        # "0 / 0" on a goal nobody has written a row for is noise; the count
+        # is drawn only where there is something to count.
+        src = self.source()
+        self.assertIn("return t?(d+' / '+t):''", src)
+
+
+class TreeTodoRunTests(BridgeTestCase):
+    """The injected row builder, actually run.
+
+    The patches above are string edits into a source the artifact evaluates.
+    Asserting the string contains them proves only that the edit landed --
+    not that what it injected parses, runs, or produces the rows it claims.
+    So the patched builder is pulled out and driven here with the same
+    locals the artifact hands it, over a tree shaped like a real one.
+    """
+
+    TREE = [{"id": "g1", "title": "Fix interface not showing up",
+             "status": "active", "done": False, "todo_items": [],
+             "children": [
+                 {"id": "g11", "title": "Find why the view fails to render",
+                  "status": "active", "done": False, "children": [],
+                  "todo_items": [
+                      {"id": "ta", "text": "Reproduce the blank interface",
+                       "depth": 0, "status": "done", "question": ""},
+                      {"id": "tb", "text": "Trace the render path",
+                       "depth": 0, "status": "", "question": "",
+                       "owner": "agent"},
+                      {"id": "tc", "text": "Ship the fix", "depth": 0,
+                       "status": "building", "question": ""}]}]}]
+
+    def rows(self, tree=None):
+        return self.patched_bundle(
+            # Just the builder's definition. Everything after it -- the
+            # path-mode grouping the launch shell injects -- calls walk
+            # itself, and taking that too would run the tree twice.
+            "var body = out.slice(out.indexOf('const walk = (ns, d) =>'),"
+            "                     out.indexOf('const anx = this.state.an;'));"
+            # The locals renderVals holds when it calls walk. `this` is a
+            # stand-in for the component: the builder only reads state off it
+            # and stores row elements on it.
+            "var make = new Function('goals', 'rows', 'keep', 'tsv', 'selId',"
+            "  'editId', 'filter', 'window',"
+            "  body + '\\nwalk(goals, 0);');"
+            "var rows = [];"
+            "var self = { state: {}, set: function () {}, up: function () {},"
+            "  addUnder: function () {}, delGoal: function () {},"
+            "  commit: function () {}, cancel: function () {} };"
+            "make.call(self, %s, rows, function () { return true; }, 'lines',"
+            "  'g1', null, 'all', window);"
+            "out = rows.map(function (r) {"
+            "  return {id: r.id, title: r.title, prog: r.prog || '',"
+            "          owner: r.owner || '', state: r.state || '',"
+            "          check: r.check || '', add: !!r.isAdd,"
+            "          todo: !!r.isTodo, pad: r.pad}; });"
+            % json.dumps(tree or self.TREE), scope="chat")
+
+    def test_the_builder_runs_and_puts_the_work_under_its_goal(self):
+        out = self.rows()
+        ids = [r["id"] for r in out]
+        self.assertIn("g1", ids)
+        self.assertIn("g11", ids)
+        # The three rows of the subgoal, under the subgoal.
+        self.assertEqual(["__todo_ta", "__todo_tb", "__todo_tc"],
+                         [i for i in ids if i.startswith("__todo_")])
+        self.assertLess(ids.index("g11"), ids.index("__todo_ta"))
+
+    def test_a_row_carries_its_text_its_tick_and_its_owner(self):
+        by = {r["id"]: r for r in self.rows()}
+        done = by["__todo_ta"]
+        self.assertEqual("Reproduce the blank interface", done["title"])
+        self.assertEqual("✓", done["check"])
+        self.assertEqual("You", done["owner"])
+        self.assertTrue(done["todo"])
+        self.assertEqual("Agent", by["__todo_tb"]["owner"])
+        # Out with the builder, and saying so on the row.
+        self.assertEqual("Running…", by["__todo_tc"]["state"])
+
+    def test_progress_counts_the_whole_subtree(self):
+        by = {r["id"]: r for r in self.rows()}
+        # One of three done, counted on the subgoal that holds the rows and
+        # again on the goal above it.
+        self.assertEqual("1 / 3", by["g11"]["prog"])
+        self.assertEqual("1 / 3", by["g1"]["prog"])
+
+    def test_a_goal_with_no_work_under_it_says_nothing(self):
+        out = self.rows([{"id": "g9", "title": "Nothing yet", "status": "active",
+                          "done": False, "todo_items": [], "children": []}])
+        self.assertEqual("", {r["id"]: r for r in out}["g9"]["prog"])
+
+    def test_the_rows_are_indented_under_the_goal_that_owns_them(self):
+        by = {r["id"]: r for r in self.rows()}
+        self.assertEqual("0px", by["g1"]["pad"])
+        self.assertEqual("22px", by["g11"]["pad"])
+        self.assertEqual("44px", by["__todo_ta"]["pad"])
+
+    def test_add_todo_is_offered_under_the_goal_that_holds_the_work(self):
+        out = self.rows()
+        adds = [r for r in out if r["add"]]
+        labels = [r["id"] for r in adds]
+        self.assertIn("__addtodo_g11", labels)
+        # The goal above it has children and no rows of its own, so it is
+        # offered a subgoal rather than a todo -- the shape the tree reads in.
+        self.assertNotIn("__addtodo_g1", labels)
