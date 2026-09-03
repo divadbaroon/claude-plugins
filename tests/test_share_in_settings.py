@@ -18,7 +18,32 @@ RECORD = {"ok": True, "path": "/vault/projects/abc123.json",
           "text": '{\n "project": {\n  "name": "myrepo"\n }\n}\n'}
 
 
-def fetch_js(supabase=None, share=None, shares=None, record=None):
+# What the Expertise tab draws: the reader profile as /api/reader hands it
+# down. Two graded areas, one near each end of the ladder, so a test can tell
+# the bar from the words beside it.
+READER = {
+    "ok": True, "answered": True, "graded": True,
+    "profile": {"name": "David", "year": "3", "major": "Computer Science",
+                "level": "full",
+                "knowledge": [
+                    {"area": "Reinforcement learning",
+                     "parent_field": "Machine learning", "level": 75,
+                     "project_role": "The training loop the paper replaces."},
+                    {"area": "Formal verification",
+                     "parent_field": "Programming languages", "level": 25,
+                     "project_role": ""}]},
+    "knowledge": [
+        {"area": "Reinforcement learning", "parent_field": "Machine learning",
+         "level": 75, "project_role": "The training loop the paper replaces.",
+         "says": "can use it"},
+        {"area": "Formal verification", "parent_field": "Programming languages",
+         "level": 25, "project_role": "", "says": "can follow it"}],
+    "year_said": "third-year", "level_label": "Fully technical"}
+
+
+def fetch_js(supabase=None, share=None, shares=None, record=None,
+             reader=None):
+    reader = reader if reader is not None else READER
     record = record if record is not None else RECORD
     supabase = supabase if supabase is not None else {
         "ok": True, "configured": True, "signed_in": True,
@@ -39,14 +64,15 @@ def fetch_js(supabase=None, share=None, shares=None, record=None):
         "  calls.push([String(url), sent]);"
         "  var u = String(url); var body;"
         "  if (u.indexOf('/api/project.json') >= 0) body = %s;"
+        "  else if (u.indexOf('/api/reader') >= 0) body = %s;"
         "  else if (u.indexOf('/api/supabase') >= 0) body = %s;"
         "  else if (sent && sent.op === 'create_share') body = %s;"
         "  else if (sent && sent.op === 'list_shares') body = %s;"
         "  else body = { ok: true };"
         "  return Promise.resolve({ ok: true, json: function () {"
         "    return Promise.resolve(body); } });"
-        "};" % (json.dumps(record), json.dumps(supabase), json.dumps(share),
-                json.dumps(shares)))
+        "};" % (json.dumps(record), json.dumps(reader), json.dumps(supabase),
+                json.dumps(share), json.dumps(shares)))
 
 
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
@@ -140,10 +166,12 @@ if __name__ == "__main__":
 class SettingsTabTests(BridgeTestCase):
     """Four sections in one column was a scroll.
 
-    The account and what is shared from it are what somebody opens this for,
-    and both were below the fold under a banner timeout. One tab at a time,
-    the account first because nothing else in here works until it is signed
-    into.
+    One tab at a time, the account first because nothing else in here works
+    until it is signed into. The strip has been trimmed twice since: Cloud
+    and Builds went, then Sharing, and Expertise took the slot Sharing had.
+    A trimmed tab does not delete its section -- the markup is still built,
+    it simply has nothing in the strip to select it, which is what
+    ``test_a_trimmed_section_has_no_way_in`` pins.
     """
 
     def panel(self, tail, **fetch):
@@ -162,8 +190,9 @@ class SettingsTabTests(BridgeTestCase):
             + "  return out; };"
             + "later(function () { " + tail + " });"))
 
-    ALL = ("cloud", "notifications", "builds", "supabase", "apikey", "project",
-           "shared", "data")
+    # Every section the panel builds, tab or no tab.
+    ALL = ("cloud", "notifications", "builds", "supabase", "apikey",
+           "expertise", "project", "shared", "data")
 
     def only(self, *on):
         return dict((name, name in on) for name in self.ALL)
@@ -173,7 +202,7 @@ class SettingsTabTests(BridgeTestCase):
             "return JSON.stringify([tabs.map(function (t) { return t.textContent; }),"
             " tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([["Account", "API key", "Alerts", "Sharing", "Data"],
+        self.assertEqual([["Account", "API key", "Alerts", "Expertise", "Data"],
                           ["", None, None, None, None],
                           self.only("supabase")], got)
 
@@ -250,13 +279,33 @@ class SettingsTabTests(BridgeTestCase):
         self.assertEqual([None, "This chat has no project directory, so there"
                                 " is no record to read."], got)
 
-    def test_sharing_carries_this_project_and_the_workspaces_joined(self):
+    def test_expertise_is_the_slot_sharing_had(self):
         got = self.panel(
             "click(tabs[3]);"
             "return JSON.stringify([tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
         self.assertEqual([[None, None, None, "", None],
-                          self.only("project", "shared")], got)
+                          self.only("expertise")], got)
+
+    def test_a_trimmed_section_has_no_way_in(self):
+        # Cloud, Builds and Sharing were taken off the strip without being
+        # deleted, so their controls are still found by attribute and the
+        # tests that cover them still stand. What is gone is the reader's
+        # way in: `gear.tab()` still lights any of them by name -- that is
+        # the door back -- but clicking every tab there is never draws one.
+        got = self.panel(
+            "var lit = {};"
+            "var orphans = ['cloud', 'builds', 'project', 'shared'];"
+            "tabs.forEach(function (t) { click(t);"
+            "  orphans.forEach(function (name) {"
+            "    if (panel.querySelector('[data-hc-settings-sec=\"' + name"
+            "          + '\"]').getAttribute('data-hc-on') !== null)"
+            "      lit[name] = true; }); });"
+            "return JSON.stringify([tabs.map(function (t) {"
+            "  return t.getAttribute('data-hc-settings-tab'); }),"
+            " Object.keys(lit)]);")
+        self.assertEqual(
+            [["account", "api", "alerts", "expertise", "data"], []], got)
 
     def test_alerts_is_where_the_banner_settings_went(self):
         got = self.panel(
@@ -273,16 +322,111 @@ class SettingsTabTests(BridgeTestCase):
             "  if (c.getAttribute('data-hc-settings-tab') !== null"
             "      && c.getAttribute('data-hc-on') !== null) on.push(c.textContent);"
             "  walk(c); }); })(back);"
-            "return JSON.stringify([on, P.gear.tab('sharing'),"
-            " back.querySelector('[data-hc-settings-sec=\"project\"]')"
+            "return JSON.stringify([on, P.gear.tab('expertise'),"
+            " back.querySelector('[data-hc-settings-sec=\"expertise\"]')"
             "   .getAttribute('data-hc-on')]);")
-        self.assertEqual([["Sharing"], True, ""], got)
+        self.assertEqual([["Expertise"], True, ""], got)
 
     def test_the_close_button_still_closes_rather_than_switching(self):
         got = self.panel(
             "click(panel.querySelector('.hc-settings-act'));"
             "return JSON.stringify([P.gear.panel() === null]);")
         self.assertEqual([True], got)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class ExpertiseTabTests(BridgeTestCase):
+    """Who the tool is writing for, shown where the reader can see it.
+
+    Nearly every sentence Engelbart shows was written by a model and pitched
+    at the reader's profile -- the four answers, plus whatever the web
+    onboarding's diagnostic graded about the areas that project turns on.
+    The pane exists because a reader who cannot see that cannot tell whether
+    it is right.
+
+    Read-only: the four answers are typed on the setup page and the grades
+    are a diagnostic's output, so a field here would be a second place to
+    disagree with the prompts.
+    """
+
+    def pane(self, tail, **fetch):
+        return json.loads(self.run_js(
+            PRELUDE + fetch_js(**fetch)
+            + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
+            + "P.gear.open(); P.gear.tab('expertise');"
+            + "var panel = P.gear.panel();"
+            + "var at = function (name) {"
+            + "  return panel.querySelector('[data-hc-reader-' + name + ']'); };"
+            + "later(function () { " + tail + " });"))
+
+    def test_it_reads_the_route_once_and_names_who_is_reading(self):
+        # The year is shown as the prompt says it -- a reader who typed "3"
+        # is a third-year -- so the pane and the prompt agree.
+        got = self.pane(
+            "return JSON.stringify([at('say').textContent, deepText(at('who')),"
+            " calls.filter(function (c) {"
+            "   return String(c[0]).indexOf('/api/reader') >= 0; }).length]);")
+        self.assertEqual(
+            ["Graded by the web onboarding",
+             "David  ·  third-year  ·  Computer ScienceExplanations"
+             "Fully technical",
+             1], got)
+
+    def test_each_area_carries_its_words_and_a_bar_that_agrees(self):
+        got = self.pane(
+            "var cards = at('areas').querySelectorAll('.hc-exp-card');"
+            "return JSON.stringify(cards.map(function (c) { return ["
+            " c.querySelector('.hc-exp-area').textContent,"
+            " c.querySelector('.hc-exp-says').textContent,"
+            " c.querySelector('.hc-exp-meter-fill').style.width,"
+            " c.querySelector('.hc-exp-field').textContent,"
+            " c.querySelector('.hc-exp-role')"
+            "   ? c.querySelector('.hc-exp-role').textContent : null]; }));")
+        self.assertEqual(
+            [["Reinforcement learning", "can use it", "75%", "Machine learning",
+              "The training loop the paper replaces."],
+             ["Formal verification", "can follow it", "25%",
+              "Programming languages", None]], got)
+
+    def test_a_profile_nobody_filled_in_says_so_rather_than_drawing_zeroes(self):
+        # An empty set of bars reads as "everything zero", and zero on this
+        # ladder means "wouldn't know where to start" -- a claim about the
+        # reader that nobody made. The prompts say nothing in this case, and
+        # so does the pane.
+        got = self.pane(
+            "return JSON.stringify([at('say').textContent,"
+            " at('areas').children.length, deepText(at('who')),"
+            " at('hint').textContent.indexOf('asks four things') >= 0]);",
+            reader={"ok": True, "answered": False, "graded": False,
+                    "profile": {"name": "", "year": "", "major": "",
+                                "level": "", "knowledge": []},
+                    "knowledge": [], "year_said": "", "level_label": ""})
+        self.assertEqual(["not filled in", 0, "", True], got)
+
+    def test_four_answers_without_a_diagnostic_are_named_as_typed(self):
+        # The setup page can be filled in by hand; only the web onboarding
+        # grades areas. The two are different situations and read as such.
+        typed = {"ok": True, "answered": True, "graded": False,
+                 "profile": {"name": "David", "year": "grad", "major": "",
+                             "level": "plain", "knowledge": []},
+                 "knowledge": [], "year_said": "grad",
+                 "level_label": "Plain language"}
+        got = self.pane(
+            "return JSON.stringify([at('say').textContent,"
+            " deepText(at('who')), at('areas').children.length,"
+            " at('hint').textContent.indexOf('area by area') >= 0]);",
+            reader=typed)
+        self.assertEqual(["Answered on the setup page",
+                          "David  ·  gradExplanationsPlain language", 0, True],
+                         got)
+
+    def test_a_route_that_will_not_answer_is_said_rather_than_drawn_empty(self):
+        got = self.pane(
+            "return JSON.stringify([at('say').textContent,"
+            " at('say').getAttribute('data-hc-bad'),"
+            " at('areas').children.length]);",
+            reader={"ok": False, "error": "unreadable"})
+        self.assertEqual(["could not read the profile", "", 0], got)
 
 
 class ChildrenAreNotArraysTests(unittest.TestCase):
