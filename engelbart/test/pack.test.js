@@ -15,6 +15,11 @@ const packageRoot = path.resolve(__dirname, '..');
 // packaging itself is verified on the Linux/macOS CI legs.
 const WINDOWS_HOST = process.platform === 'win32';
 
+test('npm permits every host the standalone installers support', () => {
+  const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json')));
+  assert.deepEqual(metadata.os, ['darwin', 'linux', 'win32']);
+});
+
 function checked(command, args, options = {}) {
   const result = spawnSync(command, args, { encoding: 'utf8', ...options });
   assert.equal(result.status, 0, result.stderr || result.stdout);
