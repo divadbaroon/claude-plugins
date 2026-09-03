@@ -16,6 +16,12 @@ one chat -- they are the same person in every project -- so they live in
 one file at the top of the vault, beside the Supabase config, and are
 appended to every prompt the tool sends.
 
+A project set up on the web arrives with more than those four: its
+onboarding grades a handful of named areas from short answers the reader
+wrote, and those grades ride along in the same file. A register says how
+to say a thing; the grades say where to start saying it, which is the
+half a register alone keeps getting wrong.
+
 Nothing here is required and nothing here is a gate. A profile nobody
 filled in renders as no lines at all, and every surface behaves exactly as
 it did before it existed.
@@ -35,12 +41,15 @@ MAX_NAME = 60
 MAX_YEAR = 40
 MAX_MAJOR = 80
 
-# How technical to be, in three stops. Named rather than numbered because
+# How technical to be, in four stops. Named rather than numbered because
 # the number is the slider's business and would mean nothing in a prompt.
+# The fourth exists because "fully technical" still reads as "and explain
+# it anyway" to somebody who wants neither the term nor the gloss.
 PLAIN = "plain"
 SOME = "some"
 FULL = "full"
-LEVELS = (PLAIN, SOME, FULL)
+EXPERT = "expert"
+LEVELS = (PLAIN, SOME, FULL, EXPERT)
 
 # What each stop is called on the page. Kept here as well as in the browser
 # so a profile read back from disk can be shown without the page having to
@@ -49,6 +58,7 @@ LEVEL_NAMES = {
     PLAIN: "Plain language",
     SOME: "Some technical detail",
     FULL: "Fully technical",
+    EXPERT: "Expert",
 }
 
 # The years, said as somebody would say them. A reader who typed their own
@@ -82,11 +92,52 @@ LEVEL_RULES = {
         "it: an explanation they did not need is an explanation in their",
         "way.",
     ],
+    EXPERT: [
+        "Write for a peer. Terse, precise, specific jargon and references to",
+        "advanced work without introduction; assume they will look up",
+        "anything they do not know.",
+    ],
 }
 
+# What the web onboarding found they already know, one line per area. The
+# level is the diagnostic's ladder; the phrase is how the prompt says it.
+CAPABILITY = {0: "wouldn't know where to start", 25: "can follow it",
+              50: "can explain it", 75: "can use it", 100: "can reason with it"}
+MAX_AREAS = 4
+MAX_AREA = 80
+MAX_ROLE = 300
 
-def blank() -> Dict[str, str]:
-    return {"name": "", "year": "", "major": "", "level": ""}
+
+def _knowledge(value) -> List[Dict[str, Any]]:
+    """The graded areas, bounded and snapped to the ladder.
+
+    The same distrust the four answers get, and one more reason for it:
+    these rows are written by a diagnostic rather than typed, so a level
+    off the ladder is not a rounder answer, it is a row from somewhere
+    else. An area with no name is nothing to say about it. Both are
+    dropped rather than guessed at, and only the first few are kept: this
+    is a paragraph in every prompt, not a transcript.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        area = _one(row.get("area"), MAX_AREA)
+        try:
+            level = int(row.get("level"))
+        except (TypeError, ValueError):
+            continue
+        if not area or level not in CAPABILITY:
+            continue
+        out.append({"area": area, "parent_field": _one(row.get("parent_field"), MAX_AREA),
+                    "level": level, "project_role": _one(row.get("project_role"), MAX_ROLE)})
+        if len(out) >= MAX_AREAS:
+            break
+    return out
+
+
+def blank() -> Dict[str, Any]:
+    return {"name": "", "year": "", "major": "", "level": "", "knowledge": []}
 
 
 def _one(value, cap: int) -> str:
@@ -103,11 +154,11 @@ def _one(value, cap: int) -> str:
     return " ".join(str(value).split())[:cap]
 
 
-def normalize(value) -> Dict[str, str]:
-    """Four strings, however they arrived.
+def normalize(value) -> Dict[str, Any]:
+    """Four answers and the graded areas, however they arrived.
 
     Everything here comes off a web page and goes into a prompt, so it is
-    bounded and none of it is trusted. A level that is not one of the three
+    bounded and none of it is trusted. A level that is not one of the four
     is no level at all rather than a guess: the slider always has a
     position, so an unrecognised one means something else sent this.
     """
@@ -118,13 +169,14 @@ def normalize(value) -> Dict[str, str]:
         "year": _one(value.get("year"), MAX_YEAR),
         "major": _one(value.get("major"), MAX_MAJOR),
         "level": level if level in LEVELS else "",
+        "knowledge": _knowledge(value.get("knowledge")),
     }
 
 
 def answered(profile) -> bool:
     """Whether there is anything here at all. A profile with nothing in it
     is not a profile the page should skip past."""
-    return any(normalize(profile).values())
+    return any(v for v in normalize(profile).values())
 
 
 # --- where it lives ---------------------------------------------------------
@@ -149,8 +201,8 @@ def path(root: Optional[Path] = None) -> Path:
     return _vault(root) / FILE_NAME
 
 
-def load(root: Optional[Path] = None) -> Dict[str, str]:
-    """What they answered, or four empty strings. Never raises: a damaged
+def load(root: Optional[Path] = None) -> Dict[str, Any]:
+    """What they answered, or an empty profile. Never raises: a damaged
     file must not be able to stop a build, only to stop personalising it."""
     try:
         value = json.loads(path(root).read_text(encoding="utf-8"))
@@ -159,7 +211,7 @@ def load(root: Optional[Path] = None) -> Dict[str, str]:
     return normalize(value)
 
 
-def save(value, root: Optional[Path] = None) -> Dict[str, str]:
+def save(value, root: Optional[Path] = None) -> Dict[str, Any]:
     """Write the profile where every surface reads it."""
     held = normalize(value)
     where = path(root)
@@ -176,8 +228,18 @@ def remember(value, root: Optional[Path] = None) -> Dict[str, Any]:
     register. The push to Supabase is the copy that survives a new laptop,
     so a failure there is reported alongside a profile that was saved --
     never instead of one.
+
+    Absent is not empty. The local setup card posts the four fields it
+    shows and says nothing about the graded areas, which it has no way to
+    display and the reader has no way to retype -- so a save that read
+    that silence as "no areas" would delete what the web onboarding found
+    the first time somebody corrected their major. A value that carries no
+    ``knowledge`` key at all keeps whatever is already on disk; an
+    explicit empty list is an answer, and clears them.
     """
     held = normalize(value)
+    if isinstance(value, dict) and "knowledge" not in value:
+        held["knowledge"] = load(root)["knowledge"]
     kept = False
     error = ""
     try:
@@ -235,7 +297,8 @@ def lines(profile) -> List[str]:
     profile = normalize(profile)
     said = who(profile)
     rule = LEVEL_RULES.get(profile["level"]) or []
-    if not said and not rule:
+    known = profile["knowledge"]
+    if not said and not rule and not known:
         return []
     out = ["", FOR, ""]
     if said:
@@ -243,6 +306,13 @@ def lines(profile) -> List[str]:
         if rule:
             out.append("")
     out += rule
+    if known:
+        if out[-1] != "":
+            out.append("")
+        out.append("What they already know, graded from short answers they gave:")
+        for row in known:
+            out.append("- %s: %s (%d)" % (row["area"], CAPABILITY[row["level"]], row["level"]))
+        out.append("Start explanations where these levels say to, not lower and not higher.")
     return out
 
 

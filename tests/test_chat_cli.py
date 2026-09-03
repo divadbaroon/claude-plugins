@@ -64,6 +64,10 @@ class ChatCliTests(unittest.TestCase):
             os.environ,
             {
                 "HC_CHAT_STATE_DIR": str(self.root),
+                # A first /bart asks the account for a web setup; the
+                # account lives under this root, so an empty one here keeps
+                # the developer's real machine token out of the tests.
+                "HUMAN_COMPACT_HOME": str(Path(self.temp.name) / "managed"),
                 "PYTHONPATH": str(HC_SRC) + os.pathsep + os.environ.get("PYTHONPATH", ""),
                 # Local health probes must bypass even a hostile proxy setup.
                 "HTTP_PROXY": "http://127.0.0.1:9",

@@ -1121,6 +1121,68 @@ test('an account with nothing pending still gets the local setup page', async ()
   assert.match(printed, /Setting up your first project: http:\/\/127\.0\.0\.1:9000\/setup/);
 });
 
+test('--code with --no-open and nothing pending sends the reader back to the browser', async () => {
+  // The web flow's own install line. The site saves the project only at
+  // the end, so nothing is pending yet; the reader is mid-setup in a tab,
+  // and a setup page or an `hc setup-ui` here would start a second setup.
+  let localSetupOpened = false;
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => null,
+    openSetup: async () => { localSetupOpened = true; return 'http://127.0.0.1:9000/setup'; },
+  });
+  assert.equal(localSetupOpened, false);
+  assert.match(printed,
+    /Connected as member@example\.com\. Go back to your browser tab to keep setting up your project\./);
+  assert.doesNotMatch(printed, /setup-ui/);
+  assert.doesNotMatch(printed, /Setting up your first project/);
+  assert.doesNotMatch(printed, /Next:/);
+});
+
+test('the browser line still follows the PATH step on a first install', async () => {
+  // A first install is exactly the machine the web flow is on, and a first
+  // install still needs the PATH line; it is the instruction after it that
+  // changes, not the line itself.
+  const printed = await installOutput({ onPath: false, added: true }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => null,
+  });
+  assert.match(printed, /export PATH=/);
+  assert.match(printed, /Go back to your browser tab to keep setting up your project\./);
+  assert.doesNotMatch(printed, /setup-ui/);
+  assert.doesNotMatch(printed, /Then:/);
+});
+
+test('a pending project still wins over the browser line under --no-open', async () => {
+  // Nothing pending is what the new web flow produces; an older flow that
+  // saved the project before the install keeps opening it at once.
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => ({ name: 'nuclear-sim' }),
+    importSetup: () => ({ url: 'http://127.0.0.1:8123/', name: 'nuclear-sim' }),
+  });
+  assert.match(printed, /Your project "nuclear-sim" is open in the workspace/);
+  assert.doesNotMatch(printed, /Go back to your browser tab/);
+});
+
 test('importSetup pipes the payload on stdin and reads the last URL line', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-import-'));
   try {

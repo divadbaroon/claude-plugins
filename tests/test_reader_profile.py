@@ -39,9 +39,9 @@ MAYA = {"name": "Maya", "year": "2", "major": "Molecular Biology",
 class NormalizeTests(unittest.TestCase):
     """It comes off a page and goes into a prompt, so none of it is trusted."""
 
-    def test_nothing_at_all_is_four_empty_strings(self):
-        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
-                         READER.normalize(None))
+    def test_nothing_at_all_is_an_empty_profile(self):
+        self.assertEqual({"name": "", "year": "", "major": "", "level": "",
+                          "knowledge": []}, READER.normalize(None))
 
     def test_every_field_is_bounded(self):
         held = READER.normalize({"name": "n" * 500, "year": "y" * 500,
@@ -51,13 +51,31 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(READER.MAX_MAJOR, len(held["major"]))
 
     def test_a_level_nobody_offered_is_no_level(self):
-        # The slider always lands on one of three. Anything else reached the
+        # The slider always lands on one of four. Anything else reached the
         # server another way, and would be appended to a prompt as an
         # instruction nobody wrote.
-        for bad in ("expert", "PLAIN LANGUAGE", "0", 3, None):
+        for bad in ("guru", "PLAIN LANGUAGE", "0", 3, None):
             self.assertEqual("", READER.normalize({"level": bad})["level"])
 
-    def test_the_three_stops_are_kept(self):
+    def test_expert_is_a_fourth_stop(self):
+        self.assertEqual("expert", READER.normalize({"level": "expert"})["level"])
+
+    def test_knowledge_is_bounded_and_snapped_to_the_ladder(self):
+        held = READER.normalize({"knowledge": [
+            {"area": "Transformers", "parent_field": "ML", "level": 75, "project_role": "core"},
+            {"area": "", "level": 50},                 # no area: dropped
+            {"area": "PyTorch", "level": 33},           # off the ladder: dropped
+            {"area": "x" * 200, "level": "25"},         # bounded, string level ok
+            {"area": "A", "level": 0}, {"area": "B", "level": 0}, {"area": "C", "level": 0},
+        ]})
+        self.assertEqual(3 + 1, len(held["knowledge"]))
+        self.assertEqual("Transformers", held["knowledge"][0]["area"])
+        self.assertEqual(75, held["knowledge"][0]["level"])
+        self.assertEqual(80, len(held["knowledge"][1]["area"]))
+        self.assertEqual(25, held["knowledge"][1]["level"])
+        self.assertEqual([], READER.normalize({"knowledge": "junk"})["knowledge"])
+
+    def test_every_stop_offered_is_kept(self):
         for good in READER.LEVELS:
             self.assertEqual(good, READER.normalize({"level": good})["level"])
 
@@ -72,8 +90,8 @@ class NormalizeTests(unittest.TestCase):
         # of thing, and str() would put its repr in a prompt.
         held = READER.normalize({"name": ["a", "b"], "major": {"x": 1},
                                  "year": ["2"]})
-        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
-                         held)
+        self.assertEqual({"name": "", "year": "", "major": "", "level": "",
+                          "knowledge": []}, held)
 
     def test_a_year_sent_as_a_number_is_still_a_year(self):
         # JSON has numbers, and a page that sends one has still answered.
@@ -126,13 +144,27 @@ class BlockTests(unittest.TestCase):
     def test_each_level_says_something_different(self):
         said = {level: "\n".join(READER.lines({"level": level}))
                 for level in READER.LEVELS}
-        self.assertEqual(3, len(set(said.values())))
+        self.assertEqual(len(READER.LEVELS), len(set(said.values())))
         for level, body in said.items():
             self.assertIn(READER.FOR, body)
 
     def test_a_level_with_no_name_still_carries_its_rule(self):
         body = "\n".join(READER.lines({"level": "full"}))
         self.assertIn("precise term", body)
+
+
+class KnowledgeLinesTests(unittest.TestCase):
+    def test_the_block_names_each_area_at_its_capability(self):
+        text = "\n".join(READER.lines({"name": "Maya", "level": "expert", "knowledge": [
+            {"area": "Transformers", "level": 25}, {"area": "PyTorch", "level": 75}]}))
+        self.assertIn("What they already know", text)
+        self.assertIn("Transformers: can follow it (25)", text)
+        self.assertIn("PyTorch: can use it (75)", text)
+        self.assertIn(READER.LEVEL_RULES["expert"][0], text)
+
+    def test_no_knowledge_adds_no_block(self):
+        text = "\n".join(READER.lines({"name": "Maya", "level": "plain"}))
+        self.assertNotIn("already know", text)
 
 
 class StoreTests(unittest.TestCase):
@@ -420,13 +452,61 @@ class RoundTripTests(unittest.TestCase):
              self.server() as base:
             self.op(base, {"op": "setup_profile",
                            "profile": {"name": ["not", "a", "name"],
-                                       "level": "expert"}})
+                                       "level": "guru"}})
             back = self.get(base + "/setup.who")["profile"]
         self.assertEqual("", back["level"])
         # Never the repr of whatever was posted: a list is not a shorter
         # name, and "['not', 'a', 'name']" in a prompt is exactly the kind
         # of sentence these fields exist to keep out of one.
         self.assertEqual("", back["name"])
+
+
+class KnowledgeSurvivesLocalEditsTests(unittest.TestCase):
+    """A local edit answers four questions. It must not answer a fifth.
+
+    The grades come from the web onboarding and there is nowhere on the
+    local setup card to see them, let alone retype them -- so the four
+    fields that card posts say nothing about knowledge, and a save that
+    read that silence as "none" would delete work the reader cannot get
+    back. Absent is not empty here. An explicit empty list still is.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.offline = mock.patch(
+            "human_compact.trajectory.supabase_client.set_reader_profile",
+            side_effect=RuntimeError("no account"))
+        self.offline.start()
+        self.addCleanup(self.offline.stop)
+        READER.remember(dict(MAYA, level="expert", knowledge=[
+            {"area": "Transformers", "level": 25}]), self.root)
+
+    def test_the_setup_cards_four_fields_do_not_delete_the_grades(self):
+        READER.remember({"name": "Maya", "level": "plain"}, self.root)
+        kept = READER.load(self.root)
+        self.assertEqual("plain", kept["level"])
+        self.assertEqual(1, len(kept["knowledge"]))
+        self.assertEqual("Transformers", kept["knowledge"][0]["area"])
+
+    def test_an_empty_list_is_an_answer_and_does_clear_them(self):
+        READER.remember({"name": "Maya", "level": "plain", "knowledge": []},
+                        self.root)
+        self.assertEqual([], READER.load(self.root)["knowledge"])
+
+    def test_the_account_is_sent_the_carried_copy_too(self):
+        # The row is the copy that survives a new laptop. Carrying the
+        # grades into the file but not into the sync would leave the
+        # account holding the deletion this exists to prevent.
+        sent = []
+        self.offline.stop()
+        with mock.patch("human_compact.trajectory.supabase_client"
+                        ".set_reader_profile",
+                        side_effect=lambda p, r=None: sent.append(p)):
+            READER.remember({"name": "Maya", "level": "plain"}, self.root)
+        self.offline.start()
+        self.assertEqual("Transformers", sent[0]["knowledge"][0]["area"])
 
 
 class MigrationTests(unittest.TestCase):
@@ -455,6 +535,48 @@ class MigrationTests(unittest.TestCase):
     def test_only_a_signed_in_reader_may_call_it(self):
         self.assertIn("revoke all on function public.hc_set_profile", self.sql)
         self.assertIn("to authenticated", self.sql)
+
+
+class KnowledgeMigrationTests(unittest.TestCase):
+    """The second migration: a fourth register, and a column for the grades.
+
+    Pinned by string match the way the first one is. The SQL is never run
+    from here -- what this catches is the migration and the client drifting
+    apart, which shows up as a profile that saves locally and silently
+    stops reaching the account.
+    """
+
+    def setUp(self):
+        self.sql = (ROOT / "supabase" / "migrations"
+                    / "20260902120000_hc_reader_knowledge.sql").read_text(
+                        encoding="utf-8")
+
+    def test_the_grades_get_a_column_of_their_own(self):
+        self.assertIn("add column if not exists knowledge jsonb", self.sql)
+        self.assertIn("default '[]'::jsonb", self.sql)
+
+    def test_the_level_column_now_admits_the_fourth_stop(self):
+        self.assertIn(
+            "check (tech_level in ('', 'plain', 'some', 'full', 'expert'))",
+            self.sql)
+
+    def test_the_four_argument_function_is_dropped_before_the_five(self):
+        # Postgres overloads rather than replaces, so a create that only
+        # adds an argument leaves the old function callable beside the new
+        # one -- and a client that stopped sending p_knowledge would go on
+        # working, writing profiles with no grades in them.
+        dropped = self.sql.index(
+            "drop function if exists public.hc_set_profile(text, text, text, text)")
+        made = self.sql.index("create or replace function public.hc_set_profile")
+        self.assertLess(dropped, made)
+        self.assertIn("p_knowledge jsonb default '[]'::jsonb", self.sql)
+
+    def test_only_a_signed_in_reader_may_call_the_new_signature(self):
+        self.assertIn("revoke all on function public.hc_set_profile"
+                      "(text, text, text, text, jsonb) from public", self.sql)
+        self.assertIn("grant execute on function public.hc_set_profile"
+                      "(text, text, text, text, jsonb) to authenticated",
+                      self.sql)
 
 
 if __name__ == "__main__":

@@ -408,6 +408,19 @@ class SubgoalTests(unittest.TestCase):
             {"label": "Real", "todos": ["do it"]}]})
         self.assertEqual(["Real"], [g["label"] for g in out["subgoals"]])
 
+    def test_a_piece_that_says_what_it_is_for_is_kept_without_rows(self):
+        # The web setup describes every piece and puts rows under the first
+        # only; the described, empty ones are goals the reader fills later,
+        # not headings.
+        out = SC.normalize_card({"card": "todos", "subgoals": [
+            {"label": "First", "description": "d1", "why": "w1",
+             "todos": ["do it"]},
+            {"label": "Second", "description": "d2", "why": "w2", "todos": []},
+            {"label": "Third", "description": "", "why": "w3", "todos": []},
+            {"label": "Bare", "todos": []}]})
+        self.assertEqual(["First", "Second", "Third"],
+                         [g["label"] for g in out["subgoals"]])
+
     def test_a_flat_list_of_rows_is_still_a_card(self):
         # The shape before this one, and what a model gives when the work
         # genuinely does not break down.
@@ -429,6 +442,28 @@ class SubgoalTests(unittest.TestCase):
                          [r["text"] for r in kids[1]["todo_items"]])
         # The rows live on the piece they belong to, not on the parent.
         self.assertEqual([], parent["todo_items"])
+
+    def test_the_web_shape_is_one_goal_with_three_described_pieces(self):
+        # What the site saves: the chosen direction is the one goal offered,
+        # broken into three pieces with rows under the first only. Each
+        # piece keeps its description and its why, and the parent holds no
+        # rows of its own.
+        goals = SC.to_goals(
+            [{"label": "Direction", "why": "because"}], "Direction", [],
+            [{"label": "One", "description": "d1", "why": "w1",
+              "todos": ["a", "b"]},
+             {"label": "Two", "description": "d2", "why": "w2", "todos": []},
+             {"label": "Three", "description": "d3", "why": "w3", "todos": []}])
+        parents = [g for g in goals if not g.get("parent_goal_id")]
+        self.assertEqual(["Direction"], [g["title"] for g in parents])
+        self.assertEqual([], parents[0]["todo_items"])
+        self.assertEqual("in_progress", parents[0]["status"])
+        kids = [g for g in goals if g.get("parent_goal_id") == parents[0]["id"]]
+        self.assertEqual(["One", "Two", "Three"], [k["title"] for k in kids])
+        self.assertEqual(["d1", "d2", "d3"], [k["description"] for k in kids])
+        self.assertEqual(["w1", "w2", "w3"], [k["relevance_why"] for k in kids])
+        self.assertEqual([["a", "b"], [], []],
+                         [[r["text"] for r in k["todo_items"]] for k in kids])
 
     def test_without_pieces_the_rows_stay_on_the_goal(self):
         goals = SC.to_goals([{"label": "a"}], "a", ["one"], [])
@@ -1753,8 +1788,8 @@ class PageTests(unittest.TestCase):
             _status, body = self.get(base + "/setup.who")
         answer = json.loads(body)
         self.assertIn("profile", answer)
-        self.assertEqual({"name": "", "year": "", "major": "", "level": ""},
-                         answer["profile"])
+        self.assertEqual({"name": "", "year": "", "major": "", "level": "",
+                          "knowledge": []}, answer["profile"])
 
     def test_the_setup_card_path_has_no_competing_freeform_composer(self):
         with self.server() as base:

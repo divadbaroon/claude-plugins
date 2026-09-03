@@ -629,7 +629,10 @@ def _normalize_subgoals(value) -> List[Dict[str, Any]]:
     A piece with no rows is normally a heading and dropped -- but a piece that
     names a real path phase, or carries a resource (a paper to read, a document
     to shape), is a goal in its own right and is kept: an Understand paper goal
-    and a Brainstorm document goal have no rows of their own.
+    and a Brainstorm document goal have no rows of their own. So is a piece
+    that says what it is and why: the web setup breaks a direction into
+    pieces and puts rows under the first only, leaving the others described
+    but empty for the reader to fill once they get there.
     """
     out = []
     for row in value if isinstance(value, list) else []:
@@ -644,11 +647,13 @@ def _normalize_subgoals(value) -> List[Dict[str, Any]]:
         if not paper.get("paper_id"):
             paper = None
         document = _normalize_document(row.get("document"))
-        if not label or (not rows and not phase and not paper and not document):
+        why = _one(row.get("why"), MAX_WHY)
+        description = _long(row.get("description"), MAX_DESC)
+        if not label or not (rows or phase or paper or document
+                             or why or description):
             continue
         piece = {"label": label, "todos": rows, "phase": phase,
-                 "why": _one(row.get("why"), MAX_WHY),
-                 "description": _long(row.get("description"), MAX_DESC)}
+                 "why": why, "description": description}
         if paper:
             piece["paper"] = paper
         if document:
