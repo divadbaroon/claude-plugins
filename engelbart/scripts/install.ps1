@@ -14,6 +14,7 @@ param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $ForwardArgs)
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # the progress bar throttles the download
+$quietBrowserResume = (($ForwardArgs -contains '--code') -and ($ForwardArgs -contains '--no-open'))
 
 $repo = 'divadbaroon/claude-plugins'
 $base = "https://github.com/$repo/releases/download/engelbart-latest"
@@ -24,6 +25,7 @@ $machineArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_AR
 $target = "engelbart-windows-$machineArch.exe"
 
 function Fail($message) { Write-Error "engelbart: $message"; exit 1 }
+function Say($message = '') { if (-not $quietBrowserResume) { Write-Host $message } }
 
 # setx only affects terminals started later. Put each launcher in the user's
 # persistent PATH *and* this PowerShell process, without replacing the
@@ -49,7 +51,7 @@ $dest = if ($env:ENGELBART_INSTALL_DIR) { $env:ENGELBART_INSTALL_DIR } `
 $tmp = Join-Path $env:TEMP ('engelbart-install-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
-  Write-Host "Downloading $target..."
+  Say "Downloading $target..."
   $binary = Join-Path $tmp $target
   Invoke-WebRequest -UseBasicParsing "$base/$target" -OutFile $binary
   Invoke-WebRequest -UseBasicParsing "$base/$target.sha256" -OutFile "$binary.sha256"
@@ -62,16 +64,16 @@ try {
   New-Item -ItemType Directory -Force -Path $dest | Out-Null
   $installed = Join-Path $dest 'engelbart.exe'
   Move-Item -Force $binary $installed
-  Write-Host "Installed $installed"
+  Say "Installed $installed"
   Add-UserPathEntry $dest
 
   $onPath = $env:PATH -split ';' | Where-Object {
     $_ -and ($_.TrimEnd('\') -ieq $dest.TrimEnd('\'))
   }
   if (-not $onPath) {
-    Write-Host ''
-    Write-Host "Note: $dest is not on your PATH. Add it for new terminals with:"
-    Write-Host "    setx PATH `"$dest;`$env:PATH`""
+    Say ''
+    Say "Note: $dest is not on your PATH. Add it for new terminals with:"
+    Say "    setx PATH `"$dest;`$env:PATH`""
   }
 
   # Hand off to the real installer; it explains everything from here.

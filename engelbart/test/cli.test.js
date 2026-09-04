@@ -8,6 +8,7 @@ const path = require('path');
 const test = require('node:test');
 
 const {
+  BROWSER_RESUME_BANNER,
   UsageError,
   importSetup,
   parseArgs,
@@ -318,6 +319,16 @@ test('setup stays closed when Supabase configuration fails after key issuance', 
   assert.equal(opened, 0);
   assert.match(text, /Supabase sync/);
   assert.doesNotMatch(text, /Setting up your first project/);
+});
+
+test('an incomplete browser connection keeps recovery instructions instead of the banner', async () => {
+  const text = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    redeemCode: async () => ({ status: 'ready', email: 'member@example.com', claude: null }),
+  });
+  assert.notEqual(text, BROWSER_RESUME_BANNER);
+  assert.match(text, /Run `npx engelbart-cli auth`/);
+  assert.match(text, /Setup starts after that/);
 });
 
 test('--no-open authenticates but suppresses the automatic setup launch', async () => {
@@ -1279,6 +1290,53 @@ test('an installer that fails stops immediately and says to install manually', a
   assert.match(errors.read(), /did not finish/);
 });
 
+test('quiet Claude lifecycle commands capture child chatter but preserve failure detail', async () => {
+  const { installClaudeCode, updateClaudeCode } = require('../lib/cli');
+  const said = capture();
+  let installOptions;
+  await installClaudeCode({
+    env: { PATH: '/usr/bin' },
+    output: said.stream,
+    errorOutput: capture().stream,
+    quiet: true,
+    deps: {
+      homedir: '/home/x',
+      spawn: (command, args, options) => {
+        installOptions = options;
+        return { status: 0, stdout: 'installer progress\n', stderr: '' };
+      },
+    },
+  });
+  assert.equal(said.read(), '');
+  assert.deepEqual(installOptions.stdio, ['ignore', 'pipe', 'pipe']);
+
+  let updateOptions;
+  const updated = await updateClaudeCode({
+    env: { PATH: '/usr/bin' },
+    output: said.stream,
+    errorOutput: capture().stream,
+    version: '2.1.174',
+    quiet: true,
+    deps: { spawn: (command, args, options) => {
+      updateOptions = options;
+      return { status: 0, stdout: 'update progress\n', stderr: '' };
+    } },
+  });
+  assert.equal(updated, true);
+  assert.equal(said.read(), '');
+  assert.deepEqual(updateOptions.stdio, ['ignore', 'pipe', 'pipe']);
+
+  const errors = capture();
+  await assert.rejects(installClaudeCode({
+    env: { PATH: '/usr/bin' },
+    output: said.stream,
+    errorOutput: errors.stream,
+    quiet: true,
+    deps: { spawn: () => ({ status: 1, stderr: 'network unavailable\n' }) },
+  }), /could not be installed automatically/);
+  assert.match(errors.read(), /did not finish \(network unavailable\)/);
+});
+
 // The binary's users have no npm; every self-reference must name the command
 // they actually have. The npm default stays npx.
 test('the standalone binary speaks of itself as engelbart, npm as npx', () => {
@@ -1393,17 +1451,10 @@ test('--code with --no-open and nothing pending sends the reader back to the bro
     openSetup: async () => { localSetupOpened = true; return 'http://127.0.0.1:9000/setup'; },
   });
   assert.equal(localSetupOpened, false);
-  assert.match(printed,
-    /Connected as member@example\.com\. Go back to your browser tab to keep setting up your project\./);
-  assert.doesNotMatch(printed, /setup-ui/);
-  assert.doesNotMatch(printed, /Setting up your first project/);
-  assert.doesNotMatch(printed, /Next:/);
+  assert.equal(printed, BROWSER_RESUME_BANNER);
 });
 
-test('the browser line still follows the PATH step on a first install', async () => {
-  // A first install is exactly the machine the web flow is on, and a first
-  // install still needs the PATH line; it is the instruction after it that
-  // changes, not the line itself.
+test('the browser handoff is the only successful output even when PATH changed', async () => {
   const printed = await installOutput({ onPath: false, added: true }, {
     argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
     redeemCode: async () => ({
@@ -1414,10 +1465,32 @@ test('the browser line still follows the PATH step on a first install', async ()
     }),
     fetchPendingSetup: async () => null,
   });
-  assert.match(printed, /export PATH=/);
-  assert.match(printed, /Go back to your browser tab to keep setting up your project\./);
-  assert.doesNotMatch(printed, /setup-ui/);
-  assert.doesNotMatch(printed, /Then:/);
+  assert.equal(printed, BROWSER_RESUME_BANNER);
+});
+
+test('the browser handoff also hides a successful Claude bootstrap', async () => {
+  let claudeReady = false;
+  let quiet = null;
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    claudeInstallState: () => claudeReady
+      ? { state: 'compatible', version: '2.1.175' }
+      : { state: 'missing' },
+    installClaudeCode: async (options) => {
+      quiet = options.quiet;
+      claudeReady = true;
+      return options.env;
+    },
+    redeemCode: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+      stored: { token: 'egb_issued', email: 'member@example.com' },
+    }),
+    fetchPendingSetup: async () => null,
+  });
+  assert.equal(quiet, true);
+  assert.equal(printed, BROWSER_RESUME_BANNER);
 });
 
 test('a pending project still wins over the browser line under --no-open', async () => {

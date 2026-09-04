@@ -20,6 +20,35 @@ const COMMANDS = Object.freeze(['install', 'auth', 'login', 'logout', 'whoami', 
 class UsageError extends Error {}
 class InputCancelled extends Error {}
 
+const BROWSER_RESUME_BANNER = [
+  '██████╗     █████╗     ██████╗    ████████╗',
+  '██╔══██╗   ██╔══██╗   ██╔══██╗   ╚══██╔══╝',
+  '██████╔╝   ███████║   ██████╔╝      ██║',
+  '██╔══██╗   ██╔══██║   ██╔══██╗      ██║',
+  '██████╔╝   ██║  ██║   ██║  ██║      ██║',
+  '╚═════╝    ╚═╝  ╚═╝   ╚═╝  ╚═╝      ╚═╝',
+  '',
+  '╔══════════════════════════════════════╗',
+  '║   RETURN TO YOUR BROWSER TO RESUME   ║',
+  '╚══════════════════════════════════════╝',
+  '',
+].join('\n');
+
+// A browser-issued setup code is one continuous interaction split across two
+// windows. Hold routine installer prose until the outcome is known: success
+// gets one unmistakable handoff, while incomplete account setup and legacy
+// pending-project paths retain their actionable detail.
+function deferredOutput() {
+  let value = '';
+  return {
+    stream: { write(chunk) { value += String(chunk); return true; } },
+    flush(target) {
+      if (value) target.write(value);
+      value = '';
+    },
+  };
+}
+
 function usage() {
   return `Usage: ${invocation()} [command] [options]
 
@@ -266,10 +295,14 @@ async function runAccountCommand(command, options, authDeps, deps, errorOutput) 
 
 async function run(deps = {}) {
   const argv = deps.argv || process.argv.slice(2);
-  const output = deps.output || process.stdout;
+  const terminalOutput = deps.output || process.stdout;
   const errorOutput = deps.errorOutput || process.stderr;
   try {
     const options = parseArgs(argv);
+    const browserResume = options.command === 'install'
+      && Boolean(options.code) && options.noOpen && !options.dryRun && !options.help;
+    const heldOutput = browserResume ? deferredOutput() : null;
+    const output = heldOutput ? heldOutput.stream : terminalOutput;
     if (options.help) {
       output.write(usage());
       return 0;
@@ -360,13 +393,13 @@ async function run(deps = {}) {
 
       if (claude.state === 'missing') {
         env = await (deps.installClaudeCode || installClaudeCode)({
-          env, output, errorOutput, platform, deps,
+          env, output, errorOutput, platform, deps, quiet: browserResume,
         });
         authDeps.env = env;
         claude = inspect(env);
       } else if (claude.state === 'outdated') {
         const updateFinished = await (deps.updateClaudeCode || updateClaudeCode)({
-          env, output, errorOutput, version: claude.version, deps,
+          env, output, errorOutput, version: claude.version, deps, quiet: browserResume,
         });
         claude = inspect(env);
         if (claude.state === 'compatible' && !updateFinished) {
@@ -379,7 +412,7 @@ async function run(deps = {}) {
           // and permission-broken installs. Its PATH is re-probed below; an
           // exit code alone is never accepted as proof of repair.
           env = await (deps.installClaudeCode || installClaudeCode)({
-            env, output, errorOutput, platform, deps, repair: true,
+            env, output, errorOutput, platform, deps, repair: true, quiet: browserResume,
           });
           authDeps.env = env;
           claude = inspect(env);
@@ -583,6 +616,13 @@ async function run(deps = {}) {
       output.write('Already have a project? Open its chat with `claude -r`'
         + ' and type /bart.\n');
     }
+    if (heldOutput) {
+      if (options.code && options.noOpen && accountReady && !imported) {
+        terminalOutput.write(BROWSER_RESUME_BANNER);
+      } else {
+        heldOutput.flush(terminalOutput);
+      }
+    }
     return 0;
   } catch (error) {
     if (error instanceof InputCancelled) {
@@ -695,14 +735,18 @@ function claudeInstallState(env, spawn) {
  * then judges the result. A failed download is fatal here: continuing would
  * let the later Engelbart success copy contradict the state of the machine.
  */
-async function installClaudeCode({ env, output, errorOutput, platform = process.platform, deps = {}, repair = false }) {
+async function installClaudeCode({
+  env, output, errorOutput, platform = process.platform, deps = {}, repair = false, quiet = false,
+}) {
   const windows = platform === 'win32';
   const url = windows ? CLAUDE_INSTALL_URL_PS1 : CLAUDE_INSTALL_URL;
-  output.write(repair
-    ? '\nThe selected Claude Code did not update -- repairing it '
-      + `with Anthropic's official native installer (${url})...\n\n`
-    : '\nClaude Code is required and was not found -- installing it '
-    + `with Anthropic's official installer (${url})...\n\n`);
+  if (!quiet) {
+    output.write(repair
+      ? '\nThe selected Claude Code did not update -- repairing it '
+        + `with Anthropic's official native installer (${url})...\n\n`
+      : '\nClaude Code is required and was not found -- installing it '
+        + `with Anthropic's official installer (${url})...\n\n`);
+  }
   const run = deps.spawn || require('child_process').spawnSync;
   // Windows ships no bash; its official installer is a PowerShell one-liner.
   // POSIX needs pipefail: without it a failed curl feeds an empty program to
@@ -711,10 +755,15 @@ async function installClaudeCode({ env, output, errorOutput, platform = process.
     ? ['powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
       `$ErrorActionPreference = 'Stop'; Invoke-RestMethod '${url}' | Invoke-Expression`]]
     : ['bash', ['-o', 'pipefail', '-c', `curl -fsSL ${url} | bash`]];
-  const done = run(command, args, { env, stdio: 'inherit', timeout: 600000 });
+  const childOptions = quiet
+    ? { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 600000 }
+    : { env, stdio: 'inherit', timeout: 600000 };
+  const done = run(command, args, childOptions);
   if (!done || done.error || done.status !== 0) {
-    const detail = done && done.error ? ` (${boundedDetail(done.error.message)})` : '';
-    errorOutput.write(`\nThe Claude Code installer did not finish${detail}.\n`);
+    const detail = done && (done.error
+      ? boundedDetail(done.error.message)
+      : boundedDetail(done.stderr || done.stdout));
+    errorOutput.write(`\nThe Claude Code installer did not finish${detail ? ` (${detail})` : ''}.\n`);
     throw new Error('Claude Code could not be installed automatically. Run Anthropic\'s installer manually, then retry Engelbart.');
   }
   // The installer wires new shells, not this process. Point PATH at the dir it
@@ -727,11 +776,16 @@ async function installClaudeCode({ env, output, errorOutput, platform = process.
 // Claude Code owns its installation mechanism. Using its documented update
 // command keeps an existing npm, native, or managed installation in place
 // instead of replacing it with a different installation type.
-async function updateClaudeCode({ env, output, errorOutput, version, deps = {} }) {
-  output.write(`\nClaude Code ${version} is below the required ${MIN_CLAUDE_VERSION_TEXT} -- updating it...\n\n`);
+async function updateClaudeCode({ env, output, errorOutput, version, deps = {}, quiet = false }) {
+  if (!quiet) {
+    output.write(`\nClaude Code ${version} is below the required ${MIN_CLAUDE_VERSION_TEXT} -- updating it...\n\n`);
+  }
   const run = deps.spawn || require('child_process').spawnSync;
   try {
-    const done = run('claude', ['update'], { env, stdio: 'inherit', timeout: 120000 });
+    const childOptions = quiet
+      ? { env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 }
+      : { env, stdio: 'inherit', timeout: 120000 };
+    const done = run('claude', ['update'], childOptions);
     if (done && !done.error && done.status === 0) return true;
   } catch (error) {
     // The caller emits one actionable error below; avoid exposing platform-
@@ -813,6 +867,7 @@ async function openSetup({ launcher, env, output, spawn }) {
 }
 
 module.exports = {
+  BROWSER_RESUME_BANNER,
   COMMANDS,
   InputCancelled,
   UsageError,
