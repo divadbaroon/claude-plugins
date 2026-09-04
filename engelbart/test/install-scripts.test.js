@@ -62,4 +62,10 @@ test('the PowerShell download shim routes every progress line through its browse
     'only Say may write download-shim progress');
   assert.match(source, /Say "Downloading \$target\.\.\."/);
   assert.match(source, /Say "Installed \$installed"/);
+  if (process.platform === 'win32') {
+    const script = path.join(scripts, 'install.ps1').replace(/'/g, "''");
+    const parsed = spawnSync('powershell', ['-NoProfile', '-Command',
+      `$null = [scriptblock]::Create((Get-Content -Raw '${script}'))`], { encoding: 'utf8' });
+    assert.equal(parsed.status, 0, parsed.stderr || parsed.stdout);
+  }
 });

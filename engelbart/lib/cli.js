@@ -472,6 +472,7 @@ async function run(deps = {}) {
     // A setup code is the one way in that needs no browser and no prompt,
     // which is why it lifts the --non-interactive gate.
     let account = null;
+    let redeemedSetupCode = false;
     if (!options.dryRun && !options.localOnly
         && (options.code || !options.nonInteractive)) {
       const stored = (deps.readCredentials || auth.readCredentials)(managedRoot, authDeps.env);
@@ -481,6 +482,7 @@ async function run(deps = {}) {
         // asked for by pasting it. Said out loud when it changes accounts.
         try {
           account = await (deps.redeemCode || auth.redeemCode)(options.code, authDeps);
+          redeemedSetupCode = Boolean(account && account.status === 'ready');
         } catch (error) {
           errorOutput.write(`\nCould not redeem that setup code: ${error.message}\n`);
         }
@@ -597,7 +599,7 @@ async function run(deps = {}) {
     } else if (imported) {
       // The recovery instructions are already on stderr; repeating them as
       // a "Next" would bury the command they name.
-    } else if (options.code && options.noOpen && account) {
+    } else if (options.code && options.noOpen && account && redeemedSetupCode) {
       // The web flow's own install line: the reader is mid-setup in a
       // browser tab, the site saves their project only at the end, and the
       // chat's first /bart claims it. Pointing them at a setup page or a
@@ -617,7 +619,7 @@ async function run(deps = {}) {
         + ' and type /bart.\n');
     }
     if (heldOutput) {
-      if (options.code && options.noOpen && accountReady && !imported) {
+      if (options.code && options.noOpen && redeemedSetupCode && accountReady && !imported) {
         terminalOutput.write(BROWSER_RESUME_BANNER);
       } else {
         heldOutput.flush(terminalOutput);

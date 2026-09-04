@@ -1417,6 +1417,21 @@ test('a dead setup code falls back to the device flow instead of dying', async (
   assert.match(printed, /Run `hc setup-ui` to set up your first project\./);
 });
 
+test('a fallback login cannot claim that the supplied browser code was redeemed', async () => {
+  const printed = await installOutput({ onPath: true, added: false }, {
+    argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    redeemCode: async () => { throw new Error('That setup code was already used'); },
+    login: async () => ({
+      status: 'ready',
+      email: 'member@example.com',
+      claude: { apiKey: 'sk-issued', baseUrl: 'https://proxy.example.com' },
+    }),
+    fetchPendingSetup: async () => null,
+  });
+  assert.notEqual(printed, BROWSER_RESUME_BANNER);
+  assert.match(printed, /Run `hc setup-ui` to set up your first project\./);
+});
+
 test('an account with nothing pending still gets the local setup page', async () => {
   let localSetupOpened = false;
   const printed = await installOutput({ onPath: true, added: false }, {
