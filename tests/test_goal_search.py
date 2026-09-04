@@ -296,7 +296,7 @@ class SearchFieldTests(BridgeTestCase):
         "var field = document.createElement('div'); field.className = 'hc-search-field';"
         "var glyph = document.createElement('span'); glyph.className = 'hc-search-glyph';"
         "var input = document.createElement('input'); input.className = 'hc-search-input';"
-        "input.setAttribute('placeholder', 'Search goals, subgoals, todos\\u2026');"
+        "input.setAttribute('placeholder', 'Search goals, notes, TODOs, prompts');"
         "var clear = document.createElement('span'); clear.className = 'hc-search-clear';"
         "var hits = document.createElement('div'); hits.className = 'hc-search-hits';"
         "field.appendChild(glyph); field.appendChild(input); field.appendChild(clear);"
