@@ -569,6 +569,37 @@ class ServerTests(unittest.TestCase):
             self.state()
         self.assertIsNone(PV.running(self.project))
 
+    def test_preview_repair_launches_with_goal_context_and_stays_out_of_the_ui_log(self):
+        calls = []
+        original = PV.repair
+
+        def fake(root, cwd, session_id="", goal_context=""):
+            calls.append((str(cwd), session_id, goal_context))
+            return {"ok": True, "started": True,
+                    "repair": {"status": "repairing"}}
+
+        PV.repair = fake
+        try:
+            out = self.op(op="preview_repair", goal_id="g1")
+        finally:
+            PV.repair = original
+        self.assertTrue(out["started"])
+        self.assertEqual(str(self.project.resolve()), calls[0][0])
+        self.assertEqual(self.session, calls[0][1])
+        self.assertIn("Goal: Ship the preview", calls[0][2])
+        # The contract contains only lifecycle state; compiler/model output
+        # remains private to the recovery process.
+        self.assertEqual({"status": "repairing"}, out["repair"])
+
+    def test_repair_prompt_is_bounded_to_preview_recovery(self):
+        prompt = PV._repair_prompt(
+            str(self.project), "Goal: Show the app", "npm run dev",
+            ["TypeError: missing route"])
+        self.assertIn("smallest changes required", prompt)
+        self.assertIn("Do not redesign", prompt)
+        self.assertIn("leave a development server running", prompt)
+        self.assertIn("TypeError: missing route", prompt)
+
     def test_a_command_typed_into_the_card_runs_without_being_saved(self):
         self.op(op="preview_configure")
         self.op(op="preview_start", command="printf 'other\\n'")

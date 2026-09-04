@@ -709,10 +709,129 @@ class Proc:
 _RUNS: Dict[str, Proc] = {}
 _RUNS_LOCK = threading.Lock()
 
+# A repair is a coding-agent turn, separate from the process it is repairing.
+# Its output is deliberately not part of the preview state: novice users see
+# the resulting page, not a transient compiler transcript. The small status
+# record only lets the browser avoid launching the same repair twice.
+_REPAIRS: Dict[str, Dict[str, Any]] = {}
+_REPAIRS_LOCK = threading.Lock()
+
 
 def running(cwd) -> Optional[Proc]:
     with _RUNS_LOCK:
         return _RUNS.get(_resolved(cwd))
+
+
+def repair_status(cwd) -> Dict[str, Any]:
+    """The quiet recovery agent's lifecycle, without its private output."""
+    with _REPAIRS_LOCK:
+        held = _REPAIRS.get(_resolved(cwd))
+        if not held:
+            return {}
+        return {"status": str(held.get("status") or ""),
+                "started_at": held.get("started_at", ""),
+                "finished_at": held.get("finished_at", "")}
+
+
+def _repair_prompt(cwd: str, goal_context: str, command: str,
+                   lines: List[str]) -> str:
+    tail = "\n".join([_clean(str(line)) for line in (lines or [])][-60:])
+    return (
+        "You are Engelbart's background live-preview recovery agent. The user"
+        " explicitly asked to see the project's browser interface. Work inside"
+        " the repository and make the smallest changes required for its existing"
+        " interface to install, compile, and start reliably. Inspect the project"
+        " before editing. You may install missing dependencies, repair run scripts,"
+        " and fix compile/runtime errors that prevent the intended interface from"
+        " loading. Do not redesign the product, change unrelated behavior, delete"
+        " user work, commit, push, or leave a development server running. Verify"
+        " the run command far enough to establish that it can serve, then stop it"
+        " and finish; Engelbart will start the persistent preview after you exit.\n\n"
+        f"Repository: {cwd}\n"
+        f"Relevant goal state:\n{goal_context or '(not supplied)'}\n\n"
+        f"Attempted preview command: {command or '(not detected)'}\n"
+        f"Last preview output:\n{tail or '(none)'}\n"
+    )
+
+
+def repair(root: Optional[Path], cwd, session_id: str = "",
+           goal_context: str = "") -> Dict[str, Any]:
+    """Launch one local Claude coding turn to make the preview runnable.
+
+    The explicit Show live preview press authorizes this; state polling never
+    calls it. A successful turn is followed by deterministic re-detection and
+    a normal supervised start, so the agent does not become the dev server.
+    """
+    from . import build as BUILD
+    from .providers import subscription_env
+
+    where = _resolved(cwd)
+    if not Path(where).is_dir():
+        return {"ok": False, "error": "no directory to repair"}
+    with _REPAIRS_LOCK:
+        held = _REPAIRS.get(where)
+        proc = held.get("process") if held else None
+        if proc is not None and proc.poll() is None:
+            return {"ok": True, "already": True, "repair": {
+                "status": str(held.get("status") or "repairing"),
+                "started_at": held.get("started_at", ""),
+                "finished_at": held.get("finished_at", "")}}
+
+    config = read_config(root, where)
+    profile = ui_profile(config) or _primary(config)
+    command = str(profile.get("command") or "")
+    failed = running(where)
+    lines = list(failed.lines) if failed else []
+    if failed and failed.alive():
+        failed.stop()
+    forget(where)
+
+    BUILD._trust_folder(where)
+    binary = BUILD._claude_executable()
+    argv = [str(binary) if binary else "claude", "-p",
+            _repair_prompt(where, goal_context, command, lines),
+            "--output-format", "stream-json", "--verbose",
+            "--permission-mode",
+            os.environ.get("HC_BUILD_PERMISSION_MODE", "acceptEdits")]
+    env = subscription_env()
+    env["HC_CHAT_INFERENCE"] = "1"
+    env.pop("CLAUDE_VAULT", None)
+    env.pop("CLAUDECODE", None)
+    try:
+        worker = subprocess.Popen(
+            argv, cwd=where, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True, **detached_popen_kwargs())
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": f"could not start preview repair: {exc}"[:200]}
+
+    record: Dict[str, Any] = {"status": "repairing", "process": worker,
+                              "started_at": _now(), "finished_at": ""}
+    with _REPAIRS_LOCK:
+        _REPAIRS[where] = record
+
+    def finish() -> None:
+        code = worker.wait()
+        outcome = "failed"
+        if code == 0:
+            try:
+                configured = configure(root, where, detect_only=True)
+                started = (show_ui(root, where, session_id=session_id,
+                                   auto=False) if configured.get("ok") else configured)
+                if started.get("ok"):
+                    outcome = "repaired"
+            except Exception:                           # noqa: BLE001
+                outcome = "failed"
+        with _REPAIRS_LOCK:
+            current = _REPAIRS.get(where)
+            if current is record:
+                record["status"] = outcome
+                record["finished_at"] = _now()
+
+    threading.Thread(target=finish, daemon=True).start()
+    return {"ok": True, "started": True,
+            "repair": {"status": "repairing",
+                       "started_at": record["started_at"], "finished_at": ""}}
 
 
 def start(root: Optional[Path], cwd, profile: Dict[str, Any],

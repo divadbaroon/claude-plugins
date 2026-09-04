@@ -80,6 +80,14 @@ if not resume:
     for other in ids[1:]:
         say('{"id": "%s", "state": "DONE"}' % other)
 else:
+    if prompt.startswith("[Engelbart] The user added context"):
+        ids = [w.strip("[]") for w in prompt.split()
+               if w.startswith("[t") and w.endswith("]")]
+        if os.environ.get("STUB_HOLD"):
+            time.sleep(float(os.environ["STUB_HOLD"]))
+        for i in ids:
+            say('{"id": "%s", "state": "DONE"}' % i)
+        end()
     try:
         msg = json.loads(prompt)
     except ValueError:
@@ -169,8 +177,84 @@ class TodoPanelBrowserTests(unittest.TestCase):
         context = browser.new_context(
             viewport={"width": 1400, "height": 900},
             permissions=["clipboard-read", "clipboard-write"])
+        # These tests specify the full TODO rail. Novice is the product
+        # default now, so select the projection under test before first paint.
+        context.add_init_script(
+            "localStorage.setItem('hc-interface-mode-v1','advanced')")
         page = context.new_page()
         return browser, page
+
+    def test_first_visit_teaches_the_novice_workspace_and_can_return_from_brainstorm(self):
+        from playwright.sync_api import expect, sync_playwright
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=self.chrome)
+            context = browser.new_context(viewport={"width": 1400, "height": 900})
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                expect(page.locator(".hc-nv-intro")).to_be_visible(timeout=15000)
+                expect(page.locator(".hc-nv-intro-step")).to_have_text(
+                    "How Engelbart works · 1 of 3")
+                page.get_by_role("button", name="Next").click()
+                page.get_by_role("button", name="Next").click()
+                page.get_by_role("button", name="Open workspace").click()
+                expect(page.locator(".hc-nv-side-head")).to_have_text("Goals")
+                expect(page.locator(".hc-nv-activity-head")).to_have_text("Activity")
+                expect(page.locator(".hc-rail-right")).not_to_be_visible()
+
+                # The novice button enters the existing brainstorm route and
+                # closing that route restores the same two-column projection.
+                page.get_by_role("button", name="Brainstorm").click()
+                expect(page.locator(".hc-brainstorm")).to_be_visible(timeout=10000)
+                page.keyboard.press("Escape")
+                expect(page.locator(".hc-novice")).to_be_visible()
+
+                # Settings makes the projection explicit and Advanced reveals
+                # the full existing workspace without changing the goal data.
+                page.get_by_role("button", name="Settings").click()
+                expect(page.locator("[data-hc-tab=interface]")).to_be_visible()
+                page.locator("[data-hc-interface-mode=advanced]").click()
+                expect(page.locator(".hc-novice")).to_have_count(0)
+                expect(page.locator(".hc-rail-right")).to_be_visible()
+            finally:
+                browser.close()
+
+    def test_novice_build_note_and_followup_message_reach_the_active_todo(self):
+        from playwright.sync_api import expect, sync_playwright
+        os.environ["STUB_HOLD"] = "2"
+        self.addCleanup(lambda: os.environ.pop("STUB_HOLD", None))
+        with server_for(self.trajdir) as url, sync_playwright() as pw:
+            browser = pw.chromium.launch(executable_path=self.chrome)
+            context = browser.new_context(viewport={"width": 1400, "height": 900})
+            context.add_init_script(
+                "localStorage.setItem('hc-novice-instructions-v1','seen')")
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded")
+                add = page.locator("[data-hc-nv-add]")
+                expect(add).to_be_visible(timeout=15000)
+                add.fill("Build the first visible screen")
+                add.press("Enter")
+                expect(page.locator(".hc-nv-todo-text")).to_have_text(
+                    "Build the first visible screen")
+                page.get_by_role("button", name="Build", exact=True).click()
+                expect(page.get_by_text("Anything Bart should know first?")) \
+                    .to_be_visible()
+                page.locator("[data-hc-nv-build-note]").fill(
+                    "Keep the first screen visual and small.")
+                page.get_by_role("button", name="Send to Bart").click()
+                expect(page.get_by_text(
+                    "Build note: Keep the first screen visual and small.")) \
+                    .to_be_visible(timeout=10000)
+                message = page.locator("[data-hc-nv-note]")
+                expect(message).to_be_visible(timeout=10000)
+                message.fill("Also preserve the keyboard path.")
+                message.press("Enter")
+                expect(page.get_by_text(
+                    "Your note: Also preserve the keyboard path.")) \
+                    .to_be_visible(timeout=10000)
+            finally:
+                browser.close()
 
     def test_rows_are_typed_selected_across_and_copied_as_markdown(self):
         from playwright.sync_api import expect, sync_playwright

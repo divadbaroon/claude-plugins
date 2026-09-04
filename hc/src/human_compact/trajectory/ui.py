@@ -2644,12 +2644,34 @@ def _preview_op(op, trajdir, chat_scoped):
             return {"ok": False, "error": "there is no run to explain"}
         return PREVIEW.explain_failure(cwd, proc.profile.get("command", ""),
                                        list(proc.lines), proc.exit_code)
+    if kind == "preview_repair":
+        # The goal is read here rather than trusted from the browser. The
+        # recovery agent needs intent, but never the preview's hidden logs as
+        # user-authored instructions.
+        context = ""
+        goal_id = str(op.get("goal_id") or "")
+        try:
+            goals, _important = CS.load_goals(_session_id, root)
+            goal = GM.by_id(goals, goal_id)
+            if goal:
+                completed = [str(row.get("text") or "").strip()
+                             for row in (goal.get("todo_items") or [])
+                             if isinstance(row, dict)
+                             and row.get("status") == "done"
+                             and str(row.get("text") or "").strip()]
+                context = "Goal: " + str(goal.get("title") or "Untitled")
+                if completed:
+                    context += "\nCompleted work:\n- " + "\n- ".join(completed[:20])
+        except (OSError, ValueError):
+            context = ""
+        return PREVIEW.repair(root, cwd, session_id=_session_id,
+                              goal_context=context)
     return {"ok": False, "error": "unknown preview operation"}
 
 
 PREVIEW_OPS = ("preview_configure", "preview_pick", "preview_start",
                "preview_show_ui", "preview_stop", "preview_forget",
-               "preview_explain")
+               "preview_explain", "preview_repair")
 
 
 def _preview_state(trajdir, chat_scoped, goal_id="", todo_id=""):
@@ -2684,6 +2706,9 @@ def _preview_state(trajdir, chat_scoped, goal_id="", todo_id=""):
     if todo_id:
         intent = PREVIEW.intent_of(root, cwd, todo_id)
     out = PREVIEW.state(root, cwd, intent, session_id=_session_id)
+    repair = PREVIEW.repair_status(cwd)
+    if repair:
+        out["repair"] = repair
     out["goal_id"] = goal_id
     out["todo_id"] = todo_id
     return out
@@ -2895,7 +2920,9 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         # condensed context belongs to the project, so every chat in it
         # shares the one cache.
         context = BRAIN.project_context(root, goal_id, op.get("__digest__"))
-        return BRAIN.ask(op.get("transcript"), context, root=root)
+        return BRAIN.ask(op.get("transcript"), context, root=root,
+                         mode=str(op.get("mode") or ""),
+                         working_direction=op.get("working_direction"))
     if kind == "setup_commit":
         return SETUP.commit(root, op.get("name"), op.get("plan"),
                             op.get("goals"), op.get("chosen"),
@@ -3553,8 +3580,10 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 return {"ok": True, "chats": CS.load_brainstorms(session_id, root)}
             if not isinstance(op.get("messages"), list):
                 return {"ok": False, "error": "messages must be a list"}
-            held = CS.save_brainstorm(session_id, str(op.get("id") or ""),
-                                      op.get("messages"), root)
+            held = CS.save_brainstorm(
+                session_id, str(op.get("id") or ""), op.get("messages"), root,
+                mode=str(op.get("mode") or ""),
+                working_direction=op.get("working_direction"))
             if held is None:
                 return {"ok": False, "error": "nothing said yet"}
             return {"ok": True, "id": held["id"], "title": held["title"],

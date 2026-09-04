@@ -9,6 +9,12 @@
 
   var KEY = "hc-vault-ui-v1";
   var SYNC_KEY = "hc-vault-ui-sync-v1";
+  // The interface choice is deliberately outside the artifact's state. The
+  // novice workspace and the advanced workspace are two projections of the
+  // same goals, not two stores which can drift apart.
+  var INTERFACE_KEY = "hc-interface-mode-v1";
+  var NOVICE_INTRO_KEY = "hc-novice-instructions-v1";
+  var NOVICE_ACTIVITY_KEY = "hc-novice-activity-v1";
   // The document a goal opens as when nobody has written one yet: nothing.
   // Kept byte-identical to human_compact.trajectory.goals.default_doc() --
   // no spine of empty headings; a heading arrives with the first thing
@@ -28,6 +34,29 @@
   var setupState = null;
   var details = Object.create(null);
   var detailPending = Object.create(null);
+
+  function interfaceMode() {
+    try {
+      return localStorage.getItem(INTERFACE_KEY) === "advanced"
+        ? "advanced" : "novice";
+    } catch (e) { return "novice"; }
+  }
+
+  function setInterfaceMode(mode) {
+    var next = mode === "advanced" ? "advanced" : "novice";
+    try { localStorage.setItem(INTERFACE_KEY, next); } catch (e) {}
+    var root = document.documentElement;
+    if (root && root.setAttribute) root.setAttribute("data-hc-interface", next);
+    if (next === "advanced") {
+      noviceClosePreview();
+      if (noviceBox && noviceBox.parentNode) noviceBox.parentNode.removeChild(noviceBox);
+      noviceBox = null;
+    } else {
+      renderNovice(true);
+    }
+    renderSettingsPanel();
+    return next;
+  }
 
   function array(value) {
     return Array.isArray(value) ? value : [];
@@ -2923,6 +2952,13 @@
         toggleAlertCenter();
         return;
       }
+      if (closestByClass(target, "hc-nv-gear")) {
+        stop();
+        closeAlertCenter();
+        setSettingsTab("interface");
+        toggleSettingsPanel();
+        return;
+      }
       if (closestByClass(target, "hc-gear")) {
         stop();
         closeAlertCenter();
@@ -2946,6 +2982,12 @@
           return;
         }
         var sbBtn = closestByClass(target, "hc-settings-btn");
+        var modeBtn = closestByClass(target, "hc-mode-btn");
+        if (modeBtn) {
+          stop();
+          setInterfaceMode(modeBtn.getAttribute("data-hc-interface-mode"));
+          return;
+        }
         // The sharing controls wear the same button class and are handled
         // where the sharing is; only the ones naming an account action
         // belong here.
@@ -3614,6 +3656,15 @@
       ".hc-bs-piece{margin-top:12px;font:600 11.5px var(--hc-sans);color:var(--ink,#111)}",
       ".hc-bs-say{margin-top:8px;font-size:10.5px;color:var(--fnt,#9b9b9b);overflow-wrap:anywhere}",
       ".hc-bs-say[data-hc-bad]{color:var(--bad,#a12d2d)}",
+      ".hc-bs-working{margin:0 0 18px;padding:14px 15px;border:1px solid var(--bd,#e3e3e3);border-left:3px solid var(--acc,#a5492a);border-radius:6px;background:var(--panel2,#f6f6f6)}",
+      ".hc-bs-working-head{display:flex;align-items:center;justify-content:space-between;gap:12px}",
+      ".hc-bs-mode{font:600 9px var(--hc-sans);letter-spacing:1.1px;text-transform:uppercase;color:var(--acc,#a5492a)}",
+      ".hc-bs-working-title{margin-top:7px;font:600 13px/1.4 var(--hc-sans);color:var(--ink,#111)}",
+      ".hc-bs-working-summary{margin-top:4px;font:11.5px/1.6 var(--hc-sans);color:var(--mut,#575757)}",
+      ".hc-bs-working-group{margin-top:10px}",
+      ".hc-bs-working-label{font:600 9px var(--hc-sans);letter-spacing:1.1px;text-transform:uppercase;color:var(--fnt,#9b9b9b)}",
+      ".hc-bs-working-row{margin-top:3px;font:10.5px/1.55 var(--hc-sans);color:var(--mut,#575757)}",
+      ".hc-bs-working-quiet .hc-bs-working-row{color:var(--fnt,#9b9b9b)}",
       ".hc-bs-think{display:flex;align-items:center;gap:9px;color:var(--fnt,#9b9b9b);font-size:11px}",
       ".hc-bs-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--acc,#a5492a);opacity:.35;animation:hc-bs-pulse 1.1s infinite}",
       "@keyframes hc-bs-pulse{0%,100%{opacity:.25}50%{opacity:1}}",
@@ -4855,7 +4906,9 @@
                        // default, changed with the picker on the card
     goalq: "",         // what is typed into that picker's search field
     say: "",           // what the last write reported
-    bad: false
+    bad: false,
+    mode: "explore",   // Explore -> Discriminate -> Deepen -> Commit
+    working: null       // the project hypothesis this conversation edits
   };
 
   function brainstormShown() {
@@ -4928,6 +4981,8 @@
         return false;
       }
       bs.id = str(held.id);
+      bs.mode = str(held.mode) || "explore";
+      bs.working = held.working_direction || null;
       bs.msgs = turns.map(function (m) {
         return { role: str(m.role), text: str(m.text) };
       });
@@ -4942,7 +4997,8 @@
     // The invitation on its own is not a conversation. The server refuses to
     // store one, so asking it to would be a round trip for nothing.
     if (bs.msgs.length < 2) return Promise.resolve(false);
-    return post({ op: "brainstorm_save", id: bs.id, messages: bs.msgs })
+    return post({ op: "brainstorm_save", id: bs.id, messages: bs.msgs,
+                  mode: bs.mode, working_direction: bs.working })
       .then(function (out) {
         if (!out || !out.ok) return false;
         bs.id = str(out.id);
@@ -4955,6 +5011,11 @@
     if (!root || !root.removeAttribute) return false;
     var was = brainstormShown();
     root.removeAttribute("data-hc-brainstorm");
+    if (noviceBrainstorming) {
+      noviceBrainstorming = false;
+      root.removeAttribute("data-hc-novice-brainstorm");
+      renderNovice(true);
+    }
     return was;
   }
 
@@ -4985,6 +5046,8 @@
       // of them was on screen: this one's are read when it is opened.
       bs.id = "";
       bs.loaded = "";
+      bs.mode = "explore";
+      bs.working = null;
       brainstormClear();
     }
     if (!brainstormBox || !inLiveDocument(brainstormBox)) {
@@ -5286,7 +5349,8 @@
     bs.note = "";
     bs.declined = false;
     drawBrainstorm();
-    return post({ op: "brainstorm_say", transcript: bs.msgs })
+    return post({ op: "brainstorm_say", transcript: bs.msgs,
+                  mode: bs.mode, working_direction: bs.working })
       .then(function (out) {
         bs.thinking = false;
         if (!out || !out.ok) {
@@ -5300,6 +5364,8 @@
         }
         brainstormSay("engelbart", out.say);
         bs.card = out;
+        bs.mode = str(out.mode) || bs.mode || "explore";
+        if (out.working_direction) bs.working = out.working_direction;
         drawBrainstorm();
         brainstormStore();
         return true;
@@ -5387,6 +5453,7 @@
     // answers in it -- changes here.
     bsSyncSend();
     wipe(col);
+    drawBsWorking(col);
     bs.msgs.forEach(function (m) {
       var box = el("div", "hc-bs-msg");
       box.setAttribute("data-hc-role", str(m.role));
@@ -5429,6 +5496,39 @@
     var scroll = brainstormBox
       && brainstormBox.querySelector(".hc-bs-scroll");
     if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    return true;
+  }
+
+  // A visible project hypothesis, not a summary hidden in old chat. The model
+  // revises this each turn; rejected routes have a quiet place to stay without
+  // remaining live competitors to the direction taking shape.
+  function drawBsWorking(col) {
+    var d = bs.working;
+    if (!d || !str(d.title).trim()) return false;
+    var card = el("section", "hc-bs-working");
+    var head = el("div", "hc-bs-working-head");
+    head.appendChild(el("span", "hc-bs-eyebrow", "working direction"));
+    head.appendChild(el("span", "hc-bs-mode", str(bs.mode) || "explore"));
+    card.appendChild(head);
+    card.appendChild(el("div", "hc-bs-working-title", str(d.title)));
+    if (d.summary) card.appendChild(el("div", "hc-bs-working-summary", str(d.summary)));
+    function rows(label, values, quiet) {
+      values = array(values);
+      if (!values.length) return;
+      var group = el("div", "hc-bs-working-group" + (quiet ? " hc-bs-working-quiet" : ""));
+      group.appendChild(el("div", "hc-bs-working-label", label));
+      values.forEach(function (value) {
+        group.appendChild(el("div", "hc-bs-working-row", "· " + str(value)));
+      });
+      card.appendChild(group);
+    }
+    rows("why this direction", d.why, false);
+    rows("still unclear", d.unclear, false);
+    var alternatives = array(d.alternatives).map(function (a) {
+      return str(a && a.label) + (a && a.reason ? " — " + str(a.reason) : "");
+    }).filter(function (v) { return v.trim(); });
+    rows("set aside", alternatives, true);
+    col.appendChild(card);
     return true;
   }
 
@@ -8419,7 +8519,8 @@
     // below, but with no tab to select them they never draw. Bring a pair
     // back here to re-open one.
     [["account", "Account"], ["api", "API key"], ["alerts", "Alerts"],
-     ["sharing", "Sharing"], ["data", "Data"]].forEach(function (spec) {
+     ["sharing", "Sharing"], ["data", "Data"],
+     ["interface", "Interface"]].forEach(function (spec) {
       var tab = document.createElement("span");
       tab.className = "hc-settings-tab";
       tab.setAttribute("data-hc-settings-tab", spec[0]);
@@ -8434,6 +8535,30 @@
       s.textContent = words;
       return s;
     };
+    var iface = document.createElement("div");
+    iface.className = "hc-settings-sec hc-interface-settings";
+    iface.setAttribute("data-hc-settings-sec", "interface");
+    iface.setAttribute("data-hc-tab", "interface");
+    var ifaceHead = document.createElement("div");
+    ifaceHead.className = "hc-settings-sec-head";
+    ifaceHead.textContent = "Workspace interface";
+    iface.appendChild(ifaceHead);
+    var ifaceCopy = document.createElement("div");
+    ifaceCopy.className = "hc-interface-copy";
+    ifaceCopy.textContent = "Novice keeps Goals and Activity in view. Advanced opens the full planning, context, and build workspace.";
+    iface.appendChild(ifaceCopy);
+    var ifaceModes = document.createElement("div");
+    ifaceModes.className = "hc-mode-picks";
+    [["novice", "Novice"], ["advanced", "Advanced"]].forEach(function (spec) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "hc-mode-btn";
+      button.setAttribute("data-hc-interface-mode", spec[0]);
+      button.textContent = spec[1];
+      ifaceModes.appendChild(button);
+    });
+    iface.appendChild(ifaceModes);
+    box.appendChild(iface);
     var sec = document.createElement("div");
     sec.className = "hc-settings-sec";
     sec.setAttribute("data-hc-settings-sec", "notifications");
@@ -9285,6 +9410,15 @@
       if (key === "banners") inputs[i].checked = !!cur.banners;
       else if (key === "seconds") inputs[i].value = String(cur.seconds);
     }
+    var mode = interfaceMode();
+    var choices = settingsPanelBox.querySelectorAll("[data-hc-interface-mode]");
+    for (var j = 0; j < choices.length; j += 1) {
+      if (choices[j].getAttribute("data-hc-interface-mode") === mode) {
+        choices[j].setAttribute("data-hc-on", "");
+      } else {
+        choices[j].removeAttribute("data-hc-on");
+      }
+    }
     return true;
   }
 
@@ -9312,6 +9446,7 @@
   function openSettingsPanel() {
     if (settingsPanelShown()) return settingsPanelBox;
     ensureAlertStyles();
+    ensureNoviceStyles();
     bindAlerts();
     placeSettingsPanel();
     settingsPanelBox = settingsPanelNode();
@@ -13982,6 +14117,10 @@
       .then(function (body) {
         if (body && typeof body === "object") previewState = body;
         previewAuto(body);
+        if (novicePreviewOpen) {
+          noviceFingerprint = "";
+          renderNovice(true);
+        }
       })
       .catch(function () { /* the server going away is the banner's news */ });
   }
@@ -14036,6 +14175,10 @@
       previewAt = 0;
       previewRead(true);
       renderPreview(true);
+      if (novicePreviewOpen) {
+        noviceFingerprint = "";
+        renderNovice(true);
+      }
       return res;
     });
   }
@@ -17473,6 +17616,884 @@
     return true;
   }
 
+  // --- the novice workspace ------------------------------------------------
+  //
+  // This is intentionally a view over the same tree and the same operations
+  // as the full workspace. It owns no goals and launches no private worker.
+  // That invariant is what makes the Settings switch reversible.
+
+  var NOVICE_CSS = [
+    "[data-hc-interface=novice] .hc{visibility:hidden}",
+    "[data-hc-interface=novice][data-hc-novice-brainstorm] .hc{visibility:visible}",
+    ".hc-novice{position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;background:var(--bg,#fff);color:var(--ink,#171717);font:14px/1.5 var(--hc-sans,system-ui,-apple-system,'Segoe UI',sans-serif)}",
+    ".hc-nv-head{height:54px;box-sizing:border-box;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--bd,#eaeaea);flex:none}",
+    ".hc-nv-brand{font:700 15px/1 var(--hc-sans,system-ui);letter-spacing:-.02em}",
+    ".hc-nv-project{font:12px/1.3 var(--hc-mono,ui-monospace,monospace);color:var(--mut,#666);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+    ".hc-nv-head-space{flex:1}",
+    ".hc-nv-icon{width:30px;height:30px;border:0;border-radius:7px;background:transparent;color:var(--mut,#666);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font:16px/1 var(--hc-sans,system-ui)}",
+    ".hc-nv-icon:hover{background:var(--hov,#f2f2f2);color:var(--ink,#171717)}",
+    ".hc-nv-shell{display:grid;grid-template-columns:285px minmax(0,1fr);min-height:0;flex:1}",
+    ".hc-nv-goals{min-width:0;border-right:1px solid var(--bd,#eaeaea);display:flex;flex-direction:column;background:var(--panel,#fff)}",
+    ".hc-nv-side-head,.hc-nv-activity-head{height:48px;box-sizing:border-box;display:flex;align-items:center;padding:0 18px;border-bottom:1px solid var(--bd,#eaeaea);font:700 10px/1 var(--hc-mono,ui-monospace,monospace);letter-spacing:1.4px;text-transform:uppercase;color:var(--fnt,#888)}",
+    ".hc-nv-tree{padding:12px 10px;overflow:auto;flex:1}",
+    ".hc-nv-goal{width:100%;box-sizing:border-box;display:flex;align-items:flex-start;gap:9px;border:0;border-radius:7px;background:transparent;color:var(--ink,#171717);cursor:pointer;padding:8px 9px;text-align:left;font:13px/1.35 var(--hc-sans,system-ui)}",
+    ".hc-nv-goal:hover{background:var(--hov,#f2f2f2)}",
+    ".hc-nv-goal[data-hc-on]{background:var(--panel2,#fafafa);font-weight:600}",
+    ".hc-nv-mark{width:12px;height:12px;margin-top:2px;box-sizing:border-box;border:1.5px solid var(--bd2,#bbb);border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:8px}",
+    ".hc-nv-mark[data-hc-done]{background:var(--ink,#171717);border-color:var(--ink,#171717);color:var(--bg,#fff)}",
+    ".hc-nv-goal-title{min-width:0;overflow-wrap:anywhere}",
+    ".hc-nv-goal-meta{display:block;margin-top:2px;color:var(--fnt,#888);font:10px/1.3 var(--hc-mono,ui-monospace,monospace);font-weight:400}",
+    ".hc-nv-main{min-width:0;display:flex;flex-direction:column;background:var(--bg,#fff)}",
+    ".hc-nv-activity{flex:1;min-height:0;overflow:auto}",
+    ".hc-nv-content{width:min(760px,calc(100% - 44px));margin:0 auto;padding:34px 0 72px}",
+    ".hc-nv-kicker{font:700 10px/1 var(--hc-mono,ui-monospace,monospace);letter-spacing:1.5px;text-transform:uppercase;color:var(--fnt,#888)}",
+    ".hc-nv-title{font:650 clamp(23px,3vw,34px)/1.16 var(--hc-sans,system-ui);letter-spacing:-.035em;margin:9px 0 8px}",
+    ".hc-nv-summary{color:var(--mut,#666);font:13px/1.55 var(--hc-sans,system-ui);max-width:620px;margin-bottom:26px}",
+    ".hc-nv-card{border:1px solid var(--bd,#eaeaea);border-radius:10px;background:var(--panel,#fff);overflow:hidden;margin:14px 0}",
+    ".hc-nv-card-head{display:flex;align-items:center;gap:10px;padding:12px 15px;border-bottom:1px solid var(--bd,#eaeaea)}",
+    ".hc-nv-card-title{font-weight:650;min-width:0}",
+    ".hc-nv-count{margin-left:auto;color:var(--fnt,#888);font:10px/1 var(--hc-mono,ui-monospace,monospace);text-transform:uppercase;letter-spacing:1px}",
+    ".hc-nv-todos{padding:4px 15px}",
+    ".hc-nv-todo{padding:11px 0;border-bottom:1px solid var(--bd,#eaeaea)}",
+    ".hc-nv-todo:last-child{border-bottom:0}",
+    ".hc-nv-todo-line{display:flex;align-items:center;gap:10px}",
+    ".hc-nv-todo-text{flex:1;min-width:0;overflow-wrap:anywhere}",
+    ".hc-nv-todo[data-hc-status=done] .hc-nv-todo-text{text-decoration:line-through;color:var(--fnt,#888)}",
+    ".hc-nv-status{font:700 9px/1 var(--hc-mono,ui-monospace,monospace);letter-spacing:1px;text-transform:uppercase;color:var(--fnt,#888)}",
+    ".hc-nv-status[data-hc-status=done]{color:var(--hc-ok,#1a7f37)}",
+    ".hc-nv-small,.hc-nv-primary{border-radius:7px;cursor:pointer;font:650 11px/1 var(--hc-sans,system-ui);padding:8px 12px}",
+    ".hc-nv-small{border:1px solid var(--bd2,#bbb);background:transparent;color:var(--ink,#171717)}",
+    ".hc-nv-small:hover{background:var(--hov,#f2f2f2)}",
+    ".hc-nv-primary{border:1px solid var(--ink,#171717);background:var(--ink,#171717);color:var(--bg,#fff)}",
+    ".hc-nv-primary:disabled,.hc-nv-small:disabled{opacity:.42;cursor:default}",
+    ".hc-nv-answer,.hc-nv-message{display:flex;gap:8px;margin:10px 0 1px;padding-left:22px}",
+    ".hc-nv-input,.hc-nv-note{box-sizing:border-box;width:100%;border:1px solid var(--bd2,#bbb);border-radius:8px;background:var(--bg,#fff);color:var(--ink,#171717);outline:none;font:13px/1.45 var(--hc-sans,system-ui);padding:9px 11px}",
+    ".hc-nv-input:focus,.hc-nv-note:focus{border-color:var(--ink,#171717)}",
+    ".hc-nv-add{display:flex;gap:8px;padding:12px 15px;border-top:1px solid var(--bd,#eaeaea)}",
+    ".hc-nv-actions{display:flex;align-items:center;gap:9px;padding:12px 15px;border-top:1px solid var(--bd,#eaeaea)}",
+    ".hc-nv-actions .hc-nv-primary{margin-left:auto}",
+    ".hc-nv-feed{display:flex;flex-direction:column;gap:10px;margin:22px 0}",
+    ".hc-nv-event{display:flex;gap:10px;align-items:flex-start;color:var(--mut,#666);font-size:12px}",
+    ".hc-nv-event-dot{width:7px;height:7px;border-radius:50%;margin-top:6px;background:var(--bd2,#bbb);flex:none}",
+    ".hc-nv-event[data-hc-kind=you]{justify-content:flex-end}",
+    ".hc-nv-event[data-hc-kind=you] .hc-nv-event-dot{display:none}",
+    ".hc-nv-event[data-hc-kind=you] .hc-nv-event-copy{padding:8px 11px;border-radius:9px;background:var(--panel2,#fafafa);color:var(--ink,#171717)}",
+    ".hc-nv-next{display:flex;align-items:center;gap:12px;padding:15px;border:1px solid var(--bd,#eaeaea);border-radius:10px;background:var(--panel2,#fafafa);margin-top:18px}",
+    ".hc-nv-next-copy{flex:1;min-width:0}",
+    ".hc-nv-next-label{font:700 9px/1 var(--hc-mono,ui-monospace,monospace);letter-spacing:1.3px;text-transform:uppercase;color:var(--fnt,#888);margin-bottom:5px}",
+    ".hc-nv-next-title{font-weight:650}",
+    ".hc-nv-empty{padding:30px 16px;text-align:center;color:var(--mut,#666)}",
+    ".hc-nv-modal{position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.42)}",
+    ".hc-nv-dialog{width:460px;max-width:92vw;padding:22px;border:1px solid var(--bd2,#bbb);border-radius:12px;background:var(--panel,#fff);box-shadow:0 22px 70px rgba(0,0,0,.24)}",
+    ".hc-nv-dialog h2{font:650 21px/1.2 var(--hc-sans,system-ui);letter-spacing:-.02em;margin:0 0 8px}",
+    ".hc-nv-dialog p{color:var(--mut,#666);font-size:12px;margin:0 0 15px}",
+    ".hc-nv-dialog textarea{min-height:105px;resize:vertical}",
+    ".hc-nv-dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:14px}",
+    ".hc-nv-intro{flex:1;display:flex;align-items:center;justify-content:center;padding:28px;overflow:auto}",
+    ".hc-nv-intro-inner{width:min(760px,100%);text-align:center}",
+    ".hc-nv-intro-step{font:700 10px/1 var(--hc-mono,ui-monospace,monospace);letter-spacing:1.5px;text-transform:uppercase;color:var(--fnt,#888)}",
+    ".hc-nv-intro h1{font:650 clamp(28px,4vw,43px)/1.12 var(--hc-sans,system-ui);letter-spacing:-.04em;margin:14px auto 12px;max-width:700px}",
+    ".hc-nv-intro p{max-width:560px;margin:0 auto;color:var(--mut,#666);font-size:14px}",
+    ".hc-nv-demo{height:190px;box-sizing:border-box;margin:30px auto 24px;max-width:540px;border:1px solid var(--bd,#eaeaea);border-radius:12px;background:var(--panel2,#fafafa);display:flex;align-items:center;justify-content:center;gap:12px;padding:24px}",
+    ".hc-nv-demo-chip{border:1px solid var(--bd2,#bbb);border-radius:8px;background:var(--panel,#fff);padding:12px 15px;text-align:left;box-shadow:0 5px 18px rgba(0,0,0,.04)}",
+    ".hc-nv-intro-actions{display:flex;align-items:center;justify-content:center;gap:9px}",
+    ".hc-nv-dots{display:flex;justify-content:center;gap:6px;margin:18px 0}",
+    ".hc-nv-dot{width:6px;height:6px;border-radius:99px;background:var(--bd2,#bbb)}",
+    ".hc-nv-dot[data-hc-on]{width:20px;background:var(--ink,#171717)}",
+    ".hc-nv-preview{position:relative;flex:1;min-height:0;display:flex;flex-direction:column}",
+    ".hc-nv-preview-bar{height:48px;box-sizing:border-box;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--bd,#eaeaea);font-weight:650}",
+    ".hc-nv-preview-bar .hc-nv-small{margin-left:auto}",
+    ".hc-nv-preview-slot{flex:1;min-height:200px;background:#fff}",
+    ".hc-nv-preview-wait{flex:1;display:flex;align-items:center;justify-content:center;color:var(--mut,#666);font-size:13px}",
+    "[data-hc-novice-preview] .hc-pv-frame{z-index:1005!important;border-radius:0!important}",
+    ".hc-interface-copy{font:12px/1.55 var(--hc-sans,system-ui);color:var(--mut,#666);margin-bottom:13px}",
+    ".hc-mode-picks{display:flex;gap:8px}",
+    ".hc-mode-btn{flex:1;border:1px solid var(--bd2,#bbb);border-radius:7px;background:transparent;color:var(--ink,#171717);padding:10px;cursor:pointer;font:650 12px/1 var(--hc-sans,system-ui)}",
+    ".hc-mode-btn[data-hc-on]{background:var(--ink,#171717);border-color:var(--ink,#171717);color:var(--bg,#fff)}",
+    "@media(max-width:720px){.hc-nv-shell{grid-template-columns:120px minmax(0,1fr)}.hc-nv-content{width:calc(100% - 28px)}.hc-nv-goal{font-size:11px;padding:8px 5px}.hc-nv-goal-meta{display:none}.hc-nv-side-head,.hc-nv-activity-head{padding:0 10px}}"
+  ].join("");
+
+  var noviceBox = null;
+  var noviceIntroStep = 0;
+  var noviceSelected = "";
+  var noviceBuildIds = [];
+  var noviceBuilding = false;
+  var noviceActiveGoal = "";
+  var noviceActiveIds = [];
+  var novicePreviewOpen = false;
+  var noviceBrainstorming = false;
+  var noviceBound = false;
+  var noviceFingerprint = "";
+  var noviceRepairTried = Object.create(null);
+
+  function ensureNoviceStyles() {
+    if (document.getElementById("hc-novice-style")) return false;
+    var style = document.createElement("style");
+    style.id = "hc-novice-style";
+    style.textContent = NOVICE_CSS;
+    (document.head || document.documentElement).appendChild(style);
+    return true;
+  }
+
+  function noviceIntroSeen() {
+    try { return localStorage.getItem(NOVICE_INTRO_KEY) === "seen"; }
+    catch (e) { return false; }
+  }
+
+  function noviceMarkIntroSeen() {
+    try { localStorage.setItem(NOVICE_INTRO_KEY, "seen"); } catch (e) {}
+  }
+
+  function noviceActivityId(goalId) {
+    var who = projectInfo();
+    return str(who && who.cwd) + "::" + str(goalId);
+  }
+
+  function noviceActivity(goalId) {
+    try {
+      var all = JSON.parse(localStorage.getItem(NOVICE_ACTIVITY_KEY) || "{}");
+      return array(all[noviceActivityId(goalId)]);
+    } catch (e) { return []; }
+  }
+
+  function noviceRemember(goalId, text, kind) {
+    var words = str(text).trim();
+    if (!words) return false;
+    try {
+      var all = JSON.parse(localStorage.getItem(NOVICE_ACTIVITY_KEY) || "{}");
+      var key = noviceActivityId(goalId);
+      var rows = array(all[key]);
+      rows.push({ text: words, kind: kind || "you", at: Date.now() });
+      all[key] = rows.slice(-30);
+      localStorage.setItem(NOVICE_ACTIVITY_KEY, JSON.stringify(all));
+    } catch (e) {}
+    noviceFingerprint = "";
+    return true;
+  }
+
+  function noviceRoots() {
+    var remote = rootsFromState(serverState);
+    var local = readLocalGoals();
+    if (!local.length) return remote;
+    var held = flattenTree(remote).map;
+    var lay = function (nodes) {
+      return array(nodes).map(function (node) {
+        var out = clone(node);
+        var current = held[node.id] && held[node.id].value;
+        if (current) {
+          out.done = current.done;
+          out.status = current.status;
+          out.todo_items = layBuildState(array(node.todo_items),
+                                         array(current.todo_items));
+        }
+        out.children = lay(node.children);
+        return out;
+      });
+    };
+    return lay(local);
+  }
+
+  function noviceGoalRows(roots) {
+    var out = [];
+    (function walk(nodes, depth, trail) {
+      array(nodes).forEach(function (node) {
+        var path = trail.concat([node]);
+        out.push({ node: node, depth: depth, trail: path });
+        walk(node.children, depth + 1, path);
+      });
+    })(roots, 0, []);
+    return out;
+  }
+
+  function noviceGoal() {
+    var rows = noviceGoalRows(noviceRoots());
+    var found = null;
+    rows.some(function (row) {
+      if (row.node.id === noviceSelected) { found = row; return true; }
+      return false;
+    });
+    if (found) return found;
+    rows.some(function (row) {
+      var items = array(row.node.todo_items);
+      if (items.some(function (todo) {
+        return str(todo.text).trim() && str(todo.status) !== "done";
+      })) { found = row; return true; }
+      return false;
+    });
+    if (!found) rows.some(function (row) {
+      if (array(row.node.todo_items).length) { found = row; return true; }
+      return false;
+    });
+    found = found || rows[0] || null;
+    if (found) noviceSelected = found.node.id;
+    return found;
+  }
+
+  function noviceSelect(goalId) {
+    noviceSelected = str(goalId);
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+      saved.selId = noviceSelected;
+      localStorage.setItem(KEY, JSON.stringify(saved));
+    } catch (e) {}
+    if (typeof window !== "undefined" && typeof window.__hcSelectGoal === "function") {
+      try { window.__hcSelectGoal(noviceSelected); } catch (e) {}
+    }
+    previewAt = 0;
+    previewState = null;
+    noviceFingerprint = "";
+    renderNovice(true);
+  }
+
+  function noviceStatus(row) {
+    var status = str(row && row.status);
+    if (status === "done") return "built";
+    if (status === "asking") return "needs you";
+    if (status === "building" || status === "queued") return status;
+    if (status === "failed") return "ready to retry";
+    return "ready";
+  }
+
+  function noviceBuildable(items) {
+    return array(items).filter(function (row) {
+      var status = str(row && row.status);
+      return str(row && row.text).trim()
+        && status !== "done" && status !== "building"
+        && status !== "queued" && status !== "asking";
+    }).map(function (row) { return str(row.id); });
+  }
+
+  function noviceWorking(items) {
+    return array(items).filter(function (row) {
+      return str(row.status) === "building" || str(row.status) === "queued";
+    });
+  }
+
+  function noviceCanPreview(goal) {
+    var items = array(goal && goal.todo_items);
+    return items.some(function (row) { return str(row.status) === "done"; })
+      && !items.some(function (row) {
+        var status = str(row.status);
+        return status === "building" || status === "queued" || status === "asking";
+      });
+  }
+
+  function noviceHeader(box) {
+    var head = el("div", "hc-nv-head");
+    head.appendChild(el("span", "hc-nv-brand", "Engelbart"));
+    var who = projectInfo();
+    head.appendChild(el("span", "hc-nv-project", str(who && who.name)));
+    head.appendChild(el("span", "hc-nv-head-space"));
+    var theme = el("button", "hc-nv-icon", "◐");
+    theme.type = "button";
+    theme.title = "Toggle light or dark mode";
+    theme.setAttribute("aria-label", "Toggle light or dark mode");
+    theme.setAttribute("data-hc-nv", "theme");
+    head.appendChild(theme);
+    var gear = el("button", "hc-nv-icon hc-gear hc-nv-gear");
+    gear.type = "button";
+    gear.title = "Settings";
+    gear.setAttribute("aria-label", "Settings");
+    gear.innerHTML = GEAR_ICON;
+    head.appendChild(gear);
+    box.appendChild(head);
+  }
+
+  function noviceIntro(box) {
+    var steps = [
+      ["TODOs are tasks you want Bart to complete in the background",
+       "Add a task, press Build, and Bart works on it while the project remains visible.",
+       ["Add an Archive action", "Build", "Bart is working"]],
+      ["Goals and subgoals organize similar TODOs for any task",
+       "A goal holds subgoals; each subgoal holds its own TODOs, decisions, and progress.",
+       ["Project goal", "↳ First subgoal", "↳ Next subgoal"]],
+      ["You can brainstorm with Bart if you're stuck on what to write",
+       "Describe the direction in a sentence. Bart uses the same project context and can add the TODOs you approve.",
+       ["You: what should this do?", "Bart: let's make the behavior concrete"]]
+    ];
+    var current = steps[noviceIntroStep];
+    var outer = el("div", "hc-nv-intro");
+    var inner = el("div", "hc-nv-intro-inner");
+    inner.appendChild(el("div", "hc-nv-intro-step",
+                         "How Engelbart works · " + (noviceIntroStep + 1) + " of 3"));
+    inner.appendChild(el("h1", "", current[0]));
+    inner.appendChild(el("p", "", current[1]));
+    var demo = el("div", "hc-nv-demo");
+    current[2].forEach(function (words) {
+      demo.appendChild(el("div", "hc-nv-demo-chip", words));
+    });
+    inner.appendChild(demo);
+    var dots = el("div", "hc-nv-dots");
+    steps.forEach(function (_, index) {
+      var dot = el("span", "hc-nv-dot");
+      if (index === noviceIntroStep) dot.setAttribute("data-hc-on", "");
+      dots.appendChild(dot);
+    });
+    inner.appendChild(dots);
+    var actions = el("div", "hc-nv-intro-actions");
+    if (noviceIntroStep) {
+      var back = el("button", "hc-nv-small", "Back");
+      back.type = "button";
+      back.setAttribute("data-hc-nv", "intro-back");
+      actions.appendChild(back);
+    }
+    var next = el("button", "hc-nv-primary",
+                  noviceIntroStep === 2 ? "Open workspace" : "Next");
+    next.type = "button";
+    next.setAttribute("data-hc-nv",
+                      noviceIntroStep === 2 ? "intro-done" : "intro-next");
+    actions.appendChild(next);
+    inner.appendChild(actions);
+    outer.appendChild(inner);
+    box.appendChild(outer);
+  }
+
+  function noviceTree(host, roots) {
+    var rows = noviceGoalRows(roots);
+    if (!rows.length) {
+      host.appendChild(el("div", "hc-nv-empty", "Goals will appear here as the conversation is analyzed."));
+      return;
+    }
+    rows.forEach(function (entry) {
+      var goal = entry.node;
+      var button = el("button", "hc-nv-goal");
+      button.type = "button";
+      button.style.paddingLeft = (9 + entry.depth * 17) + "px";
+      button.setAttribute("data-hc-nv", "select");
+      button.setAttribute("data-hc-goal", str(goal.id));
+      if (goal.id === noviceSelected) button.setAttribute("data-hc-on", "");
+      var mark = el("span", "hc-nv-mark", goal.done ? "✓" : "");
+      if (goal.done) mark.setAttribute("data-hc-done", "");
+      button.appendChild(mark);
+      var copy = el("span", "hc-nv-goal-title", str(goal.title) || "Untitled");
+      var items = array(goal.todo_items).filter(function (row) {
+        return str(row.text).trim();
+      });
+      if (items.length) {
+        var done = items.filter(function (row) { return str(row.status) === "done"; }).length;
+        copy.appendChild(el("span", "hc-nv-goal-meta", done + " of " + items.length + " built"));
+      }
+      button.appendChild(copy);
+      host.appendChild(button);
+    });
+  }
+
+  function noviceTodoNode(row) {
+    var status = str(row.status);
+    var box = el("div", "hc-nv-todo");
+    box.setAttribute("data-hc-status", status || "ready");
+    var line = el("div", "hc-nv-todo-line");
+    var mark = el("span", "hc-nv-mark", status === "done" ? "✓" : "");
+    if (status === "done") mark.setAttribute("data-hc-done", "");
+    line.appendChild(mark);
+    line.appendChild(el("span", "hc-nv-todo-text", str(row.text)));
+    var label = el("span", "hc-nv-status", noviceStatus(row));
+    label.setAttribute("data-hc-status", status);
+    line.appendChild(label);
+    if (noviceBuildable([row]).length) {
+      var build = el("button", "hc-nv-small", "Build");
+      build.type = "button";
+      build.setAttribute("data-hc-nv", "build");
+      build.setAttribute("data-hc-todo", str(row.id));
+      line.appendChild(build);
+    }
+    box.appendChild(line);
+    if (status === "asking") {
+      var answer = el("div", "hc-nv-answer");
+      var question = el("div", "hc-nv-summary", str(row.question) || "Bart needs one decision before continuing.");
+      box.appendChild(question);
+      var input = el("input", "hc-nv-input");
+      input.type = "text";
+      input.placeholder = "Answer Bart, then press Enter";
+      input.setAttribute("data-hc-nv-answer", str(row.id));
+      answer.appendChild(input);
+      box.appendChild(answer);
+    }
+    return box;
+  }
+
+  function noviceBuildCard(goal) {
+    var card = el("div", "hc-nv-card");
+    var head = el("div", "hc-nv-card-head");
+    head.appendChild(el("span", "hc-nv-card-title", "TODOs"));
+    var real = array(goal.todo_items).filter(function (row) { return str(row.text).trim(); });
+    var done = real.filter(function (row) { return str(row.status) === "done"; }).length;
+    head.appendChild(el("span", "hc-nv-count", done + " of " + real.length + " built"));
+    card.appendChild(head);
+    var list = el("div", "hc-nv-todos");
+    if (!real.length) list.appendChild(el("div", "hc-nv-empty", "Add the first concrete task for this goal."));
+    real.forEach(function (row) { list.appendChild(noviceTodoNode(row)); });
+    card.appendChild(list);
+    if (document.documentElement.getAttribute("data-hc-readonly") === null) {
+      var add = el("div", "hc-nv-add");
+      var input = el("input", "hc-nv-input");
+      input.type = "text";
+      input.placeholder = "+ Add a TODO, then press Enter";
+      input.setAttribute("data-hc-nv-add", str(goal.id));
+      add.appendChild(input);
+      card.appendChild(add);
+      var buildable = noviceBuildable(real);
+      var actions = el("div", "hc-nv-actions");
+      actions.appendChild(el("span", "hc-nv-summary",
+                             buildable.length ? buildable.length + " ready" : "Nothing waiting to build"));
+      var all = el("button", "hc-nv-primary", "Build all");
+      all.type = "button";
+      all.disabled = !buildable.length || noviceBuilding;
+      all.setAttribute("data-hc-nv", "build-all");
+      actions.appendChild(all);
+      card.appendChild(actions);
+    }
+    return card;
+  }
+
+  function noviceFeed(host, goal) {
+    var working = noviceWorking(goal.todo_items);
+    if (goal.id === noviceActiveGoal) {
+      var present = Object.create(null);
+      working.forEach(function (row) { present[row.id] = true; });
+      array(goal.todo_items).forEach(function (row) {
+        var status = str(row.status);
+        if (noviceActiveIds.indexOf(row.id) >= 0 && !present[row.id]
+            && status !== "done" && status !== "failed" && status !== "asking") {
+          working.push(row);
+        }
+      });
+      var terminal = array(goal.todo_items).filter(function (row) {
+        return noviceActiveIds.indexOf(row.id) >= 0
+          && (str(row.status) === "done" || str(row.status) === "failed");
+      }).length;
+      if (noviceActiveIds.length && terminal === noviceActiveIds.length) {
+        noviceActiveGoal = "";
+        noviceActiveIds = [];
+      }
+    }
+    var feed = el("div", "hc-nv-feed");
+    working.forEach(function (row) {
+      var event = el("div", "hc-nv-event");
+      event.appendChild(el("span", "hc-nv-event-dot"));
+      event.appendChild(el("span", "hc-nv-event-copy",
+                           "Bart is working on “" + str(row.text) + "”."));
+      feed.appendChild(event);
+    });
+    noviceActivity(goal.id).forEach(function (row) {
+      var event = el("div", "hc-nv-event");
+      event.setAttribute("data-hc-kind", str(row.kind) || "you");
+      event.appendChild(el("span", "hc-nv-event-dot"));
+      event.appendChild(el("span", "hc-nv-event-copy",
+                           (row.kind === "build" ? "Build note: " : "Your note: ") + str(row.text)));
+      feed.appendChild(event);
+    });
+    if (feed.children.length) host.appendChild(feed);
+    if (working.length) {
+      var message = el("div", "hc-nv-message");
+      var input = el("input", "hc-nv-input");
+      input.type = "text";
+      input.placeholder = "Append a message to Bart while it works…";
+      input.setAttribute("data-hc-nv-note", str(working[0].id));
+      message.appendChild(input);
+      host.appendChild(message);
+    }
+  }
+
+  function noviceNext(host, goal) {
+    if (noviceCanPreview(goal)) {
+      var preview = el("div", "hc-nv-next");
+      var copy = el("div", "hc-nv-next-copy");
+      copy.appendChild(el("div", "hc-nv-next-label", "Next up"));
+      copy.appendChild(el("div", "hc-nv-next-title", "Show live preview"));
+      preview.appendChild(copy);
+      var show = el("button", "hc-nv-primary", "Preview");
+      show.type = "button";
+      show.setAttribute("data-hc-nv", "preview");
+      preview.appendChild(show);
+      host.appendChild(preview);
+    } else {
+      var brainstorm = el("div", "hc-nv-next");
+      var bcopy = el("div", "hc-nv-next-copy");
+      bcopy.appendChild(el("div", "hc-nv-next-label", "Need a sharper next step?"));
+      bcopy.appendChild(el("div", "hc-nv-next-title", "Brainstorm with Bart"));
+      brainstorm.appendChild(bcopy);
+      var open = el("button", "hc-nv-small", "Brainstorm");
+      open.type = "button";
+      open.setAttribute("data-hc-nv", "brainstorm");
+      brainstorm.appendChild(open);
+      host.appendChild(brainstorm);
+    }
+  }
+
+  function noviceWorkspace(box) {
+    var roots = noviceRoots();
+    var selected = noviceGoal();
+    var shell = el("div", "hc-nv-shell");
+    var left = el("aside", "hc-nv-goals");
+    left.appendChild(el("div", "hc-nv-side-head", "Goals"));
+    var tree = el("div", "hc-nv-tree");
+    noviceTree(tree, roots);
+    left.appendChild(tree);
+    shell.appendChild(left);
+    var main = el("main", "hc-nv-main");
+    main.appendChild(el("div", "hc-nv-activity-head", "Activity"));
+    if (!selected) {
+      main.appendChild(el("div", "hc-nv-empty", "Engelbart is reading this conversation for goals."));
+    } else {
+      var goal = selected.node;
+      var scroll = el("div", "hc-nv-activity");
+      var content = el("div", "hc-nv-content");
+      content.appendChild(el("div", "hc-nv-kicker",
+                             selected.trail.length === 1 ? "Now" : "Current subgoal"));
+      content.appendChild(el("h1", "hc-nv-title", str(goal.title) || "Untitled"));
+      var summary = str(goal.desc || goal.why || goal.notes).replace(/\s+/g, " ").trim();
+      if (summary) content.appendChild(el("div", "hc-nv-summary", summary.slice(0, 260)));
+      content.appendChild(noviceBuildCard(goal));
+      noviceFeed(content, goal);
+      noviceNext(content, goal);
+      scroll.appendChild(content);
+      main.appendChild(scroll);
+    }
+    shell.appendChild(main);
+    box.appendChild(shell);
+    if (noviceBuildIds.length) noviceBuildModal(box, selected && selected.node);
+  }
+
+  function noviceBuildModal(box, goal) {
+    var overlay = el("div", "hc-nv-modal");
+    var dialog = el("div", "hc-nv-dialog");
+    dialog.appendChild(el("h2", "", "Anything Bart should know first?"));
+    dialog.appendChild(el("p", "",
+      "Optional. This message and the selected TODOs will be sent to Bart together."));
+    var note = el("textarea", "hc-nv-note");
+    note.placeholder = "Constraints, context, or what success should look like…";
+    note.setAttribute("data-hc-nv-build-note", "");
+    dialog.appendChild(note);
+    var summary = noviceBuildIds.length + (noviceBuildIds.length === 1 ? " TODO" : " TODOs");
+    if (goal) summary += " · " + str(goal.title);
+    dialog.appendChild(el("div", "hc-nv-summary", summary));
+    var actions = el("div", "hc-nv-dialog-actions");
+    var cancel = el("button", "hc-nv-small", "Cancel");
+    cancel.type = "button";
+    cancel.setAttribute("data-hc-nv", "build-cancel");
+    actions.appendChild(cancel);
+    var send = el("button", "hc-nv-primary", "Send to Bart");
+    send.type = "button";
+    send.setAttribute("data-hc-nv", "build-send");
+    actions.appendChild(send);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    box.appendChild(overlay);
+    setTimeout(function () { try { note.focus(); } catch (e) {} }, 0);
+  }
+
+  function novicePreview(box) {
+    var view = el("div", "hc-nv-preview");
+    var bar = el("div", "hc-nv-preview-bar");
+    bar.appendChild(el("span", "", "Live preview"));
+    var close = el("button", "hc-nv-small", "Close preview");
+    close.type = "button";
+    close.setAttribute("data-hc-nv", "preview-close");
+    bar.appendChild(close);
+    view.appendChild(bar);
+    var state = previewState || {};
+    if (str(state.status) === "running" && str(state.surface) === "web" && str(state.url)) {
+      var slot = el("div", "hc-nv-preview-slot");
+      view.appendChild(slot);
+      setTimeout(function () { previewPlaceFrame(str(state.url), slot); }, 0);
+    } else {
+      previewHideFrame();
+      view.appendChild(el("div", "hc-nv-preview-wait",
+                          "Preparing your live preview…"));
+      var status = str(state.status);
+      var repair = state.repair || {};
+      if ((status === "failed" || status === "not_ready"
+           || status === "needs_user_action"
+           || (status === "unconfigured" && state.configured === false))
+          && !previewBusy
+          && str(repair.status) !== "repairing"
+          && str(repair.status) !== "starting") {
+        noviceRepairPreview();
+      }
+      previewRead(false);
+    }
+    box.appendChild(view);
+  }
+
+  function noviceOpenPreview() {
+    if (!noviceSelected) return false;
+    novicePreviewOpen = true;
+    var who = projectInfo();
+    delete noviceRepairTried[str(who && who.cwd)];
+    var root = document.documentElement;
+    if (root) root.setAttribute("data-hc-novice-preview", "");
+    noviceFingerprint = "";
+    renderNovice(true);
+    previewAt = 0;
+    previewRead(true);
+    // This follows an explicit Preview press, so the configurator may use its
+    // read-only model fallback and Show UI may install proven prerequisites.
+    // Only an actual failed attempt reaches the coding repair agent.
+    previewDo("preview_configure", {}, true).then(function (configured) {
+      if (configured && configured.ok) {
+        return previewDo("preview_show_ui", {}, true);
+      }
+      return noviceRepairPreview();
+    });
+    return true;
+  }
+
+  function noviceRepairPreview() {
+    var who = projectInfo();
+    var key = str(who && who.cwd);
+    if (!key || noviceRepairTried[key]) return false;
+    noviceRepairTried[key] = true;
+    return post({ op: "preview_repair", goal_id: noviceSelected })
+      .then(function () {
+        previewAt = 0;
+        previewRead(true);
+        noviceFingerprint = "";
+        renderNovice(true);
+        return true;
+      });
+  }
+
+  function noviceClosePreview() {
+    novicePreviewOpen = false;
+    var root = document.documentElement;
+    if (root && root.removeAttribute) root.removeAttribute("data-hc-novice-preview");
+    previewHideFrame();
+    noviceFingerprint = "";
+    if (interfaceMode() === "novice") renderNovice(true);
+    return true;
+  }
+
+  function noviceOpenBrainstorm() {
+    noviceBrainstorming = true;
+    var root = document.documentElement;
+    if (root) root.setAttribute("data-hc-novice-brainstorm", "");
+    if (noviceBox) noviceBox.style.display = "none";
+    if (!openBrainstorm()) {
+      noviceBrainstorming = false;
+      if (root) root.removeAttribute("data-hc-novice-brainstorm");
+      renderNovice(true);
+      return false;
+    }
+    return true;
+  }
+
+  function noviceWriteTodo(goalId, words) {
+    var text = str(words).trim();
+    if (!goalId || !text) return Promise.resolve(false);
+    var goals = noviceRoots();
+    var goal = todoFind(goals, goalId);
+    if (!goal) return Promise.resolve(false);
+    goal.todo_items = array(goal.todo_items).concat([todoRow(text, 0)]);
+    goal.todos_md = todoSerialize(goal.todo_items);
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+      saved.goals = goals;
+      saved.updatedAt = Date.now();
+      saved.selId = goalId;
+      localStorage.setItem(KEY, JSON.stringify(saved));
+    } catch (e) {}
+    noviceFingerprint = "";
+    renderNovice(true);
+    return importGoals(goals).then(function () {
+      refreshState();
+      return true;
+    });
+  }
+
+  function noviceSendBuild() {
+    var selected = noviceGoal();
+    if (!selected || !noviceBuildIds.length || noviceBuilding) return false;
+    var goalId = selected.node.id;
+    var ids = noviceBuildIds.slice();
+    var noteBox = noviceBox && noviceBox.querySelector("[data-hc-nv-build-note]");
+    var note = str(noteBox && noteBox.value).trim();
+    noviceBuildIds = [];
+    noviceBuilding = true;
+    noviceFingerprint = "";
+    renderNovice(true);
+    post({ op: "build_todos", goal_id: goalId, ids: ids, quick: false })
+      .then(function (res) {
+        if (!res || !res.ok) return res;
+        noviceActiveGoal = goalId;
+        noviceActiveIds = ids.slice();
+        noviceFingerprint = "";
+        renderNovice(true);
+        if (!note) return res;
+        noviceRemember(goalId, note, "build");
+        return post({ op: "note_todo", goal_id: goalId,
+                      id: ids[0], note: note });
+      }).then(function () {
+        noviceBuilding = false;
+        noviceFingerprint = "";
+        var updating = refreshState();
+        if (updating && updating.then) updating.then(function () { renderNovice(true); });
+        else renderNovice(true);
+      });
+    return true;
+  }
+
+  function noviceAppend(todoId, words) {
+    var selected = noviceGoal();
+    var note = str(words).trim();
+    if (!selected || !todoId || !note) return false;
+    noviceRemember(selected.node.id, note, "you");
+    post({ op: "note_todo", goal_id: selected.node.id,
+           id: todoId, note: note }).then(function () {
+      noviceFingerprint = "";
+      renderNovice(true);
+    });
+    return true;
+  }
+
+  function noviceAnswer(todoId, words) {
+    var selected = noviceGoal();
+    var answer = str(words).trim();
+    if (!selected || !todoId || !answer) return false;
+    noviceRemember(selected.node.id, answer, "you");
+    post({ op: "answer_todo", goal_id: selected.node.id,
+           id: todoId, answer: answer }).then(function () {
+      previewAt = 0;
+      refreshState();
+      renderNovice(true);
+    });
+    return true;
+  }
+
+  function noviceToggleTheme() {
+    var root = document.documentElement;
+    var dark = root && root.getAttribute("data-hc-theme") === "dark";
+    var title = dark ? "Switch to light mode" : "Switch to dark mode";
+    var nativeToggle = document.querySelector("[title=\"" + title + "\"]");
+    if (nativeToggle && typeof nativeToggle.click === "function") {
+      nativeToggle.click();
+      setTimeout(function () { mirrorRootState(); renderNovice(true); }, 0);
+      return true;
+    }
+    try {
+      var saved = JSON.parse(localStorage.getItem(KEY) || "{}");
+      saved.themeMode = dark ? "light" : "dark";
+      localStorage.setItem(KEY, JSON.stringify(saved));
+    } catch (e) {}
+    var app = document.querySelector(".hc");
+    if (app) app.setAttribute("data-dark", dark ? "false" : "true");
+    if (root) root.setAttribute("data-hc-theme", dark ? "light" : "dark");
+    renderNovice(true);
+    return true;
+  }
+
+  function noviceTarget(node) {
+    while (node && node !== document) {
+      if (node.getAttribute && node.getAttribute("data-hc-nv")) return node;
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  function bindNovice() {
+    if (noviceBound || !document.addEventListener) return false;
+    noviceBound = true;
+    document.addEventListener("click", function (event) {
+      var node = noviceTarget(event.target);
+      if (!node) return;
+      if (event.preventDefault) event.preventDefault();
+      if (event.stopPropagation) event.stopPropagation();
+      var action = node.getAttribute("data-hc-nv");
+      if (action === "intro-back") {
+        noviceIntroStep = Math.max(0, noviceIntroStep - 1);
+        renderNovice(true);
+      } else if (action === "intro-next") {
+        noviceIntroStep = Math.min(2, noviceIntroStep + 1);
+        renderNovice(true);
+      } else if (action === "intro-done") {
+        noviceMarkIntroSeen(); noviceFingerprint = ""; renderNovice(true);
+      } else if (action === "select") {
+        noviceSelect(node.getAttribute("data-hc-goal"));
+      } else if (action === "build") {
+        noviceBuildIds = [node.getAttribute("data-hc-todo")]; renderNovice(true);
+      } else if (action === "build-all") {
+        var selected = noviceGoal();
+        noviceBuildIds = selected ? noviceBuildable(selected.node.todo_items) : [];
+        renderNovice(true);
+      } else if (action === "build-cancel") {
+        noviceBuildIds = []; renderNovice(true);
+      } else if (action === "build-send") noviceSendBuild();
+      else if (action === "brainstorm") noviceOpenBrainstorm();
+      else if (action === "preview") noviceOpenPreview();
+      else if (action === "preview-close") noviceClosePreview();
+      else if (action === "theme") noviceToggleTheme();
+    }, true);
+    document.addEventListener("keydown", function (event) {
+      var target = event.target;
+      if (!target || event.key !== "Enter" || event.shiftKey) return;
+      var add = target.getAttribute && target.getAttribute("data-hc-nv-add");
+      var answer = target.getAttribute && target.getAttribute("data-hc-nv-answer");
+      var note = target.getAttribute && target.getAttribute("data-hc-nv-note");
+      if (add) {
+        event.preventDefault();
+        var words = target.value;
+        target.value = "";
+        noviceWriteTodo(add, words);
+      } else if (answer) {
+        event.preventDefault();
+        var answerWords = target.value;
+        target.value = "";
+        noviceAnswer(answer, answerWords);
+      } else if (note) {
+        event.preventDefault();
+        var noteWords = target.value;
+        target.value = "";
+        noviceAppend(note, noteWords);
+      }
+    }, true);
+    return true;
+  }
+
+  function renderNovice(force) {
+    var root = document.documentElement;
+    if (!root || serverState.scope !== "chat" || !projectInfo()
+        || serverState.projectBound === false) {
+      if (noviceBox && noviceBox.parentNode) noviceBox.parentNode.removeChild(noviceBox);
+      noviceBox = null;
+      if (root) root.removeAttribute("data-hc-interface");
+      return false;
+    }
+    var mode = interfaceMode();
+    root.setAttribute("data-hc-interface", mode);
+    ensureNoviceStyles();
+    bindNovice();
+    if (mode !== "novice" || noviceBrainstorming) {
+      if (noviceBox) noviceBox.style.display = "none";
+      return false;
+    }
+    if (novicePreviewOpen) previewRead(false);
+    var selected = noviceGoal();
+    var sig = JSON.stringify([
+      noviceIntroSeen(), noviceIntroStep, noviceSelected, noviceBuildIds,
+      noviceBuilding, novicePreviewOpen, noviceRoots(),
+      selected ? noviceActivity(selected.node.id) : [], previewState && [
+        previewState.status, previewState.surface, previewState.url]
+    ]);
+    if (!force && noviceBox && sig === noviceFingerprint) {
+      if (novicePreviewOpen && previewState && previewState.url) {
+        var slot = noviceBox.querySelector(".hc-nv-preview-slot");
+        if (slot) previewPlaceFrame(str(previewState.url), slot);
+      }
+      return true;
+    }
+    noviceFingerprint = sig;
+    if (noviceBox && noviceBox.parentNode) noviceBox.parentNode.removeChild(noviceBox);
+    noviceBox = el("div", "hc-novice");
+    syncProjectTheme(noviceBox);
+    noviceHeader(noviceBox);
+    if (!noviceIntroSeen()) noviceIntro(noviceBox);
+    else if (novicePreviewOpen) novicePreview(noviceBox);
+    else noviceWorkspace(noviceBox);
+    (document.body || root).appendChild(noviceBox);
+    sealEditors();
+    return true;
+  }
+
   function watchLaunchSurface() {
     function sweep() {
       watchTheme();
@@ -17498,6 +18519,7 @@
       renderGear();
       renderSearch();
       renderInjection(injectionState);
+      renderNovice();
     }
     sweep();
     setInterval(sweep, 700);
@@ -19064,6 +20086,35 @@
     previewSeed: function (value) {
       previewState = value;
       previewAt = Date.now();
+    },
+    novice: {
+      mode: interfaceMode,
+      setMode: setInterfaceMode,
+      render: renderNovice,
+      box: function () { return noviceBox; },
+      roots: noviceRoots,
+      selected: noviceGoal,
+      select: noviceSelect,
+      addTodo: noviceWriteTodo,
+      buildable: noviceBuildable,
+      openBuild: function (ids) {
+        noviceBuildIds = array(ids).map(str);
+        noviceFingerprint = "";
+        return renderNovice(true);
+      },
+      sendBuild: noviceSendBuild,
+      append: noviceAppend,
+      answer: noviceAnswer,
+      canPreview: noviceCanPreview,
+      openPreview: noviceOpenPreview,
+      closePreview: noviceClosePreview,
+      repairPreview: noviceRepairPreview,
+      openBrainstorm: noviceOpenBrainstorm,
+      css: function () { return NOVICE_CSS; },
+      introSeen: noviceIntroSeen,
+      completeIntro: function () {
+        noviceMarkIntroSeen(); noviceFingerprint = ""; return renderNovice(true);
+      }
     },
     railFields: railFields,
     todoFlushOnExit: todoFlushOnExit,

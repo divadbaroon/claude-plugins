@@ -1876,6 +1876,34 @@ def _brainstorm_turns(value: Any) -> List[Dict[str, Any]]:
     return out[-BRAINSTORM_TURNS:]
 
 
+def _brainstorm_working(value: Any) -> Dict[str, Any]:
+    """The bounded working direction stored with a conversation."""
+    value = value if isinstance(value, dict) else {}
+    def one(item: Any, limit: int) -> str:
+        return " ".join(str(item or "").split())[:limit]
+
+    out = {"title": one(value.get("title"), 160),
+           "summary": str(value.get("summary") or "").strip()[:600],
+           "why": [], "unclear": [], "alternatives": []}
+    for key in ("why", "unclear"):
+        values = value.get(key) if isinstance(value.get(key), list) else []
+        for item in values:
+            said = one(item, 280)
+            if said:
+                out[key].append(said)
+            if len(out[key]) >= 5:
+                break
+    rows = value.get("alternatives") if isinstance(value.get("alternatives"), list) else []
+    for row in rows[:5]:
+        if not isinstance(row, dict):
+            continue
+        label = one(row.get("label"), 160)
+        if label:
+            out["alternatives"].append(
+                {"label": label, "reason": one(row.get("reason"), 280)})
+    return out
+
+
 def load_brainstorms(
     session_id: str, root: Optional[Path] = None
 ) -> List[Dict[str, Any]]:
@@ -1903,6 +1931,12 @@ def load_brainstorms(
             "created_at": str(row.get("created_at") or ""),
             "updated_at": str(row.get("updated_at") or ""),
             "messages": turns,
+            "mode": (str(row.get("mode") or "explore")
+                     if str(row.get("mode") or "") in
+                     ("explore", "discriminate", "deepen", "commit")
+                     else "explore"),
+            "working_direction": _brainstorm_working(
+                row.get("working_direction")),
         })
     out.sort(key=lambda row: str(row.get("updated_at") or ""), reverse=True)
     return out
@@ -1914,6 +1948,8 @@ def save_brainstorm(
     messages: Any,
     root: Optional[Path] = None,
     wait_s: float = 5.0,
+    mode: str = "",
+    working_direction: Any = None,
 ) -> Optional[Dict[str, Any]]:
     """Write one brainstorm down, replacing the one it is a longer version of.
 
@@ -1939,6 +1975,12 @@ def save_brainstorm(
         else:
             held.remove(row)
         row["messages"] = turns
+        row["mode"] = (mode if mode in
+                       ("explore", "discriminate", "deepen", "commit")
+                       else str(row.get("mode") or "explore"))
+        row["working_direction"] = _brainstorm_working(
+            working_direction if isinstance(working_direction, dict)
+            else row.get("working_direction"))
         row["title"] = _brainstorm_title(turns)
         row["updated_at"] = now
         # The one just written goes to the front before the sort rather than
@@ -1947,7 +1989,7 @@ def save_brainstorm(
         held.insert(0, row)
         held.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
         _atomic_json(p.brainstorms,
-                     {"version": 1, "chats": held[:BRAINSTORM_LIMIT]})
+                     {"version": 2, "chats": held[:BRAINSTORM_LIMIT]})
     return dict(row)
 
 

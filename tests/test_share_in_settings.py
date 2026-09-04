@@ -163,7 +163,7 @@ class SettingsTabTests(BridgeTestCase):
             + "later(function () { " + tail + " });"))
 
     ALL = ("cloud", "notifications", "builds", "supabase", "apikey", "project",
-           "shared", "data")
+           "shared", "data", "interface")
 
     def only(self, *on):
         return dict((name, name in on) for name in self.ALL)
@@ -173,9 +173,19 @@ class SettingsTabTests(BridgeTestCase):
             "return JSON.stringify([tabs.map(function (t) { return t.textContent; }),"
             " tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([["Account", "API key", "Alerts", "Sharing", "Data"],
-                          ["", None, None, None, None],
+        self.assertEqual([["Account", "API key", "Alerts", "Sharing", "Data",
+                           "Interface"],
+                          ["", None, None, None, None, None],
                           self.only("supabase")], got)
+
+    def test_interface_switches_between_the_novice_projection_and_full_workspace(self):
+        got = self.panel(
+            "click(tabs[5]);"
+            "var buttons = panel.querySelectorAll('[data-hc-interface-mode]');"
+            "click(buttons[1]);"
+            "return JSON.stringify([secs(), P.novice.mode(),"
+            " buttons.map(function (b) { return b.getAttribute('data-hc-on'); })]);")
+        self.assertEqual([self.only("interface"), "advanced", [None, ""]], got)
 
     def test_api_key_has_its_own_visible_section(self):
         got = self.panel(
@@ -255,7 +265,7 @@ class SettingsTabTests(BridgeTestCase):
             "click(tabs[3]);"
             "return JSON.stringify([tabs.map(function (t) { return t.getAttribute('data-hc-on'); }),"
             " secs()]);")
-        self.assertEqual([[None, None, None, "", None],
+        self.assertEqual([[None, None, None, "", None, None],
                           self.only("project", "shared")], got)
 
     def test_alerts_is_where_the_banner_settings_went(self):

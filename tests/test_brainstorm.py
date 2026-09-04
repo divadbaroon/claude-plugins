@@ -64,6 +64,15 @@ class FormTests(unittest.TestCase):
         self.assertIn("nothing you write is saved unless they ask", form)
         self.assertIn("offer", form)
 
+    def test_the_prompt_converges_instead_of_maximizing_branches(self):
+        form = "\n".join(BS.FORM).lower()
+        for mode in ("explore", "discriminate", "deepen", "commit"):
+            self.assertIn(mode, form)
+        self.assertIn("stop inventing unrelated directions", form)
+        self.assertIn("behavioral scenarios", form)
+        self.assertIn("locus of problem solving", form)
+        self.assertIn("crystallize the visible working", form)
+
     def test_the_project_goes_above_the_conversation_not_inside_it(self):
         lines = BS.compose([{"role": "you", "text": "what next"}],
                            "# Its goals\n- [active] Ship the rail")
@@ -171,6 +180,27 @@ class CardTests(unittest.TestCase):
                                  "subgoals": [{"label": "Later", "todos": []}]})
         self.assertEqual([], out["subgoals"])
 
+    def test_the_working_direction_is_bounded_and_carried_with_any_card(self):
+        out = BS.normalize_card({
+            "card": "none", "say": "Stay with this one.", "mode": "deepen",
+            "working_direction": {
+                "title": "A pose comparison learners can read",
+                "summary": "Compare one performed pose with a target pose.",
+                "why": ["The representation is the consequential choice."],
+                "unclear": ["Instantaneous or sequence-based feedback?"],
+                "alternatives": [{"label": "Train a pose model",
+                                  "reason": "Infrastructure-heavy."}]}})
+        self.assertEqual("deepen", out["mode"])
+        self.assertEqual("A pose comparison learners can read",
+                         out["working_direction"]["title"])
+        self.assertEqual("Train a pose model",
+                         out["working_direction"]["alternatives"][0]["label"])
+
+    def test_unknown_modes_fall_back_to_exploration(self):
+        out = BS.normalize_card({"card": "none", "say": "hi",
+                                 "mode": "generate forever"})
+        self.assertEqual("explore", out["mode"])
+
 
 class NoSequenceTests(unittest.TestCase):
     """The difference from setup, held in one place."""
@@ -207,6 +237,23 @@ class NoSequenceTests(unittest.TestCase):
                "# Its goals\n- [in_progress] Refactor how the TODOs work",
                engine=engine)
         self.assertIn("Refactor how the TODOs work", engine.asked[0])
+
+    def test_the_visible_direction_reaches_the_next_turn_and_survives_omission(self):
+        direction = {
+            "title": "Make the goal rail legible",
+            "summary": "Let a student inspect and edit the project state.",
+            "why": ["The rail is already the center of their questions."],
+            "unclear": ["What should remain visible while brainstorming?"],
+            "alternatives": []}
+        engine = self.Engine({"card": "none", "say": "Sharpen the scenario."})
+        out = BS.ask([{"role": "you", "text": "stay with the rail"}],
+                     engine=engine, mode="deepen",
+                     working_direction=direction)
+        self.assertIn("# The working direction visible now", engine.asked[0])
+        self.assertIn("Mode: deepen", engine.asked[0])
+        self.assertIn("Make the goal rail legible", engine.asked[0])
+        self.assertEqual("deepen", out["mode"])
+        self.assertEqual(direction["title"], out["working_direction"]["title"])
 
     def test_it_runs_on_the_readers_own_account_the_way_setup_does(self):
         # No key of ours: the same provider, named the same way, asking for
@@ -447,6 +494,22 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(["b1"], [row["id"] for row in stored])
         self.assertEqual("kept", stored[0]["title"])
 
+    def test_the_working_direction_is_saved_with_the_conversation(self):
+        direction = {
+            "title": "A readable goal rail",
+            "summary": "Keep project state visible while ideas become tasks.",
+            "why": ["It is the object the student is manipulating."],
+            "unclear": ["How much history belongs in the rail?"],
+            "alternatives": [{"label": "Chat-only state",
+                              "reason": "It disappears into transcript."}]}
+        CS.save_brainstorm(self.session, "", self.talk(), self.root,
+                           mode="deepen", working_direction=direction)
+        held = CS.load_brainstorms(self.session, self.root)[0]
+        self.assertEqual("deepen", held["mode"])
+        self.assertEqual(direction["title"], held["working_direction"]["title"])
+        self.assertEqual("Chat-only state",
+                         held["working_direction"]["alternatives"][0]["label"])
+
     def test_two_chats_of_one_project_brainstorm_into_the_same_file(self):
         # The tree is the project's, so the arguments about it are too:
         # picking up yesterday's thinking must not depend on reopening the
@@ -558,7 +621,9 @@ class OpTests(unittest.TestCase):
         self.assertEqual("brainstorm_say", out["__deferred__"][0])
 
     def test_the_deferred_call_carries_the_project_and_its_tree(self):
-        out = self.op(op="brainstorm_say", transcript=[])
+        direction = {"title": "A readable goal rail"}
+        out = self.op(op="brainstorm_say", transcript=[], mode="deepen",
+                      working_direction=direction)
         kind, _sid, root, cwd, held = out["__deferred__"]
         # Resolved, the way the store spells it: /var is a symlink to
         # /private/var on macOS and the cache is keyed by the real path.
@@ -566,6 +631,8 @@ class OpTests(unittest.TestCase):
         self.assertEqual(self.root.resolve(), root)
         self.assertIn("Refactor how the TODOs work", held["__digest__"])
         self.assertIn("plan better", held["__digest__"])
+        self.assertEqual("deepen", held["mode"])
+        self.assertEqual(direction, held["working_direction"])
 
     def test_a_transcript_that_is_not_a_list_is_refused_at_the_door(self):
         out = self.op(op="brainstorm_say", transcript="words")
@@ -618,13 +685,18 @@ class OpTests(unittest.TestCase):
     def test_a_round_that_landed_is_written_down_and_read_back(self):
         out = self.op(op="brainstorm_save", id="", messages=[
             {"role": "you", "text": "the rail is unreadable"},
-            {"role": "engelbart", "text": "which part of it"}])
+            {"role": "engelbart", "text": "which part of it"}],
+            mode="discriminate", working_direction={
+                "title": "Make the goal rail legible"})
         self.assertTrue(out["ok"], out)
         self.assertTrue(out["id"])
         self.assertEqual("the rail is unreadable", out["title"])
         back = self.op(op="brainstorm_chats")
         self.assertEqual([out["id"]], [row["id"] for row in back["chats"]])
         self.assertEqual(2, len(back["chats"][0]["messages"]))
+        self.assertEqual("discriminate", back["chats"][0]["mode"])
+        self.assertEqual("Make the goal rail legible",
+                         back["chats"][0]["working_direction"]["title"])
 
     def test_a_later_round_of_the_same_conversation_replaces_it(self):
         first = self.op(op="brainstorm_save", id="", messages=[
@@ -733,6 +805,40 @@ class PanelTests(BridgeTestCase):
             "    function (m) { return m.role + ': ' + m.text; }); });")
         self.assertEqual(1, len(out))
         self.assertEqual("you: the rail is unreadable", out[0][-1])
+
+    def test_a_round_posts_the_visible_direction_and_mode(self):
+        out = self.api(
+            "bs.open();"
+            "bs.state().mode = 'deepen';"
+            "bs.state().working = {title: 'A readable goal rail'};"
+            "bs.state().draft = 'sharpen this direction';"
+            "bs.send();"
+            "out = calls.filter(function (c) {"
+            "  return c[1] && c[1].op === 'brainstorm_say'; })"
+            "  .map(function (c) { return [c[1].mode,"
+            "    c[1].working_direction.title]; });")
+        self.assertEqual([["deepen", "A readable goal rail"]], out)
+
+    def test_the_working_direction_is_a_visible_project_model(self):
+        out = self.api(
+            "bs.open();"
+            "bs.state().mode = 'deepen';"
+            "bs.state().working = {"
+            "  title: 'A readable goal rail',"
+            "  summary: 'Keep project state visible while ideas narrow.',"
+            "  why: ['It is the object the student manipulates.'],"
+            "  unclear: ['How much history remains visible?'],"
+            "  alternatives: [{label: 'Chat-only state',"
+            "    reason: 'It disappears into transcript.'}]};"
+            "bs.draw();"
+            "var card = bs.box().querySelector('.hc-bs-working');"
+            "out = {mode: texts(card, 'hc-bs-mode'),"
+            " title: texts(card, 'hc-bs-working-title'),"
+            " rows: texts(card, 'hc-bs-working-row')};")
+        self.assertEqual(["deepen"], out["mode"])
+        self.assertEqual(["A readable goal rail"], out["title"])
+        self.assertTrue(any("student manipulates" in row for row in out["rows"]))
+        self.assertTrue(any("Chat-only state" in row for row in out["rows"]))
 
     def test_the_composer_survives_a_redraw_of_the_conversation(self):
         # The reader is mid-sentence far more often than not: the column is
@@ -902,9 +1008,17 @@ class PanelTests(BridgeTestCase):
     # after every round now, so reopening the screen is picking a thought
     # back up rather than starting one over.
 
-    HELD = [{"id": "b1", "title": "the rail is unreadable", "messages": [
-        {"role": "you", "text": "the rail is unreadable"},
-        {"role": "engelbart", "text": "which part of it"}]}]
+    HELD = [{"id": "b1", "title": "the rail is unreadable",
+             "mode": "discriminate",
+             "working_direction": {
+                 "title": "Make the goal rail legible",
+                 "summary": "Keep the project state in view.",
+                 "why": ["The student keeps returning to it."],
+                 "unclear": ["What belongs beside the conversation?"],
+                 "alternatives": []},
+             "messages": [
+                 {"role": "you", "text": "the rail is unreadable"},
+                 {"role": "engelbart", "text": "which part of it"}]}]
 
     def served(self, chats=None, tail=""):
         """The panel against a server that already has conversations in it."""
@@ -937,6 +1051,16 @@ class PanelTests(BridgeTestCase):
         self.assertEqual("b1", out["id"])
         self.assertEqual(["the rail is unreadable", "which part of it"],
                          out["drawn"])
+
+    def test_restore_recovers_the_mode_and_visible_direction(self):
+        out = self.served(tail=(
+            "bs.open();"
+            "later(function () { return {mode: bs.state().mode,"
+            " title: bs.state().working && bs.state().working.title,"
+            " drawn: texts(bs.box(), 'hc-bs-working-title')}; });"))
+        self.assertEqual("discriminate", out["mode"])
+        self.assertEqual("Make the goal rail legible", out["title"])
+        self.assertEqual(["Make the goal rail legible"], out["drawn"])
 
     def test_a_project_with_no_conversations_opens_on_the_invitation(self):
         out = self.served(chats=[], tail=(
@@ -996,6 +1120,18 @@ class PanelTests(BridgeTestCase):
         self.assertEqual("", out["saved"][0][0])
         self.assertIn("the rail is unreadable", out["saved"][0][1])
         self.assertEqual("b9", out["id"])
+
+    def test_a_round_saves_the_mode_and_working_direction(self):
+        out = self.served(chats=[], tail=(
+            "bs.open();"
+            "bs.state().mode = 'deepen';"
+            "bs.state().working = {title: 'Make the goal rail legible'};"
+            "bs.state().draft = 'stay with this direction';"
+            "bs.send();"
+            "later(function () { return %s.map(function (s) {"
+            "  return [s.mode, s.working_direction.title]; }); });"
+            % self.sent("brainstorm_save")))
+        self.assertEqual([["deepen", "Make the goal rail legible"]], out)
 
     def test_a_round_that_failed_still_keeps_what_they_said(self):
         out = self.served(chats=[], tail=(
@@ -1129,8 +1265,10 @@ class LiveTests(unittest.TestCase):
         with self.serving() as url:
             with sync_playwright() as play:
                 browser = play.chromium.launch(executable_path=self.chrome)
-                page = browser.new_context(
-                    viewport={"width": 1400, "height": 900}).new_page()
+                context = browser.new_context(viewport={"width": 1400, "height": 900})
+                context.add_init_script(
+                    "localStorage.setItem('hc-interface-mode-v1','advanced')")
+                page = context.new_page()
                 brainstorm(page, url)
                 # The round the model would have answered, put on screen by
                 # hand: what is under test is what happens to it afterwards.
@@ -1175,8 +1313,10 @@ class LiveTests(unittest.TestCase):
         with self.serving() as url:
             with sync_playwright() as play:
                 browser = play.chromium.launch(executable_path=self.chrome)
-                page = browser.new_context(
-                    viewport={"width": 1400, "height": 900}).new_page()
+                context = browser.new_context(viewport={"width": 1400, "height": 900})
+                context.add_init_script(
+                    "localStorage.setItem('hc-interface-mode-v1','advanced')")
+                page = context.new_page()
                 page.goto(url)
                 page.wait_for_selector(".hc-viewtab", timeout=30000)
                 page.get_by_text("Brainstorm", exact=True).first.click()
@@ -1221,8 +1361,10 @@ class LiveTests(unittest.TestCase):
         with self.serving() as url:
             with sync_playwright() as play:
                 browser = play.chromium.launch(executable_path=self.chrome)
-                page = browser.new_context(
-                    viewport={"width": 1400, "height": 900}).new_page()
+                context = browser.new_context(viewport={"width": 1400, "height": 900})
+                context.add_init_script(
+                    "localStorage.setItem('hc-interface-mode-v1','advanced')")
+                page = context.new_page()
                 page.goto(url)
                 page.wait_for_selector(".hc-viewtab", timeout=30000)
                 page.get_by_text("Brainstorm", exact=True).first.click()
@@ -1266,8 +1408,10 @@ class LiveTests(unittest.TestCase):
         try:
             with sync_playwright() as play:
                 browser = play.chromium.launch(executable_path=self.chrome)
-                page = browser.new_context(
-                    viewport={"width": 1400, "height": 900}).new_page()
+                context = browser.new_context(viewport={"width": 1400, "height": 900})
+                context.add_init_script(
+                    "localStorage.setItem('hc-interface-mode-v1','advanced')")
+                page = context.new_page()
                 page.goto(url)
                 page.wait_for_selector(".hc-viewtab", timeout=30000)
                 page.get_by_text("Brainstorm", exact=True).first.click()

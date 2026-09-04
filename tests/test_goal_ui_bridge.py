@@ -5773,3 +5773,83 @@ class DevServerStripTests(BridgeTestCase):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         self.assertIn(".hc-dev{flex:none", css)
         self.assertIn('.hc-dev[data-hc-dev-state="running"] .hc-dev-dot', css)
+
+
+@unittest.skipUnless(NODE, "node is required for bridge.js tests")
+class NoviceWorkspaceTests(BridgeTestCase):
+    """The beginner surface is a projection, never a second goal store."""
+
+    STATE = {
+        "scope": "chat", "revision": "r1", "project_bound": True,
+        "project": {"name": "Demo", "cwd": "/repo"},
+        "goals": [{
+            "id": "g1", "title": "Ship the interface", "status": "in_progress",
+            "parent_goal_id": None, "prompt_ids": [], "sources": [],
+            "todo_items": [
+                {"id": "t1", "text": "Draw the first screen", "status": "",
+                 "depth": 0, "question": ""},
+                {"id": "t2", "text": "Connect the preview", "status": "done",
+                 "depth": 0, "question": ""},
+            ],
+        }],
+        "prompts": [], "agent_runs": {},
+    }
+
+    def script(self, tail):
+        state = json.dumps(self.STATE)
+        return self.run_js(
+            "var P = window.__hcPromptUI;"
+            "P.acceptState(%s);" % state
+            + "store['hc-vault-ui-v1'] = JSON.stringify({v:7,selId:'g1',"
+            + "themeMode:'dark',goals:P.rootsFromState(%s)});" % state
+            + "store['hc-vault-ui-sync-v1'] = JSON.stringify({revision:'r1',"
+            + "goals:P.rootsFromState(%s)});" % state
+            + tail)
+
+    def test_novice_is_the_default_and_begins_with_three_step_instructions(self):
+        got = self.script(
+            "P.novice.render(true);"
+            "var box=P.novice.box();"
+            "out=[P.novice.mode(),box.querySelector('.hc-nv-intro-step').textContent,"
+            " P.novice.css().indexOf('[data-hc-interface=novice] .hc')>=0];")
+        self.assertEqual(["novice", "How Engelbart works · 1 of 3", True], got)
+
+    def test_completed_instructions_open_goals_and_activity_without_a_todo_rail(self):
+        got = self.script(
+            "P.novice.completeIntro();"
+            "var box=P.novice.box();"
+            "out=[box.querySelector('.hc-nv-side-head').textContent,"
+            " box.querySelector('.hc-nv-activity-head').textContent,"
+            " box.querySelector('.hc-rail-right')===null,"
+            " box.querySelector('[data-hc-nv=build-all]')!==null];")
+        self.assertEqual(["Goals", "Activity", True, True], got)
+
+    def test_append_message_uses_the_existing_todo_note_operation(self):
+        got = self.script(
+            "P.novice.completeIntro();"
+            "P.novice.append('t1','Keep the empty state visible.');"
+            "out=calls.filter(function(c){return c[1]&&c[1].op==='note_todo';})"
+            ".map(function(c){return c[1];});")
+        self.assertEqual([{
+            "op": "note_todo", "goal_id": "g1", "id": "t1",
+            "note": "Keep the empty state visible.",
+        }], got)
+
+    def test_preview_is_offered_only_after_work_exists_and_no_row_is_running(self):
+        got = self.script(
+            "var goal=P.novice.selected().node;"
+            "var ready=P.novice.canPreview(goal);"
+            "goal.todo_items[0].status='building';"
+            "out=[ready,P.novice.canPreview(goal),"
+            " P.novice.css().indexOf('Preparing your live preview')<0];")
+        # The waiting copy is DOM text, while errors and compiler output have
+        # no CSS/log surface in the novice projection.
+        self.assertEqual([True, False, True], got)
+
+    def test_preview_repair_is_a_quiet_goal_scoped_operation(self):
+        got = self.script(
+            "P.novice.select('g1');"
+            "out=P.novice.repairPreview().then(function(){"
+            " return calls.filter(function(c){return c[1]&&c[1].op==='preview_repair';})"
+            " .map(function(c){return c[1];}); });")
+        self.assertEqual([{"op": "preview_repair", "goal_id": "g1"}], got)

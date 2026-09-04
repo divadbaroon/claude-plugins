@@ -44,6 +44,7 @@ from . import setup_chat as SC
 # are setup's, in the same shapes, so the modal that draws a question here
 # is the modal that draws one there.
 CARDS = ("questions", "focus", "goals", "todos", "offer", "none")
+MODES = ("explore", "discriminate", "deepen", "commit")
 
 # What may be offered. Anything else the model names is not an offer.
 OFFERS = ("goals", "todos")
@@ -51,6 +52,7 @@ OFFERS = ("goals", "todos")
 MAX_GOALS = 6
 MAX_SUBGOALS = 6
 MAX_FOCUS_OPTIONS = 6
+MAX_WORKING_ROWS = 5
 
 # The project, as much of it as is worth carrying. A tree of forty goals
 # with every row under each is most of a context window and none of it is
@@ -104,13 +106,50 @@ FORM = [
     '   "subgoals": [{"label": "<a piece of the work>",',
     '                 "todos": ["<one row of work in that piece>"]}],',
     '   "todos": ["<or, where it does not break down, just the rows>"],',
-    '   "offer": "goals" | "todos"}',
+    '   "offer": "goals" | "todos",',
+    '   "mode": "explore" | "discriminate" | "deepen" | "commit",',
+    '   "working_direction": {',
+    '     "title": "<the direction taking shape, or empty while exploring>",',
+    '     "summary": "<the concrete capability, user, input and output>",',
+    '     "why": ["<evidence this fits the project and person>"],',
+    '     "unclear": ["<a consequential behavioral question still open>"],',
+    '     "alternatives": [{"label": "<a route considered>",',
+    '                       "reason": "<why it is inactive or deferred>"}]} }',
     "",
     "Only the key for the card you name is read; leave the others out.",
     "",
     "There is NO fixed order here. Ask a question, say nothing but prose,",
     "or go straight to rows -- whichever the conversation actually calls",
     "for. Do not walk them through a sequence they did not ask for.",
+    "",
+    "The conversation DOES change mode: Explore -> Discriminate -> Deepen ->",
+    "Commit. Explore only long enough to expose genuinely different routes.",
+    "Discriminate when their preferences separate them. Deepen once one route",
+    "has a center of gravity. Commit when its user, behavior, input, output,",
+    "first visible result, and locus of problem solving are clear enough to",
+    "write down. Return the current `mode` and `working_direction` every turn.",
+    "",
+    "Evidence of convergence includes returning to one idea, preferring it,",
+    "elaborating its behavior or implementation, rejecting neighbors, asking",
+    "narrower questions, or finding an asset that makes it tractable. Once",
+    "several signals accumulate, stop inventing unrelated directions by",
+    "default. Say what the center of gravity is and WHY it coheres with their",
+    "goals, available assets, prior work, and where they must make consequential",
+    "decisions. That is grounded assurance, not praise. Reopen exploration only",
+    "when they ask or evidence undermines the direction.",
+    "",
+    "Questions narrow with the mode. Explore distinguishes different projects.",
+    "Discriminate distinguishes versions of one project. Deepen and Commit use",
+    "behavioral scenarios: who acts, what goes in, what they see, edge cases,",
+    "and what behavior would make the result wrong. Late divergence branches",
+    "within the idea through what-if scenarios, not away from it.",
+    "",
+    "Keep rejected or deferred routes in `alternatives`; do not resurface them",
+    "as live siblings. New research normally sharpens the working direction",
+    "instead of reopening the space. Judge difficulty by the locus of problem",
+    "solving, not the sophistication of infrastructure a library or agent can",
+    "carry. What reaches goals or TODOs must crystallize the visible working",
+    "direction, never surprise them with a clever replacement project.",
     "",
     "Questions are for what changes what you would propose, never for what",
     "you could assume. Pick the shape by what you are asking for:",
@@ -343,6 +382,39 @@ def _normalize_focus(value) -> Dict[str, Any]:
             "options": options[:MAX_FOCUS_OPTIONS]}
 
 
+def normalize_working_direction(value) -> Dict[str, Any]:
+    """The project hypothesis the conversation edits in public."""
+    value = value if isinstance(value, dict) else {}
+    out = {
+        "title": SC._one(value.get("title"), SC.MAX_LABEL),
+        "summary": SC._long(value.get("summary"), 600),
+        "why": [], "unclear": [], "alternatives": [],
+    }
+    for key in ("why", "unclear"):
+        for row in value.get(key) if isinstance(value.get(key), list) else []:
+            said = SC._one(row, 280)
+            if said:
+                out[key].append(said)
+            if len(out[key]) >= MAX_WORKING_ROWS:
+                break
+    for row in value.get("alternatives") if isinstance(value.get("alternatives"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        label = SC._one(row.get("label"), SC.MAX_LABEL)
+        if label:
+            out["alternatives"].append({
+                "label": label, "reason": SC._one(row.get("reason"), 280)})
+        if len(out["alternatives"]) >= MAX_WORKING_ROWS:
+            break
+    return out
+
+
+def has_working_direction(value) -> bool:
+    held = normalize_working_direction(value)
+    return bool(held["title"] or held["summary"] or held["why"]
+                or held["unclear"] or held["alternatives"])
+
+
 def _named(value) -> Dict[str, Any]:
     """Whatever came back, with the envelope put back around it.
 
@@ -385,7 +457,12 @@ def normalize_card(value) -> Dict[str, Any]:
         "say": SC._one(value.get("say"), SC.MAX_SAY), "card": card,
         "questions": {"eyebrow": "", "items": []},
         "focus": {"title": "", "options": []},
-        "goals": [], "todos": [], "subgoals": [], "offer": ""}
+        "goals": [], "todos": [], "subgoals": [], "offer": "",
+        "mode": (str(value.get("mode") or "").strip().lower()
+                 if str(value.get("mode") or "").strip().lower() in MODES
+                 else "explore"),
+        "working_direction": normalize_working_direction(
+            value.get("working_direction"))}
     if card == "questions":
         held = SC._normalize_questions(value.get("questions"))
         out["questions"] = held
@@ -439,8 +516,8 @@ def compose(transcript, context="", extra=()) -> List[str]:
     return lines
 
 
-def ask(transcript, context="", engine=None, root=None,
-        extra=()) -> Dict[str, Any]:
+def ask(transcript, context="", engine=None, root=None, extra=(),
+        mode="", working_direction=None) -> Dict[str, Any]:
     """One round: the conversation and the project out, one card back.
 
     No stage check and no discard. Setup refuses a card out of turn because
@@ -453,14 +530,27 @@ def ask(transcript, context="", engine=None, root=None,
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
             SC.setup_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
+        current = normalize_working_direction(working_direction)
+        state = []
+        if has_working_direction(current):
+            state = ["", "# The working direction visible now", "",
+                     "Mode: " + (mode if mode in MODES else "explore"),
+                     json.dumps(current, ensure_ascii=False)]
         raw = engine.generate_json(
-            "\n".join(compose(transcript, context, extra)) + "\n")
+            "\n".join(compose(transcript, context, tuple(state) + tuple(extra))) + "\n")
     except PROVIDERS.ProviderError as exc:
         return {"ok": False,
                 "error": " ".join(str(exc).split())[:200] + SC.credit_note()}
     except Exception as exc:                             # noqa: BLE001
         return SC.unexpected(exc)
     card = normalize_card(raw)
+    # A malformed or older model reply must not erase the project hypothesis
+    # already visible to the reader. It may revise it, never lose it by omission.
+    if not has_working_direction(card.get("working_direction")) and has_working_direction(working_direction):
+        card["working_direction"] = normalize_working_direction(working_direction)
+    raw_mode = raw.get("mode") if isinstance(raw, dict) else None
+    if card.get("mode") == "explore" and mode in MODES and not raw_mode:
+        card["mode"] = mode
     if not card["say"] and card["card"] == "none":
         return {"ok": False, "error": "the model answered with nothing"}
     return dict(card, ok=True)
