@@ -142,9 +142,12 @@ See [`STASHED.md`](../STASHED.md) for the full inventory.
 - Claude Code 2.1.175+
 - `curl` for the standalone installer; Node.js 18+ only for the optional npm path
 
-If the `claude` command is present but below the supported version, Engelbart
-runs Claude Code's built-in `claude update` before continuing. A failed update
-stops the install before Engelbart writes its managed state.
+Engelbart checks the standard native launcher before downloading Claude Code,
+so a stale terminal PATH does not trigger a reinstall. If the selected command
+is below the supported version, Engelbart runs `claude update` and then probes
+the version again. A no-op package-manager update falls back to Anthropic's
+native installer; a broken, timed-out, or unrelated command named `claude` is
+left untouched and diagnosed with `claude doctor` guidance.
 
 Installer metadata lives at `~/.human-compact/install.json`; versioned Python
 runtimes live under `~/.human-compact/runtimes/`; and the stable launchers are
