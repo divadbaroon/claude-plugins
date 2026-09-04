@@ -710,14 +710,29 @@ class PanelTests(BridgeTestCase):
         self.assertFalse(out["bs"])
         self.assertTrue(out["over"])
 
-    def test_clicking_its_tab_opens_it_and_clicking_goals_puts_it_away(self):
+    def test_clicking_its_tab_opens_the_page_and_goals_docks_it(self):
+        # Goals does not end the conversation, it puts it back where it
+        # belongs on that view: along the foot of the tree, folded to a
+        # line. The page view is what goes away.
         out = self.api(
             "P.renderViewTabs();"
             "var tabs = document.querySelector('.hc-viewtabs');"
-            "click(tabs.children[2]); var opened = bs.shown();"
+            "click(tabs.children[2]);"
+            "var opened = [bs.shown(), bs.docked()];"
             "click(tabs.children[1]);"
-            "out = [opened, bs.shown()];")
-        self.assertEqual([True, False], out)
+            "out = [opened, [bs.shown(), bs.docked(), bs.dockOpen()]];")
+        self.assertEqual([True, False], out[0], "the whole page")
+        self.assertEqual([True, True, False], out[1],
+                         "the same panel, docked and folded")
+
+    def test_the_page_view_sheds_the_dock_it_was_opened_from(self):
+        # Or the full page would be laid out as a one-line strip.
+        out = self.api(
+            "bs.openDock(); bs.dockShow(true); bs.open();"
+            "var root = document.documentElement;"
+            "out = [bs.shown(), bs.docked(),"
+            " root.getAttribute('data-hc-bs-open') !== null];")
+        self.assertEqual([True, False, False], out)
 
     def test_saying_something_posts_the_whole_conversation(self):
         # The transcript lives in the browser and goes out whole on every
@@ -1043,11 +1058,15 @@ class PanelTests(BridgeTestCase):
     def test_the_stylesheet_keeps_the_goals_rail_and_covers_the_rest(self):
         css = self.run_js("out = window.__hcPromptUI.launchCss();")
         self.assertIn("--hc-bs-left:max(var(--hc-left),32vw)", css)
-        self.assertIn("[data-hc-launch][data-hc-brainstorm] .hc-rail-left",
-                      css)
+        # Both are the FULL-PAGE view's doing, and say so: the dock stands
+        # under the tree rather than beside it, so it neither narrows the
+        # rail nor takes the counts off the screen.
+        self.assertIn("[data-hc-launch][data-hc-brainstorm]"
+                      ":not([data-hc-bs-dock]) .hc-rail-left", css)
         # The counts are fixed to the window's right edge and would float
         # over the conversation.
-        self.assertIn("[data-hc-launch][data-hc-brainstorm] .hc-titlerow"
+        self.assertIn("[data-hc-launch][data-hc-brainstorm]"
+                      ":not([data-hc-bs-dock]) .hc-titlerow"
                       "{display:none!important}", css)
 
     def test_the_panel_starts_where_the_goals_rail_ends(self):
@@ -1301,3 +1320,93 @@ class LiveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DockTests(BridgeTestCase):
+    """The same brainstorm, docked at the foot of the goal tree.
+
+    On the Goals page thinking out loud happens beside the thing being
+    thought about, so the panel is a line under the workspace that grows
+    into the conversation when it is written in. It is the SAME panel: the
+    same messages, the same cards, the same round, the same writes. Only
+    where it stands and how much of it is drawn.
+    """
+
+    TREE = PanelTests.TREE
+    api = PanelTests.api
+
+    def test_docking_opens_the_one_brainstorm_rather_than_a_second_one(self):
+        out = self.api(
+            "bs.openDock();"
+            "out = {on: bs.shown(), docked: bs.docked(),"
+            " msgs: bs.state().msgs.length,"
+            " panels: document.querySelectorAll('.hc-brainstorm').length};")
+        self.assertTrue(out["on"], "it is the brainstorm, shown")
+        self.assertTrue(out["docked"])
+        self.assertEqual(1, out["msgs"], "the same invitation, not a new one")
+        self.assertEqual(1, out["panels"], "one panel, in a second place")
+
+    def test_it_opens_folded_and_grows_when_it_is_written_in(self):
+        out = self.api(
+            "bs.openDock(); var shut = bs.dockOpen();"
+            "var field = document.querySelector('[data-hc-bs-input]');"
+            "fire('focusin', field);"
+            "out = [shut, bs.dockOpen()];")
+        self.assertEqual([False, True], out)
+
+    def test_hide_folds_it_back_without_ending_the_conversation(self):
+        out = self.api(
+            "bs.openDock(); bs.dockShow(true);"
+            "var field = document.querySelector('[data-hc-bs-input]');"
+            "field.value = 'half a thought'; fire('input', field);"
+            "click(document.querySelector('[data-hc-bs-act=\"dockhide\"]'));"
+            "out = {open: bs.dockOpen(), on: bs.shown(),"
+            " draft: bs.state().draft};")
+        self.assertFalse(out["open"], "folded")
+        self.assertTrue(out["on"], "but not closed")
+        self.assertEqual("half a thought", out["draft"],
+                         "what was typed is still theirs")
+
+    def test_escape_folds_it_and_keeps_what_was_typed(self):
+        out = self.api(
+            "bs.openDock(); bs.dockShow(true);"
+            "var field = document.querySelector('[data-hc-bs-input]');"
+            "field.value = 'half a thought'; fire('input', field);"
+            "key('Escape', field);"
+            "out = {open: bs.dockOpen(), draft: bs.state().draft,"
+            " msgs: bs.state().msgs.length};")
+        self.assertFalse(out["open"])
+        self.assertEqual("half a thought", out["draft"])
+        self.assertEqual(1, out["msgs"], "escape does not send")
+
+    def test_the_placeholder_names_what_is_selected(self):
+        out = self.api(
+            "bs.openDock();"
+            "out = [bs.dockSubject(),"
+            " document.querySelector('[data-hc-bs-input]')"
+            "   .getAttribute('placeholder')];")
+        self.assertEqual("“Refactor how the TODOs work”", out[0])
+        self.assertEqual("Brainstorm about “Refactor how the TODOs"
+                         " work”…", out[1])
+
+    def test_the_full_page_view_keeps_its_own_placeholder(self):
+        # Opened as a page rather than a dock, it is not about the selected
+        # goal in particular and does not claim to be.
+        out = self.api(
+            "bs.open();"
+            "out = [bs.docked(),"
+            " document.querySelector('[data-hc-bs-input]')"
+            "   .getAttribute('placeholder')];")
+        self.assertFalse(out[0])
+        self.assertEqual("say anything — or answer the card above",
+                         out[1])
+
+    def test_closing_it_takes_the_dock_off_the_root(self):
+        # Or the next full-page brainstorm would open wearing the dock's
+        # layout, which is a panel one line tall over the whole window.
+        out = self.api(
+            "bs.openDock(); bs.dockShow(true); bs.close();"
+            "var root = document.documentElement;"
+            "out = [bs.shown(), bs.docked(),"
+            " root.getAttribute('data-hc-bs-open') !== null];")
+        self.assertEqual([False, False, False], out)

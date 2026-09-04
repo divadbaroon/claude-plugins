@@ -231,6 +231,12 @@ TODO_INDENT = "    "
 TODO_STATUSES = ("", "queued", "building", "asking", "done", "failed")
 _TODO_ID = re.compile(r"^t[0-9a-z]{4,24}$")
 
+# Who a row is for. Absent means the reader -- which is what every row has
+# always meant ("every row it writes is the reader's to send"), so no stored
+# tree changes shape and no migration is owed. Only a row handed to the agent
+# carries the field, and it carries it on both sides of the wire.
+TODO_AGENT = "agent"
+
 # A screenshot pasted into a row: the row's text gets "[attachment #N]" where
 # the caret was, and the row's `attachments` remembers which file each N
 # names. N counts up across the whole list, never reused, so a marker means
@@ -591,6 +597,10 @@ def normalize_todo_items(value) -> list:
                  "depth": depth, "status": status,
                  "question": str(row.get("question") or "")[:400]
                  if status == "asking" else ""}
+        # Handed to the agent, rather than kept by the reader. See TODO_AGENT:
+        # the field exists only in the handed-over case.
+        if str(row.get("owner") or "") == TODO_AGENT:
+            clean["owner"] = TODO_AGENT
         # Only present when there is something to hold: the browser's rows
         # and the server's must compare equal field for field, and a row
         # without a screenshot has no field at all on either side.
@@ -945,7 +955,7 @@ def new_goal(gid, title, parent_id=None, **fields):
     return goal
 
 
-def add_todo_row(goal, text, depth=0):
+def add_todo_row(goal, text, depth=0, owner=""):
     """Put a next action on the goal's own list, not in the tree.
 
     Inference used to emit these as child goals -- every next action became
@@ -968,6 +978,8 @@ def add_todo_row(goal, text, depth=0):
     row = {"id": todo_id(), "text": text,
            "depth": max(0, min(8, int(depth or 0))),
            "status": "", "question": ""}
+    if str(owner or "") == TODO_AGENT:
+        row["owner"] = TODO_AGENT
     rows.append(row)
     return row
 

@@ -632,3 +632,55 @@ class GoalDocumentTests(unittest.TestCase):
         self.assertEqual("- keep sqlite\n\n```bash\nnpm i\n```\n\n- use WAL",
                          GM.section_body(notes, "Decisions"))
         self.assertEqual([], GM.apply_ops(goals, {"items": []}, [op]))
+
+
+class TodoOwnerTests(unittest.TestCase):
+    """Who a TODO row is for.
+
+    Absent means the reader, which is what a row with no owner has always
+    meant, so every tree already on disk reads the same as it did and no
+    migration is owed. Only a row handed to the agent carries the field.
+    """
+
+    def rows(self, *posted):
+        return GM.normalize_todo_items(list(posted))
+
+    def test_a_row_nobody_handed_over_carries_no_owner(self):
+        row, = self.rows({"id": "taaaa0001", "text": "Add the route"})
+        self.assertNotIn("owner", row)
+
+    def test_a_row_handed_to_the_agent_says_so(self):
+        row, = self.rows({"id": "taaaa0001", "text": "Add the route",
+                          "owner": "agent"})
+        self.assertEqual("agent", row["owner"])
+
+    def test_only_the_agent_is_an_owner(self):
+        # "user", "you", "" and a stray object all mean the same thing --
+        # nobody took it off the reader -- and all leave the field off, so
+        # two rows that mean the same compare equal field for field.
+        for said in ("user", "you", "", None, 0, {"who": "agent"}, "Agent"):
+            row, = self.rows({"id": "taaaa0001", "text": "x", "owner": said})
+            self.assertNotIn("owner", row, said)
+
+    def test_the_field_is_written_after_the_question(self):
+        # The browser builds its copy in this order and the two are compared
+        # as JSON, so the position is part of the contract.
+        row, = self.rows({"id": "taaaa0001", "text": "x", "owner": "agent"})
+        self.assertEqual(["id", "text", "depth", "status", "question",
+                          "owner"], list(row))
+
+    def test_a_row_added_by_hand_can_be_handed_over_as_it_is_made(self):
+        goal = GM.new_goal("g1", "Ship it")
+        mine = GM.add_todo_row(goal, "Read the paper")
+        theirs = GM.add_todo_row(goal, "Draft the route", owner=GM.TODO_AGENT)
+        self.assertNotIn("owner", mine)
+        self.assertEqual("agent", theirs["owner"])
+
+    def test_the_owner_survives_a_sanitize(self):
+        goals = {"goals": [GM.new_goal("g1", "Ship it")]}
+        goals["goals"][0]["todo_items"] = [
+            {"id": "taaaa0001", "text": "Draft the route", "depth": 0,
+             "status": "", "question": "", "owner": "agent"}]
+        GM.sanitize(goals)
+        self.assertEqual("agent",
+                         goals["goals"][0]["todo_items"][0]["owner"])
