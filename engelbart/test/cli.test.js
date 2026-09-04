@@ -1473,6 +1473,7 @@ test('the browser handoff also hides a successful Claude bootstrap', async () =>
   let quiet = null;
   const printed = await installOutput({ onPath: true, added: false }, {
     argv: ['--code', 'ABCD-2345-WXYZ', '--no-open', '--global-vault', '2'],
+    env: { PATH: '/usr/bin' },
     claudeInstallState: () => claudeReady
       ? { state: 'compatible', version: '2.1.175' }
       : { state: 'missing' },
