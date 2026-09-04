@@ -13,8 +13,27 @@ set -eu
 REPO="divadbaroon/claude-plugins"
 BASE="https://github.com/$REPO/releases/download/engelbart-latest"
 
-say() { printf '%s\n' "$*" >&2; }
-fail() { say "engelbart: $*"; exit 1; }
+# The setup page passes both flags. Its CLI prints the complete browser handoff,
+# so this download shim must not surround that handoff with a second transcript.
+quiet_browser_resume=0
+has_code=0
+has_no_open=0
+for arg in "$@"; do
+  case "$arg" in
+    --code) has_code=1 ;;
+    --no-open) has_no_open=1 ;;
+  esac
+done
+if [ "$has_code" -eq 1 ] && [ "$has_no_open" -eq 1 ]; then
+  quiet_browser_resume=1
+fi
+
+say() {
+  if [ "$quiet_browser_resume" -ne 1 ]; then
+    printf '%s\n' "$*" >&2
+  fi
+}
+fail() { printf 'engelbart: %s\n' "$*" >&2; exit 1; }
 
 detect_target() {
   os=$(uname -s)
