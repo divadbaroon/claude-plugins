@@ -5812,17 +5812,17 @@ class NoviceWorkspaceTests(BridgeTestCase):
             "var box=P.novice.box();"
             "out=[P.novice.mode(),box.querySelector('.hc-nv-intro-step').textContent,"
             " P.novice.css().indexOf('[data-hc-interface=novice] .hc')>=0];")
-        self.assertEqual(["novice", "How Engelbart works · 1 of 3", True], got)
+        self.assertEqual(["novice", "1 of 3", True], got)
 
-    def test_completed_instructions_open_goals_and_activity_without_a_todo_rail(self):
+    def test_completed_instructions_open_the_reference_simple_todo_screen(self):
         got = self.script(
             "P.novice.completeIntro();"
             "var box=P.novice.box();"
-            "out=[box.querySelector('.hc-nv-side-head').textContent,"
-            " box.querySelector('.hc-nv-activity-head').textContent,"
+            "out=[box.querySelector('.hc-nv-simple-title').textContent,"
+            " box.querySelector('.hc-nv-simple-label').textContent,"
             " box.querySelector('.hc-rail-right')===null,"
             " box.querySelector('[data-hc-nv=build-all]')!==null];")
-        self.assertEqual(["Goals", "Activity", True, True], got)
+        self.assertEqual(["Ship the interface", "Ship the interface", True, True], got)
 
     def test_append_message_uses_the_existing_todo_note_operation(self):
         got = self.script(

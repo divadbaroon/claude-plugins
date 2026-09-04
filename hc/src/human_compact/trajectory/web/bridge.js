@@ -17624,7 +17624,7 @@
 
   var NOVICE_CSS = [
     "[data-hc-interface=novice] .hc{visibility:hidden}",
-    "[data-hc-interface=novice][data-hc-novice-brainstorm] .hc{visibility:visible}",
+    "[data-hc-interface=novice][data-hc-novice-brainstorm] .hc{visibility:hidden}",
     ".hc-novice{position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;background:var(--bg,#fff);color:var(--ink,#171717);font:14px/1.5 var(--hc-sans,system-ui,-apple-system,'Segoe UI',sans-serif)}",
     ".hc-nv-head{height:54px;box-sizing:border-box;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--bd,#eaeaea);flex:none}",
     ".hc-nv-brand{font:700 15px/1 var(--hc-sans,system-ui);letter-spacing:-.02em}",
@@ -17710,6 +17710,80 @@
     ".hc-mode-picks{display:flex;gap:8px}",
     ".hc-mode-btn{flex:1;border:1px solid var(--bd2,#bbb);border-radius:7px;background:transparent;color:var(--ink,#171717);padding:10px;cursor:pointer;font:650 12px/1 var(--hc-sans,system-ui)}",
     ".hc-mode-btn[data-hc-on]{background:var(--ink,#171717);border-color:var(--ink,#171717);color:var(--bg,#fff)}",
+    /* Pixel geometry is copied from the supplied Simple to Workspace
+       artifact.  These overrides deliberately win over the earlier
+       functional scaffold without forking any of its backend behavior. */
+    ".hc-novice{font-family:var(--font-sans,system-ui,-apple-system,'Segoe UI',sans-serif);font-size:14px}",
+    ".hc-nv-head{height:auto;min-height:49px;padding:16px 24px;gap:10px;border-bottom:0}",
+    ".hc-nv-brand{font:500 17px/1 var(--font-sans,system-ui);letter-spacing:-.2px}",
+    ".hc-nv-brand:after{content:'/';margin-left:10px;color:var(--bd2,#c9c9c9);font:13px/1 var(--font-sans,system-ui)}",
+    ".hc-nv-project{font:500 13px/1 var(--font-sans,system-ui);color:var(--mut,#4d4d4d)}",
+    ".hc-nv-icon{width:25px;height:25px;border-radius:6px;font-size:13px}",
+    ".hc-nv-intro{align-items:flex-start;padding:72px 24px 96px}",
+    ".hc-nv-intro-inner{width:100%;max-width:680px;box-sizing:border-box;text-align:left;border:1px solid var(--bd,#eaeaea);border-radius:12px;padding:28px 28px 22px;display:flex;flex-direction:column;gap:22px;animation:rise 260ms cubic-bezier(.25,.1,.25,1)}",
+    ".hc-nv-intro-step{font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.6px}",
+    ".hc-nv-intro h1{font:500 19px/1.35 var(--font-sans,system-ui);letter-spacing:-.2px;margin:0;max-width:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+    ".hc-nv-intro p{display:none}",
+    ".hc-nv-demo{height:auto;min-height:200px;box-sizing:border-box;margin:0;border:0;border-radius:0;background:transparent;display:flex;align-items:flex-start;justify-content:center;padding:14px 22px 12px}",
+    ".hc-nv-demo-list{width:100%;display:flex;flex-direction:column}",
+    ".hc-nv-demo-tab{align-self:flex-start;padding-bottom:6px;border-bottom:2px solid var(--ink,#171717);font:500 11px/1 var(--font-sans,system-ui)}",
+    ".hc-nv-demo-rule{height:1px;background:var(--bd,#eaeaea)}",
+    ".hc-nv-demo-row{display:flex;align-items:center;gap:8px;padding:5px 0;font:13.5px/1.5 var(--font-sans,system-ui)}",
+    ".hc-nv-demo-dash{width:10px;color:var(--mut,#4d4d4d)}",
+    ".hc-nv-demo-status{margin-left:auto;font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.2px;text-transform:uppercase;color:var(--fnt,#8f8f8f)}",
+    ".hc-nv-intro-foot{display:flex;align-items:center;gap:12px}",
+    ".hc-nv-dots{margin:0 auto 0 0}",
+    ".hc-nv-intro-actions{gap:9px}",
+    ".hc-nv-arrow{width:38px;height:38px;padding:0;border:1px solid var(--ink,#171717);border-radius:50%;background:var(--ink,#171717);color:var(--onacc,#fff);font:18px/1 var(--font-sans,system-ui)}",
+    ".hc-nv-arrow[data-hc-prev]{background:transparent;color:var(--ink,#171717);border-color:var(--bd2,#c9c9c9)}",
+    ".hc-nv-simple{flex:1;display:flex;justify-content:center;padding:48px 24px 96px;overflow:auto}",
+    ".hc-nv-simple-inner{width:100%;max-width:600px;display:flex;flex-direction:column;gap:20px;animation:rise 260ms cubic-bezier(.25,.1,.25,1)}",
+    ".hc-nv-simple-heading{display:flex;flex-direction:column;gap:12px}",
+    ".hc-nv-simple-title{margin:0;font:500 24px/1.2 var(--font-sans,system-ui);letter-spacing:-.4px}",
+    ".hc-nv-simple-card{border:1px solid var(--bd,#eaeaea);border-radius:12px;padding:20px;display:flex;flex-direction:column;gap:24px}",
+    ".hc-nv-simple-current{border-radius:8px;overflow:hidden}",
+    ".hc-nv-simple-goal{display:flex;align-items:center;gap:16px;padding:16px 18px}",
+    ".hc-nv-num{width:34px;height:34px;box-sizing:border-box;border:2px solid var(--ink,#171717);border-radius:50%;display:flex;align-items:center;justify-content:center;font:500 12.5px/1 var(--font-sans,system-ui);flex:none}",
+    ".hc-nv-simple-copy{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0}",
+    ".hc-nv-simple-label{font:500 14.5px/1.4 var(--font-sans,system-ui)}",
+    ".hc-nv-simple-desc{font:12.5px/1.4 var(--font-sans,system-ui);color:var(--mut,#4d4d4d)}",
+    ".hc-nv-cap{font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt,#8f8f8f)}",
+    ".hc-nv-simple .hc-nv-todos{padding:0}",
+    ".hc-nv-simple .hc-nv-todo{padding:0 18px;border-top:1px solid var(--bd,#eaeaea);border-bottom:0}",
+    ".hc-nv-simple .hc-nv-todo-line{min-height:48px;gap:12px}",
+    ".hc-nv-simple .hc-nv-todo-text{font:14.5px/1.4 var(--font-sans,system-ui)}",
+    ".hc-nv-simple .hc-nv-add{padding:0 18px;border-top:1px solid var(--bd,#eaeaea)}",
+    ".hc-nv-simple .hc-nv-add:before{content:'+';width:14px;text-align:center;color:var(--bd2,#c9c9c9)}",
+    ".hc-nv-simple .hc-nv-add .hc-nv-input{all:unset;display:block;flex:1;padding:14px 0;font:italic 14.5px/1.4 var(--font-sans,system-ui)}",
+    ".hc-nv-simple-next{display:flex;flex-direction:column;gap:6px}",
+    ".hc-nv-simple-next-row{display:flex;align-items:center;gap:14px;padding:12px 0}",
+    ".hc-nv-simple-next .hc-nv-num{border-width:1.5px;border-color:var(--bd2,#c9c9c9);color:var(--fnt,#8f8f8f)}",
+    ".hc-nv-simple-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}",
+    ".hc-nv-simple-help{font:12.5px/1.6 var(--font-sans,system-ui);color:var(--fnt,#8f8f8f)}",
+    ".hc-nv-shell{grid-template-columns:minmax(260px,26%) minmax(320px,1fr);border-top:1px solid var(--bd,#eaeaea);animation:rise 320ms cubic-bezier(.25,.1,.25,1)}",
+    ".hc-nv-goals{background:var(--bg,#fff);padding-bottom:20px}",
+    ".hc-nv-side-head{height:auto;padding:14px 18px 8px;border-bottom:0;font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.6px}",
+    ".hc-nv-tree{padding:0 8px}",
+    ".hc-nv-goal{min-height:26px;padding:6px 10px;border-radius:6px;gap:10px;font:12.5px/1.4 var(--font-sans,system-ui)}",
+    ".hc-nv-goal[data-hc-on]{background:var(--tint,#fafafa);font-weight:400}",
+    ".hc-nv-goal-meta{font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.2px;text-transform:uppercase}",
+    ".hc-nv-activity-head{height:auto;margin:0 20px;padding:14px 0 8px;border-bottom:1px solid var(--bd,#eaeaea);font:500 12px/1 var(--font-sans,system-ui);letter-spacing:0;text-transform:none;color:var(--ink,#171717)}",
+    ".hc-nv-activity-head:after{content:'';position:absolute;width:46px;margin-top:22px;border-bottom:2px solid var(--ink,#171717)}",
+    ".hc-nv-content{width:auto;margin:0;padding:14px 20px 24px}",
+    ".hc-nv-kicker{font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.6px}",
+    ".hc-nv-title{font:500 22px/1.35 var(--font-sans,system-ui);letter-spacing:-.3px;margin:10px 0 4px}",
+    ".hc-nv-summary{font:12.5px/1.6 var(--font-sans,system-ui)}",
+    ".hc-nv-card{border-radius:12px;margin:14px 0}",
+    ".hc-nv-card-title{font:500 13.5px/1.4 var(--font-sans,system-ui)}",
+    ".hc-nv-count,.hc-nv-status{font:500 9px/1 var(--font-sans,system-ui);letter-spacing:1.4px}",
+    ".hc-nv-small,.hc-nv-primary{font:500 13px/1 var(--font-sans,system-ui);border-radius:8px;padding:7px 15px}",
+    ".hc-nv-primary{background:var(--acc,#0070f3);border-color:var(--acc,#0070f3);color:#fff}",
+    ".hc-nv-brain{flex:1;min-height:0;display:flex;flex-direction:column}",
+    ".hc-nv-brain-slot{flex:1;min-height:0;display:flex}",
+    ".hc-nv-brain .hc-brainstorm{position:static!important;inset:auto!important;z-index:auto!important;display:flex!important;flex:1;min-height:0;background:transparent}",
+    ".hc-nv-brain-head{display:flex;align-items:center;margin:0 20px;padding:14px 0 8px;border-bottom:1px solid var(--bd,#eaeaea)}",
+    ".hc-nv-brain-title{padding-bottom:8px;margin-bottom:-9px;border-bottom:2px solid var(--ink,#171717);font:500 12px/1 var(--font-sans,system-ui)}",
+    ".hc-nv-brain-head .hc-nv-small{margin-left:auto;padding:5px 11px;font-size:11px}",
     "@media(max-width:720px){.hc-nv-shell{grid-template-columns:120px minmax(0,1fr)}.hc-nv-content{width:calc(100% - 28px)}.hc-nv-goal{font-size:11px;padding:8px 5px}.hc-nv-goal-meta{display:none}.hc-nv-side-head,.hc-nv-activity-head{padding:0 10px}}"
   ].join("");
 
@@ -17722,6 +17796,7 @@
   var noviceActiveIds = [];
   var novicePreviewOpen = false;
   var noviceBrainstorming = false;
+  var noviceWorkspaceStarted = false;
   var noviceBound = false;
   var noviceFingerprint = "";
   var noviceRepairTried = Object.create(null);
@@ -17915,37 +17990,136 @@
     var outer = el("div", "hc-nv-intro");
     var inner = el("div", "hc-nv-intro-inner");
     inner.appendChild(el("div", "hc-nv-intro-step",
-                         "How Engelbart works · " + (noviceIntroStep + 1) + " of 3"));
+                         (noviceIntroStep + 1) + " of 3"));
+    var demo = el("div", "hc-nv-demo");
+    var list = el("div", "hc-nv-demo-list");
+    list.appendChild(el("div", "hc-nv-demo-tab",
+                        noviceIntroStep === 0 ? "TODOs" :
+                        noviceIntroStep === 1 ? "GOALS" : "ACTIVITY"));
+    list.appendChild(el("div", "hc-nv-demo-rule"));
+    current[2].forEach(function (words, index) {
+      var row = el("div", "hc-nv-demo-row");
+      row.appendChild(el("span", "hc-nv-demo-dash", noviceIntroStep === 1 ? "○" : "–"));
+      row.appendChild(el("span", "", words));
+      if (noviceIntroStep === 0) {
+        row.appendChild(el("span", "hc-nv-demo-status", index === 2 ? "built" : "building"));
+      }
+      list.appendChild(row);
+    });
+    demo.appendChild(list);
+    inner.appendChild(demo);
     inner.appendChild(el("h1", "", current[0]));
     inner.appendChild(el("p", "", current[1]));
-    var demo = el("div", "hc-nv-demo");
-    current[2].forEach(function (words) {
-      demo.appendChild(el("div", "hc-nv-demo-chip", words));
-    });
-    inner.appendChild(demo);
+    var foot = el("div", "hc-nv-intro-foot");
     var dots = el("div", "hc-nv-dots");
     steps.forEach(function (_, index) {
       var dot = el("span", "hc-nv-dot");
       if (index === noviceIntroStep) dot.setAttribute("data-hc-on", "");
       dots.appendChild(dot);
     });
-    inner.appendChild(dots);
+    foot.appendChild(dots);
     var actions = el("div", "hc-nv-intro-actions");
     if (noviceIntroStep) {
-      var back = el("button", "hc-nv-small", "Back");
+      var back = el("button", "hc-nv-arrow", "←");
       back.type = "button";
+      back.setAttribute("data-hc-prev", "");
+      back.setAttribute("aria-label", "Previous");
       back.setAttribute("data-hc-nv", "intro-back");
       actions.appendChild(back);
     }
-    var next = el("button", "hc-nv-primary",
-                  noviceIntroStep === 2 ? "Open workspace" : "Next");
+    var next = el("button", noviceIntroStep === 2 ? "hc-nv-primary" : "hc-nv-arrow",
+                  noviceIntroStep === 2 ? "Continue" : "→");
     next.type = "button";
+    next.setAttribute("aria-label", noviceIntroStep === 2 ? "Continue" : "Next");
     next.setAttribute("data-hc-nv",
                       noviceIntroStep === 2 ? "intro-done" : "intro-next");
     actions.appendChild(next);
-    inner.appendChild(actions);
+    foot.appendChild(actions);
+    inner.appendChild(foot);
     outer.appendChild(inner);
     box.appendChild(outer);
+  }
+
+  function noviceNextGoal(selected) {
+    var rows = noviceGoalRows(noviceRoots());
+    var index = -1;
+    rows.some(function (row, at) {
+      if (row.node.id === selected.node.id) { index = at; return true; }
+      return false;
+    });
+    return index >= 0 ? rows[index + 1] || null : null;
+  }
+
+  // The artifact's first working state: one current subgoal and its TODOs,
+  // centered before the denser Goals + Activity workspace is introduced.
+  function noviceSimple(box) {
+    var selected = noviceGoal();
+    if (!selected) { noviceWorkspace(box); return; }
+    var goal = selected.node;
+    var rows = noviceGoalRows(noviceRoots());
+    var next = noviceNextGoal(selected);
+    var rootGoal = selected.trail[0] || goal;
+    var items = array(goal.todo_items).filter(function (row) {
+      return str(row.text).trim();
+    });
+    var done = items.filter(function (row) { return str(row.status) === "done"; }).length;
+    var outer = el("div", "hc-nv-simple");
+    var inner = el("div", "hc-nv-simple-inner");
+    var heading = el("div", "hc-nv-simple-heading");
+    heading.appendChild(el("div", "hc-nv-cap",
+      "Subgoal " + (rows.indexOf(selected) + 1) + " of " + rows.length
+      + " · " + done + " of " + items.length + " todos done"));
+    heading.appendChild(el("h1", "hc-nv-simple-title", str(rootGoal.title) || "Project"));
+    inner.appendChild(heading);
+    var card = el("div", "hc-nv-simple-card");
+    var current = el("div", "hc-nv-simple-current");
+    var goalHead = el("div", "hc-nv-simple-goal");
+    goalHead.appendChild(el("span", "hc-nv-num", String(Math.max(1, rows.indexOf(selected) + 1))));
+    var copy = el("div", "hc-nv-simple-copy");
+    copy.appendChild(el("div", "hc-nv-simple-label", str(goal.title) || "Untitled"));
+    copy.appendChild(el("div", "hc-nv-simple-desc",
+      str(goal.desc || goal.why || goal.notes).replace(/\s+/g, " ").trim()));
+    goalHead.appendChild(copy);
+    goalHead.appendChild(el("span", "hc-nv-cap", "Now"));
+    current.appendChild(goalHead);
+    var list = el("div", "hc-nv-todos");
+    items.forEach(function (row) { list.appendChild(noviceTodoNode(row)); });
+    current.appendChild(list);
+    if (document.documentElement.getAttribute("data-hc-readonly") === null) {
+      var add = el("div", "hc-nv-add");
+      var input = el("input", "hc-nv-input");
+      input.type = "text";
+      input.placeholder = "add a todo…";
+      input.setAttribute("data-hc-nv-add", str(goal.id));
+      add.appendChild(input);
+      current.appendChild(add);
+    }
+    card.appendChild(current);
+    var upcoming = el("div", "hc-nv-simple-next");
+    upcoming.appendChild(el("div", "hc-nv-cap", "Up next"));
+    var nextRow = el("div", "hc-nv-simple-next-row");
+    nextRow.appendChild(el("span", "hc-nv-num", String(Math.max(2, rows.indexOf(selected) + 2))));
+    var nextCopy = el("div", "hc-nv-simple-copy");
+    nextCopy.appendChild(el("div", "hc-nv-simple-label", next ? str(next.node.title) : "Nothing else yet"));
+    nextCopy.appendChild(el("div", "hc-nv-simple-desc", next
+      ? "todos appear once " + (str(goal.title) || "this subgoal") + " is done"
+      : "add another goal whenever the project needs one"));
+    nextRow.appendChild(nextCopy);
+    upcoming.appendChild(nextRow);
+    card.appendChild(upcoming);
+    var actions = el("div", "hc-nv-simple-actions");
+    actions.appendChild(el("span", "hc-nv-simple-help",
+      "Enter adds a todo · Build sends one to your agent"));
+    var build = el("button", "hc-nv-primary", "Build all " + noviceBuildable(items).length + "  →");
+    build.type = "button";
+    build.disabled = !noviceBuildable(items).length || noviceBuilding;
+    build.setAttribute("data-hc-nv", "build-all");
+    actions.appendChild(build);
+    card.appendChild(actions);
+    inner.appendChild(card);
+    outer.appendChild(inner);
+    box.appendChild(outer);
+    if (noviceBuildIds.length) noviceBuildModal(box, goal);
   }
 
   function noviceTree(host, roots) {
@@ -18155,6 +18329,38 @@
     if (noviceBuildIds.length) noviceBuildModal(box, selected && selected.node);
   }
 
+  function noviceBrainstorm(box) {
+    var roots = noviceRoots();
+    var shell = el("div", "hc-nv-shell");
+    var left = el("aside", "hc-nv-goals");
+    left.appendChild(el("div", "hc-nv-side-head", "Goals"));
+    var tree = el("div", "hc-nv-tree");
+    noviceTree(tree, roots);
+    left.appendChild(tree);
+    shell.appendChild(left);
+    var main = el("main", "hc-nv-main");
+    var holder = el("div", "hc-nv-brain");
+    var head = el("div", "hc-nv-brain-head");
+    head.appendChild(el("span", "hc-nv-brain-title", "Activity"));
+    var close = el("button", "hc-nv-small", "Close brainstorm");
+    close.type = "button";
+    close.setAttribute("data-hc-nv", "brainstorm-close");
+    head.appendChild(close);
+    holder.appendChild(head);
+    var slot = el("div", "hc-nv-brain-slot");
+    holder.appendChild(slot);
+    main.appendChild(holder);
+    shell.appendChild(main);
+    box.appendChild(shell);
+    setTimeout(function () {
+      renderBrainstorm();
+      if (brainstormBox && slot && brainstormBox.parentNode !== slot) {
+        slot.appendChild(brainstormBox);
+        brainstormBox.style.display = "flex";
+      }
+    }, 0);
+  }
+
   function noviceBuildModal(box, goal) {
     var overlay = el("div", "hc-nv-modal");
     var dialog = el("div", "hc-nv-dialog");
@@ -18268,13 +18474,14 @@
     noviceBrainstorming = true;
     var root = document.documentElement;
     if (root) root.setAttribute("data-hc-novice-brainstorm", "");
-    if (noviceBox) noviceBox.style.display = "none";
     if (!openBrainstorm()) {
       noviceBrainstorming = false;
       if (root) root.removeAttribute("data-hc-novice-brainstorm");
       renderNovice(true);
       return false;
     }
+    noviceFingerprint = "";
+    renderNovice(true);
     return true;
   }
 
@@ -18315,6 +18522,7 @@
     post({ op: "build_todos", goal_id: goalId, ids: ids, quick: false })
       .then(function (res) {
         if (!res || !res.ok) return res;
+        noviceWorkspaceStarted = true;
         noviceActiveGoal = goalId;
         noviceActiveIds = ids.slice();
         noviceFingerprint = "";
@@ -18419,6 +18627,7 @@
         noviceBuildIds = []; renderNovice(true);
       } else if (action === "build-send") noviceSendBuild();
       else if (action === "brainstorm") noviceOpenBrainstorm();
+      else if (action === "brainstorm-close") closeBrainstorm();
       else if (action === "preview") noviceOpenPreview();
       else if (action === "preview-close") noviceClosePreview();
       else if (action === "theme") noviceToggleTheme();
@@ -18462,7 +18671,7 @@
     root.setAttribute("data-hc-interface", mode);
     ensureNoviceStyles();
     bindNovice();
-    if (mode !== "novice" || noviceBrainstorming) {
+    if (mode !== "novice") {
       if (noviceBox) noviceBox.style.display = "none";
       return false;
     }
@@ -18470,7 +18679,8 @@
     var selected = noviceGoal();
     var sig = JSON.stringify([
       noviceIntroSeen(), noviceIntroStep, noviceSelected, noviceBuildIds,
-      noviceBuilding, novicePreviewOpen, noviceRoots(),
+      noviceBuilding, novicePreviewOpen, noviceBrainstorming,
+      noviceWorkspaceStarted, noviceRoots(),
       selected ? noviceActivity(selected.node.id) : [], previewState && [
         previewState.status, previewState.surface, previewState.url]
     ]);
@@ -18488,6 +18698,8 @@
     noviceHeader(noviceBox);
     if (!noviceIntroSeen()) noviceIntro(noviceBox);
     else if (novicePreviewOpen) novicePreview(noviceBox);
+    else if (noviceBrainstorming) noviceBrainstorm(noviceBox);
+    else if (!noviceWorkspaceStarted) noviceSimple(noviceBox);
     else noviceWorkspace(noviceBox);
     (document.body || root).appendChild(noviceBox);
     sealEditors();

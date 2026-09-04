@@ -193,13 +193,12 @@ class TodoPanelBrowserTests(unittest.TestCase):
             try:
                 page.goto(url, wait_until="domcontentloaded")
                 expect(page.locator(".hc-nv-intro")).to_be_visible(timeout=15000)
-                expect(page.locator(".hc-nv-intro-step")).to_have_text(
-                    "How Engelbart works · 1 of 3")
+                expect(page.locator(".hc-nv-intro-step")).to_have_text("1 of 3")
                 page.get_by_role("button", name="Next").click()
                 page.get_by_role("button", name="Next").click()
-                page.get_by_role("button", name="Open workspace").click()
-                expect(page.locator(".hc-nv-side-head")).to_have_text("Goals")
-                expect(page.locator(".hc-nv-activity-head")).to_have_text("Activity")
+                page.get_by_role("button", name="Continue").click()
+                expect(page.locator(".hc-nv-simple")).to_be_visible()
+                expect(page.locator(".hc-nv-simple-title")).to_be_visible()
                 expect(page.locator(".hc-rail-right")).not_to_be_visible()
 
                 # The novice button enters the existing brainstorm route and
