@@ -326,24 +326,67 @@ async function run(deps = {}) {
             ? { state: 'compatible' }
             : { state: 'missing' })
           : claudeInstallState);
-      const claude = probe(env, deps.spawn);
+      const inspect = (candidateEnv) => probe(candidateEnv, deps.spawn);
+      let claude = inspect(env);
+
+      // Anthropic's native installer always owns ~/.local/bin/claude. A shell
+      // opened before that directory was added to PATH can therefore report
+      // "missing" (or hit an older broken launcher) while a working install is
+      // already on disk. Prefer the known native launcher before downloading
+      // anything. This also repairs the current child process; Anthropic's
+      // installer owns the persistent shell integration for later terminals.
+      if (claude.state !== 'compatible') {
+        const nativeEnv = nativeClaudeEnvironment(env, homedir, platform);
+        if (nativeEnv !== env) {
+          const native = inspect(nativeEnv);
+          // A compatible native install is always preferable to a stale or
+          // broken launcher earlier on PATH. When PATH has no Claude at all,
+          // preserve every non-missing native state so an old install gets
+          // updated and a broken one gets diagnosed rather than overwritten.
+          if (native.state === 'compatible'
+              || (claude.state === 'missing' && native.state !== 'missing')) {
+            output.write(native.state === 'compatible'
+              ? `\nFound the working native Claude Code ${native.version} outside this terminal's PATH; using it without reinstalling.\n`
+              : '\nFound Claude Code in the standard native location outside this terminal\'s PATH; checking that installation before making changes.\n');
+            output.write(platform === 'win32'
+              ? 'Open a new terminal before launching Claude directly so it picks up the native installer PATH.\n'
+              : 'To launch Claude directly from this terminal afterward, run:\n\n    export PATH="$HOME/.local/bin:$PATH"\n\n');
+            env = nativeEnv;
+            authDeps.env = env;
+            claude = native;
+          }
+        }
+      }
+
       if (claude.state === 'missing') {
         env = await (deps.installClaudeCode || installClaudeCode)({
           env, output, errorOutput, platform, deps,
         });
         authDeps.env = env;
+        claude = inspect(env);
       } else if (claude.state === 'outdated') {
-        const updated = await (deps.updateClaudeCode || updateClaudeCode)({
+        const updateFinished = await (deps.updateClaudeCode || updateClaudeCode)({
           env, output, errorOutput, version: claude.version, deps,
         });
-        if (!updated) {
-          throw new Error('Claude Code could not be updated automatically. '
-            + 'Run `claude update` manually and re-run this command.');
+        claude = inspect(env);
+        if (claude.state === 'compatible' && !updateFinished) {
+          output.write(`Claude Code now reports ${claude.version}; continuing despite the updater's nonzero exit.\n`);
         }
-      } else if (claude.state === 'unrecognized') {
-        throw new Error('unsupported Claude Code version output '
-          + `${JSON.stringify(claude.output || '(empty)')}; `
-          + `Engelbart requires Claude Code ${MIN_CLAUDE_VERSION_TEXT} or newer`);
+        if (claude.state !== 'compatible') {
+          // `claude update` can exit zero for a package-manager install while
+          // leaving the selected executable untouched. The official native
+          // installer is Anthropic's documented escape hatch for those stale
+          // and permission-broken installs. Its PATH is re-probed below; an
+          // exit code alone is never accepted as proof of repair.
+          env = await (deps.installClaudeCode || installClaudeCode)({
+            env, output, errorOutput, platform, deps, repair: true,
+          });
+          authDeps.env = env;
+          claude = inspect(env);
+        }
+      }
+      if (claude.state !== 'compatible') {
+        throw claudeStateError(claude, platform);
       }
     }
 
@@ -442,6 +485,10 @@ async function run(deps = {}) {
           errorOutput.write(`\nCould not connect an Engelbart account: ${error.message}\n`);
         }
       }
+    }
+    if (options.dryRun) {
+      output.write('\nDry run complete. No files or settings were changed.\n');
+      return 0;
     }
     // The chat hooks record from the moment they are installed -- that is what
     // lets /bart, run mid-chat, see the chat from its beginning. Only
@@ -553,9 +600,46 @@ async function run(deps = {}) {
 const CLAUDE_INSTALL_URL = 'https://claude.ai/install.sh';
 const CLAUDE_INSTALL_URL_PS1 = 'https://claude.ai/install.ps1';
 
-/* Does `claude` answer on this PATH? A throwing spawn and a nonzero exit both
- * mean no; install() re-checks with the full version gate afterwards, so this
- * only decides whether to offer, never whether to proceed.
+function nativeClaudeEnvironment(env, homedir, platform = process.platform) {
+  const localBin = path.join(homedir || os.homedir(), '.local', 'bin');
+  const delimiter = platform === 'win32' ? ';' : ':';
+  const entries = String(env.PATH || '').split(delimiter).filter(Boolean);
+  const normalize = (entry) => {
+    const resolved = path.resolve(entry);
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  if (entries.length && normalize(entries[0]) === normalize(localBin)) return env;
+  const withoutNative = entries.filter((entry) => normalize(entry) !== normalize(localBin));
+  return { ...env, PATH: [localBin, ...withoutNative].join(delimiter) };
+}
+
+function boundedDetail(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+function claudeStateError(claude, platform = process.platform) {
+  const doctor = platform === 'win32' ? 'where claude, then claude doctor' : 'which -a claude, then claude doctor';
+  if (claude.state === 'broken') {
+    return new Error('A command named `claude` was found but could not run'
+      + `${claude.reason ? ` (${claude.reason})` : ''}. Engelbart left it untouched rather than overwriting an installed program. `
+      + `Run ${doctor}, fix the reported launcher or permission problem, and retry.`);
+  }
+  if (claude.state === 'unrecognized') {
+    return new Error('The `claude` command on PATH did not identify itself as Claude Code'
+      + `${claude.output ? ` (${JSON.stringify(claude.output)})` : ''}. `
+      + `Run ${doctor} and remove or update the conflicting command.`);
+  }
+  if (claude.state === 'outdated') {
+    return new Error(`Claude Code ${claude.version || '(unknown)'} is still below the required ${MIN_CLAUDE_VERSION_TEXT} after both update paths. `
+      + `Run ${doctor}, update the installation it selects, and retry.`);
+  }
+  return new Error('Anthropic\'s Claude Code installer finished, but `claude --version` is still not runnable. '
+    + `Run ${doctor}, make sure ~/.local/bin is reachable, and retry.`);
+}
+
+/* Is there any command named `claude` on this PATH? Only ENOENT means absent;
+ * a nonzero exit or failed launch still means an installed command needs
+ * diagnosis rather than replacement. The full state gate decides what follows.
  */
 function claudeOnPath(env, spawn) {
   return claudeInstallState(env, spawn).state !== 'missing';
@@ -576,7 +660,16 @@ function claudeInstallState(env, spawn) {
       timeout: 20000,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    if (!done || done.error || done.status !== 0) return { state: 'missing' };
+    if (!done) return { state: 'broken', reason: 'the version probe returned no result' };
+    if (done.error) {
+      if (done.error.code === 'ENOENT') return { state: 'missing' };
+      return { state: 'broken', reason: boundedDetail(done.error.message || done.error.code) || 'the version probe failed' };
+    }
+    if (done.status !== 0) {
+      const detail = boundedDetail(done.stderr || done.stdout);
+      const ended = done.signal ? `ended with ${done.signal}` : `exited with code ${done.status}`;
+      return { state: 'broken', reason: detail ? `${ended}: ${detail}` : ended };
+    }
     const output = String(done.stdout || '').trim() || String(done.stderr || '').trim();
     const parsed = parseClaudeVersion(output);
     if (!parsed) return { state: 'unrecognized', output };
@@ -586,36 +679,43 @@ function claudeInstallState(env, spawn) {
       return { state: 'outdated', version: parsed.join('.') };
     }
   } catch (error) {
-    return { state: 'missing' };
+    if (error && error.code === 'ENOENT') return { state: 'missing' };
+    return { state: 'broken', reason: boundedDetail(error && error.message) || 'the version probe failed' };
   }
 }
 
 /* Run Anthropic's official Claude Code installer, no questions asked: the
  * one command promises a working install, and Claude Code is part of what
- * working means. Only interactive installs come here -- CI and pipes keep
- * the hard error -- and the line below says what is happening and whose
- * installer is doing it before anything runs.
+ * working means. CI and dry runs bypass this bootstrap; interactive and
+ * explicitly non-interactive member installs both use it. The line below says
+ * what is happening and whose installer is doing it before anything runs.
  *
  * The installer wires new shells but not this process, so on success the
  * returned env reaches its ~/.local/bin directly; install()'s own preflight
- * then judges the result. An installer that fails returns the env
- * unchanged and the previous error path says what to do.
+ * then judges the result. A failed download is fatal here: continuing would
+ * let the later Engelbart success copy contradict the state of the machine.
  */
-async function installClaudeCode({ env, output, errorOutput, platform = process.platform, deps = {} }) {
+async function installClaudeCode({ env, output, errorOutput, platform = process.platform, deps = {}, repair = false }) {
   const windows = platform === 'win32';
   const url = windows ? CLAUDE_INSTALL_URL_PS1 : CLAUDE_INSTALL_URL;
-  output.write('\nClaude Code is required and was not found -- installing it '
+  output.write(repair
+    ? '\nThe selected Claude Code did not update -- repairing it '
+      + `with Anthropic's official native installer (${url})...\n\n`
+    : '\nClaude Code is required and was not found -- installing it '
     + `with Anthropic's official installer (${url})...\n\n`);
   const run = deps.spawn || require('child_process').spawnSync;
   // Windows ships no bash; its official installer is a PowerShell one-liner.
+  // POSIX needs pipefail: without it a failed curl feeds an empty program to
+  // bash, whose zero exit status falsely reports a successful installation.
   const [command, args] = windows
-    ? ['powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `irm ${url} | iex`]]
-    : ['bash', ['-c', `curl -fsSL ${url} | bash`]];
-  const done = run(command, args, { env, stdio: 'inherit' });
+    ? ['powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+      `$ErrorActionPreference = 'Stop'; Invoke-RestMethod '${url}' | Invoke-Expression`]]
+    : ['bash', ['-o', 'pipefail', '-c', `curl -fsSL ${url} | bash`]];
+  const done = run(command, args, { env, stdio: 'inherit', timeout: 600000 });
   if (!done || done.error || done.status !== 0) {
-    errorOutput.write('\nThe Claude Code installer did not finish; install it '
-      + 'manually and re-run this command.\n');
-    return env;
+    const detail = done && done.error ? ` (${boundedDetail(done.error.message)})` : '';
+    errorOutput.write(`\nThe Claude Code installer did not finish${detail}.\n`);
+    throw new Error('Claude Code could not be installed automatically. Run Anthropic\'s installer manually, then retry Engelbart.');
   }
   // The installer wires new shells, not this process. Point PATH at the dir it
   // drops `claude` into so install()'s preflight can find it right away; the
@@ -631,13 +731,12 @@ async function updateClaudeCode({ env, output, errorOutput, version, deps = {} }
   output.write(`\nClaude Code ${version} is below the required ${MIN_CLAUDE_VERSION_TEXT} -- updating it...\n\n`);
   const run = deps.spawn || require('child_process').spawnSync;
   try {
-    const done = run('claude', ['update'], { env, stdio: 'inherit' });
+    const done = run('claude', ['update'], { env, stdio: 'inherit', timeout: 120000 });
     if (done && !done.error && done.status === 0) return true;
   } catch (error) {
     // The caller emits one actionable error below; avoid exposing platform-
     // specific spawn internals as though they were a member-facing remedy.
   }
-  errorOutput.write('\nClaude Code could not be updated automatically.\n');
   return false;
 }
 
@@ -720,9 +819,11 @@ module.exports = {
   canPrompt,
   claudeInstallState,
   claudeOnPath,
+  claudeStateError,
   importSetup,
   installClaudeCode,
   numericChoice,
+  nativeClaudeEnvironment,
   openSetup,
   parseArgs,
   resolveChoices,

@@ -64,7 +64,8 @@ test('packed npm artifact contains and executes the verified wheel', { skip: WIN
       env: { ...process.env, HUMAN_COMPACT_HOME: managed },
     });
     assert.match(invocation.stdout, new RegExp(`Verified bundled backend ${metadata.version.replace(/\./g, '\.')}`));
-    assert.match(invocation.stdout, /set up your first project|Setting up your first project/);
+    assert.match(invocation.stdout, /Dry run complete\. No files or settings were changed\./);
+    assert.doesNotMatch(invocation.stdout, /Installed\.|setup-ui/);
     assert.equal(fs.existsSync(managed), false);
   } finally {
     fs.rmSync(fixture, { recursive: true, force: true });

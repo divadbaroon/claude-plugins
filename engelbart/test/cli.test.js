@@ -146,7 +146,8 @@ test('dry-run verifies the package and never invokes installer', async () => {
     assert.equal(code, 0);
     assert.equal(invoked, false);
     assert.match(output.read(), /Verified bundled backend 0\.16\.0/);
-    assert.match(output.read(), /Run `hc setup-ui` to set up your first project\./);
+    assert.match(output.read(), /Dry run complete\. No files or settings were changed\./);
+    assert.doesNotMatch(output.read(), /Installed\.|setup-ui/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -802,6 +803,7 @@ test('a missing Claude Code is installed, and the extended env reaches install',
   try {
     fixturePackage(root);
     let installEnv = null;
+    let claudeReady = false;
     const code = await run({
       argv: ['--local-only', '--no-open'],
       packageRoot: root,
@@ -812,8 +814,13 @@ test('a missing Claude Code is installed, and the extended env reaches install',
       env: { PATH: '/usr/bin' },
       output: capture().stream,
       errorOutput: capture().stream,
-      claudeOnPath: () => false,
-      installClaudeCode: async ({ env }) => ({ ...env, PATH: `/home/x/.local/bin:${env.PATH}` }),
+      claudeInstallState: () => claudeReady
+        ? { state: 'compatible', version: '2.1.175' }
+        : { state: 'missing' },
+      installClaudeCode: async ({ env }) => {
+        claudeReady = true;
+        return { ...env, PATH: `/home/x/.local/bin:${env.PATH}` };
+      },
       install: async (options) => { installEnv = options.deps.env; return { launcher: null }; },
       readCredentials: () => null,
     });
@@ -833,6 +840,7 @@ test('a runnable but stale Claude Code is updated before the Engelbart install',
     fixturePackage(root);
     const output = capture();
     let update = null;
+    let claudeReady = false;
     let installed = false;
     const code = await run({
       argv: ['--local-only', '--no-open'],
@@ -844,8 +852,10 @@ test('a runnable but stale Claude Code is updated before the Engelbart install',
       env: { PATH: '/usr/bin' },
       output: output.stream,
       errorOutput: capture().stream,
-      claudeInstallState: () => ({ state: 'outdated', version: '2.1.174' }),
-      updateClaudeCode: async (options) => { update = options; return true; },
+      claudeInstallState: () => claudeReady
+        ? { state: 'compatible', version: '2.1.175' }
+        : { state: 'outdated', version: '2.1.174' },
+      updateClaudeCode: async (options) => { update = options; claudeReady = true; return true; },
       install: async () => { installed = true; return { launcher: null }; },
       readCredentials: () => null,
     });
@@ -872,7 +882,238 @@ test('the Claude preflight distinguishes compatible, stale, and unknown binaries
   assert.deepEqual(state({ status: 0, stdout: 'other program\n', stderr: '' }), {
     state: 'unrecognized', output: 'other program',
   });
-  assert.deepEqual(state({ status: 127, stdout: '', stderr: 'missing' }), { state: 'missing' });
+  assert.equal(state({ status: 127, stdout: '', stderr: 'broken launcher' }).state, 'broken');
+  assert.equal(state({ status: null, error: { code: 'ETIMEDOUT', message: 'timed out' } }).state, 'broken');
+  assert.deepEqual(state({ status: null, error: { code: 'ENOENT' } }), { state: 'missing' });
+});
+
+test('a working native Claude install outside the inherited PATH is reused without reinstalling', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-native-path-'));
+  try {
+    fixturePackage(root);
+    const homedir = path.join(root, 'home');
+    const localBin = path.join(homedir, '.local', 'bin');
+    let installedClaude = false;
+    let installEnv = null;
+    const output = capture();
+    const code = await run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir,
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: output.stream,
+      errorOutput: capture().stream,
+      claudeInstallState: (env) => String(env.PATH).startsWith(localBin)
+        ? { state: 'compatible', version: '2.1.175' }
+        : { state: 'missing' },
+      installClaudeCode: async () => { installedClaude = true; throw new Error('must not reinstall'); },
+      install: async (options) => { installEnv = options.deps.env; return { launcher: null }; },
+      readCredentials: () => null,
+    });
+    assert.equal(code, 0);
+    assert.equal(installedClaude, false);
+    assert.ok(String(installEnv.PATH).startsWith(localBin));
+    assert.match(output.read(), process.platform === 'win32'
+      ? /Open a new terminal/
+      : /export PATH=.*\.local\/bin/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a broken native Claude outside inherited PATH is diagnosed instead of overwritten', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-native-broken-'));
+  try {
+    fixturePackage(root);
+    const homedir = path.join(root, 'home');
+    const localBin = path.join(homedir, '.local', 'bin');
+    let reinstalled = false;
+    await assert.rejects(run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir,
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: (env) => String(env.PATH).startsWith(localBin)
+        ? { state: 'broken', reason: 'permission denied' }
+        : { state: 'missing' },
+      installClaudeCode: async () => { reinstalled = true; return {}; },
+      install: async () => { throw new Error('must stop before Engelbart install'); },
+    }), /permission denied.*claude doctor/i);
+    assert.equal(reinstalled, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an outdated native Claude outside inherited PATH is updated instead of reinstalled', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-native-update-'));
+  try {
+    fixturePackage(root);
+    const homedir = path.join(root, 'home');
+    const localBin = path.join(homedir, '.local', 'bin');
+    let updated = false;
+    let reinstalled = false;
+    const code = await run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir,
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: (env) => {
+        if (!String(env.PATH).startsWith(localBin)) return { state: 'missing' };
+        return updated
+          ? { state: 'compatible', version: '2.1.175' }
+          : { state: 'outdated', version: '2.1.174' };
+      },
+      updateClaudeCode: async () => { updated = true; return true; },
+      installClaudeCode: async () => { reinstalled = true; throw new Error('must not reinstall'); },
+      install: async () => ({ launcher: null }),
+      readCredentials: () => null,
+    });
+    assert.equal(code, 0);
+    assert.equal(updated, true);
+    assert.equal(reinstalled, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an update that exits zero without changing the selected Claude falls back to the native installer', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-update-noop-'));
+  try {
+    fixturePackage(root);
+    const homedir = path.join(root, 'home');
+    const localBin = path.join(homedir, '.local', 'bin');
+    let repaired = false;
+    let installEnv = null;
+    const code = await run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir,
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/old/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: (env) => repaired && String(env.PATH).startsWith(localBin)
+        ? { state: 'compatible', version: '2.1.175' }
+        : { state: 'outdated', version: '2.1.174' },
+      updateClaudeCode: async () => true,
+      installClaudeCode: async ({ env }) => {
+        repaired = true;
+        return { ...env, PATH: `${localBin}${path.delimiter}${env.PATH}` };
+      },
+      install: async (options) => { installEnv = options.deps.env; return { launcher: null }; },
+      readCredentials: () => null,
+    });
+    assert.equal(code, 0);
+    assert.equal(repaired, true);
+    assert.ok(String(installEnv.PATH).startsWith(localBin));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a nonzero updater exit is accepted when the version probe proves the update completed', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-update-cleanup-failure-'));
+  try {
+    fixturePackage(root);
+    let updated = false;
+    let repaired = false;
+    const code = await run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir: path.join(root, 'home'),
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/old/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: () => updated
+        ? { state: 'compatible', version: '2.1.175' }
+        : { state: 'outdated', version: '2.1.174' },
+      updateClaudeCode: async () => { updated = true; return false; },
+      installClaudeCode: async () => { repaired = true; throw new Error('must not repair'); },
+      install: async () => ({ launcher: null }),
+      readCredentials: () => null,
+    });
+    assert.equal(code, 0);
+    assert.equal(repaired, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an installer process that exits zero must still produce a runnable Claude', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-install-noop-'));
+  try {
+    fixturePackage(root);
+    let installedEngelbart = false;
+    await assert.rejects(run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir: path.join(root, 'home'),
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/usr/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: () => ({ state: 'missing' }),
+      installClaudeCode: async ({ env }) => env,
+      install: async () => { installedEngelbart = true; return { launcher: null }; },
+      readCredentials: () => null,
+    }), /installer finished.*still not runnable/i);
+    assert.equal(installedEngelbart, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a broken command named claude is diagnosed without overwriting it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hc-cli-broken-claude-'));
+  try {
+    fixturePackage(root);
+    let reinstalled = false;
+    await assert.rejects(run({
+      argv: ['--local-only', '--no-open'],
+      packageRoot: root,
+      managedRoot: path.join(root, 'managed'),
+      homedir: path.join(root, 'home'),
+      platform: process.platform === 'win32' ? 'win32' : 'darwin',
+      arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+      interactive: true,
+      env: { PATH: '/broken/bin' },
+      output: capture().stream,
+      errorOutput: capture().stream,
+      claudeInstallState: () => ({ state: 'broken', reason: 'exited with code 127' }),
+      installClaudeCode: async () => { reinstalled = true; return {}; },
+      install: async () => { throw new Error('must stop before Engelbart install'); },
+    }), /found.*could not run.*claude doctor/i);
+    assert.equal(reinstalled, false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a failed automatic Claude update stops before the Engelbart install', async () => {
@@ -892,8 +1133,9 @@ test('a failed automatic Claude update stops before the Engelbart install', asyn
       errorOutput: capture().stream,
       claudeInstallState: () => ({ state: 'outdated', version: '2.1.174' }),
       updateClaudeCode: async () => false,
+      installClaudeCode: async () => { throw new Error('automatic repair failed'); },
       install: async () => { installed = true; return { launcher: null }; },
-    }), /could not be updated automatically/);
+    }), /automatic repair failed/);
     assert.equal(installed, false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -906,6 +1148,7 @@ test('a session without a TTY still installs missing Claude Code', async () => {
     fixturePackage(root);
     let probed = false;
     let installed = false;
+    let claudeReady = false;
     const code = await run({
       argv: ['--local-only', '--non-interactive', '--no-open'],
       packageRoot: root,
@@ -916,8 +1159,13 @@ test('a session without a TTY still installs missing Claude Code', async () => {
       env: { PATH: '/usr/bin' },
       output: capture().stream,
       errorOutput: capture().stream,
-      claudeOnPath: () => { probed = true; return false; },
-      installClaudeCode: async ({ env }) => { installed = true; return env; },
+      claudeInstallState: () => {
+        probed = true;
+        return claudeReady
+          ? { state: 'compatible', version: '2.1.175' }
+          : { state: 'missing' };
+      },
+      installClaudeCode: async ({ env }) => { installed = true; claudeReady = true; return env; },
       install: async () => ({ launcher: null }),
     });
     assert.equal(code, 0);
@@ -956,7 +1204,12 @@ test('CI never bootstraps Claude Code', async () => {
 test('the installer runs with no question, says whose it is, and extends PATH', async () => {
   const { installClaudeCode } = require('../lib/cli');
   const ran = [];
-  const spawn = (command, args) => { ran.push([command, ...args]); return { status: 0 }; };
+  let spawnOptions = null;
+  const spawn = (command, args, options) => {
+    ran.push([command, ...args]);
+    spawnOptions = options;
+    return { status: 0 };
+  };
   const said = capture();
   const env = { PATH: '/usr/bin' };
   const result = await installClaudeCode({
@@ -968,6 +1221,8 @@ test('the installer runs with no question, says whose it is, and extends PATH', 
   });
   assert.equal(ran.length, 1);
   assert.match(ran[0].join(' '), /curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash/);
+  assert.deepEqual(ran[0].slice(0, 3), ['bash', '-o', 'pipefail']);
+  assert.equal(spawnOptions.timeout, 600000);
   assert.match(said.read(), /Anthropic's official installer/);
   assert.doesNotMatch(said.read(), /\[Y\/n\]/);
   // localBin is built with the host's path.join (backslashes on Windows), so
@@ -1004,24 +1259,24 @@ test('on Windows the installer is the PowerShell one-liner, not bash+curl', asyn
     deps: { spawn, homedir: 'C:\\Users\\x' },
   });
   assert.equal(ran[0][0], 'powershell');
-  assert.match(ran[0].join(' '), /irm https:\/\/claude\.ai\/install\.ps1 \| iex/);
+  assert.match(ran[0].join(' '), /Invoke-RestMethod 'https:\/\/claude\.ai\/install\.ps1' \| Invoke-Expression/);
+  assert.match(ran[0].join(' '), /ErrorActionPreference.*Stop/);
   assert.doesNotMatch(ran[0].join(' '), /bash|curl/);
   assert.match(said.read(), /install\.ps1/);
   assert.ok(result.PATH.startsWith(path.join('C:\\Users\\x', '.local', 'bin')));
 });
 
-test('an installer that fails leaves the env alone and says to install manually', async () => {
+test('an installer that fails stops immediately and says to install manually', async () => {
   const { installClaudeCode } = require('../lib/cli');
   const errors = capture();
   const env = { PATH: '/usr/bin' };
-  const result = await installClaudeCode({
+  await assert.rejects(installClaudeCode({
     env,
     output: capture().stream,
     errorOutput: errors.stream,
     deps: { spawn: () => ({ status: 1 }) },
-  });
-  assert.equal(result, env);
-  assert.match(errors.read(), /install it manually/);
+  }), /could not be installed automatically/);
+  assert.match(errors.read(), /did not finish/);
 });
 
 // The binary's users have no npm; every self-reference must name the command

@@ -731,7 +731,11 @@ async function install(options) {
   const vendor = inspectVendor(options.packageRoot, options.packageVersion);
   let claude;
   try {
-    claude = runner('claude', ['--version'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    claude = runner('claude', ['--version'], {
+      env,
+      timeout: 20000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
   } catch (error) {
     throw new Error('Claude Code is required and was not found: '
       + `${error.message}\nInstall it with: curl -fsSL https://claude.ai/install.sh | bash`);

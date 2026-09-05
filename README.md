@@ -14,8 +14,10 @@ https://github.com/user-attachments/assets/46b8eb80-ca27-43e9-a180-6515fc4ec2c4
 
 ## Install
 
-macOS or Linux and Claude Code 2.1.175+. If Claude Code is installed but below
-that version, Engelbart runs `claude update` automatically before installing.
+macOS or Linux and Claude Code 2.1.175+. Engelbart reuses the standard native
+install even when the current terminal cannot see it. For an older install it
+runs `claude update`, verifies the version actually changed, and falls back to
+Anthropic's native installer only when the selected installation stayed stale.
 
 ```bash
 curl -fsSL https://berkeley.mathetic.com/engelbart/install.sh | sh
