@@ -979,6 +979,38 @@ def project_json(root, cwd, full=False):
             "text": text.decode("utf-8", errors="replace")}
 
 
+def reader_pane(root=None):
+    """The reader's profile, with the numbers said as a person says them.
+
+    The profile itself is ``reader.load``'s, unchanged: this is the same
+    four answers and the same graded areas that go into every prompt, so a
+    reader looking at this pane is looking at what the tool is actually
+    pitching at rather than at a second copy of it that could drift.
+
+    What is added is only wording. The ladder and the register names live in
+    ``reader`` beside the rules they govern -- turning 75 into "can use it"
+    here, from that table, is the edge doing the reading, and there is no
+    second ladder to keep in step.
+    """
+    profile = READER.load(root)
+    known = [dict(row, says=READER.CAPABILITY.get(row.get("level"), ""))
+             for row in profile.get("knowledge") or []]
+    return {"ok": True,
+            "answered": READER.answered(profile),
+            "profile": profile,
+            "knowledge": known,
+            # The year as the prompt says it: a reader who typed "3" is a
+            # third-year, and a reader who typed "transferring" is that.
+            "year_said": READER.ORDINALS.get(profile.get("year", ""),
+                                             profile.get("year", "")),
+            "level_label": READER.LEVEL_NAMES.get(profile.get("level", ""), ""),
+            # Whether the diagnostic ever ran. The four answers can be typed
+            # into the setup page by hand; the graded areas only ever come
+            # from the web onboarding, so they are what says a project was
+            # set up through it.
+            "graded": bool(known)}
+
+
 README_NAMES = ("README.md", "readme.md", "README.markdown", "README")
 
 
@@ -4113,6 +4145,14 @@ class H(BaseHTTPRequestHandler):
                     from . import build as BUILD
                     self._send(200, BUILD.models(
                         *_chat_identity(self.server.trajdir)))
+            elif self.path == "/api/reader":
+                # Behind the Expertise tab. Account-scoped, so it takes no
+                # project: `reader.json` sits at the top of the vault because
+                # it is the same person in every project, and asking per
+                # directory would answer differently in each.
+                root = (_chat_identity(self.server.trajdir)[1]
+                        if self.server.chat_scoped else None)
+                self._send(200, reader_pane(root))
             elif self.path.split("?", 1)[0] == "/api/project.json":
                 # The project's own record: one file per directory, holding
                 # every goal of every chat started there. Read from the vault

@@ -232,6 +232,72 @@ class StoreTests(unittest.TestCase):
         self.assertEqual("", sent[0]["level"])
 
 
+class PaneTests(unittest.TestCase):
+    """What the Expertise tab is handed.
+
+    A fifth surface, and the only one that shows the profile back rather
+    than writing with it. It adds wording and nothing else: the ladder and
+    the register names are read out of ``reader`` itself, so there is no
+    second table here to fall out of step with the rules the prompts use.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_a_vault_with_no_profile_says_so_rather_than_inventing_one(self):
+        out = ui.reader_pane(self.root)
+        self.assertTrue(out["ok"])
+        self.assertFalse(out["answered"])
+        self.assertFalse(out["graded"])
+        self.assertEqual([], out["knowledge"])
+        self.assertEqual(READER.blank(), out["profile"])
+
+    def test_the_four_answers_come_back_with_their_words(self):
+        READER.save(MAYA, self.root)
+        out = ui.reader_pane(self.root)
+        self.assertTrue(out["answered"])
+        # Said as the prompt says it: "2" is a second-year.
+        self.assertEqual("second-year", out["year_said"])
+        self.assertEqual(READER.LEVEL_NAMES["plain"], out["level_label"])
+        # Typed answers alone are not a diagnostic.
+        self.assertFalse(out["graded"])
+
+    def test_a_year_in_their_own_words_is_kept_in_their_own_words(self):
+        READER.save(dict(MAYA, year="transferring"), self.root)
+        self.assertEqual("transferring", ui.reader_pane(self.root)["year_said"])
+
+    def test_the_graded_areas_carry_the_ladder_said_as_a_person_says_it(self):
+        READER.save(dict(MAYA, knowledge=[
+            {"area": "Gene expression", "parent_field": "Molecular biology",
+             "level": 75, "project_role": "What the assay measures."},
+            {"area": "Statistics", "level": 0}]), self.root)
+        out = ui.reader_pane(self.root)
+        self.assertTrue(out["graded"])
+        self.assertEqual([READER.CAPABILITY[75], READER.CAPABILITY[0]],
+                         [row["says"] for row in out["knowledge"]])
+        # The rows are reader.py's own, untouched but for the added words.
+        self.assertEqual("Gene expression", out["knowledge"][0]["area"])
+        self.assertEqual(75, out["knowledge"][0]["level"])
+
+    def test_the_pane_and_the_prompts_read_the_one_profile(self):
+        # The point of the pane: a reader looking at it is looking at what
+        # the prompts are actually pitched at, not a second copy of it.
+        READER.save(dict(MAYA, knowledge=[
+            {"area": "Gene expression", "level": 50}]), self.root)
+        out = ui.reader_pane(self.root)
+        said = "\n".join(READER.prompt_lines(self.root))
+        self.assertIn(out["knowledge"][0]["says"], said)
+        self.assertIn(out["profile"]["name"], said)
+
+    def test_a_damaged_file_costs_the_pane_nothing_but_the_answers(self):
+        READER.path(self.root).write_text("{not json", encoding="utf-8")
+        out = ui.reader_pane(self.root)
+        self.assertTrue(out["ok"])
+        self.assertFalse(out["answered"])
+
+
 class SurfaceTests(unittest.TestCase):
     """The four places the work says the answers have to reach."""
 
@@ -459,6 +525,30 @@ class RoundTripTests(unittest.TestCase):
         # name, and "['not', 'a', 'name']" in a prompt is exactly the kind
         # of sentence these fields exist to keep out of one.
         self.assertEqual("", back["name"])
+
+
+    def test_the_expertise_tab_route_answers_off_the_same_file(self):
+        # The route the settings panel reads. It takes no project: the
+        # profile is the same person in every one, so it hangs off the vault
+        # rather than the directory the chat happened to open on.
+        with mock.patch("human_compact.trajectory.supabase_client"
+                        ".set_reader_profile",
+                        side_effect=RuntimeError("no account")), \
+             self.server() as base:
+            cold = self.get(base + "/api/reader")
+            self.assertEqual((True, False, False),
+                             (cold["ok"], cold["answered"], cold["graded"]))
+            self.op(base, {"op": "setup_profile",
+                           "profile": dict(MAYA, knowledge=[
+                               {"area": "Gene expression", "level": 75}])})
+            warm = self.get(base + "/api/reader")
+        self.assertTrue(warm["answered"])
+        self.assertTrue(warm["graded"])
+        self.assertEqual("second-year", warm["year_said"])
+        self.assertEqual(READER.CAPABILITY[75], warm["knowledge"][0]["says"])
+        # And it is the file the page wrote, not a second store.
+        self.assertEqual(READER.normalize(dict(MAYA, knowledge=[
+            {"area": "Gene expression", "level": 75}])), warm["profile"])
 
 
 class KnowledgeSurvivesLocalEditsTests(unittest.TestCase):
