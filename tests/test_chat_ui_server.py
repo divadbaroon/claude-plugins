@@ -738,12 +738,12 @@ class ChatUiServerTests(unittest.TestCase):
         with server_for(self.a) as url, sync_playwright() as playwright:
             # The control that used to make this row is gone from the tree;
             # the op behind it is the one the browser calls either way.
-            self.assertEqual({"ok": True}, post_json(
+            self.assertTrue(post_json(
                 url + "/api/op",
                 {"op": "add_goal", "title": child_title,
                  "parent_goal_id": "a1"},
                 {"Origin": url},
-            ))
+            )["ok"])
             child_id = [g["id"] for g in get_json(url + "/api/state")["goals"]
                         if g["title"] == child_title]
             self.assertEqual(1, len(child_id))

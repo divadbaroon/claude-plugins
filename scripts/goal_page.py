@@ -26,6 +26,9 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8877)
     ap.add_argument("--no-open", action="store_true",
                     help="print the URL without opening a browser")
+    ap.add_argument("--seed", action="store_true",
+                    help="start on the design's example goal, not an empty chat "
+                         "(Build all still runs a real build, in this directory)")
     args = ap.parse_args(argv)
     loaded = Path(UI.__file__).resolve()
     if HC_SRC not in loaded.parents:
@@ -35,10 +38,34 @@ def main(argv=None):
     # re-running its own arguments through the cli -- which is not this
     # script. The page's own files are read from disk on every request.
     os.environ.setdefault("HC_AUTO_RELOAD", "0")
+    # A disposable session is not this machine's work: the edits made here
+    # stay in the temporary directory and are never sent to the account.
+    os.environ.setdefault("HC_AUTOSYNC_SECONDS", "0")
     with tempfile.TemporaryDirectory(prefix="engelbart-goal-page-") as tmp:
+        chat = Path(tmp) / "chat"
+        if args.seed:
+            chat.mkdir()
+            seed(chat)
         UI.run(port=args.port, open_browser=not args.no_open,
-               trajdir=Path(tmp) / "chat", label="Goal page")
+               trajdir=chat, label="Goal page")
     return 0
+
+
+def seed(chat):
+    """The design's example content, written through the page's own
+    operations: the goal, three subgoals, two todos on the first."""
+    goal = UI._apply({"op": "add_goal",
+                      "title": "Create an interface to import the dataset"},
+                     chat)["id"]
+    subgoals = [
+        UI._apply({"op": "add_goal", "title": title, "parent_goal_id": goal},
+                  chat)["id"]
+        for title in ("Create a blank interface with an import button",
+                      "Save the dataset locally to my project folder",
+                      "Allow me to inspect the dataset in a CSV viewer")]
+    for text in ("Create a blank interface", "Add an import button"):
+        UI._apply({"op": "add_todo_row", "goal_id": subgoals[0], "text": text},
+                  chat)
 
 
 if __name__ == "__main__":

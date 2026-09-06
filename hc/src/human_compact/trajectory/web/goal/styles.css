@@ -197,6 +197,24 @@ input, textarea { outline: none; }
 .build-btn:hover { opacity: var(--hover-opacity); }
 .build-btn:disabled { opacity: var(--disabled-opacity); pointer-events: none; }
 .build-caret { font: 11px/1 var(--font-sans); }
+/* A row the builder holds is read, not edited; what it says sits beside it. */
+.todo.is-held .todo-text { color: var(--fnt); }
+.todo.is-held .todo-mark { color: var(--bd2); cursor: default; }
+.todo-status { flex: none; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: var(--fnt); }
+.todo-status.is-failed { color: var(--del); }
+.build-note { margin-right: auto; align-self: center; font: 12px/1.5 var(--font-sans); color: var(--fnt); }
+.build-note.is-error { color: var(--del); }
+
+/* No goal yet: the one line that asks for it, alone in the main column. */
+.main.is-empty { justify-content: center; align-items: center; }
+.empty { display: flex; flex-direction: column; gap: 12px; width: min(560px, 100%); }
+.empty-label { padding-left: 2px; font: 400 15px/1.4 var(--font-sans); color: var(--mut); }
+.goal-input { width: 100%; padding: 12px 14px; border: 1px solid var(--bd); border-radius: var(--radius-md); background: var(--panel); font: 17px/1.4 var(--font-sans); color: var(--ink); transition: border-color var(--dur-fast); }
+.goal-input:focus { border-color: var(--bd2); }
+.goal-input::placeholder { color: var(--fnt); }
+.pane.is-blank { justify-content: center; align-items: center; }
+.pane.is-blank .empty { align-items: flex-start; width: min(480px, 100%); }
+.first-subgoal-btn { margin-left: 0; }
 
 /* Live preview */
 .preview { min-height: 360px; background: var(--panel); border: 1px solid var(--bd); border-radius: var(--radius-sm); overflow: hidden; }

@@ -8,26 +8,34 @@
 
 export const TABS = ["plan", "preview", "terminal"];
 
+// The builder holds a row from the moment it is picked until it comes
+// back; a row that failed is the reader's again, to reword or to clear.
+export const WITH_BUILDER = new Set(["queued", "building", "asking"]);
+
 export const EMPTY_SLICE = Object.freeze({
   notes: "",
   chat: [],          // [{ id, who: "you" | "bart", kind: "text" | "proposal", text, added? }]
   draft: "",         // the message being typed to Bart
   newTodo: "",       // the todo being typed
-  todos: [],         // [{ id, text, done }]
+  todos: [],         // [{ id, text, done, status }] -- status as the server keeps it
   todosShown: null,  // null until the reader chooses: shown iff there are todos
 });
 
 export function initialState() {
   return {
     status: "loading",      // "loading" | "ready" | "failed"
-    goal: null,             // { id, title }
-    subgoals: [],           // [{ id, title }]
+    goal: null,             // { id, title, status }
+    empty: false,           // ready, and the workspace has no goal yet
+    goalDraft: "",          // the goal being typed into an empty workspace
+    revision: null,         // the goals' revision the page last drew
+    subgoals: [],           // [{ id, title, status }]
     activeId: null,
     tab: "plan",            // one of TABS
     slices: {},             // subgoal id -> slice
     addingSubgoal: false,
     subgoalDraft: "",
     building: null,         // the subgoal id whose Build all is out, else null
+    buildNote: null,        // what the builder answered when it would not start: { text, error }
     preview: null,          // what getPreview answered
     terminal: null,         // what getTerminal answered
     account: null,          // what loadAccount answered: { connected, email, ... }
@@ -75,6 +83,19 @@ export function todosShown(slice) {
   return slice.todosShown === null ? slice.todos.length > 0 : slice.todosShown;
 }
 
+export function isWithBuilder(todo) {
+  return WITH_BUILDER.has(todo.status);
+}
+
+/* The rows the reader can still hand over: not done, not already out. */
+export function openTodos(slice) {
+  return slice.todos.filter((todo) => !todo.done && !isWithBuilder(todo));
+}
+
 export function hasOpenTodos(slice) {
-  return slice.todos.some((todo) => !todo.done);
+  return openTodos(slice).length > 0;
+}
+
+export function anyWithBuilder(slice) {
+  return slice.todos.some(isWithBuilder);
 }

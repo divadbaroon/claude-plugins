@@ -26,6 +26,11 @@ function draw(state) {
     const input = host.querySelector('[data-key="sub-add-input"]');
     if (input && document.activeElement !== input) input.focus();
   }
+  // A workspace with no goal opens on the line that asks for one.
+  if (state.status === "ready" && state.empty) {
+    const input = host.querySelector("#goal-input");
+    if (input && document.activeElement !== input) input.focus();
+  }
 }
 
 store.subscribe(draw);
