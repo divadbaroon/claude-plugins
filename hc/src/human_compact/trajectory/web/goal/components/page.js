@@ -11,7 +11,7 @@ import { renderTerminal } from "./terminal.js";
 
 export function renderPage(state, actions) {
   return h("div", { class: "app" },
-    renderHeader(state),
+    renderHeader(state, actions),
     h("div", { class: "body" },
       renderBreakdown(state, actions),
       h("main", { class: "main" },

@@ -7,7 +7,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -1931,6 +1933,169 @@ def _supabase_status(SB, root, cwd=None):
     else:
         state["display_name"] = ""
     return state
+
+
+# The machine's account, from the page. `engelbart auth` and `engelbart
+# logout` are the only code that knows how to connect a machine -- the
+# device flow, auth.json, the Claude Code helper, the vault config -- so the
+# page runs those same commands through the server rather than the server
+# keeping a second copy of them that would drift.
+
+NO_CLI = ("The Engelbart CLI is not on this machine. Install it, then sign "
+          "in from a terminal with `engelbart auth`.")
+
+_CODE_LINE = re.compile(r"^\s*code\s+(\S+)\s*$")
+_PAGE_LINE = re.compile(r"^\s*page\s+(\S+)\s*$")
+
+
+def engelbart_cli(env=None, home=None):
+    """The Engelbart CLI on this machine, or None.
+
+    ENGELBART_CLI names one outright (a checkout, a stand-in in a test);
+    else the installer's copy under ~/.local/bin; else whatever PATH has.
+    """
+    env = os.environ if env is None else env
+    named = env.get("ENGELBART_CLI")
+    if named:
+        return named if Path(named).is_file() else None
+    name = "engelbart.exe" if sys.platform == "win32" else "engelbart"
+    installed = Path(home or Path.home()) / ".local" / "bin" / name
+    if installed.is_file():
+        return str(installed)
+    return shutil.which("engelbart")
+
+
+class AccountSignIn:
+    """One `engelbart auth` at a time, run for the page.
+
+    The CLI prints the code and the page that approves it, opens that page
+    in the browser, and waits for the approval; the page reads the code
+    from here and asks again until the command has finished.
+    """
+
+    KEEP_LINES = 40
+
+    def __init__(self):
+        self.guard = threading.RLock()
+        self.proc = None
+        self._reset()
+
+    def _reset(self):
+        self.status = "idle"      # idle | waiting | ready | failed | cancelled
+        self.code = ""
+        self.url = ""
+        self.error = ""
+        self.lines = []
+
+    def snapshot(self):
+        with self.guard:
+            return {"ok": True, "status": self.status, "code": self.code,
+                    "url": self.url, "error": self.error}
+
+    def running(self):
+        with self.guard:
+            return self.proc is not None and self.proc.poll() is None
+
+    def start(self, cli, env=None, wait=10.0):
+        """Run the CLI unless one is already waiting; answer once the code
+        is on hand, or once `wait` seconds have passed without it."""
+        with self.guard:
+            if self.running():
+                return self.snapshot()
+            self._reset()
+            if not cli:
+                self.status = "failed"
+                self.error = NO_CLI
+                return self.snapshot()
+            try:
+                self.proc = subprocess.Popen(
+                    [cli, "auth", "--no-open"],
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, errors="replace",
+                    env=env)
+            except OSError as exc:
+                self.status = "failed"
+                self.error = f"The Engelbart CLI could not be run: {exc}"
+                return self.snapshot()
+            self.status = "waiting"
+            threading.Thread(target=self._follow, args=(self.proc,),
+                             daemon=True).start()
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            with self.guard:
+                if (self.code and self.url) or self.status != "waiting":
+                    break
+            time.sleep(0.05)
+        return self.snapshot()
+
+    def _follow(self, proc):
+        with proc.stdout:
+            for raw in proc.stdout:
+                line = raw.rstrip("\r\n")
+                with self.guard:
+                    if proc is not self.proc:
+                        continue
+                    self.lines.append(line)
+                    del self.lines[:-self.KEEP_LINES]
+                    found = _CODE_LINE.match(line)
+                    if found:
+                        self.code = found.group(1)
+                    found = _PAGE_LINE.match(line)
+                    if found:
+                        self.url = found.group(1)
+        code = proc.wait()
+        with self.guard:
+            if proc is not self.proc or self.status != "waiting":
+                return
+            if code == 0:
+                self.status = "ready"
+                return
+            self.status = "failed"
+            said = [line.strip() for line in self.lines if line.strip()]
+            self.error = said[-1] if said else f"engelbart auth exited with {code}"
+
+    def cancel(self):
+        with self.guard:
+            proc = self.proc if self.running() else None
+            if self.status == "waiting":
+                self.status = "cancelled"
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            except OSError:
+                pass
+        return self.snapshot()
+
+
+ACCOUNT_SIGN_IN = AccountSignIn()
+
+
+def sign_out(cli, env=None, timeout=60):
+    """Run `engelbart logout`: the machine token is revoked at the backend,
+    the Claude Code helper unwired, auth.json removed. Answers with what
+    the CLI said last."""
+    if not cli:
+        return {"ok": False, "error": NO_CLI}
+    try:
+        done = subprocess.run(
+            [cli, "logout"], stdin=subprocess.DEVNULL, capture_output=True,
+            text=True, errors="replace", env=env, timeout=timeout)
+    except OSError as exc:
+        return {"ok": False, "error": f"The Engelbart CLI could not be run: {exc}"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "`engelbart logout` did not finish; "
+                                      "run it in a terminal."}
+    said = [line.strip() for line in (done.stdout + done.stderr).splitlines()
+            if line.strip()]
+    last = said[-1] if said else ""
+    if done.returncode != 0:
+        return {"ok": False,
+                "error": last or f"engelbart logout exited with {done.returncode}"}
+    return {"ok": True, "message": last or "Disconnected."}
 
 
 # The shared workspaces this process has opened, by project. One server
@@ -4176,6 +4341,8 @@ class H(BaseHTTPRequestHandler):
                     cwd = _project_identity(
                         self.server.trajdir, True, session_id).get("cwd")
                 self._send(200, _supabase_status(SB, root, cwd))
+            elif self.path == "/api/account/sign-in":
+                self._send(200, ACCOUNT_SIGN_IN.snapshot())
             elif self.path.split("?", 1)[0] == "/api/claude-account":
                 # Which account `claude` runs on -- the pool key or the
                 # member's own login -- read from the same settings wiring
@@ -4563,6 +4730,17 @@ class H(BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(n))
             except (ValueError, TypeError):
                 self._send(400, {"ok": False, "error": "bad json"})
+                return
+            if self.path == "/api/account/sign-in":
+                # Behind the JSON media-type check on purpose: a page
+                # from another origin cannot start one.
+                self._send(200, ACCOUNT_SIGN_IN.start(engelbart_cli()))
+                return
+            if self.path == "/api/account/sign-in/cancel":
+                self._send(200, ACCOUNT_SIGN_IN.cancel())
+                return
+            if self.path == "/api/account/sign-out":
+                self._send(200, sign_out(engelbart_cli()))
                 return
             if self.path == "/api/op":
                 if not isinstance(body, dict):

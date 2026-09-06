@@ -30,6 +30,11 @@ export function initialState() {
     building: null,         // the subgoal id whose Build all is out, else null
     preview: null,          // what getPreview answered
     terminal: null,         // what getTerminal answered
+    account: null,          // what loadAccount answered: { connected, email, ... }
+    accountOpen: false,     // the account popover in the header
+    accountBusy: false,     // a sign-out on its way
+    accountNote: null,      // what the last sign-out said: { text, error }
+    signIn: null,           // an `engelbart auth` in flight: { status, code, url, error }
   };
 }
 

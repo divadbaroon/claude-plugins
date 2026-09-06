@@ -32,5 +32,15 @@ store.subscribe(draw);
 draw(store.get());
 actions.boot();
 
+// On the capture phase: by the time a click has bubbled up, the row it
+// landed on may have been redrawn out of the tree and no longer counts as
+// inside the menu.
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-account]")) actions.closeAccount();
+}, true);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") actions.closeAccount();
+});
+
 // For the console and the tests; nothing on the page reads it.
 window.engelbart = { store, actions, services };
