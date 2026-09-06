@@ -464,6 +464,20 @@ class SubgoalTests(unittest.TestCase):
         self.assertEqual(["w1", "w2", "w3"], [k["relevance_why"] for k in kids])
         self.assertEqual([["a", "b"], [], []],
                          [[r["text"] for r in k["todo_items"]] for k in kids])
+        # Each piece's notes open on what was said about it; the direction
+        # itself keeps its notes empty, as every goal's start.
+        self.assertEqual(["d1\n\nWhy this matters: w1", "d2\n\nWhy this matters: w2",
+                          "d3\n\nWhy this matters: w3"], [k["notes"] for k in kids])
+        self.assertEqual("", parents[0]["notes"])
+
+    def test_the_notes_seed_says_only_what_the_setup_said(self):
+        self.assertEqual("", SC.seed_notes("", ""))
+        self.assertEqual("What it is", SC.seed_notes("  What it is ", None))
+        self.assertEqual("Why this matters: because", SC.seed_notes(None, "because"))
+        goals = SC.to_goals([{"label": "a"}], "a", [],
+                            [{"label": "piece", "todos": ["row"]}])
+        kid = [g for g in goals if g.get("parent_goal_id")][0]
+        self.assertEqual("", kid["notes"])
 
     def test_without_pieces_the_rows_stay_on_the_goal(self):
         goals = SC.to_goals([{"label": "a"}], "a", ["one"], [])
@@ -482,6 +496,55 @@ class SubgoalTests(unittest.TestCase):
         parents = [g for g in goals if not g.get("parent_goal_id")]
         self.assertEqual(["a", "b"], [g["title"] for g in parents])
         self.assertEqual(1, len([g for g in goals if g.get("parent_goal_id")]))
+
+
+class NotesBackfillTests(unittest.TestCase):
+    """A project set up before the pieces' notes were seeded gets them once."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def _tree(self, notes=("", "", "")):
+        goals = SC.to_goals(
+            [{"label": "Direction", "why": "because"}], "Direction", [],
+            [{"label": "One", "description": "d1", "why": "w1", "todos": ["a"]},
+             {"label": "Two", "description": "d2", "why": "", "todos": []},
+             {"label": "Three", "description": "", "why": "w3", "todos": []}])
+        kids = [g for g in goals if g.get("parent_goal_id")]
+        for kid, text in zip(kids, notes):
+            kid["notes"] = text
+        CS.save_goals("chat", {"version": 1, "goals": goals}, {"items": []}, self.root)
+
+    def _notes(self):
+        goals, _important = CS.load_goals("chat", self.root)
+        return [g["notes"] for g in goals["goals"] if g.get("parent_goal_id")]
+
+    def test_pieces_from_before_get_the_seed_once(self):
+        self._tree()
+        self.assertEqual(3, SC.backfill_notes("chat", self.root))
+        self.assertEqual(["d1\n\nWhy this matters: w1", "d2", "Why this matters: w3"],
+                         self._notes())
+        # Written once: the seeds are notes now, and a second look finds a
+        # tree with notes in it.
+        self.assertEqual(0, SC.backfill_notes("chat", self.root))
+
+    def test_a_tree_anybody_has_written_notes_in_is_left_alone(self):
+        self._tree(notes=("", "the reader's own words", ""))
+        self.assertEqual(0, SC.backfill_notes("chat", self.root))
+        self.assertEqual(["", "the reader's own words", ""], self._notes())
+
+    def test_only_the_reader_s_own_pieces_are_seeded(self):
+        self._tree()
+        goals, important = CS.load_goals("chat", self.root)
+        for g in goals["goals"]:
+            if g["title"] == "Two":
+                g["origin"] = "inferred"
+        CS.save_goals("chat", goals, important, self.root)
+        self.assertEqual(2, SC.backfill_notes("chat", self.root))
+        self.assertEqual(["d1\n\nWhy this matters: w1", "", "Why this matters: w3"],
+                         self._notes())
 
 
 class NameTests(unittest.TestCase):

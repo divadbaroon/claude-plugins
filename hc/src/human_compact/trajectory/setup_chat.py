@@ -875,6 +875,11 @@ def _goal(doc, title, description, rows, parent=None, phase="",
                               "title": str(document.get("title") or "")[:200],
                               "body_md": str(document.get("body_md") or "")}]
         goal["primary_document_id"] = did
+    # A piece's notes open on what the setup said about it -- what it is,
+    # then why it matters -- so the goal page shows the plan the reader
+    # approved rather than an empty box. Theirs to edit from there.
+    if parent:
+        goal["notes"] = seed_notes(description, purpose)
     # No status is what the rail means by "not yet sent to a build", and
     # setup has run nothing: every row it writes is the reader's to send.
     goal["todo_items"] = [{"id": GM.todo_id(), "text": text, "depth": 0,
@@ -883,6 +888,52 @@ def _goal(doc, title, description, rows, parent=None, phase="",
     goal["todos_md"] = GM.render_todos(goal["todo_items"])
     goal["status"] = "in_progress" if rows else "active"
     return goal
+
+
+def seed_notes(description, why) -> str:
+    """What a piece's notes say before the reader has written any.
+
+    The setup's description of the piece, then why it matters, worded the
+    way the workspace's Current pane words it. "" when the setup said
+    nothing about the piece, so an empty box stays an empty box.
+    """
+    parts = []
+    said = str(description or "").strip()
+    if said:
+        parts.append(said)
+    reason = str(why or "").strip()
+    if reason:
+        parts.append("Why this matters: " + reason)
+    return "\n\n".join(parts)
+
+
+def backfill_notes(session_id: str, root=None) -> int:
+    """Notes for the pieces of a project set up before setup wrote them.
+
+    A tree the setup wrote holds each piece's description and its why, and
+    until the goal page opened on them the notes stayed empty. This writes
+    the seed once, into every piece the setup made -- a subgoal of the
+    reader's own with a description or a why and no notes -- and only into
+    a tree where nobody has written notes at all: a tree with notes anywhere
+    is one the reader has been working in, and a piece they emptied on
+    purpose is not one to fill back in. Returns how many were written.
+    """
+    from . import chat_state as CS
+    goals, important = CS.load_goals(session_id, root)
+    rows = [g for g in goals.get("goals") or [] if isinstance(g, dict)]
+    if any(str(g.get("notes") or "").strip() for g in rows):
+        return 0
+    written = 0
+    for g in rows:
+        if not g.get("parent_goal_id") or g.get("origin") != "user":
+            continue
+        seed = seed_notes(g.get("description"), g.get("relevance_why"))
+        if seed:
+            g["notes"] = seed
+            written += 1
+    if written and not CS.save_goals(session_id, goals, important, root):
+        return 0
+    return written
 
 
 def to_project(name, plan, provenance=None) -> Dict[str, Any]:

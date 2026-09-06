@@ -30,7 +30,9 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 from human_compact.trajectory import autosync as AUTOSYNC  # noqa: E402
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
+from human_compact.trajectory import reader as READER  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
+from human_compact.trajectory import web_setup as WS  # noqa: E402
 
 NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 GOAL_DIR = ROOT / "hc" / "src" / "human_compact" / "trajectory" / "web" / "goal"
@@ -92,6 +94,56 @@ def seed_design(chat):
         ui._apply({"op": "add_todo_row", "goal_id": subgoals[0], "text": text},
                   chat)
     return goal, subgoals
+
+
+# What the site saves at the end of its onboarding, as /bart claims it: three
+# directions offered, one chosen and broken into three described pieces, rows
+# under the first piece only. Nothing under the two directions not taken.
+WEB_SETUP = {
+    "name": "Signed uploads",
+    "plan": {"description": "Move uploads off the API server.\nSign, then PUT."},
+    "goals": [{"label": "Direct-to-storage uploads", "why": "the API is the bottleneck"},
+              {"label": "Resumable uploads", "why": "large files fail midway"},
+              {"label": "Upload quotas", "why": "storage is unmetered"}],
+    "chosen": "Direct-to-storage uploads",
+    "todos": [],
+    "subgoals": [
+        {"label": "Signing route", "description": "Mint short-lived URLs",
+         "why": "nothing else can start without it",
+         "todos": ["Add POST /uploads/sign", "Scope the token"]},
+        {"label": "Client PUTs", "description": "Browser writes to storage",
+         "why": "it is the traffic being moved", "todos": []},
+        {"label": "Retire the proxy", "description": "Delete the old path",
+         "why": "two paths is one too many", "todos": []},
+    ],
+    "reader": {"name": "Maya", "level": "expert"},
+}
+PIECE_NOTES = {
+    "Signing route": "Mint short-lived URLs\n\nWhy this matters: nothing else can start without it",
+    "Client PUTs": "Browser writes to storage\n\nWhy this matters: it is the traffic being moved",
+    "Retire the proxy": "Delete the old path\n\nWhy this matters: two paths is one too many",
+}
+
+
+def claim_web_setup(case, payload=WEB_SETUP):
+    """What /bart does for a chat the hooks have seen and nobody has asked
+    about, on a machine connected to an account with a finished setup
+    waiting: the project is made and the chat bound to it. Returns the
+    chat's directory and the directory of the workspace holding the
+    project's tree -- the two a server can be started on."""
+    sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    CS.ingest_hook({"session_id": sid, "hook_event_name": "SessionStart",
+                    "cwd": str(case.root / "repo")}, root=case.root)
+    (case.home / "auth.json").write_text(json.dumps({
+        "schema": 1, "token": "egb_x", "apiBase": "https://example.test"}),
+        encoding="utf-8")
+    with mock.patch.object(READER, "remember", return_value={"ok": True}):
+        said = WS.claim_for_chat(sid, case.root, {"HUMAN_COMPACT_HOME": str(case.home)},
+                                 fetch=lambda account: json.loads(json.dumps(payload)))
+    case.assertEqual('created "Signed uploads" from your web setup; this chat is in it', said)
+    tree = CS.tree_session(sid, case.root)
+    case.assertNotEqual(sid, tree)
+    return CS.paths(sid, case.root).session_dir, CS.paths(tree, case.root).session_dir
 
 
 def stored_rows(chat, goal_id):
@@ -327,6 +379,7 @@ class GoalDataRouteTests(ChatCase):
         self.assertEqual([], answer["subgoals"])
         self.assertEqual({}, answer["slices"])
         self.assertEqual([], answer["goals"])
+        self.assertIsNone(answer["project"])
         self.assertTrue(answer["revision"])
 
     def test_the_page_reads_the_goal_its_subgoals_and_their_rows(self):
@@ -392,6 +445,73 @@ class GoalDataRouteTests(ChatCase):
                     g["status"] = "completed"
             CS.save_goals("chat", goals, important, self.root)
             self.assertEqual(finished, get_json(url + "/api/goal-page")["goal"]["id"])
+
+    def test_a_goal_with_something_under_it_comes_before_an_empty_one(self):
+        # Two open goals, the newer one bare, the older one with a subgoal:
+        # the page opens on the one with work under it. An empty goal that
+        # is the newest thing is what a direction the reader passed over
+        # looks like; and with nothing under any of them, newest wins.
+        worked = ui._apply({"op": "add_goal", "title": "Worked"}, self.chat)["id"]
+        ui._apply({"op": "add_goal", "title": "Its piece", "parent_goal_id": worked}, self.chat)
+        bare = ui._apply({"op": "add_goal", "title": "Bare"}, self.chat)["id"]
+        started = ui._apply({"op": "add_goal", "title": "Started"}, self.chat)["id"]
+        goals, important = self.goals()
+        by_id = {g["id"]: g for g in goals["goals"]}
+        by_id[worked]["updated_at"] = "2026-09-01T10:00:00+00:00"
+        by_id[bare]["updated_at"] = "2026-09-05T10:00:00+00:00"
+        by_id[started]["updated_at"] = "2026-09-03T10:00:00+00:00"
+        CS.save_goals("chat", goals, important, self.root)
+        with server_for(self.chat) as url:
+            self.assertEqual(worked, get_json(url + "/api/goal-page")["goal"]["id"])
+            # A goal the reader marked in progress counts the same as one
+            # with work under it, and between the two the newer wins.
+            goals, important = self.goals()
+            for g in goals["goals"]:
+                if g["id"] == started:
+                    g["status"] = "in_progress"
+            CS.save_goals("chat", goals, important, self.root)
+            self.assertEqual(started, get_json(url + "/api/goal-page")["goal"]["id"])
+            # The address still names any of them.
+            self.assertEqual(bare, get_json(url + f"/api/goal-page?goal={bare}")["goal"]["id"])
+
+    def test_a_project_set_up_on_the_web_opens_on_the_direction_chosen(self):
+        chat, tree = claim_web_setup(self)
+        # The chat's own workspace and the project's read the same tree,
+        # and both answer the same page: the direction the reader chose,
+        # not the last of the three offered in the same second; its pieces
+        # as subgoals, each with notes seeded from what the setup said about
+        # it, and rows under the first; and the project with its plan, for
+        # the header.
+        for where in (chat, tree):
+            with server_for(where) as url:
+                answer = get_json(url + "/api/goal-page")
+            self.assertEqual("Direct-to-storage uploads", answer["goal"]["title"], where)
+            self.assertEqual("in_progress", answer["goal"]["status"])
+            self.assertEqual(["Signing route", "Client PUTs", "Retire the proxy"],
+                             [s["title"] for s in answer["subgoals"]])
+            slices = {s["title"]: answer["slices"][s["id"]] for s in answer["subgoals"]}
+            self.assertEqual(PIECE_NOTES, {title: s["notes"] for title, s in slices.items()})
+            self.assertEqual([["Add POST /uploads/sign", "Scope the token"], [], []],
+                             [[t["text"] for t in slices[title]["todos"]]
+                              for title in ("Signing route", "Client PUTs", "Retire the proxy")])
+            self.assertEqual({"name": "Signed uploads",
+                              "objective": "Move uploads off the API server.",
+                              "plan": "Move uploads off the API server.\nSign, then PUT."},
+                             answer["project"])
+            # The directions not taken are kept, out of the way: the
+            # address could still name one.
+            self.assertEqual(["Direct-to-storage uploads", "Resumable uploads", "Upload quotas"],
+                             [g["title"] for g in answer["goals"]])
+        # The notes are the reader's from here: a save through the page's
+        # door replaces the seed, and the page reads the saved text back.
+        with server_for(chat) as url:
+            answer = get_json(url + "/api/goal-page")
+            first = answer["subgoals"][0]["id"]
+            written = post_json(url + "/api/goal-page/op",
+                                {"op": "set_notes", "goal_id": first, "notes": "Sign with a KMS key."})
+            self.assertTrue(written["ok"])
+            self.assertEqual("Sign with a KMS key.",
+                             get_json(url + "/api/goal-page")["slices"][first]["notes"])
 
     def test_the_page_writes_through_its_own_door(self):
         goal, subgoals = seed_design(self.chat)
@@ -977,6 +1097,42 @@ class GoalPageBrowserTests(BrowserCase):
             page.reload(wait_until="domcontentloaded")
             expect(page.get_by_role("heading", name=GOAL_TITLE)).to_be_visible()
             expect(page.locator(".rail .sub")).to_have_text([SUBGOAL_TITLES[0]])
+            self.assertEqual([], errors)
+
+    def test_a_project_set_up_on_the_web_fills_the_page(self):
+        expect = self.expect
+        chat, _tree = claim_web_setup(self)
+        with server_for(chat) as url, self.page_on(url) as (page, errors):
+            # The header is the path to where the reader is -- the project
+            # from the web setup, then the direction they chose -- with the
+            # plan they approved under it.
+            expect(page.locator(".crumbs")).to_contain_text("Engelbart")
+            expect(page.locator(".project-name")).to_have_text("Signed uploads")
+            expect(page.get_by_role("heading", name="Direct-to-storage uploads")).to_be_visible()
+            expect(page.locator(".goal-plan")).to_have_text(
+                "Move uploads off the API server.\nSign, then PUT.")
+            expect(page.get_by_label("What is the goal?")).to_have_count(0)
+            # The pieces are the rail, the first one open, its notes what
+            # the setup said about it and its rows ready to build.
+            expect(page.locator(".rail .sub")).to_have_text(
+                ["Signing route", "Client PUTs", "Retire the proxy"])
+            expect(page.locator(".notes-input")).to_have_value(PIECE_NOTES["Signing route"])
+            rows = page.locator(".todo-list .todo:not(.todo-new)")
+            expect(rows).to_have_count(2)
+            expect(rows.nth(0).locator(".todo-text")).to_have_value("Add POST /uploads/sign")
+            expect(rows.nth(1).locator(".todo-text")).to_have_value("Scope the token")
+            page.locator(".rail .sub").nth(2).click()
+            expect(page.locator(".notes-input")).to_have_value(PIECE_NOTES["Retire the proxy"])
+            # Editable as before: typed over, saved to the tree, kept.
+            page.locator(".notes-input").fill("Delete the old path once the client PUTs land.")
+            self.assertTrue(wait_for(lambda: any(
+                g.get("notes") == "Delete the old path once the client PUTs land."
+                for g in CS.load_goals(chat.name, self.root)[0]["goals"])))
+            page.reload(wait_until="domcontentloaded")
+            expect(page.locator(".project-name")).to_have_text("Signed uploads")
+            page.locator(".rail .sub").nth(2).click()
+            expect(page.locator(".notes-input")).to_have_value(
+                "Delete the old path once the client PUTs land.")
             self.assertEqual([], errors)
 
     def test_the_account_icon_says_who_the_machine_is_connected_as(self):

@@ -294,6 +294,29 @@ class ChatUiTests(unittest.TestCase):
         self.assertEqual(["http://127.0.0.1:9012/"], lines)
         self.assertFalse(CS.project_bound(self.sid))
 
+    def test_bart_seeds_the_notes_a_setup_from_before_left_empty(self):
+        # A project made by the setup before it wrote notes on the pieces:
+        # the same tree, with every piece's notes blank. Opening the chat
+        # writes them from the descriptions, once, and says nothing about it.
+        from human_compact.trajectory import setup_chat as SC
+        made = SC.commit(None, "Signed uploads", web_payload()["plan"],
+                         web_payload()["goals"], "Direct-to-storage uploads", [],
+                         web_payload()["subgoals"], bind=self.sid)
+        self.assertTrue(made["ok"])
+        goals, important = CS.load_goals(self.sid)
+        for g in goals["goals"]:
+            g["notes"] = ""
+        CS.save_goals(self.sid, goals, important)
+        code, lines = self._open(None)
+        self.assertEqual(0, code)
+        self.assertEqual(["http://127.0.0.1:9012/"], lines)
+        goals, _important = CS.load_goals(self.sid)
+        self.assertEqual(
+            {"Signing route": "Mint short-lived URLs\n\nWhy this matters: nothing else can start without it",
+             "Client PUTs": "Browser writes to storage\n\nWhy this matters: it is the traffic being moved",
+             "Retire the proxy": "Delete the old path\n\nWhy this matters: two paths is one too many"},
+            {g["title"]: g["notes"] for g in goals["goals"] if g.get("parent_goal_id")})
+
 
 class SetupImportTests(unittest.TestCase):
     """`hc setup-import` and the claim share one commit path."""

@@ -23,9 +23,16 @@ there takes one object of named arguments and returns a promise; replace
 the bodies, keep the signatures.
 
 The goals are real. `loadGoal` reads `GET /api/goal-page`: the goal the
-address names (`/?goal=<id>`), or the top-level goal touched most recently
-when it names none; its subgoals; and for each the notes and the todo rows,
-straight from the chat's `goals.json` through the goals model. A workspace
+address names (`/?goal=<id>`), or when it names none the top-level goal
+touched most recently, among those in progress or with something under
+them; its subgoals; for each the notes and the todo rows, straight from the
+chat's `goals.json` through the goals model; and the project the chat is
+in, whose name and plan the header shows. This is how a project finished
+in the web onboarding arrives: `/bart` claims it, writes its tree and binds
+the chat, and the page opens on the direction the reader chose (the ones
+they were offered and did not take stay in the tree, with nothing under
+them) with its pieces as subgoals, each piece's notes seeded from the
+setup's description and its why, and the plan under the goal. A workspace
 with no goal answers empty, and the page asks for one in a line; a goal
 with nothing under it yet asks for its first subgoal, since the notes,
 the conversation and the todos each belong to one. Every

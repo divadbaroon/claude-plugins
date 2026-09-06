@@ -383,21 +383,27 @@ def _todo_row(row):
             "status": status}
 
 
-def _pick_goal(tops, wanted):
+def _pick_goal(tops, wanted, worked=()):
     """The goal the page is about.
 
-    The one the address names, when that is a top-level goal here;
-    otherwise the top-level goal touched most recently that is still open;
-    otherwise any that is not archived. Between goals touched at the same
-    moment the later one in the tree wins: the goal added last, when
-    nothing has been done since.
+    The one the address names, when that is a top-level goal here.
+    Otherwise the open top-level goal touched most recently -- among those
+    in progress or with something under them, when there are any: a project
+    set up on the web keeps the directions the reader was offered and did
+    not take as open goals with nothing under them, made in the same second
+    as the one they chose, and the page opens on the chosen one. Otherwise
+    any that is not archived. Between goals touched at the same moment the
+    later one in the tree wins: the goal added last, when nothing has been
+    done since. *worked* names the goals with a subgoal or a row under them.
     """
     wanted = str(wanted or "").strip()
     for goal in tops:
         if wanted and goal.get("id") == wanted:
             return goal
-    pool = [g for g in tops
-            if g.get("status") in ("active", "in_progress")] or tops
+    open_goals = [g for g in tops if g.get("status") in ("active", "in_progress")]
+    busy = [g for g in open_goals
+            if g.get("status") == "in_progress" or g.get("id") in worked]
+    pool = busy or open_goals or tops
     chosen = None
     for goal in pool:
         if chosen is None or (str(goal.get("updated_at") or "")
@@ -419,7 +425,11 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
     rows = [g for g in goals.get("goals") or [] if isinstance(g, dict)]
     tops = [g for g in rows
             if not g.get("parent_goal_id") and g.get("status") != "archived"]
-    goal = _pick_goal(tops, wanted)
+    worked = ({g.get("parent_goal_id") for g in rows
+               if g.get("parent_goal_id") and g.get("status") != "archived"}
+              | {g.get("id") for g in tops
+                 if GM.normalize_todo_items(g.get("todo_items"))})
+    goal = _pick_goal(tops, wanted, worked)
     subgoals, slices = [], {}
     if goal is not None:
         for child in rows:
@@ -440,8 +450,41 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
         "slices": slices,
         "goals": [dict(_goal_row(g), updated_at=str(g.get("updated_at") or ""))
                   for g in tops],
+        "project": _goal_page_project(trajdir, chat_scoped),
         "revision": _goal_revision(goals, important),
     }
+
+
+def _goal_page_project(trajdir, chat_scoped):
+    """The project this workspace is in, for the header: its name and the
+    plan agreed at setup.
+
+    The chat's binding says which project, as everywhere else; a workspace
+    this vault minted for a project's directory has no binding and is asked
+    where it was opened instead. None for a chat in no project yet, for the
+    legacy global scope, and for anything that cannot be read -- the header
+    then goes without, and the page does not fail over it.
+    """
+    if not chat_scoped:
+        return None
+    try:
+        session_id, root = _chat_identity(trajdir)
+        home = CS.bound_project(session_id, root)
+        if not home:
+            manifest = _manifest_as_written(session_id, root)
+            if str(manifest.get("origin") or "") == "workspace":
+                home = str(manifest.get("cwd") or "")
+        if not home:
+            return None
+        record = PS.load_project(root, home)
+    except Exception:  # noqa: BLE001 - a header line is not worth a failed page
+        return None
+    name = str(record.get("name") or Path(home).name or "").strip()
+    objective = str(record.get("objective") or "").strip()
+    plan = str(record.get("description") or "").strip() or objective
+    if not (name or plan):
+        return None
+    return {"name": name, "objective": objective, "plan": plan}
 
 
 def _current_revision(trajdir, chat_scoped):
@@ -1097,13 +1140,18 @@ def _manifest_cwd(session_id, root):
     the directory's, which a seeded or copied workspace does -- and the
     directory it was started in is still the directory it was started in.
     """
+    cwd = _manifest_as_written(session_id, root).get("cwd")
+    return cwd if isinstance(cwd, str) else ""
+
+
+def _manifest_as_written(session_id, root):
+    """A chat's manifest as the file holds it, or {} when it cannot be read."""
     try:
         path = CS.paths(str(session_id), root).manifest
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ""
-    cwd = value.get("cwd") if isinstance(value, dict) else None
-    return cwd if isinstance(cwd, str) else ""
+    except (OSError, ValueError, TypeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 # The project's own record: one file per directory, under the vault base

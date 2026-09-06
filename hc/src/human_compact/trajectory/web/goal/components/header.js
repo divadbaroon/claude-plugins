@@ -1,4 +1,5 @@
-/* The header: the brand, the goal, and the account at the right. */
+/* The header: the brand, the project and the goal as a path, the plan the
+   project was set up with under the goal, and the account at the right. */
 
 import { h, svg } from "../dom.js";
 
@@ -17,10 +18,17 @@ const ICONS = {
 };
 
 export function renderHeader(state, actions) {
+  const project = state.project;
+  const plan = state.goal && project ? project.plan : "";
   return h("header", { class: "header" },
-    h("span", { class: "brand" }, "Engelbart"),
-    state.goal && h("span", { class: "crumb", "aria-hidden": "true" }, "/"),
-    state.goal && h("h1", { class: "goal-title" }, state.goal.title),
+    h("div", { class: "crumbs" },
+      h("span", { class: "brand" }, "Engelbart"),
+      project && project.name && h("span", { class: "crumb", "aria-hidden": "true" }, "/"),
+      project && project.name && h("span", { class: "project-name" }, project.name),
+      state.goal && h("span", { class: "crumb", "aria-hidden": "true" }, "/"),
+      state.goal && h("div", { class: "goal-head" },
+        h("h1", { class: "goal-title" }, state.goal.title),
+        plan && h("p", { class: "goal-plan", title: plan }, plan))),
     renderAccount(state, actions));
 }
 

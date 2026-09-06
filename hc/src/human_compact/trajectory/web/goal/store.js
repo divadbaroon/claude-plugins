@@ -25,6 +25,7 @@ export function initialState() {
   return {
     status: "loading",      // "loading" | "ready" | "failed"
     goal: null,             // { id, title, status }
+    project: null,          // the project the workspace is in: { name, objective, plan }, or null
     empty: false,           // ready, and the workspace has no goal yet
     goalDraft: "",          // the goal being typed into an empty workspace
     revision: null,         // the goals' revision the page last drew
