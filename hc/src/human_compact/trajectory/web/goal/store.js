@@ -30,6 +30,8 @@ export function initialState() {
     building: null,         // the subgoal id whose Build all is out, else null
     preview: null,          // what getPreview answered
     terminal: null,         // what getTerminal answered
+    account: null,          // what loadAccount answered: { connected, email, ... }
+    accountOpen: false,     // the account popover in the header
   };
 }
 
