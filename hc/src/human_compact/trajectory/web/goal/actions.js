@@ -89,6 +89,7 @@ export function createActions(store, services) {
       ...state,
       status: "ready",
       goal: loaded.goal,
+      project: loaded.project || null,
       empty: !loaded.goal,
       subgoals,
       activeId: kept ? state.activeId : (subgoals.length ? subgoals[0].id : null),

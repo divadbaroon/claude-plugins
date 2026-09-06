@@ -1862,6 +1862,14 @@ def chat_ui_main(argv=None):
         claimed = WS.claim_for_chat(args.session)
     except Exception:  # noqa: BLE001 - /bart opens with or without the web
         claimed = ""
+    # A project set up before the goal page opened its pieces' notes on the
+    # setup's descriptions gets those notes now, once; a tree anybody has
+    # written notes in is left as it is.
+    try:
+        from .trajectory import setup_chat as SETUP
+        SETUP.backfill_notes(args.session)
+    except Exception:  # noqa: BLE001 - notes are a convenience, /bart is not
+        pass
 
     # The workspace is where the user reads their goals; the mirror is where
     # they read them once it is closed. Only the manifest knows where Claude

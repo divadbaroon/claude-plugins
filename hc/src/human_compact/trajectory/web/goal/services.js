@@ -112,15 +112,17 @@ export const services = {
   },
 
   /** The goal this page is about, its subgoals, and what each already
-      holds. goalId is the goal the address names, or empty for whichever
-      this workspace is most recently about. A workspace with no goal
-      answers goal null and empty true. */
+      holds; and the project the workspace is in, when it is in one. goalId
+      is the goal the address names, or empty for whichever this workspace
+      is most recently about. A workspace with no goal answers goal null and
+      empty true. */
   async loadGoal({ goalId } = {}) {
     const query = goalId ? `?goal=${encodeURIComponent(goalId)}` : "";
     const answer = await get(`/api/goal-page${query}`);
     if (!answer.ok) throw new Error(answer.error || "the goal could not be read");
     return {
       goal: answer.goal,
+      project: answer.project || null,
       subgoals: answer.subgoals || [],
       slices: answer.slices || {},
       goals: answer.goals || [],
