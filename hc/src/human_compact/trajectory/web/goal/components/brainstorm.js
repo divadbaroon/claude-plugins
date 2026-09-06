@@ -6,7 +6,7 @@ import { activeSlice } from "../store.js";
 
 export function renderBrainstorm(state, actions, withTodos) {
   const slice = activeSlice(state);
-  const ready = slice.draft.trim().length > 0;
+  const ready = slice.draft.trim().length > 0 && !slice.thinking;
   return h("div", { class: "brainstorm" },
     h("div", { class: "section-head" },
       h("span", { class: "section-label" }, "Brainstorm"),
@@ -15,14 +15,15 @@ export function renderBrainstorm(state, actions, withTodos) {
       }, "Show todos")),
     h("div", { class: "feed", "data-feed": "", role: "log" },
       h("div", { key: `feed:${state.activeId}`, class: "feed-inner" },
-        slice.chat.map((message) => renderMessage(message, actions)))),
+        slice.chat.map((message) => renderMessage(message, actions)),
+        slice.thinking && renderThinking())),
     h("div", { class: "composer" },
       h("div", { class: "composer-box" },
         h("input", {
           key: `draft:${state.activeId}`,
           class: "composer-input",
           type: "text",
-          placeholder: "message Bart…",
+          placeholder: slice.thinking ? "Bart is thinking…" : "message Bart…",
           spellcheck: "false",
           "aria-label": "Message Bart",
           value: slice.draft,
@@ -55,7 +56,14 @@ function renderMessage(message, actions) {
   h("span", { class: "msg-who" }, message.who),
   message.kind === "proposal"
     ? renderProposal(message, actions)
-    : h("div", { class: "bubble" }, message.text));
+    : h("div", { class: message.kind === "error" ? "bubble is-error" : "bubble" }, message.text));
+}
+
+// Bart's turn, while the model is still writing it.
+function renderThinking() {
+  return h("div", { key: "thinking", class: "msg from-bart is-thinking" },
+    h("span", { class: "msg-who" }, "bart"),
+    h("div", { class: "bubble is-thinking", role: "status", "aria-label": "Bart is thinking" }, "…"));
 }
 
 function renderProposal(message, actions) {

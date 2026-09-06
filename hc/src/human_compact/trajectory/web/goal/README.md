@@ -9,8 +9,8 @@ step; the browser loads them as they are.
     app.js          creates the store, the actions and the first draw
     store.js        the state tree and the readers on it (one slice per subgoal)
     actions.js      what the reader can do; the only writer of the store
-    services.js     the boundary to everything behind the page (the goals
-                    and the account are real, Bart and the panes mocked)
+    services.js     the boundary to everything behind the page (the goals,
+                    the account and Bart are real, the panes mocked)
     dom.js          h() to build a tree, mount() to morph the page toward it
     components/     one render function per region, pure in state and actions
 
@@ -62,7 +62,17 @@ page that approves it, and waits, while the page asks `GET
 the installer put at `~/.local/bin/engelbart`, or whatever `ENGELBART_CLI`
 names.
 
-Bart's replies, the preview and the terminal are still the design's
-example content, held in memory for the life of the page.
+Bart is the brainstorm behind `/legacy`, told which subgoal the
+conversation is about. `POST /api/goal-page/bart` takes the subgoal's whole
+conversation, reads and digests the tree under the state lock, asks the
+model outside it on the reader's own account (`claude` in safe mode, as
+setup and the brainstorm do), and answers with what to draw: prose as
+text, each row it proposed as a proposal the reader adds with one click
+(through `add_todo_row`, so nothing is written until they do). A question
+or a choice is said as text with its options, and answered by typing. The
+conversation lives in the page for its lifetime; a reload starts it over.
+
+The preview and the terminal are still the design's example content, held
+in memory for the life of the page.
 
 The workspace this page replaced still answers at `/legacy`.

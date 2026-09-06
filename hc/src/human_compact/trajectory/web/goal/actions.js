@@ -292,19 +292,30 @@ export function createActions(store, services) {
     const id = state.activeId;
     const slice = sliceOf(state, id);
     const text = slice.draft.trim();
-    if (!id || !text) return;
+    if (!id || !text || slice.thinking) return;
     const mine = { id: nextId("m"), who: "you", kind: "text", text };
-    changeSlice(id, (current) => ({ draft: "", chat: [...current.chat, mine] }));
-    const reply = await services.sendBartMessage({
-      goalId: state.goal.id,
-      subgoalId: id,
-      text,
-      history: slice.chat,
-      todos: slice.todos,
-    });
-    const answer = { id: nextId("m"), who: "bart", kind: reply.kind, text: reply.text };
-    if (reply.kind === "proposal") answer.added = false;
-    changeSlice(id, (current) => ({ chat: [...current.chat, answer] }));
+    changeSlice(id, (current) => ({ draft: "", thinking: true, chat: [...current.chat, mine] }));
+    let reply;
+    try {
+      reply = await services.sendBartMessage({
+        goalId: state.goal.id,
+        subgoalId: id,
+        text,
+        history: slice.chat,
+        todos: slice.todos,
+      });
+    } catch (error) {
+      // Said in the conversation, where the reader is looking: a model
+      // that could not be reached is an answer, not a defect of the page.
+      const failed = { id: nextId("m"), who: "bart", kind: "error", text: error.message || "Bart could not answer" };
+      changeSlice(id, (current) => ({ thinking: false, chat: [...current.chat, failed] }));
+      return;
+    }
+    const answers = reply.replies.map((r) => ({
+      id: nextId("m"), who: "bart", kind: r.kind, text: r.text,
+      ...(r.kind === "proposal" ? { added: false } : {}),
+    }));
+    changeSlice(id, (current) => ({ thinking: false, chat: [...current.chat, ...answers] }));
   }
 
   // A row laid on the list once: a refresh that arrived first may have
