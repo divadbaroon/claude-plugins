@@ -10,6 +10,10 @@ const ICONS = {
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
     <path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>`,
+  signIn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+    <path d="M10 17l5-5-5-5"/><path d="M15 12H3"/></svg>`,
 };
 
 export function renderHeader(state, actions) {
@@ -40,7 +44,7 @@ function renderAccount(state, actions) {
       onclick: actions.toggleAccount,
     }, h("span", { class: "account-dot", "aria-hidden": "true" })),
     state.accountOpen && h("div", { class: "account-menu", role: "menu", "aria-label": "Account" },
-      renderAccountRows(state.account, actions)));
+      renderAccountRows(state, actions)));
 }
 
 function icon(name) {
@@ -49,7 +53,8 @@ function icon(name) {
   return node;
 }
 
-function renderAccountRows(account, actions) {
+function renderAccountRows(state, actions) {
+  const { account } = state;
   if (!account) {
     return h("div", { class: "menu-row" }, icon("person"),
       h("span", { class: "menu-sub" }, "Checking the account…"));
@@ -62,15 +67,54 @@ function renderAccountRows(account, actions) {
     return [
       h("div", { class: "menu-row" }, icon("person"),
         h("span", { class: "menu-label" }, "Not connected")),
-      h("div", { class: "menu-note" }, "Connect this machine with ",
-        h("code", { class: "menu-cmd" }, "engelbart auth")),
+      renderNote(state.accountNote),
+      renderSignIn(state, actions),
     ];
   }
   return [
     h("div", { class: "menu-row" }, icon("person"),
       h("span", { class: "menu-label" }, "Account"),
       h("span", { class: "menu-sub" }, account.email)),
-    h("button", { type: "button", role: "menuitem", class: "menu-row is-action", onclick: actions.signOut },
-      icon("signOut"), h("span", { class: "menu-label" }, "Sign out")),
+    renderNote(state.accountNote),
+    h("button", {
+      type: "button", role: "menuitem", class: "menu-row is-action",
+      disabled: state.accountBusy || null, onclick: actions.signOut,
+    }, icon("signOut"), h("span", { class: "menu-label" },
+      state.accountBusy ? "Signing out…" : "Sign out")),
+  ];
+}
+
+function renderNote(note) {
+  if (!note) return null;
+  return h("div", { class: `menu-note${note.error ? " is-error" : ""}`, role: "status" }, note.text);
+}
+
+/* The way in: `engelbart auth`, run by the server. While it waits, the
+   code it printed and the page that approves it are shown here; the CLI
+   has already opened that page in a tab of its own. */
+function renderSignIn(state, actions) {
+  const signIn = state.signIn;
+  if (signIn && signIn.status === "starting") {
+    return h("div", { class: "menu-row is-muted" }, icon("signIn"),
+      h("span", { class: "menu-label" }, "Starting sign-in…"));
+  }
+  if (signIn && signIn.status === "waiting") {
+    return h("div", { class: "menu-signin", "data-key": "signin" },
+      h("div", { class: "menu-hint" }, signIn.code
+        ? "Approve this code in the browser tab that just opened."
+        : "Asking Engelbart for a code…"),
+      signIn.code && h("div", { class: "menu-code", "aria-label": "sign-in code" }, signIn.code),
+      signIn.url && h("a", { class: "menu-link", href: signIn.url, target: "_blank", rel: "noopener" },
+        "Open the approval page"),
+      h("div", { class: "menu-wait" },
+        h("span", null, "Waiting for the approval…"),
+        h("button", { type: "button", class: "menu-cancel", onclick: actions.cancelSignIn }, "Cancel")));
+  }
+  return [
+    signIn && signIn.status === "failed" && h("div", { class: "menu-note is-error", role: "alert" },
+      `Could not connect: ${signIn.error || "the sign-in did not finish"}`),
+    h("button", {
+      type: "button", role: "menuitem", class: "menu-row is-action", onclick: actions.startSignIn,
+    }, icon("signIn"), h("span", { class: "menu-label" }, "Sign in")),
   ];
 }

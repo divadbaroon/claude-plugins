@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -51,6 +52,83 @@ def fetch(url):
     except urllib.error.HTTPError as error:
         with error:
             return error.code, dict(error.headers), error.read()
+
+
+def post_json(url, body, headers=None):
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers or {})
+    request = urllib.request.Request(
+        url, data=json.dumps(body).encode(), headers=request_headers,
+        method="POST")
+    with NO_PROXY_OPENER.open(request, timeout=15) as response:
+        return json.loads(response.read())
+
+
+# A stand-in for the Engelbart CLI. `logout` removes auth.json and says what
+# the real one says; `auth` prints the code and page lines the real one
+# prints, then waits for an `approve` or `deny` file where a person would
+# approve the code in a browser.
+FAKE_CLI = """
+import json, os, sys, time
+from pathlib import Path
+
+home = Path(os.environ["HUMAN_COMPACT_HOME"])
+signals = Path(os.environ["FAKE_ENGELBART_DIR"])
+with (signals / "calls.log").open("a", encoding="utf-8") as log:
+    log.write(" ".join(sys.argv[1:]) + "\\n")
+command = sys.argv[1] if len(sys.argv) > 1 else ""
+
+if command == "logout":
+    auth = home / "auth.json"
+    if not auth.exists():
+        print("This machine is not connected to an Engelbart account.")
+        sys.exit(0)
+    auth.unlink()
+    print("Disconnected. That token is revoked.")
+    sys.exit(0)
+
+if command == "auth":
+    print("\\nConnect this machine to your Engelbart account.\\n")
+    print("  code   WXYZ-2468")
+    print("  page   http://127.0.0.1:9/engelbart?code=WXYZ-2468\\n")
+    print("Opening that page. Approve the code above to finish.")
+    sys.stdout.flush()
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        if (signals / "approve").exists():
+            (home / "auth.json").write_text(json.dumps({
+                "apiBase": "http://127.0.0.1:9", "token": "fresh-token",
+                "email": "someone@example.com"}), encoding="utf-8")
+            print("\\nConnected as someone@example.com.")
+            sys.exit(0)
+        if (signals / "deny").exists():
+            print("\\nThat code was rejected in the browser. Nothing was connected.")
+            sys.exit(1)
+        time.sleep(0.05)
+    print("\\nThat code expired before it was approved.")
+    sys.exit(1)
+
+print("unknown command", file=sys.stderr)
+sys.exit(2)
+"""
+
+
+def fake_cli(root):
+    """Write the stand-in CLI under root; the path to run and the directory
+    its `auth` watches for the approval."""
+    signals = Path(root) / "engelbart-signals"
+    signals.mkdir()
+    script = Path(root) / "fake_engelbart.py"
+    script.write_text(FAKE_CLI, encoding="utf-8")
+    if sys.platform == "win32":
+        wrapper = Path(root) / "engelbart.cmd"
+        wrapper.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+    else:
+        wrapper = Path(root) / "engelbart"
+        wrapper.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        wrapper.chmod(0o755)
+    return str(wrapper), signals
 
 
 def browser_executable():
@@ -190,6 +268,124 @@ class AccountRouteTests(unittest.TestCase):
         self.assertEqual("someone@example.com", answer["email"])
 
 
+class AccountCommandTests(unittest.TestCase):
+    """Sign-out and sign-in from the page run the Engelbart CLI: the
+    stand-in here answers like `engelbart logout` and `engelbart auth`,
+    down to the lines the real one prints."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.chat = root / "chat"
+        self.chat.mkdir()
+        self.home = root / "human-compact"
+        self.home.mkdir()
+        cli, self.signals = fake_cli(root)
+        self.env = {"HUMAN_COMPACT_HOME": str(self.home), "ENGELBART_CLI": cli,
+                    "FAKE_ENGELBART_DIR": str(self.signals)}
+
+    def tearDown(self):
+        ui.ACCOUNT_SIGN_IN.cancel()
+        self.tmp.cleanup()
+
+    def connected(self):
+        (self.home / "auth.json").write_text(json.dumps({
+            "apiBase": "http://127.0.0.1:9", "token": "machine-token",
+            "email": "someone@example.com"}), encoding="utf-8")
+
+    def calls(self):
+        log = self.signals / "calls.log"
+        return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
+    @contextmanager
+    def page_server(self, env=None):
+        with mock.patch.dict(os.environ, env or self.env):
+            with server_for(self.chat) as url:
+                yield url
+
+    def sign_in_status(self, url, until, timeout=5):
+        deadline = time.monotonic() + timeout
+        while True:
+            answer = json.loads(fetch(url + "/api/account/sign-in")[2])
+            if answer["status"] == until or time.monotonic() > deadline:
+                return answer
+            time.sleep(0.05)
+
+    def test_signing_out_runs_engelbart_logout(self):
+        self.connected()
+        with self.page_server() as url:
+            answer = post_json(url + "/api/account/sign-out", {})
+            self.assertEqual(
+                {"ok": True, "message": "Disconnected. That token is revoked."}, answer)
+            self.assertFalse((self.home / "auth.json").exists())
+            self.assertFalse(json.loads(fetch(url + "/api/supabase")[2])["connected"])
+        self.assertEqual(["logout"], self.calls())
+
+    def test_signing_in_shows_the_code_and_waits_for_the_approval(self):
+        with self.page_server() as url:
+            answer = post_json(url + "/api/account/sign-in", {})
+            self.assertEqual("waiting", answer["status"])
+            self.assertEqual("WXYZ-2468", answer["code"])
+            self.assertEqual("http://127.0.0.1:9/engelbart?code=WXYZ-2468", answer["url"])
+            # Asking again while it waits joins the command already running.
+            self.assertEqual(answer, post_json(url + "/api/account/sign-in", {}))
+            self.assertEqual(
+                "waiting", json.loads(fetch(url + "/api/account/sign-in")[2])["status"])
+            (self.signals / "approve").touch()
+            self.assertEqual("ready", self.sign_in_status(url, "ready")["status"])
+            status = json.loads(fetch(url + "/api/supabase")[2])
+            self.assertTrue(status["connected"])
+            self.assertEqual("someone@example.com", status["email"])
+        self.assertEqual(["auth --no-open"], self.calls())
+
+    def test_a_code_rejected_in_the_browser_says_so(self):
+        with self.page_server() as url:
+            post_json(url + "/api/account/sign-in", {})
+            (self.signals / "deny").touch()
+            answer = self.sign_in_status(url, "failed")
+            self.assertEqual("failed", answer["status"])
+            self.assertEqual(
+                "That code was rejected in the browser. Nothing was connected.",
+                answer["error"])
+            self.assertFalse((self.home / "auth.json").exists())
+
+    def test_cancelling_stops_the_command(self):
+        with self.page_server() as url:
+            post_json(url + "/api/account/sign-in", {})
+            self.assertTrue(ui.ACCOUNT_SIGN_IN.running())
+            answer = post_json(url + "/api/account/sign-in/cancel", {})
+            self.assertEqual("cancelled", answer["status"])
+            self.assertFalse(ui.ACCOUNT_SIGN_IN.running())
+            # A cancelled attempt makes room for the next one.
+            self.assertEqual(
+                "waiting", post_json(url + "/api/account/sign-in", {})["status"])
+        self.assertEqual(["auth --no-open", "auth --no-open"], self.calls())
+
+    def test_without_the_cli_the_page_is_sent_to_a_terminal(self):
+        env = dict(self.env, ENGELBART_CLI=str(Path(self.tmp.name) / "missing"))
+        with self.page_server(env) as url:
+            started = post_json(url + "/api/account/sign-in", {})
+            self.assertEqual("failed", started["status"])
+            self.assertIn("engelbart auth", started["error"])
+            out = post_json(url + "/api/account/sign-out", {})
+            self.assertFalse(out["ok"])
+            self.assertIn("engelbart auth", out["error"])
+        self.assertEqual([], self.calls())
+
+    def test_another_site_s_form_cannot_sign_the_machine_out(self):
+        self.connected()
+        with self.page_server() as url:
+            request = urllib.request.Request(
+                url + "/api/account/sign-out", data=b"x=1", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+        self.assertTrue((self.home / "auth.json").exists())
+        self.assertEqual([], self.calls())
+
+
 class GoalPageModuleTests(unittest.TestCase):
     """The page's modules, read as files: what a browser would refuse."""
 
@@ -238,6 +434,7 @@ class GoalPageBrowserTests(unittest.TestCase):
         self.chat.mkdir()
 
     def tearDown(self):
+        ui.ACCOUNT_SIGN_IN.cancel()
         self.tmp.cleanup()
 
     def test_the_design_s_interactions_hold_on_local_state(self):
@@ -373,7 +570,10 @@ class GoalPageBrowserTests(unittest.TestCase):
             self.skipTest("Chrome/Chromium is not installed")
         home = Path(self.tmp.name) / "human-compact"
         home.mkdir()
-        with mock.patch.dict(os.environ, {"HUMAN_COMPACT_HOME": str(home)}), \
+        cli, signals = fake_cli(Path(self.tmp.name))
+        env = {"HUMAN_COMPACT_HOME": str(home), "ENGELBART_CLI": cli,
+               "FAKE_ENGELBART_DIR": str(signals)}
+        with mock.patch.dict(os.environ, env), \
                 server_for(self.chat) as url, sync_playwright() as playwright:
             browser = playwright.chromium.launch(
                 executable_path=chrome, headless=True,
@@ -385,7 +585,7 @@ class GoalPageBrowserTests(unittest.TestCase):
                 account = page.get_by_role("button", name=re.compile("connected|account", re.I))
 
                 # Nobody has connected this machine: the avatar says so and
-                # the menu points at the command that does.
+                # the menu offers the way in.
                 page.goto(url, wait_until="domcontentloaded")
                 expect(account).to_have_attribute("aria-label", "Not connected")
                 menu = page.get_by_role("menu", name="Account")
@@ -393,7 +593,7 @@ class GoalPageBrowserTests(unittest.TestCase):
                 account.click()
                 expect(menu).to_be_visible()
                 expect(menu).to_contain_text("Not connected")
-                expect(menu).to_contain_text("engelbart auth")
+                expect(menu.get_by_role("menuitem", name="Sign in")).to_be_visible()
                 expect(menu.get_by_role("menuitem", name="Sign out")).to_have_count(0)
                 page.keyboard.press("Escape")
                 expect(menu).to_have_count(0)
@@ -412,9 +612,26 @@ class GoalPageBrowserTests(unittest.TestCase):
                     "aria-label", "Connected as someone@example.com")
                 account.click()
                 expect(menu).to_contain_text("someone@example.com")
+                # Sign out runs `engelbart logout` (the stand-in here): the
+                # account is gone from disk and the menu says what happened.
                 menu.get_by_role("menuitem", name="Sign out").click()
-                expect(menu).to_have_count(0)
                 expect(account).to_have_attribute("aria-label", "Not connected")
+                expect(menu).to_be_visible()
+                expect(menu).to_contain_text("Disconnected. That token is revoked.")
+                self.assertFalse((home / "auth.json").exists())
+
+                # Sign in runs `engelbart auth`: the code it printed and the
+                # page that approves it stay up until the approval lands.
+                menu.get_by_role("menuitem", name="Sign in").click()
+                expect(menu).to_contain_text("WXYZ-2468")
+                expect(menu.get_by_role("link", name="Open the approval page")).to_have_attribute(
+                    "href", "http://127.0.0.1:9/engelbart?code=WXYZ-2468")
+                expect(menu.get_by_role("button", name="Cancel")).to_be_visible()
+                (signals / "approve").touch()
+                expect(account).to_have_attribute(
+                    "aria-label", "Connected as someone@example.com", timeout=10000)
+                expect(menu).to_contain_text("someone@example.com")
+                expect(menu.get_by_role("menuitem", name="Sign in")).to_have_count(0)
                 self.assertEqual([], errors)
             finally:
                 browser.close()

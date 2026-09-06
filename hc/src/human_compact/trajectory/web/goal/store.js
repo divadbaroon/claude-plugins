@@ -32,6 +32,9 @@ export function initialState() {
     terminal: null,         // what getTerminal answered
     account: null,          // what loadAccount answered: { connected, email, ... }
     accountOpen: false,     // the account popover in the header
+    accountBusy: false,     // a sign-out on its way
+    accountNote: null,      // what the last sign-out said: { text, error }
+    signIn: null,           // an `engelbart auth` in flight: { status, code, url, error }
   };
 }
 

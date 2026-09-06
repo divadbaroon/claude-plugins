@@ -5,12 +5,16 @@
 import { EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos } from "./store.js";
 
 const NOTES_SAVE_DELAY_MS = 400;
+const SIGN_IN_POLL_MS = 2000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createActions(store, services) {
   const { get, set } = store;
   let seq = 0;
   const nextId = (prefix) => `${prefix}-${(seq += 1)}`;
   const notesTimers = new Map();
+  let signInRun = 0;   // the sign-in attempt that is current
 
   // A write the page does not wait on: the store already holds the change.
   function persist(promise) {
@@ -65,12 +69,59 @@ export function createActions(store, services) {
     if (get().accountOpen) set({ accountOpen: false });
   }
 
+  // The menu stays open through both: what the CLI answered is shown there.
   async function signOut() {
-    set({ accountOpen: false });
+    if (get().accountBusy) return;
+    set({ accountBusy: true, accountNote: null, signIn: null });
     try {
-      set({ account: await services.signOut() });
+      const message = await services.signOut();
+      set({ accountNote: { text: message, error: false } });
     } catch (error) {
       console.error("engelbart: sign out failed", error);
+      set({ accountNote: { text: `Could not sign out: ${error.message}`, error: true } });
+    }
+    await loadAccount();
+    set({ accountBusy: false });
+  }
+
+  // Sign-in is a command that waits on a person, so the page asks after it
+  // until it has finished. A cancel or a newer attempt retires the loop.
+  async function startSignIn() {
+    const state = get();
+    if (state.accountBusy || (state.signIn && state.signIn.status === "waiting")) return;
+    const run = (signInRun += 1);
+    set({ accountNote: null, signIn: { status: "starting", code: "", url: "", error: "" } });
+    try {
+      let answer = await services.startSignIn();
+      while (run === signInRun && answer.status === "waiting") {
+        set({ signIn: answer });
+        await sleep(SIGN_IN_POLL_MS);
+        answer = await services.signInStatus();
+      }
+      if (run !== signInRun) return;
+      if (answer.status === "ready") {
+        await loadAccount();
+        set({ signIn: null });
+      } else if (answer.status === "cancelled") {
+        set({ signIn: null });
+      } else {
+        set({ signIn: answer });
+      }
+    } catch (error) {
+      console.error("engelbart: sign in failed", error);
+      if (run === signInRun) {
+        set({ signIn: { status: "failed", code: "", url: "", error: String(error.message || error) } });
+      }
+    }
+  }
+
+  async function cancelSignIn() {
+    signInRun += 1;
+    set({ signIn: null });
+    try {
+      await services.cancelSignIn();
+    } catch (error) {
+      console.error("engelbart: the sign-in could not be cancelled", error);
     }
   }
 
@@ -236,7 +287,8 @@ export function createActions(store, services) {
   }
 
   return {
-    boot, toggleAccount, closeAccount, signOut, selectSubgoal, showTab,
+    boot, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
+    selectSubgoal, showTab,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editNotes, editDraft, sendMessage, acceptProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
