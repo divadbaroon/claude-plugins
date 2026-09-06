@@ -86,8 +86,9 @@ input, textarea { outline: none; }
 /* The circle is taller than the brand line; the header stays the design's height. */
 .account { position: relative; margin: -5px 0 -5px auto; flex: none; display: flex; }
 .account-btn { display: flex; padding: 0; border: 0; background: transparent; border-radius: var(--radius-round); cursor: pointer; }
-.account-dot { display: block; width: 26px; height: 26px; border-radius: var(--radius-round); background: var(--bd2); transition: background var(--dur-fast); }
-.account-btn:hover .account-dot, .account-btn[aria-expanded="true"] .account-dot { background: var(--fnt); }
+/* The avatar placeholder: a gray circle with a white head and shoulders. */
+.account-dot { display: block; width: 26px; height: 26px; border-radius: var(--radius-round); background-color: var(--bd2); background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 26'><clipPath id='c'><circle cx='13' cy='13' r='13'/></clipPath><g fill='%23fff' clip-path='url(%23c)'><circle cx='13' cy='10' r='4.4'/><path d='M3.6 26.5a9.4 8.4 0 0 1 18.8 0z'/></g></svg>"); background-size: 100% 100%; transition: background-color var(--dur-fast); }
+.account-btn:hover .account-dot, .account-btn[aria-expanded="true"] .account-dot { background-color: var(--fnt); }
 .account-pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 10; min-width: 220px; max-width: 320px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; background: var(--panel); border: 1px solid var(--bd); border-radius: var(--radius-sm); animation: rise var(--dur-rise) var(--ease-rise); }
 .account-title { font: 500 13px/1.4 var(--font-sans); color: var(--ink); overflow-wrap: anywhere; }
 .account-note { font: 12px/1.5 var(--font-sans); color: var(--fnt); }
