@@ -72,6 +72,13 @@ export const services = {
     };
   },
 
+  /** Disconnect this machine from the account. Mocked: the real thing is
+      `engelbart logout`, which revokes the machine token at the backend and
+      removes auth.json; the server route that runs it is the next step. */
+  async signOut() {
+    return { connected: false, signedIn: false, email: "", name: "" };
+  },
+
   /** The goal this page is about, its subgoals, and what each already holds. */
   async loadGoal() {
     return copy({ goal: GOAL, subgoals: SUBGOALS, slices: SLICES });

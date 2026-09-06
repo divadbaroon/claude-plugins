@@ -384,24 +384,26 @@ class GoalPageBrowserTests(unittest.TestCase):
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 account = page.get_by_role("button", name=re.compile("connected|account", re.I))
 
-                # Nobody has connected this machine: the circle says so and
-                # points at the command that does.
+                # Nobody has connected this machine: the avatar says so and
+                # the menu points at the command that does.
                 page.goto(url, wait_until="domcontentloaded")
                 expect(account).to_have_attribute("aria-label", "Not connected")
-                expect(page.get_by_role("dialog", name="Account")).to_have_count(0)
+                menu = page.get_by_role("menu", name="Account")
+                expect(menu).to_have_count(0)
                 account.click()
-                dialog = page.get_by_role("dialog", name="Account")
-                expect(dialog).to_be_visible()
-                expect(dialog).to_contain_text("Not connected")
-                expect(dialog).to_contain_text("engelbart auth")
+                expect(menu).to_be_visible()
+                expect(menu).to_contain_text("Not connected")
+                expect(menu).to_contain_text("engelbart auth")
+                expect(menu.get_by_role("menuitem", name="Sign out")).to_have_count(0)
                 page.keyboard.press("Escape")
-                expect(dialog).to_have_count(0)
+                expect(menu).to_have_count(0)
                 account.click()
-                expect(dialog).to_be_visible()
+                expect(menu).to_be_visible()
                 page.locator(".goal-title").click()
-                expect(dialog).to_have_count(0)
+                expect(menu).to_have_count(0)
 
-                # Connected: the account the installer wrote, by email.
+                # Connected: the account the installer wrote, by email, and
+                # a way out.
                 (home / "auth.json").write_text(json.dumps({
                     "apiBase": "http://127.0.0.1:9", "token": "machine-token",
                     "email": "someone@example.com"}), encoding="utf-8")
@@ -409,8 +411,10 @@ class GoalPageBrowserTests(unittest.TestCase):
                 expect(account).to_have_attribute(
                     "aria-label", "Connected as someone@example.com")
                 account.click()
-                expect(dialog).to_contain_text("someone@example.com")
-                expect(dialog).to_contain_text("Connected on this machine")
+                expect(menu).to_contain_text("someone@example.com")
+                menu.get_by_role("menuitem", name="Sign out").click()
+                expect(menu).to_have_count(0)
+                expect(account).to_have_attribute("aria-label", "Not connected")
                 self.assertEqual([], errors)
             finally:
                 browser.close()

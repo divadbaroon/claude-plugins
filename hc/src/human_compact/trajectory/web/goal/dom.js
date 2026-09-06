@@ -42,6 +42,14 @@ function append(el, children) {
   }
 }
 
+/* An SVG element from its markup, for the few icons the page draws. The
+   HTML parser puts it in the SVG namespace, which createElement cannot. */
+export function svg(markup) {
+  const template = document.createElement("template");
+  template.innerHTML = markup.trim();
+  return template.content.firstElementChild;
+}
+
 export function mount(host, tree) {
   if (host.firstChild) morph(host.firstChild, tree);
   else host.replaceChildren(tree);
