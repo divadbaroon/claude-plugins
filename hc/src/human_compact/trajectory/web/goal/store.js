@@ -37,8 +37,10 @@ export function initialState() {
     subgoalDraft: "",
     building: null,         // the subgoal id whose Build all is out, else null
     buildNote: null,        // what the builder answered when it would not start: { text, error }
-    preview: null,          // what getPreview answered
-    terminal: null,         // what getTerminal answered
+    panes: null,            // what getPanes answered for panesFor: { preview, build }
+    panesFor: null,         // the subgoal id the panes were read for
+    previewBusy: false,     // a preview operation on its way
+    previewNote: null,      // what the last preview operation said when it would not: { text }
     account: null,          // what loadAccount answered: { connected, email, ... }
     accountOpen: false,     // the account popover in the header
     accountBusy: false,     // a sign-out on its way

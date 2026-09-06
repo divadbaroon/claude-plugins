@@ -10,7 +10,7 @@ step; the browser loads them as they are.
     store.js        the state tree and the readers on it (one slice per subgoal)
     actions.js      what the reader can do; the only writer of the store
     services.js     the boundary to everything behind the page (the goals,
-                    the account and Bart are real, the panes mocked)
+                    the account, Bart and the panes are all real)
     dom.js          h() to build a tree, mount() to morph the page toward it
     components/     one render function per region, pure in state and actions
 

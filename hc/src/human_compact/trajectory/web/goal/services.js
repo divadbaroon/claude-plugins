@@ -24,30 +24,15 @@
    saveChat writes it whole after every change, and loadGoal brings it
    back in each subgoal's slice.
 
-   Still mocked: the preview and the terminal. Their answers are the
-   example content of the design, held in memory for the life of the page.
-   Replace the bodies and keep the signatures. */
+   The panes are real. getPanes reads GET /api/goal-page/panes: the Live
+   preview is the middle pane's engine from /legacy -- what the project
+   can run, the process the server started for it, the address it answers
+   on -- and the Terminal is the build log of the open subgoal. previewOp
+   sends the preview's own operations (find how to run it, show its page,
+   run, stop) to POST /api/goal-page/preview. Nothing runs on a page load;
+   every start is a click. */
 
 import { WITH_BUILDER } from "./store.js";
-
-const PREVIEW = {
-  host: "localhost:5173",
-  app: "dataset-importer",
-  url: null,   // a real preview answers with the address to frame
-  placeholder: { action: "Import dataset", hint: "CSV only · up to 100mb" },
-};
-
-const TERMINAL = {
-  lines: [
-    { kind: "cmd", text: 'bart build "Create a blank interface with an import button"' },
-    { kind: "out", text: "[1/2] built · create a blank interface" },
-    { kind: "out", text: "[2/2] built · add an import button" },
-    { kind: "cmd", text: "npm run dev" },
-    { kind: "out", text: "ready · http://localhost:5173" },
-  ],
-};
-
-const copy = (value) => JSON.parse(JSON.stringify(value));
 
 async function get(path) {
   const response = await fetch(path, { headers: { Accept: "application/json" } });
@@ -239,13 +224,20 @@ export const services = {
     return { close: () => source.close() };
   },
 
-  /** Where the goal's app is running, or the placeholder to draw instead. */
-  async getPreview({ goalId }) {
-    return copy(PREVIEW);
+  /** The two side panes for one subgoal, in one read: the project's run
+      as the preview engine sees it (status, surface, profiles, blockers,
+      the running process and its url), and the subgoal's build log
+      ({ lines: [{ at, kind, text }], run }). */
+  async getPanes({ subgoalId }) {
+    const answer = await get(`/api/goal-page/panes?goal=${encodeURIComponent(subgoalId || "")}`);
+    if (!answer.ok) throw new Error(answer.error || "the panes could not be read");
+    return { preview: answer.preview, build: answer.build };
   },
 
-  /** The terminal the builder works in, as lines. */
-  async getTerminal({ goalId }) {
-    return copy(TERMINAL);
+  /** One of the preview's operations -- preview_configure, preview_show_ui,
+      preview_start, preview_stop, preview_forget -- with its arguments.
+      Answers as the engine does: { ok } with a reason when it would not. */
+  async previewOp(op) {
+    return post("/api/goal-page/preview", op);
   },
 };

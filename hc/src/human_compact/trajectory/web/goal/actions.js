@@ -12,6 +12,7 @@ import {
   EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder,
 } from "./store.js";
 
+const PANES_POLL_MS = 2000;
 const TODO_SAVE_DELAY_MS = 400;
 const SIGN_IN_POLL_MS = 2000;
 const REVISIONS_KEPT = 8;
@@ -29,7 +30,8 @@ export function createActions(store, services) {
   let signInRun = 0;               // the sign-in attempt that is current
   let wanted = "";                 // the goal the address names, if any
   let loadRun = 0;                 // the load whose answer is current
-  let watcher = null;              // the open change feed
+  let watcher = null;
+  let panesTimer = null;              // the open change feed
   const seen = [];                 // the last revisions this page loaded or made
 
   // A revision this page has already seen -- loaded, or made by one of its
@@ -113,19 +115,35 @@ export function createActions(store, services) {
     if (run !== loadRun) return;
     saw(loaded.revision);
     set((state) => merge(state, loaded));
-    if (loaded.goal && !get().preview) loadPanes(loaded.goal.id);
+    loadPanes();
   }
 
-  async function loadPanes(goalId) {
+  // The side panes for the open subgoal: the project's run and the
+  // subgoal's build log. Read again on every refresh, on a switch of
+  // subgoal or tab, and on a slow poll while something is being watched --
+  // a build out, a process running, or a pane other than Bart's open.
+  let panesRun = 0;
+  async function loadPanes() {
+    const id = get().activeId;
+    if (!id) return;
+    const run = (panesRun += 1);
+    let panes;
     try {
-      const [preview, terminal] = await Promise.all([
-        services.getPreview({ goalId }),
-        services.getTerminal({ goalId }),
-      ]);
-      set({ preview, terminal });
+      panes = await services.getPanes({ subgoalId: id });
     } catch (error) {
       console.error("engelbart: the panes did not load", error);
+      return;
     }
+    if (run !== panesRun || get().activeId !== id) return;
+    set({ panes, panesFor: id });
+  }
+
+  function watching(state) {
+    const preview = state.panes && state.panes.preview;
+    const build = state.panes && state.panes.build;
+    return state.tab !== "bart" || Boolean(state.building)
+      || Boolean(preview && (preview.status === "running" || preview.status === "starting"))
+      || Boolean(build && build.run && build.run.running);
   }
 
   async function boot() {
@@ -138,6 +156,9 @@ export function createActions(store, services) {
           if (!seen.includes(revision)) refresh();
         },
       });
+    }
+    if (!panesTimer) {
+      panesTimer = setInterval(() => { if (watching(get())) loadPanes(); }, PANES_POLL_MS);
     }
   }
 
@@ -228,12 +249,36 @@ export function createActions(store, services) {
   }
 
   function selectSubgoal(id) {
-    set({ activeId: id, tab: "bart", buildNote: null });
+    set({ activeId: id, tab: "bart", buildNote: null, previewNote: null });
+    loadPanes();
   }
 
   function showTab(tab) {
     set({ tab });
+    if (tab !== "bart") loadPanes();
   }
+
+  // The preview's own operations, each a click: what the engine answers
+  // when it would not is said under the pane, and the pane is read again
+  // either way so it draws what is now true.
+  async function previewOp(op) {
+    if (get().previewBusy) return;
+    set({ previewBusy: true, previewNote: null });
+    let answer;
+    try {
+      answer = await services.previewOp(op);
+    } catch (error) {
+      answer = { ok: false, error: String((error && error.message) || error) };
+    }
+    const said = answer && !answer.ok ? (answer.reason || answer.error) : "";
+    set({ previewBusy: false, previewNote: said ? { text: said } : null });
+    await loadPanes();
+  }
+  const previewConfigure = () => previewOp({ op: "preview_configure" });
+  const previewShowUi = () => previewOp({ op: "preview_show_ui" });
+  const previewRun = (profileId) => previewOp({ op: "preview_start", profile_id: profileId || "" });
+  const previewStop = () => previewOp({ op: "preview_stop" });
+  const previewForget = () => previewOp({ op: "preview_forget" });
 
   function beginAddSubgoal() {
     set({ addingSubgoal: true, subgoalDraft: "" });
@@ -438,7 +483,8 @@ export function createActions(store, services) {
   return {
     boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
     editGoalDraft, commitCreateGoal,
-    selectSubgoal, showTab,
+    selectSubgoal, showTab, loadPanes,
+    previewConfigure, previewShowUi, previewRun, previewStop, previewForget,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editDraft, sendMessage, acceptProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,

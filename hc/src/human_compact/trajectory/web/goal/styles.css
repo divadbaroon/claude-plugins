@@ -229,10 +229,25 @@ input, textarea { outline: none; }
 .dark-btn { padding: 9px 18px; border: 0; border-radius: var(--radius-sm); background: var(--ink); color: var(--bg); font: var(--text-btn); cursor: pointer; transition: opacity var(--dur-fast); }
 .dark-btn:hover { opacity: var(--hover-opacity); }
 .preview-hint { font: 11.5px/1.5 var(--font-sans); color: var(--fnt); }
+.preview-body { padding: 24px; }
+.preview-body.is-output { align-items: stretch; justify-content: flex-start; }
+.chrome-btn { margin-left: 8px; padding: 2px 10px; border: 1px solid var(--bd); border-radius: 4px; background: var(--panel); font: 500 11px/1.4 var(--font-sans); color: var(--ink); cursor: pointer; }
+.chrome-btn:hover { border-color: var(--bd2); }
+.pv-text { margin: 0; font: 14.5px/1.5 var(--font-sans); color: var(--ink); text-align: center; }
+.pv-note { margin: 0; font: 12px/1.5 var(--font-sans); color: var(--del); text-align: center; }
+.pv-card { display: flex; flex-direction: column; gap: 6px; width: min(520px, 100%); padding: 12px 14px; border: 1px solid var(--bd); border-radius: var(--radius-sm); background: var(--panel2); }
+.pv-card-text { margin: 0; font: 500 14px/1.5 var(--font-sans); color: var(--ink); }
+.pv-cmd { align-self: flex-start; padding: 2px 8px; border-radius: 4px; background: var(--term-bg); color: var(--term-ink); font: 12px/1.7 var(--font-mono); white-space: pre-wrap; }
+.pv-why { margin: 0; font: 12.5px/1.5 var(--font-sans); color: var(--fnt); }
+.pv-actions { display: flex; gap: 8px; align-items: center; }
+.pv-btn { margin-left: 0; }
+.pv-out { flex: 1; margin: 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--term-bg); color: var(--term-ink); font: 12px/1.7 var(--font-mono); white-space: pre-wrap; overflow: auto; }
 
 /* Terminal */
 .terminal { min-height: 360px; padding: 14px 16px; border-radius: var(--radius-sm); background: var(--term-bg); color: var(--term-ink); font: 12px/1.7 var(--font-mono); gap: 2px; overflow: auto; }
 .term-cmd { color: var(--fnt); }
+.term-head { color: var(--fnt); }
+.term-say { color: var(--term-ink); opacity: .75; }
 .term-prompt { display: flex; align-items: center; gap: 8px; }
 .cursor { width: 7px; height: 13px; background: var(--bd2); animation: blink .9s steps(1) infinite; }
 

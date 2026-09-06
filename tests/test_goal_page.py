@@ -29,8 +29,10 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import autosync as AUTOSYNC  # noqa: E402
 from human_compact.trajectory import brainstorm as BRAIN  # noqa: E402
+from human_compact.trajectory import build as BUILD  # noqa: E402
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
+from human_compact.trajectory import preview as PV  # noqa: E402
 from human_compact.trajectory import reader as READER  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
 from human_compact.trajectory import web_setup as WS  # noqa: E402
@@ -124,6 +126,38 @@ PIECE_NOTES = {
     "Client PUTs": "Browser writes to storage\n\nWhy this matters: it is the traffic being moved",
     "Retire the proxy": "Delete the old path\n\nWhy this matters: two paths is one too many",
 }
+
+
+def bind_project(case, serving_port=None):
+    """A project directory for the case's chat, named in the chat's manifest
+    the way the directory a chat was started in is. With ``serving_port``
+    it holds a page and a script that serves it there; without, a script
+    that only prints. Whatever it started is stopped when the case ends."""
+    project = case.root / "project"
+    project.mkdir(exist_ok=True)
+    if serving_port:
+        (project / "index.html").write_text("<h1>the app</h1>")
+        (project / "serve.py").write_text(
+            "import http.server, socketserver\n"
+            f"srv = socketserver.TCPServer(('127.0.0.1', {serving_port}),"
+            " http.server.SimpleHTTPRequestHandler)\n"
+            f"print('http://127.0.0.1:{serving_port}/')\n"
+            "srv.serve_forever()\n")
+        # The Procfile names the interpreter running these tests, so the
+        # run does not hang on which `python` the machine has on its PATH.
+        (project / "Procfile").write_text(f"web: {sys.executable} serve.py\n")
+    else:
+        (project / "main.py").write_text("print('hello')\n")
+    CS.paths(case.chat.name, case.root).manifest.write_text(json.dumps({
+        "cwd": str(project), "project_bound_at": "2026-01-01T00:00:00+00:00"}))
+
+    def quiet():
+        proc = PV.running(project)
+        if proc:
+            proc.stop()
+        PV.forget(project)
+    case.addCleanup(quiet)
+    return project
 
 
 def claim_web_setup(case, payload=WEB_SETUP):
@@ -710,6 +744,64 @@ class GoalDataRouteTests(ChatCase):
                 connection.close()
 
 
+class PanesRouteTests(ChatCase):
+    """The side panes' route: the preview engine's state and the build log,
+    and the preview's own operations behind it."""
+
+    def panes(self, url, subgoal):
+        return get_json(url + "/api/goal-page/panes?goal=" + subgoal)
+
+    def test_a_chat_in_no_project_has_nothing_to_run_and_no_build_yet(self):
+        goal, subgoals = seed_design(self.chat)
+        with server_for(self.chat) as url:
+            answer = self.panes(url, subgoals[0])
+            self.assertTrue(answer["ok"])
+            self.assertEqual(subgoals[0], answer["subgoal_id"])
+            self.assertEqual("unconfigured", answer["preview"]["status"])
+            self.assertIn("not bound to a project", answer["preview"]["reason"])
+            self.assertEqual({"lines": [], "run": None}, answer["build"])
+
+    def test_the_project_is_worked_out_on_a_click_and_the_build_log_is_the_subgoal_s(self):
+        goal, subgoals = seed_design(self.chat)
+        bind_project(self, serving_port=8996)
+        BUILD.note_activity("chat", self.root, subgoals[0], "start", "started on 2 rows")
+        BUILD.note_activity("chat", self.root, subgoals[0], "tool", "Edit app.py")
+        with server_for(self.chat) as url:
+            # Nothing runs and nothing is worked out by reading the pane.
+            before = self.panes(url, subgoals[0])
+            self.assertEqual("unconfigured", before["preview"]["status"])
+            self.assertFalse(before["preview"]["configured"])
+            self.assertEqual(["started on 2 rows", "Edit app.py"],
+                             [l["text"] for l in before["build"]["lines"]])
+            self.assertEqual([], self.panes(url, subgoals[1])["build"]["lines"])
+            # The click: detection reads the files and finds the script
+            # that serves, so the pane can offer its page.
+            found = post_json(url + "/api/goal-page/preview",
+                              {"op": "preview_configure", "auto": True}, {"Origin": url})
+            self.assertTrue(found["ok"], found)
+            after = self.panes(url, subgoals[0])["preview"]
+            self.assertEqual("ready", after["status"])
+            self.assertTrue(after["ui"]["available"], after["ui"])
+            self.assertIn("serve.py", after["profile"]["command"])
+            self.assertIsNone(PV.running(self.root / "project"))
+            # Not the preview's operation, not an operation, not JSON.
+            for body in ({"op": "add_goal", "title": "x"}, {"op": ""}, {"op": "preview_bogus"}):
+                answer = post_json(url + "/api/goal-page/preview", body, {"Origin": url})
+                self.assertFalse(answer["ok"], body)
+                self.assertIn("not an operation of the preview", answer["error"])
+            request = urllib.request.Request(
+                url + "/api/goal-page/preview", data=b"op=preview_stop", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+            # Stopping what is not running says so rather than pretending.
+            answer = post_json(url + "/api/goal-page/preview",
+                               {"op": "preview_stop"}, {"Origin": url})
+            self.assertFalse(answer["ok"])
+
+
 class BartRouteTests(ChatCase):
     """Bart on the page is the brainstorm, asked about one subgoal. The
     model is stood in for; what the route sends it, and what it draws
@@ -1226,17 +1318,16 @@ class GoalPageBrowserTests(BrowserCase):
             expect(rows).to_have_count(2)
             expect(page.locator(".msg")).to_have_count(0)
 
-            # The other two panes, and the host beside them.
+            # The other two panes: this chat is in no project, and both say
+            # so rather than drawing something -- no address beside them.
             page.get_by_role("tab", name="Live preview").click()
-            expect(page.get_by_role("button", name="Import dataset")).to_be_visible()
-            expect(page.get_by_text("CSV only · up to 100mb")).to_be_visible()
-            expect(page.locator(".host")).to_have_text("localhost:5173")
-            page.get_by_role("tab", name="Terminal").click()
-            expect(page.locator(".terminal")).to_contain_text("$ npm run dev")
-            expect(page.locator(".terminal")).to_contain_text("ready · http://localhost:5173")
-            expect(page.locator(".host")).to_have_text("localhost:5173")
-            page.get_by_role("tab", name="Bart").click()
+            expect(page.locator(".preview")).to_contain_text("not bound to a project")
+            expect(page.get_by_role("button", name="Find how to run it")).to_have_count(0)
             expect(page.locator(".host")).to_have_count(0)
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal")).to_contain_text("no build has run on this subgoal yet")
+            expect(page.locator(".host")).to_have_count(0)
+            page.get_by_role("tab", name="Bart").click()
             expect(rows).to_have_count(2)
 
             # A subgoal added from the rail is selected as it lands, and is
@@ -1368,6 +1459,57 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".project-name")).to_have_text("Signed uploads")
             expect(page.locator(".rail .sub")).to_have_text(
                 ["Signing route", "Client PUTs", "Retire the proxy"])
+            self.assertEqual([], errors)
+
+    def test_the_preview_shows_the_project_s_page_and_the_terminal_follows_the_build(self):
+        expect = self.expect
+        port = 8995
+        goal, subgoals = seed_design(self.chat)
+        project = bind_project(self, serving_port=port)
+        BUILD.note_activity("chat", self.root, subgoals[0], "start", "started on 2 rows")
+        BUILD.note_activity("chat", self.root, subgoals[0], "say", "Adding the import button first.")
+        with server_for(self.chat) as url, self.page_on(url) as (page, errors):
+            # The Terminal is the open subgoal's build log, stamped.
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal .term-line")).to_have_count(3)
+            expect(page.locator(".terminal")).to_contain_text("started on 2 rows")
+            expect(page.locator(".terminal .term-say")).to_have_text(
+                re.compile(r"\d\d:\d\d:\d\d  Adding the import button first\."))
+            expect(page.locator(".term-prompt")).to_have_count(0)
+            page.locator(".rail .sub").nth(1).click()
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal")).to_contain_text("no build has run on this subgoal yet")
+            expect(page.locator(".terminal")).not_to_contain_text("started on 2 rows")
+
+            # The Live preview: nothing was run by opening it. One click works
+            # the project out, the next shows its page, in a frame, with the
+            # address beside the tabs; Stop ends it and says so.
+            page.get_by_role("tab", name="Live preview").click()
+            expect(page.locator(".preview")).to_contain_text("Nothing is set up to run yet")
+            self.assertIsNone(PV.running(project))
+            page.get_by_role("button", name="Find how to run it").click()
+            expect(page.locator(".pv-cmd")).to_contain_text("serve.py", timeout=10_000)
+            self.assertIsNone(PV.running(project))
+            page.get_by_role("button", name="Show UI").click()
+            frame = page.locator(".preview-frame")
+            expect(frame).to_be_visible(timeout=20_000)
+            expect(frame).to_have_attribute("src", re.compile(f"127\\.0\\.0\\.1:{port}"))
+            expect(page.locator(".host")).to_have_text(f"127.0.0.1:{port}")
+            expect(page.locator(".preview-url")).to_contain_text(f"127.0.0.1:{port}")
+            expect(frame.content_frame.get_by_role("heading", name="the app")).to_be_visible()
+            # The terminal has the run too: its command and what it printed.
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal .term-cmd").first).to_contain_text("serve.py")
+            expect(page.locator(".terminal")).to_contain_text(f"http://127.0.0.1:{port}/")
+            expect(page.locator(".term-prompt")).to_be_visible()
+            page.get_by_role("tab", name="Live preview").click()
+            page.get_by_role("button", name="Stop").click()
+            expect(page.locator(".preview")).to_contain_text("It ended", timeout=10_000)
+            expect(page.locator(".host")).to_have_count(0)
+            self.assertTrue(wait_for(lambda: PV.running(project) is None
+                                     or not PV.running(project).alive()))
+            page.get_by_role("button", name="Back to the start").click()
+            expect(page.get_by_role("button", name="Show UI")).to_be_visible(timeout=10_000)
             self.assertEqual([], errors)
 
     def test_the_account_icon_says_who_the_machine_is_connected_as(self):

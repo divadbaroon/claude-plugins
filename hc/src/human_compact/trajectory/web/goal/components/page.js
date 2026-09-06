@@ -25,7 +25,7 @@ export function renderPage(state, actions) {
 }
 
 function renderPane(state, actions) {
-  if (state.tab === "preview") return renderPreview(state);
+  if (state.tab === "preview") return renderPreview(state, actions);
   if (state.tab === "terminal") return renderTerminal(state);
   if (state.status === "ready" && !state.subgoals.length) return renderFirstSubgoal(state, actions);
   return renderBart(state, actions);
