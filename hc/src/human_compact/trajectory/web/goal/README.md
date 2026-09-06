@@ -70,7 +70,10 @@ setup and the brainstorm do), and answers with what to draw: prose as
 text, each row it proposed as a proposal the reader adds with one click
 (through `add_todo_row`, so nothing is written until they do). A question
 or a choice is said as text with its options, and answered by typing. The
-conversation lives in the page for its lifetime; a reload starts it over.
+conversation is kept beside the goals, per subgoal, in the page's own
+shape (`chat_state.save_bart_chat`, `bart.json` in the tree's session):
+`POST /api/goal-page/chat` writes it whole after every change, and the
+payload's slices carry it back, so a reload draws what was on screen.
 
 The preview and the terminal are still the design's example content, held
 in memory for the life of the page.

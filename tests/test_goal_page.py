@@ -429,7 +429,7 @@ class GoalDataRouteTests(ChatCase):
             self.assertTrue(row["id"])
             self.assertFalse(row["done"])
             self.assertEqual("", row["status"])
-        self.assertEqual({"notes": "keep it local", "todos": []},
+        self.assertEqual({"notes": "keep it local", "chat": [], "todos": []},
                          answer["slices"][subgoals[1]])
         self.assertEqual([goal], [g["id"] for g in answer["goals"]])
         # The rows the page reads are the rows the build reads.
@@ -815,6 +815,69 @@ class BartRouteTests(ChatCase):
                 self.assertEqual(415, caught.exception.code)
         self.assertEqual([], ask.asked)
 
+    def test_the_conversation_is_kept_beside_the_goals_and_read_back_with_them(self):
+        goal, subgoals = seed_design(self.chat)
+        said = [{"id": "m-a", "who": "you", "kind": "text", "text": "save it as parquet"},
+                {"id": "m-b", "who": "bart", "kind": "text", "text": "Two rows, then."},
+                {"id": "m-c", "who": "bart", "kind": "proposal", "text": "Save the file as parquet",
+                 "added": True, "todoId": "t9"},
+                {"id": "m-d", "who": "bart", "kind": "proposal", "text": "Name it", "added": False},
+                {"id": "m-e", "who": "bart", "kind": "error", "text": "claude CLI timed out"},
+                # Not messages: a stranger's shape, an empty one, a kind the page has not got.
+                "words", {"who": "you", "kind": "text", "text": "   "},
+                {"who": "them", "kind": "text", "text": "hi"},
+                {"who": "bart", "kind": "card", "text": "hi"}]
+        with server_for(self.chat) as url:
+            answer = post_json(url + "/api/goal-page/chat",
+                               {"subgoal_id": subgoals[1], "messages": said}, {"Origin": url})
+            self.assertTrue(answer["ok"], answer)
+            self.assertEqual(["m-a", "m-b", "m-c", "m-d", "m-e"],
+                             [m["id"] for m in answer["messages"]])
+            self.assertEqual({"id": "m-c", "who": "bart", "kind": "proposal",
+                              "text": "Save the file as parquet", "added": True, "todoId": "t9"},
+                             answer["messages"][2])
+            self.assertEqual({"id": "m-d", "who": "bart", "kind": "proposal",
+                              "text": "Name it", "added": False}, answer["messages"][3])
+            # Back in the payload, on its own subgoal and no other.
+            page = get_json(url + "/api/goal-page")
+            self.assertEqual(answer["messages"], page["slices"][subgoals[1]]["chat"])
+            self.assertEqual([], page["slices"][subgoals[0]]["chat"])
+            # Written whole: an emptied conversation is gone.
+            post_json(url + "/api/goal-page/chat",
+                      {"subgoal_id": subgoals[1], "messages": []}, {"Origin": url})
+            self.assertEqual([], get_json(url + "/api/goal-page")["slices"][subgoals[1]]["chat"])
+        # Beside the goals, in the chat's own files.
+        self.assertTrue((self.chat / "bart.json").exists())
+
+    def test_a_conversation_about_a_piece_that_is_gone_goes_with_it(self):
+        goal, subgoals = seed_design(self.chat)
+        one = [{"id": "m-1", "who": "you", "kind": "text", "text": "first"}]
+        with server_for(self.chat) as url:
+            for sub in subgoals[:2]:
+                post_json(url + "/api/goal-page/chat",
+                          {"subgoal_id": sub, "messages": one}, {"Origin": url})
+            # The second subgoal purged from the tree; the next save prunes.
+            goals, important = self.goals()
+            goals["goals"] = [g for g in goals["goals"] if g["id"] != subgoals[1]]
+            CS.save_goals("chat", goals, important, self.root)
+            post_json(url + "/api/goal-page/chat",
+                      {"subgoal_id": subgoals[0], "messages": one}, {"Origin": url})
+            self.assertEqual({subgoals[0]: one},
+                             CS.load_bart_chats("chat", self.root))
+            # Refusals: not a list, no such subgoal, the goal itself, a form.
+            for body in ({"subgoal_id": subgoals[0], "messages": "words"},
+                         {"subgoal_id": "g99", "messages": one},
+                         {"subgoal_id": goal, "messages": one}):
+                answer = post_json(url + "/api/goal-page/chat", body, {"Origin": url})
+                self.assertFalse(answer["ok"], body)
+            request = urllib.request.Request(
+                url + "/api/goal-page/chat", data=b"messages=hi", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+
     def test_the_model_is_asked_outside_the_state_lock(self):
         # A reply takes as long as the model takes, and meanwhile the page
         # still reads its goal and saves its rows. A stand-in model that
@@ -1143,6 +1206,21 @@ class GoalPageBrowserTests(BrowserCase):
                  ("bart", "Proposed TODO row: save the file as parquet (added to the list)"),
                  ("you", "and then?")],
                 [(t["role"], t["text"]) for t in ask.asked[1]["transcript"]])
+
+            # The conversation was written down as it went: a reload draws
+            # it back on its subgoal, the proposal still marked as taken.
+            self.assertTrue(wait_for(lambda: len(
+                CS.load_bart_chats("chat", self.root).get(subgoals[1]) or []) == 4))
+            page.reload(wait_until="domcontentloaded")
+            subs.nth(1).click()
+            expect(page.locator(".msg")).to_have_count(4)
+            expect(page.locator(".msg.from-you .bubble").nth(0)).to_have_text(
+                "I want to save the file as parquet")
+            expect(page.locator(".proposal-text")).to_have_text("save the file as parquet")
+            expect(page.locator(".proposal-note")).to_have_text("added to todos")
+            expect(page.locator(".msg.from-bart .bubble")).to_have_text(
+                re.compile("Imagine this subgoal is done"))
+            expect(page.locator(".rail .sub").nth(0).locator(".msg")).to_have_count(0)
 
             # Back on the first subgoal: its notes, its todos, none of the
             # second's conversation.

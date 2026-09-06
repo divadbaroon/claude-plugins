@@ -20,7 +20,9 @@
    brainstorm the workspace at /legacy talks to, on the reader's own
    account, told which piece the conversation is about -- and answers with
    what to draw: prose as text, each row the model proposed as a proposal
-   the reader can add.
+   the reader can add. The conversation itself is kept beside the goals:
+   saveChat writes it whole after every change, and loadGoal brings it
+   back in each subgoal's slice.
 
    Still mocked: the preview and the terminal. Their answers are the
    example content of the design, held in memory for the life of the page.
@@ -177,6 +179,15 @@ export const services = {
     });
     if (!answer.ok) throw new Error(answer.error || "Bart could not answer");
     return { replies: answer.replies || [] };
+  },
+
+  /** One subgoal's conversation, written down whole -- after a message
+      sent, a reply landed, a proposal taken -- so a reload draws what was
+      on screen. Answers with the messages as kept. */
+  async saveChat({ subgoalId, messages }) {
+    const answer = await post("/api/goal-page/chat", { subgoal_id: subgoalId, messages });
+    if (!answer.ok) throw new Error(answer.error || "the conversation could not be saved");
+    return { subgoalId, messages: answer.messages || [] };
   },
 
   /** A todo on a subgoal, typed or accepted from a proposal (source names

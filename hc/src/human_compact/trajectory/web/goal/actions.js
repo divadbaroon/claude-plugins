@@ -22,7 +22,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export function createActions(store, services) {
   const { get, set } = store;
   let seq = 0;
-  const nextId = (prefix) => `${prefix}-${(seq += 1)}`;
+  // Stamped per page load: a conversation read back from the server
+  // carries the ids it was saved with, and a new message must not take one.
+  const stamp = Date.now().toString(36);
+  const nextId = (prefix) => `${prefix}-${stamp}-${(seq += 1)}`;
   const notesTimers = new Map();   // subgoal id -> the save waiting on its notes
   const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
   let signInRun = 0;               // the sign-in attempt that is current
@@ -63,7 +66,7 @@ export function createActions(store, services) {
   // The store with what the server now holds laid under what the reader is
   // in the middle of: the subgoal they are on, the message they are typing,
   // the notes or todo text a save is still waiting on, and the conversation,
-  // which the server does not keep yet.
+  // which this page writes and so keeps its own copy of once it has one.
   function merge(state, loaded) {
     const slices = {};
     for (const [id, incoming] of Object.entries(loaded.slices || {})) {
@@ -295,6 +298,7 @@ export function createActions(store, services) {
     if (!id || !text || slice.thinking) return;
     const mine = { id: nextId("m"), who: "you", kind: "text", text };
     changeSlice(id, (current) => ({ draft: "", thinking: true, chat: [...current.chat, mine] }));
+    keepChat(id);
     let reply;
     try {
       reply = await services.sendBartMessage({
@@ -309,6 +313,7 @@ export function createActions(store, services) {
       // that could not be reached is an answer, not a defect of the page.
       const failed = { id: nextId("m"), who: "bart", kind: "error", text: error.message || "Bart could not answer" };
       changeSlice(id, (current) => ({ thinking: false, chat: [...current.chat, failed] }));
+      keepChat(id);
       return;
     }
     const answers = reply.replies.map((r) => ({
@@ -316,6 +321,14 @@ export function createActions(store, services) {
       ...(r.kind === "proposal" ? { added: false } : {}),
     }));
     changeSlice(id, (current) => ({ thinking: false, chat: [...current.chat, ...answers] }));
+    keepChat(id);
+  }
+
+  // The conversation, written down whole after each change to it. The
+  // page is its only writer, so the copy on screen is the truth and the
+  // server's is a record of it.
+  function keepChat(id) {
+    persist(services.saveChat({ subgoalId: id, messages: sliceOf(get(), id).chat }));
   }
 
   // A row laid on the list once: a refresh that arrived first may have
@@ -343,6 +356,7 @@ export function createActions(store, services) {
       todosShown: true,
       chat: current.chat.map((m) => (m.id === messageId ? { ...m, added: true, todoId: todo.id } : m)),
     }));
+    keepChat(id);
   }
 
   function toggleTodosPane() {

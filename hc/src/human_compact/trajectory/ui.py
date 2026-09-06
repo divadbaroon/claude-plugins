@@ -432,6 +432,7 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
     goal = _pick_goal(tops, wanted, worked)
     subgoals, slices = [], {}
     if goal is not None:
+        chats = _bart_chats(trajdir, chat_scoped)
         for child in rows:
             if (child.get("parent_goal_id") != goal.get("id")
                     or child.get("status") == "archived"):
@@ -439,6 +440,7 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
             subgoals.append(_goal_row(child))
             slices[child["id"]] = {
                 "notes": str(child.get("notes") or ""),
+                "chat": chats.get(child["id"]) or [],
                 "todos": [_todo_row(row) for row
                           in GM.normalize_todo_items(child.get("todo_items"))],
             }
@@ -578,6 +580,40 @@ def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
             "digest": str(op.get("__digest__") or ""),
             "goal": str((parent or {}).get("title") or ""),
             "subgoal": str(piece.get("title") or "")}
+
+
+def _bart_chats(trajdir, chat_scoped):
+    """Every subgoal's conversation with Bart, by id; none for a vault
+    with no chat behind it, which has nowhere to keep one."""
+    if not chat_scoped:
+        return {}
+    session_id, root = _chat_identity(trajdir)
+    try:
+        return CS.load_bart_chats(session_id, root)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages):
+    """The page's conversation on one subgoal, written down whole. Under
+    the state lock like every write, and pruned to the tree as it stands:
+    a conversation about a piece that is gone goes with the piece."""
+    if not chat_scoped:
+        return {"ok": False, "error": "chat scope only"}
+    if not isinstance(messages, list):
+        return {"ok": False, "error": "messages must be a list"}
+    trajdir = _scope(trajdir)
+    with _state_access(trajdir, chat_scoped):
+        goals, _important = _load_goals(trajdir, chat_scoped)
+    GM.sanitize(goals)
+    piece = GM.by_id(goals, str(subgoal_id or ""))
+    if piece is None or not piece.get("parent_goal_id"):
+        return {"ok": False, "error": "no such subgoal"}
+    keep = {g.get("id") for g in goals.get("goals") or []
+            if isinstance(g, dict) and g.get("id")}
+    session_id, root = _chat_identity(trajdir)
+    kept = CS.save_bart_chat(session_id, piece["id"], messages, root, keep=keep)
+    return {"ok": True, "messages": kept}
 
 
 def _bart_answer(held, transcript):
@@ -5182,6 +5218,26 @@ class H(BaseHTTPRequestHandler):
             return
         self._send(200, _bart_answer(held, body.get("transcript")))
 
+    def _keep_bart_chat(self, body):
+        """The page's conversation on one subgoal, saved whole after every
+        change to it, so a reload draws what was on screen."""
+        if not isinstance(body, dict):
+            self._send(400, {"ok": False, "error": "expected a conversation"})
+            return
+        if getattr(self.server, "shared_project", None):
+            self._send(200, {"ok": False,
+                             "error": "this is a shared workspace"})
+            return
+        with self.server.state_lock:
+            try:
+                answer = _save_bart_chat(self.server.trajdir,
+                                         self.server.chat_scoped,
+                                         body.get("subgoal_id"),
+                                         body.get("messages"))
+            except (OSError, ValueError, RuntimeError) as exc:
+                answer = {"ok": False, "error": str(exc)[:200]}
+        self._send(200, answer)
+
     def _take_attachment(self):
         """A screenshot pasted into a TODO row: the image bytes, as sent.
 
@@ -5341,6 +5397,9 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/goal-page/bart":
                 self._answer_bart(body)
+                return
+            if self.path == "/api/goal-page/chat":
+                self._keep_bart_chat(body)
                 return
             if self.path == "/api/op":
                 if not isinstance(body, dict):
