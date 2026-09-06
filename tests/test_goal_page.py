@@ -29,6 +29,8 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import autosync as AUTOSYNC  # noqa: E402
 from human_compact.trajectory import brainstorm as BRAIN  # noqa: E402
+from human_compact.trajectory.agents import chat as CHAT_AGENT  # noqa: E402
+from human_compact.trajectory.agents import events as AGENT_EVENTS  # noqa: E402
 from human_compact.trajectory import build as BUILD  # noqa: E402
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
@@ -311,6 +313,27 @@ def fake_bart(*cards):
 
     ask.asked = asked
     return ask
+
+
+def fake_chat(*answers):
+    """The Chat agent stood in for: answers in order, remembers the asks."""
+    asked = []
+    left = list(answers)
+
+    def ask(transcript, context="", focus=(), known=(), discovered="", engine=None, root=None):
+        asked.append({"transcript": list(transcript or []), "context": context,
+                      "focus": list(focus or []), "known": list(known or []),
+                      "discovered": discovered})
+        answer = left.pop(0) if len(left) > 1 else left[0]
+        return dict(answer)
+
+    ask.asked = asked
+    return ask
+
+
+def chat_answer(say="", todos=(), needs=None):
+    return {"ok": True, "say": say, "todos": list(todos),
+            "needs": needs or {"kind": "", "question": ""}}
 
 
 TODOS_CARD = {"ok": True, "say": "Two rows, then.", "card": "todos",
@@ -843,23 +866,59 @@ class PanesRouteTests(ChatCase):
 
 
 class BartRouteTests(ChatCase):
-    """Bart on the page is the brainstorm, asked about one subgoal. The
-    model is stood in for; what the route sends it, and what it draws
-    from the card that comes back, are the tests."""
+    """Bart on the page is routed (agents.orchestrator): an ordinary
+    message is answered by the Chat agent; a message asking for options is
+    the brainstorm, asked about one subgoal. Both models are stood in for;
+    what the route sends them, and what it draws from what comes back,
+    are the tests."""
 
     def ask_bart(self, url, subgoal, transcript):
         return post_json(url + "/api/goal-page/bart",
                          {"goal_id": "", "subgoal_id": subgoal,
                           "transcript": transcript}, {"Origin": url})
 
-    def test_a_message_reaches_the_model_with_the_tree_and_the_piece(self):
+    def test_an_ordinary_message_is_answered_by_the_chat_agent_not_the_brainstorm(self):
         goal, subgoals = seed_design(self.chat)
-        ask = fake_bart(TODOS_CARD)
-        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+        chat = fake_chat(chat_answer("Parquet keeps the types.",
+                                     ["Save the file as parquet", "Name it after the dataset"]))
+        brainstorm = fake_bart(TODOS_CARD)
+        with mock.patch.object(CHAT_AGENT, "ask", chat), \
+                mock.patch.object(BRAIN, "ask", brainstorm), server_for(self.chat) as url:
             answer = self.ask_bart(url, subgoals[1], [
                 {"role": "bart", "text": "Proposed TODO row: Pick a format (added to the list)"},
                 {"role": "you", "text": "I want to save the file as parquet"}])
         self.assertTrue(answer["ok"], answer)
+        self.assertEqual("chat", answer["route"])
+        self.assertEqual([("text", "Parquet keeps the types."),
+                          ("proposal", "Save the file as parquet"),
+                          ("proposal", "Name it after the dataset")],
+                         [(r["kind"], r["text"]) for r in answer["replies"]])
+        self.assertEqual([], brainstorm.asked)
+        # The chat got the conversation whole, the project as the brainstorm
+        # digests it, and where in the project the talk is.
+        [asked] = chat.asked
+        self.assertEqual([("bart", "Proposed TODO row: Pick a format (added to the list)"),
+                          ("you", "I want to save the file as parquet")],
+                         [(t["role"], t["text"]) for t in asked["transcript"]])
+        self.assertIn(GOAL_TITLE, asked["context"])
+        self.assertIn(SUBGOAL_TITLES[1], asked["context"])
+        self.assertIn('"%s"' % SUBGOAL_TITLES[1], "\n".join(asked["focus"]))
+        # The turn is in the chat's event log, routed once.
+        kinds = [e["type"] for e in AGENT_EVENTS.read("chat", self.root)]
+        self.assertEqual(["bart.message", "overseer.routed", "chat.replied"], kinds)
+        self.assertEqual([("bart.message", "chat")], [(s["event"], s["action"]) for s in answer["flow"]])
+
+    def test_a_message_asking_for_options_reaches_the_brainstorm_with_the_tree_and_the_piece(self):
+        goal, subgoals = seed_design(self.chat)
+        ask = fake_bart(TODOS_CARD)
+        chat = fake_chat(chat_answer("no"))
+        with mock.patch.object(BRAIN, "ask", ask), mock.patch.object(CHAT_AGENT, "ask", chat), \
+                server_for(self.chat) as url:
+            answer = self.ask_bart(url, subgoals[1], [
+                {"role": "bart", "text": "Proposed TODO row: Pick a format (added to the list)"},
+                {"role": "you", "text": "brainstorm some options for the file format"}])
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual("brainstorm", answer["route"])
         # Prose first, then every row the model put forward, flat or under
         # a piece, each as a proposal of its own.
         self.assertEqual([("text", "Two rows, then."),
@@ -868,11 +927,10 @@ class BartRouteTests(ChatCase):
                           ("proposal", "Open the file the way pandas does")],
                          [(r["kind"], r["text"]) for r in answer["replies"]])
         self.assertEqual("todos", answer["card"])
-        # The model got the conversation whole, the project as the
-        # brainstorm digests it, and where in the project the talk is.
+        self.assertEqual([], chat.asked)
         [asked] = ask.asked
         self.assertEqual([("bart", "Proposed TODO row: Pick a format (added to the list)"),
-                          ("you", "I want to save the file as parquet")],
+                          ("you", "brainstorm some options for the file format")],
                          [(t["role"], t["text"]) for t in asked["transcript"]])
         self.assertIn(GOAL_TITLE, asked["context"])
         self.assertIn(SUBGOAL_TITLES[1], asked["context"])
@@ -902,7 +960,8 @@ class BartRouteTests(ChatCase):
                  "subgoals": []}]})
         with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
             turns = [self.ask_bart(url, subgoals[1], [{"role": "you", "text": t}])
-                     for t in ("save it", "ok", "yes", "and goals?")]
+                     for t in ("brainstorm how to save it", "brainstorm the reading",
+                               "brainstorm: yes", "brainstorm goals?")]
         first, second, third, fourth = [[(r["kind"], r["text"]) for r in t["replies"]]
                                         for t in turns]
         self.assertEqual([("text", "One thing first."),
@@ -914,19 +973,67 @@ class BartRouteTests(ChatCase):
         # A goal has no place on this page: said, not proposed.
         self.assertEqual([("text", "Keep the data in the browser (no server)")], fourth)
 
+    def test_a_choice_that_is_the_readers_is_asked_and_a_fact_of_the_project_is_not(self):
+        goal, subgoals = seed_design(self.chat)
+        bind_project(self)
+        (self.root / "project" / "requirements.txt").write_text("flask==3.0\n")
+        chat = fake_chat(
+            chat_answer("", needs={"kind": "environment", "question": "which web framework"}),
+            chat_answer("It is Flask; the route goes in app.py."),
+            chat_answer("Depends who reads it.",
+                        needs={"kind": "human_preference", "question": "People or pandas?"}))
+        ask = fake_bart({"ok": True, "say": "", "card": "focus",
+                         "focus": {"title": "Who reads the file?", "options": [
+                             {"label": "people", "why": "csv"}, {"label": "pandas", "why": "parquet"}]}})
+        with mock.patch.object(CHAT_AGENT, "ask", chat), mock.patch.object(BRAIN, "ask", ask), \
+                server_for(self.chat) as url:
+            found = self.ask_bart(url, subgoals[1], [{"role": "you", "text": "where does the route go?"}])
+            chosen = self.ask_bart(url, subgoals[1], [{"role": "you", "text": "export it somehow"}])
+        # The framework was read off the directory; no question reached the reader.
+        self.assertEqual([("text", "It is Flask; the route goes in app.py.")],
+                         [(r["kind"], r["text"]) for r in found["replies"]])
+        self.assertEqual([], ask.asked[:0] or [])
+        self.assertIn("flask==3.0", chat.asked[1]["discovered"])
+        self.assertEqual([("bart.message", "chat"), ("chat.needs_discovery", "chat")],
+                         [(s["event"], s["action"]) for s in found["flow"]])
+        # The preference was put to them as a choice, by the brainstorm.
+        self.assertEqual([("text", "Depends who reads it."),
+                          ("text", "Who reads the file?\n- people -- csv\n- pandas -- parquet")],
+                         [(r["kind"], r["text"]) for r in chosen["replies"]])
+        self.assertEqual(1, len(ask.asked))
+        self.assertIn("People or pandas?", "\n".join(ask.asked[0]["extra"]))
+        self.assertEqual([("bart.message", "chat"), ("chat.needs_human", "brainstorm")],
+                         [(s["event"], s["action"]) for s in chosen["flow"]])
+
     def test_a_model_that_could_not_be_reached_is_reported_not_drawn(self):
         goal, subgoals = seed_design(self.chat)
-        ask = fake_bart({"ok": False, "error": "claude CLI not found on PATH"})
-        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+        chat = fake_chat({"ok": False, "error": "claude CLI not found on PATH"})
+        with mock.patch.object(CHAT_AGENT, "ask", chat), server_for(self.chat) as url:
             answer = self.ask_bart(url, subgoals[0], [{"role": "you", "text": "hi"}])
         self.assertFalse(answer["ok"])
         self.assertIn("claude CLI not found", answer["error"])
         self.assertNotIn("replies", answer)
 
+    def test_with_the_agents_off_every_message_is_the_brainstorm_as_before(self):
+        goal, subgoals = seed_design(self.chat)
+        ask = fake_bart(TODOS_CARD)
+        chat = fake_chat(chat_answer("no"))
+        with mock.patch.dict(os.environ, {"HC_AGENTS": "0"}), \
+                mock.patch.object(BRAIN, "ask", ask), mock.patch.object(CHAT_AGENT, "ask", chat), \
+                server_for(self.chat) as url:
+            answer = self.ask_bart(url, subgoals[1], [{"role": "you", "text": "hi"}])
+        self.assertEqual("todos", answer["card"])
+        self.assertEqual(1, len(ask.asked))
+        self.assertEqual([], chat.asked)
+        self.assertNotIn("flow", answer)
+        self.assertEqual([], AGENT_EVENTS.read("chat", self.root))
+
     def test_the_conversation_must_be_a_list_on_a_subgoal_that_exists(self):
         goal, subgoals = seed_design(self.chat)
         ask = fake_bart(TODOS_CARD)
-        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+        chat = fake_chat(chat_answer("no"))
+        with mock.patch.object(BRAIN, "ask", ask), mock.patch.object(CHAT_AGENT, "ask", chat), \
+                server_for(self.chat) as url:
             said = self.ask_bart(url, subgoals[0], "words")
             self.assertFalse(said["ok"])
             self.assertIn("transcript", said["error"])
@@ -1018,12 +1125,12 @@ class BartRouteTests(ChatCase):
         goal, subgoals = seed_design(self.chat)
         seen = {}
 
-        def ask(transcript, context="", engine=None, root=None, extra=()):
+        def ask(transcript, context="", focus=(), known=(), discovered="", engine=None, root=None):
             with NO_PROXY_OPENER.open(seen["url"] + "/api/goal-page", timeout=5) as response:
                 seen["page"] = json.load(response)["goal"]["title"]
-            return dict(TODOS_CARD)
+            return chat_answer("Two rows, then.", ["Save the file as parquet"])
 
-        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+        with mock.patch.object(CHAT_AGENT, "ask", ask), server_for(self.chat) as url:
             seen["url"] = url
             answer = self.ask_bart(url, subgoals[0], [{"role": "you", "text": "hi"}])
         self.assertTrue(answer["ok"], answer)
@@ -1298,11 +1405,11 @@ class GoalPageBrowserTests(BrowserCase):
             return {"ok": True, "started": True, "rows": list(row_ids)}
 
         # Bart, stood in for: a row for the first message, a question after.
-        ask = fake_bart({"ok": True, "say": "", "card": "todos",
-                         "todos": ["save the file as parquet"]}, PROSE_CARD)
+        ask = fake_chat(chat_answer("", ["save the file as parquet"]),
+                        chat_answer(PROSE_CARD["say"]))
 
         with mock.patch("human_compact.trajectory.build.start", start), \
-                mock.patch.object(BRAIN, "ask", ask), \
+                mock.patch.object(CHAT_AGENT, "ask", ask), \
                 server_for(self.chat) as url, self.page_on(url) as (page, errors):
             # The goal, its plan, and the first subgoal selected with
             # its own two todos -- all of it from the chat's goals.json.

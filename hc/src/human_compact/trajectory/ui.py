@@ -26,6 +26,7 @@ from . import agent_exec as AE, chat_state as CS, goals as GM, state
 from ..platform_compat import detached_popen_kwargs, pid_alive, terminate_pid
 from . import autosync as AUTOSYNC
 from . import brainstorm as BRAIN
+from .agents import orchestrator as AGENTS
 from . import preview as PREVIEW
 from . import project_store as PS
 from . import reader as READER
@@ -485,85 +486,11 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
 # with one click. Nothing is written to the tree by a reply; the row lands
 # through add_todo_row when they take it, like a row they typed.
 
-def _bart_focus(goal_title, subgoal_title):
-    """What the model is told about where the conversation is."""
-    return [
-        "",
-        "# Where this conversation is",
-        "",
-        "They are talking about one piece of the work: \"%s\", under the "
-        "goal \"%s\". What they want from you is the next TODO row or two "
-        "for that piece, or the one question that decides what those rows "
-        "are." % (subgoal_title, goal_title),
-        "",
-        "Propose rows as `todos` -- flat rows, for that piece; not as "
-        "`subgoals` and not as `goals`. Do not offer to write goals here, "
-        "and do not send an `offer` card for rows either: when you have "
-        "the rows, send them as a `todos` card. Nothing is written until "
-        "they add a row themselves, so a proposed row is the offer.",
-    ]
-
-
-def _bart_choice(title, options, note=""):
-    """A question or a choice, as one message the reader can answer by
-    typing: the title, then each option on its own line with its
-    argument, when it has one."""
-    lines = [str(title or "").strip()]
-    said = str(note or "").strip()
-    if said:
-        lines[0] = (lines[0] + " (" + said + ")") if lines[0] else said
-    for option in options or []:
-        if not isinstance(option, dict):
-            continue
-        label = str(option.get("label") or "").strip()
-        why = str(option.get("why") or "").strip()
-        if label:
-            lines.append("- " + label + (" -- " + why if why else ""))
-    return "\n".join(line for line in lines if line)
-
-
-def _bart_replies(card):
-    """A brainstorm card as the messages the page draws, in order.
-
-    Prose is a text message. Each row proposed is its own proposal, whether
-    it came flat or under a piece: the page has one list, the subgoal's,
-    and a proposal is one row for it. A question or a choice is said as
-    text with its options under it, so the reader answers by typing; the
-    page has no form to draw them in. Goals the model proposes are said,
-    not offered: nothing on this page makes a goal.
-    """
-    replies = []
-    say = str(card.get("say") or "").strip()
-    if say:
-        replies.append({"kind": "text", "text": say})
-    kind = str(card.get("card") or "")
-    if kind == "questions":
-        for item in (card.get("questions") or {}).get("items") or []:
-            if isinstance(item, dict):
-                replies.append({"kind": "text", "text": _bart_choice(
-                    item.get("title"), item.get("options"),
-                    item.get("subtitle"))})
-    elif kind == "focus":
-        focus = card.get("focus") or {}
-        replies.append({"kind": "text", "text": _bart_choice(
-            focus.get("title"), focus.get("options"))})
-    elif kind == "goals":
-        for goal in card.get("goals") or []:
-            if isinstance(goal, dict):
-                replies.append({"kind": "text", "text": _bart_choice(
-                    goal.get("label"), [], goal.get("why"))})
-    elif kind == "todos":
-        rows = list(card.get("todos") or [])
-        for piece in card.get("subgoals") or []:
-            if isinstance(piece, dict):
-                rows.extend(piece.get("todos") or [])
-        for text in rows:
-            said = str(text or "").strip()
-            if said:
-                replies.append({"kind": "proposal", "text": said})
-    if not replies:
-        replies.append({"kind": "text", "text": "Bart had nothing to add."})
-    return replies
+# Bart's helpers live with the agents now (agents.orchestrator.focus,
+# agents.replies); these names stay for the tests and callers that read them.
+_bart_focus = AGENTS.focus
+from .agents.replies import choice as _bart_choice  # noqa: E402
+from .agents.replies import from_card as _bart_replies  # noqa: E402
 
 
 def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
@@ -593,10 +520,11 @@ def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
         return (held if isinstance(held, dict)
                 else {"ok": False, "error": "the tree could not be read"})
     _kind, _session, root, cwd, op = deferred
-    return {"ok": True, "root": root, "cwd": cwd,
+    return {"ok": True, "root": root, "cwd": cwd, "session": _session,
             "digest": str(op.get("__digest__") or ""),
             "goal": str((parent or {}).get("title") or ""),
-            "subgoal": str(piece.get("title") or "")}
+            "subgoal": str(piece.get("title") or ""),
+            "subgoal_id": str(piece.get("id") or "")}
 
 
 def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
@@ -659,18 +587,23 @@ def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages):
 
 
 def _bart_answer(held, transcript):
-    """The model's turn, outside the lock: the project condensed if it is
-    long, the conversation, and where in the project it is; one card
-    back, as the replies the page draws."""
-    context = BRAIN.project_context(held["root"], held["cwd"], held["digest"])
-    card = BRAIN.ask(transcript, context, root=held["root"],
-                     extra=_bart_focus(held["goal"], held["subgoal"]))
-    if not isinstance(card, dict) or not card.get("ok"):
-        error = (card or {}).get("error") if isinstance(card, dict) else ""
-        return {"ok": False, "error": str(error or "Bart could not answer")}
-    return {"ok": True, "say": str(card.get("say") or ""),
-            "card": str(card.get("card") or "none"),
-            "replies": _bart_replies(card)}
+    """The model's turn, outside the lock. The message is recorded and
+    routed (agents.orchestrator): an ordinary message is answered by the
+    Chat agent; one asking for options goes to the brainstorm; one asking
+    for a plan to the Path agent. HC_AGENTS=0 is the old path -- every
+    message a brainstorm."""
+    if not AGENTS.enabled():
+        context = BRAIN.project_context(held["root"], held["cwd"], held["digest"])
+        card = BRAIN.ask(transcript, context, root=held["root"],
+                         extra=_bart_focus(held["goal"], held["subgoal"]))
+        if not isinstance(card, dict) or not card.get("ok"):
+            error = (card or {}).get("error") if isinstance(card, dict) else ""
+            return {"ok": False, "error": str(error or "Bart could not answer")}
+        return {"ok": True, "say": str(card.get("say") or ""),
+                "card": str(card.get("card") or "none"),
+                "replies": _bart_replies(card)}
+    orch = AGENTS.for_chat(held["session"], held["root"], cwd=str(held.get("cwd") or ""))
+    return orch.bart_message(held, transcript)
 
 
 def _goal_page_project(trajdir, chat_scoped):
@@ -712,6 +645,30 @@ def _current_revision(trajdir, chat_scoped):
         goals, important = _load_goals(trajdir, chat_scoped)
     GM.sanitize(goals)
     return _goal_revision(goals, important)
+
+
+def _goal_page_write(body, trajdir, chat_scoped):
+    """One of the page's operations, applied -- and, with the agents on,
+    written to the event log. Rows handed to the build go through the
+    orchestrator, where the Overseer routes them to the Build agent; every
+    other op is applied as before and recorded as the minor event it is,
+    which routes nothing."""
+    kind = str(body.get("op") or "")
+    if kind == "build_todos" and chat_scoped and AGENTS.enabled():
+        session_id, root = _chat_identity(_scope(trajdir))
+        ids = body.get("ids")
+        goal_id = str(body.get("goal_id") or "")
+        orch = AGENTS.for_chat(session_id, root)
+        return orch.build_requested(goal_id, ids if isinstance(ids, list) else [],
+                                    quick=bool(body.get("quick")))
+    result = _apply(body, trajdir, chat_scoped)
+    if chat_scoped and AGENTS.enabled():
+        try:
+            session_id, root = _chat_identity(_scope(trajdir))
+            AGENTS.note_op(session_id, root, body, result if isinstance(result, dict) else None)
+        except (OSError, ValueError):
+            pass
+    return result
 
 
 class GoalEvents:
@@ -5230,8 +5187,8 @@ class H(BaseHTTPRequestHandler):
             return
         with self.server.state_lock:
             try:
-                result = _apply(body, self.server.trajdir,
-                                self.server.chat_scoped)
+                result = _goal_page_write(body, self.server.trajdir,
+                                          self.server.chat_scoped)
             except (OSError, ValueError, RuntimeError) as exc:
                 result = {"ok": False, "error": str(exc)[:200]}
             if isinstance(result, dict):

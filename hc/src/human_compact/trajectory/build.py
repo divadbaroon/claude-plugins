@@ -1691,11 +1691,16 @@ class Run:
         # is left waiting, and the counter starts again from there.
         if not waiting:
             self._bank()
+        # The agents hear that the build ended (agents.orchestrator): a
+        # finished build is verified, and a verdict that fails sends the row
+        # back out with the reason. When that repair went out, the goal is
+        # the repair's now -- no restart check on the run it replaced.
+        repaired = _after_finish(self, ended)
         # Rows an older runtime parked behind this run go out now -- unless
         # it stopped on a question, whose answer resumes this same session
         # first; they leave with the resumed run's finish instead. Rows
         # picked since the upgrade never wait: they joined the run itself.
-        if not waiting:
+        if not waiting and not repaired:
             held = _pop_later(self.session_id, self.root, self.goal_id)
             if held:
                 start(self.session_id, self.root, self.goal_id, held)
@@ -1705,6 +1710,21 @@ class Run:
                 # Finished on its own terms, with nothing behind it: the one
                 # question left is whether what it changed is what is running.
                 self._check()
+
+
+def _after_finish(run: "Run", ended: str) -> bool:
+    """Tell the agents a build ended. True when they sent a repair out on
+    this goal. The import is late and the call is guarded: the build's own
+    record is written by now, and nothing the agents do may undo it."""
+    if run.phase == "check":
+        return False
+    try:
+        from .agents import orchestrator as AGENTS
+        return bool(AGENTS.build_finished(
+            run.session_id, run.root, run.goal_id, ended, list(run.picked),
+            run_id=run.claude_session, error=run.error))
+    except Exception:  # noqa: BLE001 -- see above
+        return False
 
 
 # A headless run takes one process per goal. Rows picked while one is out are
