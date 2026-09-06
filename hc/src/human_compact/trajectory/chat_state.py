@@ -83,6 +83,7 @@ class ChatPaths:
     context_snapshot: Path
     notices: Path
     brainstorms: Path
+    bart: Path
     lock_dir: Path
 
 
@@ -153,6 +154,7 @@ def paths(session_id: str, root: Optional[Path] = None) -> ChatPaths:
         context_snapshot=session_dir / "context_snapshot.json",
         notices=session_dir / "notices.json",
         brainstorms=session_dir / "brainstorms.json",
+        bart=session_dir / "bart.json",
         lock_dir=session_dir / ".lock",
     )
 
@@ -1874,6 +1876,96 @@ def _brainstorm_turns(value: Any) -> List[Dict[str, Any]]:
     # Bounded from the oldest end, like every other read of a conversation
     # here: what a reader comes back to is the end of it.
     return out[-BRAINSTORM_TURNS:]
+
+
+BART_CHAT_LIMIT = 200      # messages kept per subgoal, newest last
+BART_TEXT_LIMIT = 4000
+BART_WHO = ("you", "bart")
+BART_KINDS = ("text", "proposal", "error")
+
+
+def bart_messages(value: Any) -> List[Dict[str, Any]]:
+    """The goal page's conversation with Bart, as the page keeps it, checked.
+
+    Kept in the page's own shape rather than the brainstorm's turns, so a
+    reload draws exactly what was on screen: which messages were proposals,
+    which of those were taken and the row each became. Anything that is not
+    a message of that shape is dropped rather than refused, the way a goal
+    file with a strange row in it is read past the row.
+    """
+    out: List[Dict[str, Any]] = []
+    for row in value if isinstance(value, list) else []:
+        if not isinstance(row, dict):
+            continue
+        who = str(row.get("who") or "")
+        kind = str(row.get("kind") or "")
+        text = str(row.get("text") or "").strip()[:BART_TEXT_LIMIT]
+        if who not in BART_WHO or kind not in BART_KINDS or not text:
+            continue
+        message: Dict[str, Any] = {
+            "id": str(row.get("id") or "")[:40] or os.urandom(4).hex(),
+            "who": who, "kind": kind, "text": text}
+        if kind == "proposal":
+            message["added"] = bool(row.get("added"))
+            todo_id = str(row.get("todoId") or "")[:40]
+            if todo_id:
+                message["todoId"] = todo_id
+        out.append(message)
+    return out[-BART_CHAT_LIMIT:]
+
+
+def load_bart_chats(
+    session_id: str, root: Optional[Path] = None
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Every subgoal's conversation with Bart on the goal page, by subgoal id.
+
+    Read where the goals are read -- ``tree_session`` -- so a conversation
+    about a piece of a project is the project's, whichever chat opened the
+    page. Read without the lock, as ``load_brainstorms`` is: the file is
+    only ever replaced whole.
+    """
+    p = paths(tree_session(session_id, root), root)
+    value = _read_json(p.bart, {})
+    rows = value.get("chats") if isinstance(value, dict) else None
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for goal_id, row in (rows.items() if isinstance(rows, dict) else ()):
+        held = row.get("messages") if isinstance(row, dict) else row
+        messages = bart_messages(held)
+        if messages and isinstance(goal_id, str) and goal_id:
+            out[goal_id] = messages
+    return out
+
+
+def save_bart_chat(
+    session_id: str,
+    goal_id: str,
+    messages: Any,
+    root: Optional[Path] = None,
+    keep: Optional[Any] = None,
+    wait_s: float = 5.0,
+) -> List[Dict[str, Any]]:
+    """Write one subgoal's conversation down, whole, replacing what was there.
+
+    Called after every change to it -- a message sent, a reply landed, a
+    proposal taken -- because there is no end to save at: the reader
+    reloads or closes the tab. An emptied conversation removes the record.
+    ``keep``, when given, names the goal ids still in the tree; a record for
+    a goal that is gone goes with it, so the file does not outlive the tree.
+    """
+    wanted = bart_messages(messages)
+    session_id = tree_session(session_id, root)
+    with session_lock(session_id, root, wait_s=wait_s) as p:
+        value = _read_json(p.bart, {})
+        rows = value.get("chats") if isinstance(value, dict) else None
+        rows = dict(rows) if isinstance(rows, dict) else {}
+        if keep is not None:
+            rows = {k: v for k, v in rows.items() if k in set(keep)}
+        if wanted:
+            rows[str(goal_id)] = {"messages": wanted, "updated_at": _now_ms()}
+        else:
+            rows.pop(str(goal_id), None)
+        _atomic_json(p.bart, {"version": 1, "chats": rows})
+    return wanted
 
 
 def load_brainstorms(

@@ -165,8 +165,10 @@ input, textarea { outline: none; }
 .msg { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
 .msg.from-you { align-items: flex-end; }
 .msg-who { font: 500 9px/1 var(--font-sans); letter-spacing: 1.4px; text-transform: uppercase; color: var(--fnt); }
-.bubble { max-width: 78%; padding: 7px 11px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--bd); font: 14.5px/1.5 var(--font-sans); color: var(--ink); text-wrap: pretty; }
+.bubble { max-width: 78%; padding: 7px 11px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--bd); font: 14.5px/1.5 var(--font-sans); color: var(--ink); text-wrap: pretty; white-space: pre-line; }
 .from-you .bubble { background: var(--bd); border-color: transparent; }
+.bubble.is-error { color: var(--del); border-color: var(--del); }
+.bubble.is-thinking { color: var(--fnt); letter-spacing: 3px; }
 .proposal { width: 100%; max-width: 420px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--bd2); display: flex; flex-direction: column; gap: 8px; }
 .proposal-title { font: 500 13px/1.4 var(--font-sans); color: var(--ink); }
 .proposal-row { display: flex; align-items: center; gap: 12px; }

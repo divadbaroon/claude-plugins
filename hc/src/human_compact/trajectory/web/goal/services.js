@@ -15,13 +15,20 @@
    connected as, and signOut / startSignIn run `engelbart logout` and
    `engelbart auth` through it.
 
-   Still mocked: Bart's replies, the preview and the terminal. Their answers
-   are the example content of the design, held in memory for the life of
-   the page. Replace the bodies and keep the signatures. */
+   Bart is real: sendBartMessage sends the subgoal's whole conversation to
+   POST /api/goal-page/bart, where the server asks the model -- the same
+   brainstorm the workspace at /legacy talks to, on the reader's own
+   account, told which piece the conversation is about -- and answers with
+   what to draw: prose as text, each row the model proposed as a proposal
+   the reader can add. The conversation itself is kept beside the goals:
+   saveChat writes it whole after every change, and loadGoal brings it
+   back in each subgoal's slice.
+
+   Still mocked: the preview and the terminal. Their answers are the
+   example content of the design, held in memory for the life of the page.
+   Replace the bodies and keep the signatures. */
 
 import { WITH_BUILDER } from "./store.js";
-
-const REPLY_DELAY_MS = 900;
 
 const PREVIEW = {
   host: "localhost:5173",
@@ -40,10 +47,6 @@ const TERMINAL = {
   ],
 };
 
-const QUESTION = "Imagine this subgoal is done — what is the first thing you would see or click?";
-const LEADING_INTENT = /^(i want to|i need to|i should|let me|allow me to)\s+/i;
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
 async function get(path) {
@@ -62,6 +65,17 @@ async function post(path, body = {}) {
   });
   if (!response.ok) throw new Error(`${path} answered ${response.status}`);
   return response.json();
+}
+
+// A message of the page as a turn of the conversation the server reads:
+// the reader's as theirs, Bart's as its own -- a proposal as the row it
+// put forward, and whether the reader took it.
+function asTurn(message) {
+  if (message.kind === "proposal") {
+    const taken = message.added ? " (added to the list)" : "";
+    return { role: "bart", text: `Proposed TODO row: ${message.text}${taken}` };
+  }
+  return { role: message.who === "you" ? "you" : "bart", text: message.text };
 }
 
 // One operation on the goals. The server refuses with a reason when it
@@ -150,13 +164,30 @@ export const services = {
 
   /** Bart's reply to one message, in the conversation of one subgoal.
 
-      The mock keeps the design's two answers: a subgoal with no todos yet
-      gets the message back as a proposed todo, one that has some gets the
-      question that draws the next one out. */
+      The whole conversation goes out each time: the server holds the
+      tree, not the argument. Answers with the messages to draw, in order:
+      { kind: "text", text } for prose, a question or a choice, and
+      { kind: "proposal", text } for each row the model put forward. Throws
+      with the reason when the model could not be reached. */
   async sendBartMessage({ goalId, subgoalId, text, history, todos }) {
-    await wait(REPLY_DELAY_MS);
-    if (todos.length) return { kind: "text", text: QUESTION };
-    return { kind: "proposal", text: text.replace(LEADING_INTENT, "") };
+    const transcript = [
+      ...history.filter((m) => m.kind !== "error").map(asTurn),
+      { role: "you", text },
+    ];
+    const answer = await post("/api/goal-page/bart", {
+      goal_id: goalId, subgoal_id: subgoalId, transcript,
+    });
+    if (!answer.ok) throw new Error(answer.error || "Bart could not answer");
+    return { replies: answer.replies || [] };
+  },
+
+  /** One subgoal's conversation, written down whole -- after a message
+      sent, a reply landed, a proposal taken -- so a reload draws what was
+      on screen. Answers with the messages as kept. */
+  async saveChat({ subgoalId, messages }) {
+    const answer = await post("/api/goal-page/chat", { subgoal_id: subgoalId, messages });
+    if (!answer.ok) throw new Error(answer.error || "the conversation could not be saved");
+    return { subgoalId, messages: answer.messages || [] };
   },
 
   /** A todo on a subgoal, typed or accepted from a proposal (source names

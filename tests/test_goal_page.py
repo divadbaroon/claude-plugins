@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import autosync as AUTOSYNC  # noqa: E402
+from human_compact.trajectory import brainstorm as BRAIN  # noqa: E402
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
 from human_compact.trajectory import reader as READER  # noqa: E402
@@ -260,6 +261,32 @@ def browser_executable():
     return chrome or (str(mac_chrome) if mac_chrome.is_file() else None)
 
 
+# A stand-in for the brainstorm's model call behind Bart. Answers with the
+# cards given, one per round (the last one again after that), and keeps
+# what each round was asked: the transcript, the project as digested, and
+# where in it the conversation was said to be.
+def fake_bart(*cards):
+    asked = []
+    left = list(cards)
+
+    def ask(transcript, context="", engine=None, root=None, extra=()):
+        asked.append({"transcript": list(transcript or []), "context": context,
+                      "extra": list(extra or [])})
+        card = left.pop(0) if len(left) > 1 else left[0]
+        return dict(card)
+
+    ask.asked = asked
+    return ask
+
+
+TODOS_CARD = {"ok": True, "say": "Two rows, then.", "card": "todos",
+              "todos": ["Save the file as parquet", "Name it after the dataset"],
+              "subgoals": [{"label": "Reading it back",
+                            "todos": ["Open the file the way pandas does"]}]}
+PROSE_CARD = {"ok": True, "card": "none", "say":
+              "Imagine this subgoal is done — what is the first thing you would see or click?"}
+
+
 class ChatCase(unittest.TestCase):
     """A disposable chat, with the machine's own account and autosync kept
     out: what the tests write stays in the temporary directory."""
@@ -402,7 +429,7 @@ class GoalDataRouteTests(ChatCase):
             self.assertTrue(row["id"])
             self.assertFalse(row["done"])
             self.assertEqual("", row["status"])
-        self.assertEqual({"notes": "keep it local", "todos": []},
+        self.assertEqual({"notes": "keep it local", "chat": [], "todos": []},
                          answer["slices"][subgoals[1]])
         self.assertEqual([goal], [g["id"] for g in answer["goals"]])
         # The rows the page reads are the rows the build reads.
@@ -683,6 +710,194 @@ class GoalDataRouteTests(ChatCase):
                 connection.close()
 
 
+class BartRouteTests(ChatCase):
+    """Bart on the page is the brainstorm, asked about one subgoal. The
+    model is stood in for; what the route sends it, and what it draws
+    from the card that comes back, are the tests."""
+
+    def ask_bart(self, url, subgoal, transcript):
+        return post_json(url + "/api/goal-page/bart",
+                         {"goal_id": "", "subgoal_id": subgoal,
+                          "transcript": transcript}, {"Origin": url})
+
+    def test_a_message_reaches_the_model_with_the_tree_and_the_piece(self):
+        goal, subgoals = seed_design(self.chat)
+        ask = fake_bart(TODOS_CARD)
+        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+            answer = self.ask_bart(url, subgoals[1], [
+                {"role": "bart", "text": "Proposed TODO row: Pick a format (added to the list)"},
+                {"role": "you", "text": "I want to save the file as parquet"}])
+        self.assertTrue(answer["ok"], answer)
+        # Prose first, then every row the model put forward, flat or under
+        # a piece, each as a proposal of its own.
+        self.assertEqual([("text", "Two rows, then."),
+                          ("proposal", "Save the file as parquet"),
+                          ("proposal", "Name it after the dataset"),
+                          ("proposal", "Open the file the way pandas does")],
+                         [(r["kind"], r["text"]) for r in answer["replies"]])
+        self.assertEqual("todos", answer["card"])
+        # The model got the conversation whole, the project as the
+        # brainstorm digests it, and where in the project the talk is.
+        [asked] = ask.asked
+        self.assertEqual([("bart", "Proposed TODO row: Pick a format (added to the list)"),
+                          ("you", "I want to save the file as parquet")],
+                         [(t["role"], t["text"]) for t in asked["transcript"]])
+        self.assertIn(GOAL_TITLE, asked["context"])
+        self.assertIn(SUBGOAL_TITLES[1], asked["context"])
+        where = "\n".join(asked["extra"])
+        self.assertIn('"%s"' % SUBGOAL_TITLES[1], where)
+        self.assertIn('"%s"' % GOAL_TITLE, where)
+        self.assertIn("`todos`", where)
+        self.assertIn("Nothing is written until they add a row", where)
+
+    def test_a_question_and_a_choice_are_said_so_the_reader_can_type_back(self):
+        goal, subgoals = seed_design(self.chat)
+        ask = fake_bart(
+            {"ok": True, "say": "One thing first.", "card": "questions",
+             "questions": {"eyebrow": "one question", "items": [
+                 {"id": "fmt", "type": "mcq", "title": "Which format?",
+                  "subtitle": "pick one", "options": [
+                      {"label": "parquet", "why": "columnar"},
+                      {"label": "csv", "why": ""}]}]}},
+            {"ok": True, "say": "", "card": "focus",
+             "focus": {"title": "Which reading of this?", "options": [
+                 {"label": "a viewer", "why": "look first"},
+                 {"label": "an export", "why": "share first"}]}},
+            {"ok": True, "say": "I would write the rows now, shall I?",
+             "card": "offer", "offer": "todos"},
+            {"ok": True, "say": "", "card": "goals", "goals": [
+                {"label": "Keep the data in the browser", "why": "no server",
+                 "subgoals": []}]})
+        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+            turns = [self.ask_bart(url, subgoals[1], [{"role": "you", "text": t}])
+                     for t in ("save it", "ok", "yes", "and goals?")]
+        first, second, third, fourth = [[(r["kind"], r["text"]) for r in t["replies"]]
+                                        for t in turns]
+        self.assertEqual([("text", "One thing first."),
+                          ("text", "Which format? (pick one)\n- parquet -- columnar\n- csv")],
+                         first)
+        self.assertEqual([("text", "Which reading of this?\n- a viewer -- look first"
+                                   "\n- an export -- share first")], second)
+        self.assertEqual([("text", "I would write the rows now, shall I?")], third)
+        # A goal has no place on this page: said, not proposed.
+        self.assertEqual([("text", "Keep the data in the browser (no server)")], fourth)
+
+    def test_a_model_that_could_not_be_reached_is_reported_not_drawn(self):
+        goal, subgoals = seed_design(self.chat)
+        ask = fake_bart({"ok": False, "error": "claude CLI not found on PATH"})
+        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+            answer = self.ask_bart(url, subgoals[0], [{"role": "you", "text": "hi"}])
+        self.assertFalse(answer["ok"])
+        self.assertIn("claude CLI not found", answer["error"])
+        self.assertNotIn("replies", answer)
+
+    def test_the_conversation_must_be_a_list_on_a_subgoal_that_exists(self):
+        goal, subgoals = seed_design(self.chat)
+        ask = fake_bart(TODOS_CARD)
+        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+            said = self.ask_bart(url, subgoals[0], "words")
+            self.assertFalse(said["ok"])
+            self.assertIn("transcript", said["error"])
+            gone = self.ask_bart(url, "g99", [{"role": "you", "text": "hi"}])
+            self.assertFalse(gone["ok"])
+            self.assertIn("no such subgoal", gone["error"])
+            # The goal itself is not a piece of the work.
+            top = self.ask_bart(url, goal, [{"role": "you", "text": "hi"}])
+            self.assertFalse(top["ok"])
+            self.assertIn("no such subgoal", top["error"])
+            # Another site's form is stopped at the media type, as everywhere.
+            request = urllib.request.Request(
+                url + "/api/goal-page/bart", data=b"transcript=hi", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+        self.assertEqual([], ask.asked)
+
+    def test_the_conversation_is_kept_beside_the_goals_and_read_back_with_them(self):
+        goal, subgoals = seed_design(self.chat)
+        said = [{"id": "m-a", "who": "you", "kind": "text", "text": "save it as parquet"},
+                {"id": "m-b", "who": "bart", "kind": "text", "text": "Two rows, then."},
+                {"id": "m-c", "who": "bart", "kind": "proposal", "text": "Save the file as parquet",
+                 "added": True, "todoId": "t9"},
+                {"id": "m-d", "who": "bart", "kind": "proposal", "text": "Name it", "added": False},
+                {"id": "m-e", "who": "bart", "kind": "error", "text": "claude CLI timed out"},
+                # Not messages: a stranger's shape, an empty one, a kind the page has not got.
+                "words", {"who": "you", "kind": "text", "text": "   "},
+                {"who": "them", "kind": "text", "text": "hi"},
+                {"who": "bart", "kind": "card", "text": "hi"}]
+        with server_for(self.chat) as url:
+            answer = post_json(url + "/api/goal-page/chat",
+                               {"subgoal_id": subgoals[1], "messages": said}, {"Origin": url})
+            self.assertTrue(answer["ok"], answer)
+            self.assertEqual(["m-a", "m-b", "m-c", "m-d", "m-e"],
+                             [m["id"] for m in answer["messages"]])
+            self.assertEqual({"id": "m-c", "who": "bart", "kind": "proposal",
+                              "text": "Save the file as parquet", "added": True, "todoId": "t9"},
+                             answer["messages"][2])
+            self.assertEqual({"id": "m-d", "who": "bart", "kind": "proposal",
+                              "text": "Name it", "added": False}, answer["messages"][3])
+            # Back in the payload, on its own subgoal and no other.
+            page = get_json(url + "/api/goal-page")
+            self.assertEqual(answer["messages"], page["slices"][subgoals[1]]["chat"])
+            self.assertEqual([], page["slices"][subgoals[0]]["chat"])
+            # Written whole: an emptied conversation is gone.
+            post_json(url + "/api/goal-page/chat",
+                      {"subgoal_id": subgoals[1], "messages": []}, {"Origin": url})
+            self.assertEqual([], get_json(url + "/api/goal-page")["slices"][subgoals[1]]["chat"])
+        # Beside the goals, in the chat's own files.
+        self.assertTrue((self.chat / "bart.json").exists())
+
+    def test_a_conversation_about_a_piece_that_is_gone_goes_with_it(self):
+        goal, subgoals = seed_design(self.chat)
+        one = [{"id": "m-1", "who": "you", "kind": "text", "text": "first"}]
+        with server_for(self.chat) as url:
+            for sub in subgoals[:2]:
+                post_json(url + "/api/goal-page/chat",
+                          {"subgoal_id": sub, "messages": one}, {"Origin": url})
+            # The second subgoal purged from the tree; the next save prunes.
+            goals, important = self.goals()
+            goals["goals"] = [g for g in goals["goals"] if g["id"] != subgoals[1]]
+            CS.save_goals("chat", goals, important, self.root)
+            post_json(url + "/api/goal-page/chat",
+                      {"subgoal_id": subgoals[0], "messages": one}, {"Origin": url})
+            self.assertEqual({subgoals[0]: one},
+                             CS.load_bart_chats("chat", self.root))
+            # Refusals: not a list, no such subgoal, the goal itself, a form.
+            for body in ({"subgoal_id": subgoals[0], "messages": "words"},
+                         {"subgoal_id": "g99", "messages": one},
+                         {"subgoal_id": goal, "messages": one}):
+                answer = post_json(url + "/api/goal-page/chat", body, {"Origin": url})
+                self.assertFalse(answer["ok"], body)
+            request = urllib.request.Request(
+                url + "/api/goal-page/chat", data=b"messages=hi", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+
+    def test_the_model_is_asked_outside_the_state_lock(self):
+        # A reply takes as long as the model takes, and meanwhile the page
+        # still reads its goal and saves its rows. A stand-in model that
+        # reads the page through the server from inside the call would
+        # wait on a lock the route was holding, and time out.
+        goal, subgoals = seed_design(self.chat)
+        seen = {}
+
+        def ask(transcript, context="", engine=None, root=None, extra=()):
+            with NO_PROXY_OPENER.open(seen["url"] + "/api/goal-page", timeout=5) as response:
+                seen["page"] = json.load(response)["goal"]["title"]
+            return dict(TODOS_CARD)
+
+        with mock.patch.object(BRAIN, "ask", ask), server_for(self.chat) as url:
+            seen["url"] = url
+            answer = self.ask_bart(url, subgoals[0], [{"role": "you", "text": "hi"}])
+        self.assertTrue(answer["ok"], answer)
+        self.assertEqual(GOAL_TITLE, seen["page"])
+
+
 class AccountRouteTests(ChatCase):
     """What the page's loadAccount relies on: the machine's own account, as
     the installer wrote it, read by the server and never by the page."""
@@ -914,7 +1129,12 @@ class GoalPageBrowserTests(BrowserCase):
             CS.save_goals(session_id, goals, important, root)
             return {"ok": True, "started": True, "rows": list(row_ids)}
 
+        # Bart, stood in for: a row for the first message, a question after.
+        ask = fake_bart({"ok": True, "say": "", "card": "todos",
+                         "todos": ["save the file as parquet"]}, PROSE_CARD)
+
         with mock.patch("human_compact.trajectory.build.start", start), \
+                mock.patch.object(BRAIN, "ask", ask), \
                 server_for(self.chat) as url, self.page_on(url) as (page, errors):
             # The goal, its breakdown, and the first subgoal selected with
             # its own two todos -- all of it from the chat's goals.json.
@@ -939,8 +1159,8 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.get_by_role("button", name="Show todos")).to_be_visible()
             expect(page.locator(".todo-list")).to_have_count(0)
 
-            # Bart proposes a todo from the first message on an empty
-            # subgoal, and Add puts it on the list -- and in todos.json.
+            # Bart's row for the first message comes back as a proposal,
+            # and Add puts it on the list -- and in todos.json.
             composer = page.get_by_label("Message Bart")
             composer.fill("I want to save the file as parquet")
             composer.press("Enter")
@@ -974,12 +1194,33 @@ class GoalPageBrowserTests(BrowserCase):
             self.assertTrue(wait_for(
                 lambda: stored_rows(self.chat, subgoals[1]) == [("save as parquet", "")]))
 
-            # With todos on the subgoal, Bart asks instead of proposing.
+            # A prose answer is a bubble; and the second round carried the
+            # whole conversation, the proposal as Bart's own turn, taken.
             composer.fill("and then?")
             page.get_by_role("button", name="Send").click()
             expect(page.locator(".msg.from-bart .bubble")).to_have_text(
                 re.compile("Imagine this subgoal is done"), timeout=5_000)
             expect(composer).to_be_focused()
+            self.assertEqual(
+                [("you", "I want to save the file as parquet"),
+                 ("bart", "Proposed TODO row: save the file as parquet (added to the list)"),
+                 ("you", "and then?")],
+                [(t["role"], t["text"]) for t in ask.asked[1]["transcript"]])
+
+            # The conversation was written down as it went: a reload draws
+            # it back on its subgoal, the proposal still marked as taken.
+            self.assertTrue(wait_for(lambda: len(
+                CS.load_bart_chats("chat", self.root).get(subgoals[1]) or []) == 4))
+            page.reload(wait_until="domcontentloaded")
+            subs.nth(1).click()
+            expect(page.locator(".msg")).to_have_count(4)
+            expect(page.locator(".msg.from-you .bubble").nth(0)).to_have_text(
+                "I want to save the file as parquet")
+            expect(page.locator(".proposal-text")).to_have_text("save the file as parquet")
+            expect(page.locator(".proposal-note")).to_have_text("added to todos")
+            expect(page.locator(".msg.from-bart .bubble")).to_have_text(
+                re.compile("Imagine this subgoal is done"))
+            expect(page.locator(".rail .sub").nth(0).locator(".msg")).to_have_count(0)
 
             # Back on the first subgoal: its notes, its todos, none of the
             # second's conversation.
