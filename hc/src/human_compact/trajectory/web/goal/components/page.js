@@ -1,6 +1,7 @@
-/* The page: header, the plan rail, and the main column with its tabs
-   and whichever pane the current tab shows -- or, for a workspace with no
-   goal yet, the one line that asks for it. */
+/* The page: header, then the view the header's path names -- every
+   project, this project's goals, or the goal: the plan rail and the main
+   column with its tabs and whichever pane the current tab shows, or, for
+   a workspace with no goal yet, the one line that asks for it. */
 
 import { h } from "../dom.js";
 import { renderHeader } from "./header.js";
@@ -9,12 +10,15 @@ import { renderTabs } from "./tabs.js";
 import { renderBart } from "./bart.js";
 import { renderPreview } from "./preview.js";
 import { renderTerminal } from "./terminal.js";
+import { renderProjects, renderGoals } from "./home.js";
 
 export function renderPage(state, actions) {
   const empty = state.status === "ready" && state.empty;
   return h("div", { class: "app" },
     renderHeader(state, actions),
-    h("div", { class: "body" },
+    state.view === "projects" ? renderProjects(state, actions)
+    : state.view === "goals" ? renderGoals(state, actions)
+    : h("div", { class: "body" },
       !empty && renderBreakdown(state, actions),
       h("main", { class: empty ? "main is-empty" : "main" },
         state.status === "failed"

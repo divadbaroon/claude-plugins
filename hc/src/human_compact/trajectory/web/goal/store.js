@@ -26,6 +26,12 @@ export function initialState() {
     status: "loading",      // "loading" | "ready" | "failed"
     goal: null,             // { id, title, status }
     project: null,          // the project the workspace is in: { name, objective, plan }, or null
+    view: "goal",           // "goal" | "goals" (this project's goals) | "projects" (every project)
+    goals: [],              // the project's top-level goals: [{ id, title, status, why, subgoals, completed, done }]
+    projects: null,         // what listProjects answered, once asked: [{ cwd, name, objective, goals, chats }]
+    projectsHere: "",       // the cwd of the project this workspace is in
+    projectsBusy: false,    // a project being opened
+    projectsNote: null,     // what the last open said when it would not: { text }
     empty: false,           // ready, and the workspace has no goal yet
     goalDraft: "",          // the goal being typed into an empty workspace
     revision: null,         // the goals' revision the page last drew

@@ -84,14 +84,42 @@ input, textarea { outline: none; }
 
 /* header */
 .header { display: flex; align-items: flex-start; gap: 10px; padding: 16px 24px; border-bottom: 1px solid var(--bd); }
-/* The path reads along one baseline; the plan hangs under the goal's name. */
+/* The path reads along one baseline; every step of it is a button that
+   looks like text and opens its view. */
 .crumbs { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.crumb-btn { padding: 0; border: 0; background: transparent; cursor: pointer; text-align: left; border-radius: 4px; }
+.crumb-btn:hover { color: var(--ink); }
+.crumb-btn[aria-current="page"] { cursor: default; }
 .brand { font: 500 17px/1 var(--font-sans); letter-spacing: -.2px; color: var(--ink); white-space: nowrap; }
 .crumb { font: 15px/1 var(--font-sans); color: var(--bd2); }
 .project-name { font: 400 15px/1.3 var(--font-sans); color: var(--mut); white-space: nowrap; }
-.goal-head { min-width: 0; }
-.goal-title { margin: 0; font: 400 15px/1.3 var(--font-sans); color: var(--mut); text-wrap: pretty; }
-.goal-plan { margin: 4px 0 0; max-width: 72ch; font: 13px/1.45 var(--font-sans); color: var(--fnt); white-space: pre-line; text-wrap: pretty; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.goal-title { margin: 0; min-width: 0; font: 400 15px/1.3 var(--font-sans); color: var(--mut); text-wrap: pretty; }
+.goal-title .crumb-btn { font: inherit; color: inherit; }
+
+/* the two lists the path opens: projects, and this project's goals */
+.home { flex: 1; min-height: 0; overflow: auto; padding: 22px 24px 40px; }
+.home-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.home-title { margin: 0; font: 500 16px/1.3 var(--font-sans); color: var(--ink); }
+.home-count { font: 13px/1 var(--font-sans); color: var(--fnt); white-space: nowrap; }
+.home-sub { margin: 6px 0 18px; max-width: 72ch; font: 13.5px/1.55 var(--font-sans); color: var(--mut); white-space: pre-line; text-wrap: pretty; }
+.home-empty { margin: 30px 0; font: 14px/1.5 var(--font-sans); color: var(--fnt); }
+.home-note { margin: 14px 0 0; font: 13px/1.5 var(--font-sans); color: var(--del); }
+.home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.card { position: relative; display: flex; flex-direction: column; gap: 7px; min-height: 118px; padding: 16px 18px 14px; border: 1px solid var(--bd); border-radius: var(--radius-sm); background: var(--panel); text-align: left; cursor: pointer; transition: border-color var(--dur-fast); }
+.card:hover { border-color: var(--bd2); }
+.card:disabled { cursor: progress; opacity: var(--hover-opacity); }
+.card.is-here { border-color: var(--acc); box-shadow: inset 3px 0 0 var(--acc); }
+.card.is-done { background: var(--panel2); }
+.card-name { display: flex; align-items: baseline; gap: 8px; font: 500 14px/1.35 var(--font-sans); color: var(--ink); text-wrap: pretty; }
+.card.is-here .card-name { color: var(--acc); }
+.card-check { flex: none; width: 18px; height: 18px; border-radius: var(--radius-round); background: var(--ink); color: var(--gray-0); font: 600 11px/18px var(--font-sans); text-align: center; }
+.card.is-done .card-name { color: var(--mut); }
+.card-text { flex: 1 1 auto; font: 13px/1.5 var(--font-sans); color: var(--mut); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.card-text.is-empty { color: var(--fnt); font-style: italic; }
+.card-where { font: 11px/1.4 var(--font-mono); color: var(--fnt); overflow-wrap: anywhere; }
+.card-facts { display: flex; flex-wrap: wrap; gap: 12px; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: var(--fnt); }
+.card-here, .card-done { color: var(--acc); }
+.card-done { color: var(--ink); }
 /* The circle is taller than the brand line; the header stays the design's height. */
 .account { position: relative; margin: -5px 8px -5px auto; flex: none; display: flex; }
 .account-btn { display: flex; padding: 0; border: 0; background: transparent; border-radius: var(--radius-round); cursor: pointer; }

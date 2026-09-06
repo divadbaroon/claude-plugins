@@ -383,6 +383,22 @@ def _todo_row(row):
             "status": status}
 
 
+def _goal_card(goal, children):
+    """A top-level goal as the goals list draws it: the row, when it was
+    touched, why it was offered (the setup writes that as the description),
+    how many pieces are under it and how many of those are finished. Done
+    when every piece is, or the goal itself was marked so."""
+    kids = [c for c in children if c.get("status") != "archived"]
+    finished = sum(1 for c in kids if c.get("status") == "completed")
+    return dict(_goal_row(goal),
+                updated_at=str(goal.get("updated_at") or ""),
+                why=str(goal.get("description") or "").strip(),
+                subgoals=len(kids),
+                completed=finished,
+                done=(goal.get("status") == "completed"
+                      or (bool(kids) and finished == len(kids))))
+
+
 def _pick_goal(tops, wanted, worked=()):
     """The goal the page is about.
 
@@ -450,7 +466,8 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
         "empty": goal is None,
         "subgoals": subgoals,
         "slices": slices,
-        "goals": [dict(_goal_row(g), updated_at=str(g.get("updated_at") or ""))
+        "goals": [_goal_card(g, [c for c in rows
+                                  if c.get("parent_goal_id") == g.get("id")])
                   for g in tops],
         "project": _goal_page_project(trajdir, chat_scoped),
         "revision": _goal_revision(goals, important),
@@ -657,8 +674,8 @@ def _bart_answer(held, transcript):
 
 
 def _goal_page_project(trajdir, chat_scoped):
-    """The project this workspace is in, for the header: its name and the
-    plan agreed at setup.
+    """The project this workspace is in, for the header: its name, and the
+    plan agreed at setup for the goals list.
 
     The chat's binding says which project, as everywhere else; a workspace
     this vault minted for a project's directory has no binding and is asked

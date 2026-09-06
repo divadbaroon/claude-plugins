@@ -1,5 +1,6 @@
-/* The header: the brand, the project and the goal as a path, the plan the
-   project was set up with under the goal, and the account at the right. */
+/* The header: the brand, the project and the goal as a path -- each step
+   of it a way to that view: every project, this project's goals, the goal
+   -- and the account at the right. */
 
 import { h, svg } from "../dom.js";
 
@@ -19,16 +20,24 @@ const ICONS = {
 
 export function renderHeader(state, actions) {
   const project = state.project;
-  const plan = state.goal && project ? project.plan : "";
+  const here = state.view;
   return h("header", { class: "header" },
-    h("div", { class: "crumbs" },
-      h("span", { class: "brand" }, "Engelbart"),
+    h("nav", { class: "crumbs", "aria-label": "Where you are" },
+      h("button", {
+        type: "button", class: "brand crumb-btn", title: "All projects",
+        "aria-current": here === "projects" ? "page" : null, onclick: actions.showProjects,
+      }, "Engelbart"),
       project && project.name && h("span", { class: "crumb", "aria-hidden": "true" }, "/"),
-      project && project.name && h("span", { class: "project-name" }, project.name),
+      project && project.name && h("button", {
+        type: "button", class: "project-name crumb-btn", title: "This project's goals",
+        "aria-current": here === "goals" ? "page" : null, onclick: actions.showGoals,
+      }, project.name),
       state.goal && h("span", { class: "crumb", "aria-hidden": "true" }, "/"),
-      state.goal && h("div", { class: "goal-head" },
-        h("h1", { class: "goal-title" }, state.goal.title),
-        plan && h("p", { class: "goal-plan", title: plan }, plan))),
+      state.goal && h("h1", { class: "goal-title" },
+        h("button", {
+          type: "button", class: "crumb-btn", title: "The goal",
+          "aria-current": here === "goal" ? "page" : null, onclick: actions.showGoal,
+        }, state.goal.title))),
     renderAccount(state, actions));
 }
 

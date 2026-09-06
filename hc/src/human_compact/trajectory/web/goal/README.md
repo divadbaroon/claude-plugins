@@ -27,13 +27,18 @@ address names (`/?goal=<id>`), or when it names none the top-level goal
 touched most recently, among those in progress or with something under
 them; its subgoals; for each the todo rows, straight from the
 chat's `goals.json` through the goals model; and the project the chat is
-in, whose name and plan the header shows. This is how a project finished
+in, whose name the header shows. This is how a project finished
 in the web onboarding arrives: `/bart` claims it, writes its tree and binds
 the chat, and the page opens on the direction the reader chose (the ones
 they were offered and did not take stay in the tree, with nothing under
-them) with its pieces as subgoals and the plan under the goal (each
+them) with its pieces as subgoals (each
 piece's notes are seeded from the setup's description and its why, kept
-in the tree for `/legacy` and the hooks; this page does not draw notes). A workspace
+in the tree for `/legacy` and the hooks; this page does not draw notes). The
+header's path is the way around: the brand opens every project the vault
+knows (`GET /api/projects`, a card each, opening one goes to its workspace
+through `open_project`), the project's name opens this project's goals as
+cards -- the direction's why, how many pieces are done, a check when all of
+them are -- and a goal card opens that goal here, named on the address. A workspace
 with no goal answers empty, and the page asks for one in a line; a goal
 with nothing under it yet asks for its first subgoal, since the
 conversation and the todos each belong to one. Every

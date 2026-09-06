@@ -92,6 +92,7 @@ export function createActions(store, services) {
       status: "ready",
       goal: loaded.goal,
       project: loaded.project || null,
+      goals: loaded.goals || [],
       empty: !loaded.goal,
       subgoals,
       activeId: kept ? state.activeId : (subgoals.length ? subgoals[0].id : null),
@@ -159,6 +160,58 @@ export function createActions(store, services) {
     }
     if (!panesTimer) {
       panesTimer = setInterval(() => { if (watching(get())) loadPanes(); }, PANES_POLL_MS);
+    }
+  }
+
+  // --- the header's path, each step a view --------------------------------
+  //
+  // The brand is every project, the project's name is its goals, and the
+  // goal's name is the goal itself. The goals view draws from the list the
+  // page already loads; the projects view asks the server when it opens.
+
+  function showGoal() {
+    set({ view: "goal", projectsNote: null });
+  }
+
+  function showGoals() {
+    set({ view: "goals", projectsNote: null });
+  }
+
+  async function showProjects() {
+    set({ view: "projects", projectsNote: null });
+    try {
+      const { projects, active } = await services.listProjects();
+      if (get().view === "projects") set({ projects, projectsHere: active });
+    } catch (error) {
+      console.error("engelbart: the projects could not be read", error);
+      set({ projects: [], projectsNote: { text: String((error && error.message) || error) } });
+    }
+  }
+
+  // Another goal of this project: the address names it, so a reload keeps
+  // it, and the page reads it the way it read the first.
+  async function openGoal(id) {
+    wanted = id;
+    const url = new URL(window.location.href);
+    url.searchParams.set("goal", id);
+    window.history.pushState(null, "", url);
+    set({ view: "goal", tab: "bart", activeId: null, panes: null, panesFor: null });
+    await refresh();
+  }
+
+  // Another project's workspace is another window's; this one only follows
+  // the address the server gives. The project this page is in just closes
+  // the list.
+  async function openProject(cwd) {
+    if (get().projectsBusy) return;
+    if (cwd === get().projectsHere) { showGoals(); return; }
+    set({ projectsBusy: true, projectsNote: null });
+    try {
+      const { url } = await services.openProject({ cwd });
+      if (!url) throw new Error("the project has no workspace to open");
+      window.location.href = url;
+    } catch (error) {
+      set({ projectsBusy: false, projectsNote: { text: String((error && error.message) || error) } });
     }
   }
 
@@ -482,6 +535,7 @@ export function createActions(store, services) {
 
   return {
     boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
+    showGoal, showGoals, showProjects, openGoal, openProject,
     editGoalDraft, commitCreateGoal,
     selectSubgoal, showTab, loadPanes,
     previewConfigure, previewShowUi, previewRun, previewStop, previewForget,

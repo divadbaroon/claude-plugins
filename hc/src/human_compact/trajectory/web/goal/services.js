@@ -110,6 +110,22 @@ export const services = {
     return post("/api/account/sign-in/cancel");
   },
 
+  /** Every project this vault knows, newest worked-in first, and which
+      one this workspace is in. */
+  async listProjects() {
+    const answer = await get("/api/projects");
+    if (!answer.ok) throw new Error(answer.error || "the projects could not be read");
+    return { projects: answer.projects || [], active: answer.active || "" };
+  },
+
+  /** Another project's workspace, opened beside this one: the server
+      answers with its address. The same door /legacy uses. */
+  async openProject({ cwd }) {
+    const answer = await post("/api/op", { op: "open_project", cwd });
+    if (!answer.ok) throw new Error(answer.error || "that project could not be opened");
+    return { url: answer.url || "" };
+  },
+
   /** The goal this page is about, its subgoals, and what each already
       holds; and the project the workspace is in, when it is in one. goalId
       is the goal the address names, or empty for whichever this workspace

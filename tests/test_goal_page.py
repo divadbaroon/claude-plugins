@@ -535,6 +535,44 @@ class GoalDataRouteTests(ChatCase):
             # The address still names any of them.
             self.assertEqual(bare, get_json(url + f"/api/goal-page?goal={bare}")["goal"]["id"])
 
+    def test_the_goals_list_says_how_far_each_has_come(self):
+        # The list the project's goals view draws: for each top-level goal,
+        # why it was offered and how many of its pieces are finished. Done
+        # when every piece is, or the goal was marked so; a goal with
+        # nothing under it is not done for want of pieces.
+        far = ui._apply({"op": "add_goal", "title": "Far along"}, self.chat)["id"]
+        one = ui._apply({"op": "add_goal", "title": "One", "parent_goal_id": far}, self.chat)["id"]
+        two = ui._apply({"op": "add_goal", "title": "Two", "parent_goal_id": far}, self.chat)["id"]
+        ui._apply({"op": "add_goal", "title": "Gone", "parent_goal_id": far}, self.chat)
+        bare = ui._apply({"op": "add_goal", "title": "Bare"}, self.chat)["id"]
+        goals, important = self.goals()
+        for g in goals["goals"]:
+            if g["id"] == far:
+                g["description"] = "it pays for the rest"
+            if g["id"] == one:
+                g["status"] = "completed"
+            if g["title"] == "Gone":
+                g["status"] = "archived"
+        CS.save_goals("chat", goals, important, self.root)
+        with server_for(self.chat) as url:
+            cards = {g["title"]: g for g in get_json(url + "/api/goal-page")["goals"]}
+            self.assertEqual({"id": far, "title": "Far along", "status": "active",
+                              "why": "it pays for the rest", "subgoals": 2,
+                              "completed": 1, "done": False},
+                             {k: v for k, v in cards["Far along"].items() if k != "updated_at"})
+            self.assertEqual({"why": "", "subgoals": 0, "completed": 0, "done": False},
+                             {k: cards["Bare"][k] for k in ("why", "subgoals", "completed", "done")})
+            goals, important = self.goals()
+            for g in goals["goals"]:
+                if g["id"] == two:
+                    g["status"] = "completed"
+                if g["id"] == bare:
+                    g["status"] = "completed"
+            CS.save_goals("chat", goals, important, self.root)
+            cards = {g["title"]: g for g in get_json(url + "/api/goal-page")["goals"]}
+            self.assertEqual((2, 2, True), tuple(cards["Far along"][k] for k in ("subgoals", "completed", "done")))
+            self.assertTrue(cards["Bare"]["done"])
+
     def test_a_project_set_up_on_the_web_opens_on_the_direction_chosen(self):
         chat, tree = claim_web_setup(self)
         # The chat's own workspace and the project's read the same tree,
@@ -561,8 +599,10 @@ class GoalDataRouteTests(ChatCase):
                              answer["project"])
             # The directions not taken are kept, out of the way: the
             # address could still name one.
-            self.assertEqual(["Direct-to-storage uploads", "Resumable uploads", "Upload quotas"],
-                             [g["title"] for g in answer["goals"]])
+            self.assertEqual([("Direct-to-storage uploads", "the API is the bottleneck", 3),
+                              ("Resumable uploads", "large files fail midway", 0),
+                              ("Upload quotas", "storage is unmetered", 0)],
+                             [(g["title"], g["why"], g["subgoals"]) for g in answer["goals"]])
         # The notes are the reader's from here: a save through the page's
         # door replaces the seed, and the page reads the saved text back.
         with server_for(chat) as url:
@@ -1431,13 +1471,12 @@ class GoalPageBrowserTests(BrowserCase):
         chat, _tree = claim_web_setup(self)
         with server_for(chat) as url, self.page_on(url) as (page, errors):
             # The header is the path to where the reader is -- the project
-            # from the web setup, then the direction they chose -- with the
-            # plan they approved under it.
+            # from the web setup, then the direction they chose -- and
+            # nothing else: the plan is on the goals list, not up here.
             expect(page.locator(".crumbs")).to_contain_text("Engelbart")
             expect(page.locator(".project-name")).to_have_text("Signed uploads")
             expect(page.get_by_role("heading", name="Direct-to-storage uploads")).to_be_visible()
-            expect(page.locator(".goal-plan")).to_have_text(
-                "Move uploads off the API server.\nSign, then PUT.")
+            expect(page.locator(".goal-plan")).to_have_count(0)
             expect(page.get_by_label("What is the goal?")).to_have_count(0)
             # The pieces are the rail, the first one open with its rows
             # ready to build. What the setup said about each piece is in
@@ -1459,6 +1498,56 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".project-name")).to_have_text("Signed uploads")
             expect(page.locator(".rail .sub")).to_have_text(
                 ["Signing route", "Client PUTs", "Retire the proxy"])
+            # The brand is every project: this one, first, marked as the
+            # workspace the page is in.
+            page.get_by_role("button", name="Engelbart", exact=True).click()
+            cards = page.locator(".home .card")
+            expect(page.get_by_role("heading", name="Projects")).to_be_visible()
+            expect(cards.first.locator(".card-name")).to_have_text("Signed uploads")
+            expect(cards.first).to_have_class(re.compile(r"\bis-here\b"))
+            expect(cards.first.locator(".card-text")).to_have_text("Move uploads off the API server.")
+            expect(cards.first.locator(".card-facts")).to_contain_text("this workspace")
+            # The project's name is its goals: the three directions offered,
+            # each with its why, the chosen one open with its pieces counted.
+            page.locator(".project-name").click()
+            expect(page.get_by_role("heading", name="Goals of Signed uploads")).to_be_visible()
+            expect(page.locator(".home-sub")).to_have_text("Move uploads off the API server.\nSign, then PUT.")
+            cards = page.locator(".home .card")
+            expect(cards.locator(".card-name")).to_have_text(
+                ["Direct-to-storage uploads", "Resumable uploads", "Upload quotas"])
+            expect(cards.locator(".card-text")).to_have_text(
+                ["the API is the bottleneck", "large files fail midway", "storage is unmetered"])
+            expect(cards.nth(0)).to_have_class(re.compile(r"\bis-here\b"))
+            expect(cards.nth(0).locator(".card-facts")).to_have_text("0 of 3 subgoals doneopen")
+            expect(cards.nth(1).locator(".card-facts")).to_have_text("nothing under it yet")
+            expect(page.locator(".card.is-done")).to_have_count(0)
+            # A goal card opens that goal here, and the address names it, so
+            # a reload stays on it.
+            cards.nth(1).click()
+            expect(page.get_by_role("heading", name="Resumable uploads")).to_be_visible()
+            expect(page.locator(".rail .sub")).to_have_count(0)
+            expect(page.get_by_text("Break it into subgoals", exact=False)).to_be_visible()
+            self.assertIn("goal=", page.url)
+            page.reload(wait_until="domcontentloaded")
+            expect(page.get_by_role("heading", name="Resumable uploads")).to_be_visible()
+            # The goal's name is the way back to it from either list.
+            page.locator(".project-name").click()
+            expect(page.get_by_role("heading", name="Goals of Signed uploads")).to_be_visible()
+            page.locator(".goal-title button").click()
+            expect(page.locator(".rail-label")).to_have_text("Plan")
+            # A direction whose every piece is finished says so on its card.
+            goals, important = CS.load_goals(chat.name, self.root)
+            for g in goals["goals"]:
+                if g["title"] in ("Signing route", "Client PUTs", "Retire the proxy"):
+                    g["status"] = "completed"
+            CS.save_goals(chat.name, goals, important, self.root)
+            page.reload(wait_until="domcontentloaded")
+            page.locator(".project-name").click()
+            done = page.locator(".home .card.is-done")
+            expect(done).to_have_count(1)
+            expect(done.locator(".card-name")).to_have_text("✓Direct-to-storage uploads")
+            expect(done.locator(".card-facts")).to_have_text("Done")
+            expect(done).to_have_attribute("aria-label", "Direct-to-storage uploads, done")
             self.assertEqual([], errors)
 
     def test_the_preview_shows_the_project_s_page_and_the_terminal_follows_the_build(self):
