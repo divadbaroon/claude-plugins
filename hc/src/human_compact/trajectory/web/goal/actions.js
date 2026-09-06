@@ -216,7 +216,39 @@ export function createActions(store, services) {
   }
 
   function toggleAccount() {
-    set((state) => ({ ...state, accountOpen: !state.accountOpen }));
+    const opening = !get().accountOpen;
+    set({ accountOpen: opening });
+    if (opening) loadReader();
+  }
+
+  // --- the reader's level, in the account menu -----------------------------
+  //
+  // Read when the menu opens, so the slider stands where the profile is.
+  // A stop the reader picks is drawn at once and kept through the
+  // server; what it says when it would not is shown under the slider.
+
+  async function loadReader() {
+    try {
+      set({ reader: await services.loadReader(), readerNote: null });
+    } catch (error) {
+      console.error("engelbart: the profile could not be read", error);
+      set({ reader: { profile: {}, levelLabel: "" },
+            readerNote: { text: String((error && error.message) || error) } });
+    }
+  }
+
+  async function setLevel(level) {
+    if (get().readerBusy) return;
+    const before = get().reader;
+    set({ readerBusy: true, readerNote: null,
+          reader: { profile: { ...((before && before.profile) || {}), level }, levelLabel: "" } });
+    try {
+      const reader = await services.saveLevel({ level });
+      set({ reader, readerBusy: false });
+    } catch (error) {
+      set({ reader: before, readerBusy: false,
+            readerNote: { text: String((error && error.message) || error) } });
+    }
   }
 
   function closeAccount() {
@@ -536,6 +568,7 @@ export function createActions(store, services) {
   return {
     boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
     showGoal, showGoals, showProjects, openGoal, openProject,
+    loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
     selectSubgoal, showTab, loadPanes,
     previewConfigure, previewShowUi, previewRun, previewStop, previewForget,

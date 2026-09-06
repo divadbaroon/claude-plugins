@@ -38,7 +38,10 @@ header's path is the way around: the brand opens every project the vault
 knows (`GET /api/projects`, a card each, opening one goes to its workspace
 through `open_project`), the project's name opens this project's goals as
 cards -- the direction's why, how many pieces are done, a check when all of
-them are -- and a goal card opens that goal here, named on the address. A workspace
+them are -- and a goal card opens that goal here, named on the address. The
+account menu has the reader's level under a rule, on the bar slider the web
+setup asks it with (`GET /api/reader`, `POST /api/goal-page/reader` with one
+of `reader.LEVELS`; the rest of the profile is kept as it was). A workspace
 with no goal answers empty, and the page asks for one in a line; a goal
 with nothing under it yet asks for its first subgoal, since the
 conversation and the todos each belong to one. Every

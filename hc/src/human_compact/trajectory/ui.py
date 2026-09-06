@@ -5293,6 +5293,25 @@ class H(BaseHTTPRequestHandler):
             answer = {"ok": False, "error": str(exc)[:200]}
         self._send(200, answer)
 
+    def _set_reader_level(self, body):
+        """The reader's level, from the slider in the account menu: one of
+        reader.LEVELS, kept on the profile every prompt reads, with the rest
+        of the profile as it was. Account-scoped like GET /api/reader."""
+        if not isinstance(body, dict):
+            self._send(400, {"ok": False, "error": "expected a level"})
+            return
+        level = str(body.get("level") or "").strip().lower()
+        if level not in READER.LEVELS:
+            self._send(200, {"ok": False,
+                             "error": "not a level: " + level[:40]})
+            return
+        root = (_chat_identity(self.server.trajdir)[1]
+                if self.server.chat_scoped else None)
+        profile = dict(READER.load(root), level=level)
+        answer = READER.remember(profile, root)
+        answer["level_label"] = READER.LEVEL_NAMES.get(level, "")
+        self._send(200, answer)
+
     def _keep_bart_chat(self, body):
         """The page's conversation on one subgoal, saved whole after every
         change to it, so a reload draws what was on screen."""
@@ -5478,6 +5497,9 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/goal-page/preview":
                 self._run_preview_op(body)
+                return
+            if self.path == "/api/goal-page/reader":
+                self._set_reader_level(body)
                 return
             if self.path == "/api/op":
                 if not isinstance(body, dict):

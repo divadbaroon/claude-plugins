@@ -52,6 +52,9 @@ export function initialState() {
     accountBusy: false,     // a sign-out on its way
     accountNote: null,      // what the last sign-out said: { text, error }
     signIn: null,           // an `engelbart auth` in flight: { status, code, url, error }
+    reader: null,           // what loadReader answered: { profile, levelLabel }
+    readerBusy: false,      // a level on its way to the profile
+    readerNote: null,       // what the last save said when it would not: { text }
   };
 }
 

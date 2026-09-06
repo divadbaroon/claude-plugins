@@ -1053,6 +1053,42 @@ class AccountRouteTests(ChatCase):
         self.assertEqual("someone@example.com", answer["email"])
 
 
+class ReaderRouteTests(ChatCase):
+    """The level in the account menu: read with the profile every prompt
+    reads, and written back onto it without touching the rest."""
+
+    def test_the_level_is_kept_on_the_profile_and_the_rest_stays(self):
+        READER.save({"name": "Maya", "year": "3", "major": "Statistics", "level": "some",
+                     "knowledge": [{"area": "Kalman filters", "level": 50}]}, self.root)
+        with mock.patch("human_compact.trajectory.supabase_client.set_reader_profile",
+                        side_effect=RuntimeError("not signed in")), \
+                server_for(self.chat) as url:
+            before = get_json(url + "/api/reader")
+            self.assertEqual(("some", "Some technical detail"),
+                             (before["profile"]["level"], before["level_label"]))
+            answer = post_json(url + "/api/goal-page/reader", {"level": "expert"}, {"Origin": url})
+            self.assertTrue(answer["ok"])
+            self.assertEqual(("expert", "Expert"), (answer["profile"]["level"], answer["level_label"]))
+            self.assertFalse(answer["synced"])
+            held = READER.load(self.root)
+            self.assertEqual("expert", held["level"])
+            self.assertEqual(("Maya", "3", "Statistics"), (held["name"], held["year"], held["major"]))
+            self.assertEqual([("Kalman filters", 50)],
+                             [(k["area"], k["level"]) for k in held["knowledge"]])
+            self.assertEqual("Expert", get_json(url + "/api/reader")["level_label"])
+            # Only the four levels; anything else is refused and nothing moves.
+            for body in ({"level": "guru"}, {"level": ""}, {}):
+                self.assertFalse(post_json(url + "/api/goal-page/reader", body, {"Origin": url})["ok"], body)
+            self.assertEqual("expert", READER.load(self.root)["level"])
+            request = urllib.request.Request(
+                url + "/api/goal-page/reader", data=b"level=plain", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+
+
 class AccountCommandTests(ChatCase):
     """Sign-out and sign-in from the page run the Engelbart CLI: the
     stand-in here answers like `engelbart logout` and `engelbart auth`,
@@ -1620,6 +1656,37 @@ class GoalPageBrowserTests(BrowserCase):
             expect(menu).to_contain_text("Not connected")
             expect(menu.get_by_role("menuitem", name="Sign in")).to_be_visible()
             expect(menu.get_by_role("menuitem", name="Sign out")).to_have_count(0)
+            # Under a rule, the reader's level: nothing set yet, so the
+            # slider stands at the start and the stops are all open.
+            expect(menu.locator(".menu-rule")).to_have_count(1)
+            expect(menu.locator(".menu-cap")).to_have_text("Expertise")
+            expect(menu.locator(".slider-name")).to_have_text("Not set")
+            stops = menu.get_by_role("radio")
+            expect(stops).to_have_text(["Plain", "Some detail", "Technical", "Expert"])
+            expect(menu.get_by_role("radio", checked=True)).to_have_count(0)
+            # A stop picked is kept on the profile every prompt reads, and
+            # the slider says what it now means.
+            with mock.patch("human_compact.trajectory.supabase_client.set_reader_profile",
+                            side_effect=RuntimeError("not signed in")):
+                stops.nth(2).click()
+                expect(menu.locator(".slider-name")).to_have_text("Fully technical")
+                expect(menu.locator(".slider-desc")).to_contain_text("Assumes you know the field well")
+                expect(menu.get_by_role("radio", checked=True)).to_have_text("Technical")
+                wait_for(lambda: READER.load(self.root)["level"] == "full")
+                # A drag on the track lands on the stop under the finger.
+                track = menu.locator(".slider-track")
+                box = track.bounding_box()
+                page.mouse.move(box["x"] + box["width"] * 0.1, box["y"] + box["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(box["x"] + box["width"] * 0.95, box["y"] + box["height"] / 2, steps=4)
+                page.mouse.up()
+                expect(menu.get_by_role("radio", checked=True)).to_have_text("Expert")
+                wait_for(lambda: READER.load(self.root)["level"] == "expert")
+            # Reopened, the slider stands where the profile is.
+            page.keyboard.press("Escape")
+            expect(menu).to_have_count(0)
+            account.click()
+            expect(menu.locator(".slider-name")).to_have_text("Expert")
             page.keyboard.press("Escape")
             expect(menu).to_have_count(0)
             account.click()

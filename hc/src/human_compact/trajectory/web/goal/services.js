@@ -88,6 +88,21 @@ export const services = {
   /** Disconnect this machine. The server runs `engelbart logout`: the
       machine token is revoked at the backend, the Claude Code helper is
       unwired and auth.json is removed. Resolves to what the CLI said. */
+  /** The reader's profile, as every prompt reads it: the four answers
+      and, for the menu, the level's name. Account-scoped. */
+  async loadReader() {
+    const answer = await get("/api/reader");
+    if (!answer.ok) throw new Error(answer.error || "the profile could not be read");
+    return { profile: answer.profile || {}, levelLabel: answer.level_label || "" };
+  },
+
+  /** One of the four levels, kept on the profile. */
+  async saveLevel({ level }) {
+    const answer = await post("/api/goal-page/reader", { level });
+    if (!answer.ok) throw new Error(answer.error || "the level could not be saved");
+    return { profile: answer.profile || {}, levelLabel: answer.level_label || "" };
+  },
+
   async signOut() {
     const answer = await post("/api/account/sign-out");
     if (!answer.ok) throw new Error(answer.error || "sign out failed");

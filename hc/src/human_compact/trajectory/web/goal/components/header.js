@@ -1,8 +1,10 @@
 /* The header: the brand, the project and the goal as a path -- each step
    of it a way to that view: every project, this project's goals, the goal
-   -- and the account at the right. */
+   -- and the account at the right, with the reader's level under a rule
+   in its menu. */
 
 import { h, svg } from "../dom.js";
+import { renderExpertise } from "./expertise.js";
 
 const ICONS = {
   person: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
@@ -61,7 +63,9 @@ function renderAccount(state, actions) {
       onclick: actions.toggleAccount,
     }, h("span", { class: "account-dot", "aria-hidden": "true" })),
     state.accountOpen && h("div", { class: "account-menu", role: "menu", "aria-label": "Account" },
-      renderAccountRows(state, actions)));
+      renderAccountRows(state, actions),
+      h("hr", { class: "menu-rule" }),
+      renderExpertise(state, actions)));
 }
 
 function icon(name) {
