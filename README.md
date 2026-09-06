@@ -72,6 +72,17 @@ bypasses both the npm package's vendored wheel and the installed
 browser after a browser-side edit; server-side edits restart the scenario
 process in place. `Ctrl-C` stops the console and deletes its active sandbox.
 
+## See the goal page
+
+```bash
+python3 scripts/goal_page.py
+```
+
+Serves the goal page -- what `/bart` opens -- from this working tree on a
+disposable session and opens it in the browser. Edit anything under
+`hc/src/human_compact/trajectory/web/goal/` and reload. The installed `/bart`
+keeps serving the wheel its runtime was built from until that is rebuilt.
+
 **Workspace** — goal tree, one markdown document per goal, linked prompts, assembled prompt. Per chat, on a local port.
 
 **Injection** — after the first `/bart`, the goals document goes back into the chat: whole file on session start and after compaction, a diff afterwards. Subagents and tool batches read it too.
