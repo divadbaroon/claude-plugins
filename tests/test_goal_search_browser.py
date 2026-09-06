@@ -66,7 +66,7 @@ class GoalSearchBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-rail-left .hc-search-input", timeout=15000)
                 # The box is the heading's next sibling, with the rows under it.
                 self.assertTrue(page.evaluate(

@@ -1139,7 +1139,7 @@ class LiveTests(unittest.TestCase):
 
         def brainstorm(page, url=None):
             if url:
-                page.goto(url)
+                page.goto(url + "/legacy")
             page.wait_for_selector(".hc-viewtab", timeout=30000)
             page.get_by_text("Brainstorm", exact=True).first.click()
             page.wait_for_selector(".hc-brainstorm", state="visible",
@@ -1196,7 +1196,7 @@ class LiveTests(unittest.TestCase):
                 browser = play.chromium.launch(executable_path=self.chrome)
                 page = browser.new_context(
                     viewport={"width": 1400, "height": 900}).new_page()
-                page.goto(url)
+                page.goto(url + "/legacy")
                 page.wait_for_selector(".hc-viewtab", timeout=30000)
                 page.get_by_text("Brainstorm", exact=True).first.click()
                 page.wait_for_selector(".hc-brainstorm", state="visible",
@@ -1242,7 +1242,7 @@ class LiveTests(unittest.TestCase):
                 browser = play.chromium.launch(executable_path=self.chrome)
                 page = browser.new_context(
                     viewport={"width": 1400, "height": 900}).new_page()
-                page.goto(url)
+                page.goto(url + "/legacy")
                 page.wait_for_selector(".hc-viewtab", timeout=30000)
                 page.get_by_text("Brainstorm", exact=True).first.click()
                 page.wait_for_selector(".hc-brainstorm", state="visible",
@@ -1287,7 +1287,7 @@ class LiveTests(unittest.TestCase):
                 browser = play.chromium.launch(executable_path=self.chrome)
                 page = browser.new_context(
                     viewport={"width": 1400, "height": 900}).new_page()
-                page.goto(url)
+                page.goto(url + "/legacy")
                 page.wait_for_selector(".hc-viewtab", timeout=30000)
                 page.get_by_text("Brainstorm", exact=True).first.click()
                 page.wait_for_selector(".hc-brainstorm", state="visible",

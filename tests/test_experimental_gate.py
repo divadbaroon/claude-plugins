@@ -165,7 +165,7 @@ class ExperimentalRouteTests(unittest.TestCase):
         with flag(False), server_for(self.chat) as url:
             state = get_json(url + "/api/state")
             health = get_json(url + "/api/health")
-            with NO_PROXY_OPENER.open(url + "/", timeout=5) as response:
+            with NO_PROXY_OPENER.open(url + "/legacy", timeout=5) as response:
                 html = response.read().decode()
         self.assertEqual(["a1"], [g["id"] for g in state["goals"]])
         self.assertTrue(health["ok"])
