@@ -5,6 +5,7 @@ cover the half the server owns -- the root serves it, its files are served
 by name and nothing else is, and the workspace it replaced still answers at
 /legacy -- and, where a browser is available, the interactions themselves.
 """
+import json
 import os
 import re
 import shutil
@@ -17,6 +18,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "hc" / "src"))
@@ -47,7 +49,8 @@ def fetch(url):
         with NO_PROXY_OPENER.open(url, timeout=5) as response:
             return response.status, dict(response.headers), response.read()
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers), error.read()
+        with error:
+            return error.code, dict(error.headers), error.read()
 
 
 def browser_executable():
@@ -150,6 +153,41 @@ class GoalPageRouteTests(unittest.TestCase):
             status, _headers, body = fetch(url + "/bridge.js")
             self.assertEqual(200, status)
             self.assertIn(b"window.__hcServerStale", body)
+
+
+class AccountRouteTests(unittest.TestCase):
+    """What the page's loadAccount relies on: the machine's own account, as
+    the installer wrote it, read by the server and never by the page."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.chat = Path(self.tmp.name) / "chat"
+        self.chat.mkdir()
+        self.home = Path(self.tmp.name) / "human-compact"
+        self.home.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def status(self):
+        with mock.patch.dict(os.environ, {"HUMAN_COMPACT_HOME": str(self.home)}):
+            with server_for(self.chat) as url:
+                _status, _headers, body = fetch(url + "/api/supabase")
+        return json.loads(body)
+
+    def test_a_machine_nobody_connected_says_so(self):
+        answer = self.status()
+        self.assertTrue(answer["ok"])
+        self.assertFalse(answer["connected"])
+        self.assertEqual("", answer["email"])
+
+    def test_a_connected_machine_answers_with_its_account(self):
+        (self.home / "auth.json").write_text(json.dumps({
+            "apiBase": "http://127.0.0.1:9", "token": "machine-token",
+            "email": "someone@example.com"}), encoding="utf-8")
+        answer = self.status()
+        self.assertTrue(answer["connected"])
+        self.assertEqual("someone@example.com", answer["email"])
 
 
 class GoalPageModuleTests(unittest.TestCase):
@@ -321,6 +359,58 @@ class GoalPageBrowserTests(unittest.TestCase):
                 expect(page.locator(".todo-list .todo.is-done")).to_have_count(2)
                 expect(page.get_by_role("button", name="Build all")).to_be_disabled()
 
+                self.assertEqual([], errors)
+            finally:
+                browser.close()
+
+    def test_the_account_icon_says_who_the_machine_is_connected_as(self):
+        try:
+            from playwright.sync_api import expect, sync_playwright
+        except ImportError:
+            self.skipTest("playwright is not installed")
+        chrome = browser_executable()
+        if not chrome:
+            self.skipTest("Chrome/Chromium is not installed")
+        home = Path(self.tmp.name) / "human-compact"
+        home.mkdir()
+        with mock.patch.dict(os.environ, {"HUMAN_COMPACT_HOME": str(home)}), \
+                server_for(self.chat) as url, sync_playwright() as playwright:
+            browser = playwright.chromium.launch(
+                executable_path=chrome, headless=True,
+                args=["--disable-background-networking"])
+            try:
+                page = browser.new_page(viewport={"width": 1400, "height": 900})
+                errors = []
+                page.on("pageerror", lambda error: errors.append(str(error)))
+                account = page.get_by_role("button", name=re.compile("connected|account", re.I))
+
+                # Nobody has connected this machine: the circle says so and
+                # points at the command that does.
+                page.goto(url, wait_until="domcontentloaded")
+                expect(account).to_have_attribute("aria-label", "Not connected")
+                expect(page.get_by_role("dialog", name="Account")).to_have_count(0)
+                account.click()
+                dialog = page.get_by_role("dialog", name="Account")
+                expect(dialog).to_be_visible()
+                expect(dialog).to_contain_text("Not connected")
+                expect(dialog).to_contain_text("engelbart auth")
+                page.keyboard.press("Escape")
+                expect(dialog).to_have_count(0)
+                account.click()
+                expect(dialog).to_be_visible()
+                page.locator(".goal-title").click()
+                expect(dialog).to_have_count(0)
+
+                # Connected: the account the installer wrote, by email.
+                (home / "auth.json").write_text(json.dumps({
+                    "apiBase": "http://127.0.0.1:9", "token": "machine-token",
+                    "email": "someone@example.com"}), encoding="utf-8")
+                page.reload(wait_until="domcontentloaded")
+                expect(account).to_have_attribute(
+                    "aria-label", "Connected as someone@example.com")
+                account.click()
+                expect(dialog).to_contain_text("someone@example.com")
+                expect(dialog).to_contain_text("Connected on this machine")
                 self.assertEqual([], errors)
             finally:
                 browser.close()

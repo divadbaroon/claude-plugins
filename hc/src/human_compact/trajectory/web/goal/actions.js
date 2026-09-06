@@ -21,7 +21,18 @@ export function createActions(store, services) {
     set((state) => withSlice(state, id, change));
   }
 
+  async function loadAccount() {
+    try {
+      set({ account: await services.loadAccount() });
+    } catch (error) {
+      console.error("engelbart: the account could not be read", error);
+      set({ account: { connected: false, signedIn: false, email: "", name: "",
+                       error: String((error && error.message) || error) } });
+    }
+  }
+
   async function boot() {
+    loadAccount();   // beside the goal, never ahead of it
     try {
       const loaded = await services.loadGoal();
       const slices = {};
@@ -44,6 +55,14 @@ export function createActions(store, services) {
       console.error("engelbart: the goal did not load", error);
       set({ status: "failed" });
     }
+  }
+
+  function toggleAccount() {
+    set((state) => ({ ...state, accountOpen: !state.accountOpen }));
+  }
+
+  function closeAccount() {
+    if (get().accountOpen) set({ accountOpen: false });
   }
 
   function selectSubgoal(id) {
@@ -208,7 +227,7 @@ export function createActions(store, services) {
   }
 
   return {
-    boot, selectSubgoal, showTab,
+    boot, toggleAccount, closeAccount, selectSubgoal, showTab,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editNotes, editDraft, sendMessage, acceptProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,

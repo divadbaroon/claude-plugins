@@ -32,5 +32,12 @@ store.subscribe(draw);
 draw(store.get());
 actions.boot();
 
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-account]")) actions.closeAccount();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") actions.closeAccount();
+});
+
 // For the console and the tests; nothing on the page reads it.
 window.engelbart = { store, actions, services };

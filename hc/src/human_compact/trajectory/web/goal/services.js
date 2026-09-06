@@ -1,10 +1,11 @@
 /* The boundary between the goal page and everything behind it.
 
    Every function here is the shape a real service will take -- the goal
-   store, the Bart runtime, the builder, the preview server, the terminal --
-   and every one of them is mocked: the answers are the example content of
-   the design, held in memory for the life of the page. Replace the bodies
-   and keep the signatures; nothing above this file knows the difference.
+   store, the Bart runtime, the builder, the preview server, the terminal.
+   loadAccount is real: it asks the server who this machine is connected
+   as. The rest are mocked: their answers are the example content of the
+   design, held in memory for the life of the page. Replace the bodies and
+   keep the signatures; nothing above this file knows the difference.
 
    Each function takes one object of named arguments and returns a promise,
    so the swap to a fetch is a change inside the function alone. */
@@ -56,6 +57,21 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
 export const services = {
+  /** Who this machine is connected as. The server reads the account the
+      installer wrote (auth.json under ~/.human-compact) and answers; the
+      page never holds a token of its own. */
+  async loadAccount() {
+    const response = await fetch("/api/supabase", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error(`account status answered ${response.status}`);
+    const status = await response.json();
+    return {
+      connected: Boolean(status.connected),
+      signedIn: Boolean(status.signed_in),
+      email: String(status.email || ""),
+      name: String(status.display_name || ""),
+    };
+  },
+
   /** The goal this page is about, its subgoals, and what each already holds. */
   async loadGoal() {
     return copy({ goal: GOAL, subgoals: SUBGOALS, slices: SLICES });
