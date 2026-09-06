@@ -1,10 +1,11 @@
-/* The rail: the goal's subgoals, one selected, and the row that adds one. */
+/* The rail, labelled Plan: the goal's subgoals, one selected, and the
+   row that adds one. */
 
 import { h } from "../dom.js";
 
 export function renderBreakdown(state, actions) {
-  return h("aside", { class: "rail", "aria-label": "Breakdown" },
-    h("div", { class: "rail-label" }, "Breakdown"),
+  return h("aside", { class: "rail", "aria-label": "Plan" },
+    h("div", { class: "rail-label" }, "Plan"),
     state.subgoals.map((subgoal) =>
       renderSubgoal(subgoal, subgoal.id === state.activeId, actions)),
     state.status === "ready" && state.goal && (state.addingSubgoal

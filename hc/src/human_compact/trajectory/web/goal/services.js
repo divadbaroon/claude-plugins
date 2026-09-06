@@ -157,11 +157,6 @@ export const services = {
     return { id: answer.id, title, goalId, revision: answer.revision };
   },
 
-  async saveNotes({ subgoalId, text }) {
-    const answer = await op({ op: "set_notes", goal_id: subgoalId, notes: text });
-    return { subgoalId, revision: answer.revision };
-  },
-
   /** Bart's reply to one message, in the conversation of one subgoal.
 
       The whole conversation goes out each time: the server holds the

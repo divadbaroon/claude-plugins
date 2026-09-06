@@ -1136,7 +1136,7 @@ class GoalPageBrowserTests(BrowserCase):
         with mock.patch("human_compact.trajectory.build.start", start), \
                 mock.patch.object(BRAIN, "ask", ask), \
                 server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            # The goal, its breakdown, and the first subgoal selected with
+            # The goal, its plan, and the first subgoal selected with
             # its own two todos -- all of it from the chat's goals.json.
             expect(page.get_by_role("heading", name=GOAL_TITLE)).to_be_visible()
             subs = page.locator(".rail .sub")
@@ -1147,14 +1147,12 @@ class GoalPageBrowserTests(BrowserCase):
             expect(rows.nth(0).locator(".todo-text")).to_have_value(FIRST_TODOS[0])
             expect(page.get_by_role("button", name="Build all")).to_be_enabled()
 
-            # Notes belong to the subgoal they were written on, and reach
-            # the chat's files once the reader pauses.
-            page.locator(".notes-input").fill("first notes")
+            # The rail is the plan; the pane is Bart, and no notes above him.
+            expect(page.locator(".rail-label")).to_have_text("Plan")
+            expect(page.get_by_role("tab", name="Bart")).to_have_attribute("aria-selected", "true")
+            expect(page.locator(".notes-input")).to_have_count(0)
             subs.nth(1).click()
             expect(subs.nth(1)).to_have_class(active)
-            expect(page.locator(".notes-input")).to_have_value("")
-            self.assertTrue(wait_for(
-                lambda: GM.by_id(self.goals()[0], subgoals[0])["notes"] == "first notes"))
             # No todos yet, so the pane is folded away behind its button.
             expect(page.get_by_role("button", name="Show todos")).to_be_visible()
             expect(page.locator(".todo-list")).to_have_count(0)
@@ -1222,10 +1220,9 @@ class GoalPageBrowserTests(BrowserCase):
                 re.compile("Imagine this subgoal is done"))
             expect(page.locator(".rail .sub").nth(0).locator(".msg")).to_have_count(0)
 
-            # Back on the first subgoal: its notes, its todos, none of the
-            # second's conversation.
+            # Back on the first subgoal: its todos, none of the second's
+            # conversation.
             subs.nth(0).click()
-            expect(page.locator(".notes-input")).to_have_value("first notes")
             expect(rows).to_have_count(2)
             expect(page.locator(".msg")).to_have_count(0)
 
@@ -1238,9 +1235,9 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".terminal")).to_contain_text("$ npm run dev")
             expect(page.locator(".terminal")).to_contain_text("ready · http://localhost:5173")
             expect(page.locator(".host")).to_have_text("localhost:5173")
-            page.get_by_role("tab", name="Plan").click()
+            page.get_by_role("tab", name="Bart").click()
             expect(page.locator(".host")).to_have_count(0)
-            expect(page.locator(".notes-input")).to_have_value("first notes")
+            expect(rows).to_have_count(2)
 
             # A subgoal added from the rail is selected as it lands, and is
             # a goal under this one in the chat's tree.
@@ -1272,7 +1269,6 @@ class GoalPageBrowserTests(BrowserCase):
             expect(subs.nth(4)).to_have_text("Validate the dataset's columns")
             expect(subs.nth(3)).to_have_class(active)
             subs.nth(0).click()
-            expect(page.locator(".notes-input")).to_have_value("first notes")
             expect(rows).to_have_count(2)
 
             # Build all hands the open rows to the builder. Refused, it says
@@ -1313,9 +1309,8 @@ class GoalPageBrowserTests(BrowserCase):
             # rail is ready for the first subgoal and the pane says so.
             expect(page.get_by_role("heading", name=GOAL_TITLE)).to_be_visible()
             expect(page.get_by_label("What is the goal?")).to_have_count(0)
-            expect(page.get_by_role("tab", name="Plan")).to_be_visible()
+            expect(page.get_by_role("tab", name="Bart")).to_be_visible()
             expect(page.locator(".pane.is-blank")).to_contain_text("Break it into subgoals")
-            expect(page.locator(".notes-input")).to_have_count(0)
             first = page.get_by_label("New subgoal")
             expect(first).to_be_focused()
             goals, _important = self.goals()
@@ -1323,7 +1318,7 @@ class GoalPageBrowserTests(BrowserCase):
                              [(g["title"], g["status"]) for g in goals["goals"]])
             self.assertFalse(goals["goals"][0].get("parent_goal_id"))
             # Escape leaves the hint with its own way in; the first subgoal
-            # named is selected, with its notes and conversation.
+            # named is selected, with its conversation.
             first.press("Escape")
             page.get_by_role("button", name="+ Add the first subgoal").click()
             first = page.get_by_label("New subgoal")
@@ -1332,7 +1327,7 @@ class GoalPageBrowserTests(BrowserCase):
             first.press("Enter")
             expect(page.locator(".rail .sub")).to_have_count(1)
             expect(page.locator(".rail .sub").nth(0)).to_have_class(re.compile(r"\bis-active\b"))
-            expect(page.locator(".notes-input")).to_be_visible()
+            expect(page.get_by_label("Message Bart")).to_be_visible()
             expect(page.locator(".pane.is-blank")).to_have_count(0)
             # This load and the next.
             page.reload(wait_until="domcontentloaded")
@@ -1353,27 +1348,26 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".goal-plan")).to_have_text(
                 "Move uploads off the API server.\nSign, then PUT.")
             expect(page.get_by_label("What is the goal?")).to_have_count(0)
-            # The pieces are the rail, the first one open, its notes what
-            # the setup said about it and its rows ready to build.
+            # The pieces are the rail, the first one open with its rows
+            # ready to build. What the setup said about each piece is in
+            # the tree as its notes, which this page does not draw.
+            expect(page.locator(".rail-label")).to_have_text("Plan")
             expect(page.locator(".rail .sub")).to_have_text(
                 ["Signing route", "Client PUTs", "Retire the proxy"])
-            expect(page.locator(".notes-input")).to_have_value(PIECE_NOTES["Signing route"])
+            expect(page.locator(".notes-input")).to_have_count(0)
             rows = page.locator(".todo-list .todo:not(.todo-new)")
             expect(rows).to_have_count(2)
             expect(rows.nth(0).locator(".todo-text")).to_have_value("Add POST /uploads/sign")
             expect(rows.nth(1).locator(".todo-text")).to_have_value("Scope the token")
             page.locator(".rail .sub").nth(2).click()
-            expect(page.locator(".notes-input")).to_have_value(PIECE_NOTES["Retire the proxy"])
-            # Editable as before: typed over, saved to the tree, kept.
-            page.locator(".notes-input").fill("Delete the old path once the client PUTs land.")
-            self.assertTrue(wait_for(lambda: any(
-                g.get("notes") == "Delete the old path once the client PUTs land."
-                for g in CS.load_goals(chat.name, self.root)[0]["goals"])))
+            expect(page.locator(".todo-list .todo:not(.todo-new)")).to_have_count(0)
+            self.assertEqual(PIECE_NOTES["Retire the proxy"], next(
+                g["notes"] for g in CS.load_goals(chat.name, self.root)[0]["goals"]
+                if g["title"] == "Retire the proxy"))
             page.reload(wait_until="domcontentloaded")
             expect(page.locator(".project-name")).to_have_text("Signed uploads")
-            page.locator(".rail .sub").nth(2).click()
-            expect(page.locator(".notes-input")).to_have_value(
-                "Delete the old path once the client PUTs land.")
+            expect(page.locator(".rail .sub")).to_have_text(
+                ["Signing route", "Client PUTs", "Retire the proxy"])
             self.assertEqual([], errors)
 
     def test_the_account_icon_says_who_the_machine_is_connected_as(self):

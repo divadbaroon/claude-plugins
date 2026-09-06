@@ -1,4 +1,4 @@
-/* The page: header, the breakdown rail, and the main column with its tabs
+/* The page: header, the plan rail, and the main column with its tabs
    and whichever pane the current tab shows -- or, for a workspace with no
    goal yet, the one line that asks for it. */
 
@@ -6,7 +6,7 @@ import { h } from "../dom.js";
 import { renderHeader } from "./header.js";
 import { renderBreakdown } from "./breakdown.js";
 import { renderTabs } from "./tabs.js";
-import { renderPlan } from "./plan.js";
+import { renderBart } from "./bart.js";
 import { renderPreview } from "./preview.js";
 import { renderTerminal } from "./terminal.js";
 
@@ -28,15 +28,15 @@ function renderPane(state, actions) {
   if (state.tab === "preview") return renderPreview(state);
   if (state.tab === "terminal") return renderTerminal(state);
   if (state.status === "ready" && !state.subgoals.length) return renderFirstSubgoal(state, actions);
-  return renderPlan(state, actions);
+  return renderBart(state, actions);
 }
 
-/* A goal with nothing under it yet: the notes, the conversation and the
-   todos all belong to a subgoal, so the first thing to do is name one. */
+/* A goal with nothing under it yet: the conversation and the todos both
+   belong to a subgoal, so the first thing to do is name one. */
 function renderFirstSubgoal(state, actions) {
   return h("section", { key: "pane-first", class: "pane is-blank", role: "tabpanel" },
     h("div", { class: "empty" },
-      h("p", { class: "empty-label" }, "Break it into subgoals. Each one gets its own notes, conversation and todos."),
+      h("p", { class: "empty-label" }, "Break it into subgoals. Each one gets its own conversation and todos."),
       !state.addingSubgoal && h("button", {
         type: "button", class: "ghost-btn first-subgoal-btn", onclick: actions.beginAddSubgoal,
       }, "+ Add the first subgoal")));

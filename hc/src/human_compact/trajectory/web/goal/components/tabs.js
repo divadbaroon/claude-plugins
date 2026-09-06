@@ -1,7 +1,7 @@
 import { h } from "../dom.js";
 import { TABS } from "../store.js";
 
-const LABELS = { plan: "Plan", preview: "Live preview", terminal: "Terminal" };
+const LABELS = { bart: "Bart", preview: "Live preview", terminal: "Terminal" };
 
 export function renderTabs(state, actions) {
   return h("nav", { class: "tabs", role: "tablist", "aria-label": "Views" },
@@ -14,6 +14,6 @@ export function renderTabs(state, actions) {
       onclick: () => actions.showTab(tab),
     }, LABELS[tab])),
     // Where the app is running: shown beside the panes that look at it.
-    state.tab !== "plan" && state.preview
+    state.tab !== "bart" && state.preview
       && h("span", { class: "host" }, state.preview.host));
 }

@@ -25,19 +25,20 @@ the bodies, keep the signatures.
 The goals are real. `loadGoal` reads `GET /api/goal-page`: the goal the
 address names (`/?goal=<id>`), or when it names none the top-level goal
 touched most recently, among those in progress or with something under
-them; its subgoals; for each the notes and the todo rows, straight from the
+them; its subgoals; for each the todo rows, straight from the
 chat's `goals.json` through the goals model; and the project the chat is
 in, whose name and plan the header shows. This is how a project finished
 in the web onboarding arrives: `/bart` claims it, writes its tree and binds
 the chat, and the page opens on the direction the reader chose (the ones
 they were offered and did not take stay in the tree, with nothing under
-them) with its pieces as subgoals, each piece's notes seeded from the
-setup's description and its why, and the plan under the goal. A workspace
+them) with its pieces as subgoals and the plan under the goal (each
+piece's notes are seeded from the setup's description and its why, kept
+in the tree for `/legacy` and the hooks; this page does not draw notes). A workspace
 with no goal answers empty, and the page asks for one in a line; a goal
-with nothing under it yet asks for its first subgoal, since the notes,
-the conversation and the todos each belong to one. Every
+with nothing under it yet asks for its first subgoal, since the
+conversation and the todos each belong to one. Every
 write is one operation on `POST /api/goal-page/op` -- `add_goal`,
-`set_notes`, `add_todo_row`, `set_todo_text`, `set_todo_done`,
+`add_todo_row`, `set_todo_text`, `set_todo_done`,
 `remove_todo_row`, `build_todos` -- the same operations the workspace at
 `/legacy` applies, so the two pages and the chat's hooks write one file.
 Each answer carries the goals' revision after the write.

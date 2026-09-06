@@ -12,7 +12,6 @@ import {
   EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder,
 } from "./store.js";
 
-const NOTES_SAVE_DELAY_MS = 400;
 const TODO_SAVE_DELAY_MS = 400;
 const SIGN_IN_POLL_MS = 2000;
 const REVISIONS_KEPT = 8;
@@ -26,7 +25,6 @@ export function createActions(store, services) {
   // carries the ids it was saved with, and a new message must not take one.
   const stamp = Date.now().toString(36);
   const nextId = (prefix) => `${prefix}-${stamp}-${(seq += 1)}`;
-  const notesTimers = new Map();   // subgoal id -> the save waiting on its notes
   const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
   let signInRun = 0;               // the sign-in attempt that is current
   let wanted = "";                 // the goal the address names, if any
@@ -65,7 +63,7 @@ export function createActions(store, services) {
 
   // The store with what the server now holds laid under what the reader is
   // in the middle of: the subgoal they are on, the message they are typing,
-  // the notes or todo text a save is still waiting on, and the conversation,
+  // the todo text a save is still waiting on, and the conversation,
   // which this page writes and so keeps its own copy of once it has one.
   function merge(state, loaded) {
     const slices = {};
@@ -77,7 +75,6 @@ export function createActions(store, services) {
         slice.draft = held.draft;
         slice.newTodo = held.newTodo;
         slice.todosShown = held.todosShown;
-        if (notesTimers.has(id)) slice.notes = held.notes;
         slice.todos = slice.todos.map((todo) => {
           if (!todoTimers.has(`${id}/${todo.id}`)) return todo;
           const mine = held.todos.find((t) => t.id === todo.id);
@@ -231,7 +228,7 @@ export function createActions(store, services) {
   }
 
   function selectSubgoal(id) {
-    set({ activeId: id, tab: "plan", buildNote: null });
+    set({ activeId: id, tab: "bart", buildNote: null });
   }
 
   function showTab(tab) {
@@ -270,19 +267,8 @@ export function createActions(store, services) {
         ? current.subgoals
         : [...current.subgoals, { id: subgoal.id, title: subgoal.title, status: "active" }],
       activeId: subgoal.id,
-      tab: "plan",
+      tab: "bart",
     }));
-  }
-
-  function editNotes(text) {
-    const id = get().activeId;
-    if (!id) return;
-    changeSlice(id, { notes: text });
-    clearTimeout(notesTimers.get(id));
-    notesTimers.set(id, setTimeout(() => {
-      notesTimers.delete(id);
-      persist(services.saveNotes({ subgoalId: id, text: sliceOf(get(), id).notes }));
-    }, NOTES_SAVE_DELAY_MS));
   }
 
   function editDraft(text) {
@@ -377,7 +363,7 @@ export function createActions(store, services) {
   }
 
   // The text lands in the store on every keystroke and goes to the server
-  // once the reader pauses, like the notes.
+  // once the reader pauses.
   function editTodo(todoId, text) {
     const id = get().activeId;
     const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
@@ -454,7 +440,7 @@ export function createActions(store, services) {
     editGoalDraft, commitCreateGoal,
     selectSubgoal, showTab,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
-    editNotes, editDraft, sendMessage, acceptProposal,
+    editDraft, sendMessage, acceptProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
     buildAll,
   };
