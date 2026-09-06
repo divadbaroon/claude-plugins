@@ -65,6 +65,15 @@ export function createActions(store, services) {
     if (get().accountOpen) set({ accountOpen: false });
   }
 
+  async function signOut() {
+    set({ accountOpen: false });
+    try {
+      set({ account: await services.signOut() });
+    } catch (error) {
+      console.error("engelbart: sign out failed", error);
+    }
+  }
+
   function selectSubgoal(id) {
     set({ activeId: id, tab: "plan" });
   }
@@ -227,7 +236,7 @@ export function createActions(store, services) {
   }
 
   return {
-    boot, toggleAccount, closeAccount, selectSubgoal, showTab,
+    boot, toggleAccount, closeAccount, signOut, selectSubgoal, showTab,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editNotes, editDraft, sendMessage, acceptProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
