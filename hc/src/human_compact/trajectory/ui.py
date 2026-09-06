@@ -455,6 +455,146 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
     }
 
 
+# --- Bart, on the goal page -----------------------------------------------
+#
+# The page's conversation is per subgoal, and what the reader wants out of
+# it is the next row or two for that piece. The brainstorm behind /legacy
+# already knows how to talk to a project -- its tree, its rows, one card
+# back per turn, on the reader's own account -- so Bart is that brainstorm
+# told which piece the conversation is about, and its card read into the
+# two things the page draws: prose, and a proposed row the reader adds
+# with one click. Nothing is written to the tree by a reply; the row lands
+# through add_todo_row when they take it, like a row they typed.
+
+def _bart_focus(goal_title, subgoal_title):
+    """What the model is told about where the conversation is."""
+    return [
+        "",
+        "# Where this conversation is",
+        "",
+        "They are talking about one piece of the work: \"%s\", under the "
+        "goal \"%s\". What they want from you is the next TODO row or two "
+        "for that piece, or the one question that decides what those rows "
+        "are." % (subgoal_title, goal_title),
+        "",
+        "Propose rows as `todos` -- flat rows, for that piece; not as "
+        "`subgoals` and not as `goals`. Do not offer to write goals here, "
+        "and do not send an `offer` card for rows either: when you have "
+        "the rows, send them as a `todos` card. Nothing is written until "
+        "they add a row themselves, so a proposed row is the offer.",
+    ]
+
+
+def _bart_choice(title, options, note=""):
+    """A question or a choice, as one message the reader can answer by
+    typing: the title, then each option on its own line with its
+    argument, when it has one."""
+    lines = [str(title or "").strip()]
+    said = str(note or "").strip()
+    if said:
+        lines[0] = (lines[0] + " (" + said + ")") if lines[0] else said
+    for option in options or []:
+        if not isinstance(option, dict):
+            continue
+        label = str(option.get("label") or "").strip()
+        why = str(option.get("why") or "").strip()
+        if label:
+            lines.append("- " + label + (" -- " + why if why else ""))
+    return "\n".join(line for line in lines if line)
+
+
+def _bart_replies(card):
+    """A brainstorm card as the messages the page draws, in order.
+
+    Prose is a text message. Each row proposed is its own proposal, whether
+    it came flat or under a piece: the page has one list, the subgoal's,
+    and a proposal is one row for it. A question or a choice is said as
+    text with its options under it, so the reader answers by typing; the
+    page has no form to draw them in. Goals the model proposes are said,
+    not offered: nothing on this page makes a goal.
+    """
+    replies = []
+    say = str(card.get("say") or "").strip()
+    if say:
+        replies.append({"kind": "text", "text": say})
+    kind = str(card.get("card") or "")
+    if kind == "questions":
+        for item in (card.get("questions") or {}).get("items") or []:
+            if isinstance(item, dict):
+                replies.append({"kind": "text", "text": _bart_choice(
+                    item.get("title"), item.get("options"),
+                    item.get("subtitle"))})
+    elif kind == "focus":
+        focus = card.get("focus") or {}
+        replies.append({"kind": "text", "text": _bart_choice(
+            focus.get("title"), focus.get("options"))})
+    elif kind == "goals":
+        for goal in card.get("goals") or []:
+            if isinstance(goal, dict):
+                replies.append({"kind": "text", "text": _bart_choice(
+                    goal.get("label"), [], goal.get("why"))})
+    elif kind == "todos":
+        rows = list(card.get("todos") or [])
+        for piece in card.get("subgoals") or []:
+            if isinstance(piece, dict):
+                rows.extend(piece.get("todos") or [])
+        for text in rows:
+            said = str(text or "").strip()
+            if said:
+                replies.append({"kind": "proposal", "text": said})
+    if not replies:
+        replies.append({"kind": "text", "text": "Bart had nothing to add."})
+    return replies
+
+
+def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
+    """What a reply needs from the tree, read under the lock: the piece
+    and its goal by name, and the brainstorm's digest of the project.
+
+    The digest comes from the brainstorm_say branch of _apply_locked, which
+    is where the legacy panel gets its own, so the two screens describe the
+    project to the model in the one way.
+    """
+    if not chat_scoped:
+        return {"ok": False, "error": "chat scope only"}
+    if not isinstance(transcript, list):
+        return {"ok": False, "error": "transcript must be a list"}
+    trajdir = _scope(trajdir)
+    with _state_access(trajdir, chat_scoped):
+        goals, _important = _load_goals(trajdir, chat_scoped)
+    GM.sanitize(goals)
+    piece = GM.by_id(goals, str(subgoal_id or ""))
+    if piece is None or not piece.get("parent_goal_id"):
+        return {"ok": False, "error": "no such subgoal"}
+    parent = GM.by_id(goals, piece.get("parent_goal_id"))
+    held = _apply_locked({"op": "brainstorm_say", "transcript": transcript},
+                         trajdir, chat_scoped)
+    deferred = held.get("__deferred__") if isinstance(held, dict) else None
+    if not deferred:
+        return (held if isinstance(held, dict)
+                else {"ok": False, "error": "the tree could not be read"})
+    _kind, _session, root, cwd, op = deferred
+    return {"ok": True, "root": root, "cwd": cwd,
+            "digest": str(op.get("__digest__") or ""),
+            "goal": str((parent or {}).get("title") or ""),
+            "subgoal": str(piece.get("title") or "")}
+
+
+def _bart_answer(held, transcript):
+    """The model's turn, outside the lock: the project condensed if it is
+    long, the conversation, and where in the project it is; one card
+    back, as the replies the page draws."""
+    context = BRAIN.project_context(held["root"], held["cwd"], held["digest"])
+    card = BRAIN.ask(transcript, context, root=held["root"],
+                     extra=_bart_focus(held["goal"], held["subgoal"]))
+    if not isinstance(card, dict) or not card.get("ok"):
+        error = (card or {}).get("error") if isinstance(card, dict) else ""
+        return {"ok": False, "error": str(error or "Bart could not answer")}
+    return {"ok": True, "say": str(card.get("say") or ""),
+            "card": str(card.get("card") or "none"),
+            "replies": _bart_replies(card)}
+
+
 def _goal_page_project(trajdir, chat_scoped):
     """The project this workspace is in, for the header: its name and the
     plan agreed at setup.
@@ -5017,6 +5157,31 @@ class H(BaseHTTPRequestHandler):
             events.publish(result.get("revision"))
         self._send(200, result)
 
+    def _answer_bart(self, body):
+        """Bart's reply on the goal page. The tree is read and digested
+        under the state lock, the way every write is; the model is asked
+        outside it, the way every model call is, so a reply that takes a
+        minute stops nobody else's read or save."""
+        if not isinstance(body, dict):
+            self._send(400, {"ok": False, "error": "expected a message"})
+            return
+        if getattr(self.server, "shared_project", None):
+            self._send(200, {"ok": False,
+                             "error": "this is a shared workspace"})
+            return
+        with self.server.state_lock:
+            try:
+                held = _bart_context(self.server.trajdir,
+                                     self.server.chat_scoped,
+                                     body.get("subgoal_id"),
+                                     body.get("transcript"))
+            except (OSError, ValueError, RuntimeError) as exc:
+                held = {"ok": False, "error": str(exc)[:200]}
+        if not held.get("ok"):
+            self._send(200, held)
+            return
+        self._send(200, _bart_answer(held, body.get("transcript")))
+
     def _take_attachment(self):
         """A screenshot pasted into a TODO row: the image bytes, as sent.
 
@@ -5173,6 +5338,9 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/goal-page/op":
                 self._apply_goal_page_op(body)
+                return
+            if self.path == "/api/goal-page/bart":
+                self._answer_bart(body)
                 return
             if self.path == "/api/op":
                 if not isinstance(body, dict):

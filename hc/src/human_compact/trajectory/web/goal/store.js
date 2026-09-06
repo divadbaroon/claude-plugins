@@ -14,7 +14,8 @@ export const WITH_BUILDER = new Set(["queued", "building", "asking"]);
 
 export const EMPTY_SLICE = Object.freeze({
   notes: "",
-  chat: [],          // [{ id, who: "you" | "bart", kind: "text" | "proposal", text, added? }]
+  chat: [],          // [{ id, who: "you" | "bart", kind: "text" | "proposal" | "error", text, added? }]
+  thinking: false,   // a reply from Bart on its way
   draft: "",         // the message being typed to Bart
   newTodo: "",       // the todo being typed
   todos: [],         // [{ id, text, done, status }] -- status as the server keeps it
