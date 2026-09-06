@@ -1,6 +1,7 @@
-"""hc ui — localhost goal browser. Reads and writes the SAME goals.json
-through the goals model (goal_context.md stays in sync for SessionStart
-injection). Stdlib only; localhost only; Ctrl-C to stop."""
+"""hc ui — localhost goal browser. Serves the goal page (web/goal) at /,
+the workspace it replaced at /legacy, and answers both from the SAME
+goals.json through the goals model (goal_context.md stays in sync for
+SessionStart injection). Stdlib only; localhost only; Ctrl-C to stop."""
 import difflib
 import hashlib
 import json
@@ -106,6 +107,40 @@ def _version():
         return version("human-compact")
     except Exception:                     # noqa: BLE001 - a label, never logic
         return "unknown"
+
+
+# The goal page: what a chat workspace opens on. Its files are served by
+# name from web/goal, and only files of the kinds the page is made of.
+GOAL_PAGE_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+}
+_GOAL_ASSET_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def goal_page_asset(relpath):
+    """The bytes and media type of one file of the goal page, or None.
+
+    The name arrives from the browser, so it is honoured only as a plain
+    relative path to one of the page's own kinds of file: no absolute
+    paths, no parent references, nothing outside web/goal, and nothing
+    but html, css and js.
+    """
+    parts = str(relpath).split("/")
+    if not all(_GOAL_ASSET_SEGMENT.match(part) for part in parts):
+        return None
+    ctype = GOAL_PAGE_TYPES.get(Path(parts[-1]).suffix)
+    if ctype is None:
+        return None
+    node = resources.files("human_compact.trajectory").joinpath("web/goal")
+    for part in parts:
+        node = node.joinpath(part)
+    try:
+        data = node.read_bytes()
+    except (OSError, ValueError):
+        return None
+    return data, ctype
 
 
 def _code_stamp():
@@ -4010,10 +4045,27 @@ class H(BaseHTTPRequestHandler):
             if _experimental_route(self.path) and not _experimental_enabled():
                 self._send(200, {"ok": False, "error": EXPERIMENTAL_ERROR})
             elif self.path.split("?", 1)[0] in ("/", "/index.html"):
-                # The query is the page's own, not this handler's: the setup
-                # page's bypass comes back here with ?quick=1 on it, and a
-                # workspace that 404'd on its own address would be the last
-                # thing that reader saw.
+                # The goal page: what /bart opens. The query is the page's
+                # own, not this handler's: the setup page's bypass comes back
+                # here with ?quick=1 on it, and a workspace that 404'd on its
+                # own address would be the last thing that reader saw.
+                page = goal_page_asset("index.html")
+                if page is None:
+                    self._send(404, {"error": "not found"})
+                else:
+                    self._send(200, page[0], page[1])
+            elif self.path.split("?", 1)[0].startswith("/goal/"):
+                # The goal page's own files, by plain relative name.
+                found = goal_page_asset(
+                    self.path.split("?", 1)[0][len("/goal/"):])
+                if found is None:
+                    self._send(404, {"error": "not found"})
+                else:
+                    self._send(200, found[0], found[1])
+            elif self.path.split("?", 1)[0] in ("/legacy", "/legacy/"):
+                # The workspace the goal page replaced, kept whole while the
+                # goal page grows into its work: the goal tree, its documents
+                # and the bridge that runs them all still answer here.
                 html = resources.files("human_compact.trajectory").joinpath(
                     "web/goals_bundle.html").read_text(encoding="utf-8")
                 # The artifact ships its own pre-hydration body: a rust splash

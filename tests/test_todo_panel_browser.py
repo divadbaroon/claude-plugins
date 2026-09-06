@@ -177,7 +177,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("ship it")
@@ -232,7 +232,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("ship it")
@@ -268,7 +268,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -300,7 +300,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 # The caret is where the first character will be drawn, so a
                 # throwaway glyph in the empty line stands in for it: measure
@@ -340,7 +340,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 # A list whose newlines were lost on the way through the
@@ -361,7 +361,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("fix the header")
@@ -404,7 +404,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -426,7 +426,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -475,7 +475,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.evaluate("() => { window.__hcStay = 'same page'; }")
                 expect(page.locator(".hc-chip").filter(has_text="In progress")
@@ -561,7 +561,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -588,7 +588,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -640,7 +640,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Drop the 2k char cap")
@@ -720,7 +720,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 empty = page.evaluate(measure)
                 page.locator(".hc-todo-line").first.click()
@@ -741,7 +741,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("ship it")
@@ -773,7 +773,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -797,7 +797,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-rail-tabs", timeout=15000)
                 page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
                 body = page.locator(".hc-rail-ctx-body")
@@ -818,7 +818,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -852,7 +852,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -879,7 +879,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-rail-left", timeout=15000)
                 page.evaluate(
                     "() => { window.__hcSaves = 0;"
@@ -921,7 +921,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 tabs = page.locator(".hc-rail-tabs")
                 before = tabs.bounding_box()
@@ -955,7 +955,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -1009,7 +1009,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Cache goals.md per session")
@@ -1086,7 +1086,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-rail-tabs", timeout=15000)
                 page.locator(".hc-rail-tabs").get_by_text(
                     "Understanding", exact=True).click()
@@ -1227,7 +1227,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-rail-tabs", timeout=15000)
                 page.locator(".hc-rail-tabs").get_by_text(
                     "Understanding", exact=True).click()
@@ -1246,7 +1246,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
 
     def open_understanding(self, page, url):
         from playwright.sync_api import expect
-        page.goto(url, wait_until="domcontentloaded")
+        page.goto(url + "/legacy", wait_until="domcontentloaded")
         page.wait_for_selector(".hc-rail-tabs", timeout=15000)
         page.locator(".hc-rail-tabs").get_by_text(
             "Understanding", exact=True).click()
@@ -1632,7 +1632,7 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")
@@ -1713,7 +1713,7 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-todo-line", timeout=15000)
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("Add the route")

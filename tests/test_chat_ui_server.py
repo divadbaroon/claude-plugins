@@ -161,7 +161,7 @@ class ChatUiServerTests(unittest.TestCase):
 
     def test_two_running_servers_keep_state_and_writes_scoped(self):
         with server_for(self.a) as url_a, server_for(self.b) as url_b:
-            with NO_PROXY_OPENER.open(url_a, timeout=2) as response:
+            with NO_PROXY_OPENER.open(url_a + "/legacy", timeout=2) as response:
                 html = response.read().decode()
             self.assertLess(
                 html.index('script type="__bundler/template"'),
@@ -465,7 +465,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
@@ -541,7 +541,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 # The bridge replaces the artifact's own empty-tree line: a
                 # vault with nothing in it is not a dead end, so the copy
                 # says where goals come from as well as offering the button.
@@ -607,7 +607,7 @@ class ChatUiServerTests(unittest.TestCase):
                     permissions=["clipboard-read", "clipboard-write"],
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.get_by_text("real goal 2", exact=True).first
                        ).to_be_visible(timeout=10_000)
 
@@ -674,7 +674,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.get_by_text("goal in chat a", exact=True).first
                        ).to_be_visible(timeout=10_000)
 
@@ -756,7 +756,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.get_by_text(child_title, exact=True).first
                        ).to_be_visible(timeout=10_000)
 
@@ -835,7 +835,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 # The control is on the Notes tab of the rail, under the
                 # document the prompts are evidence for. Chat scope used to
                 # be refused it.
@@ -1051,7 +1051,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
@@ -1122,7 +1122,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.get_by_text("All 2", exact=True)).to_be_visible(
                     timeout=10_000
                 )
@@ -1171,7 +1171,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.locator(".hc-preview-mount")).to_be_visible(
                     timeout=10_000
                 )
@@ -1280,7 +1280,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 editor = page.locator(self.EDITOR)
                 expect(editor).to_be_visible(timeout=10_000)
@@ -1347,7 +1347,7 @@ class ChatUiServerTests(unittest.TestCase):
                     permissions=["clipboard-read", "clipboard-write"],
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 editor = page.locator(self.EDITOR)
                 rendered = page.locator(".hc-notes-render")
@@ -1389,7 +1389,7 @@ class ChatUiServerTests(unittest.TestCase):
                 with server_for(self.a) as url:
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
-                    page.goto(url, wait_until="domcontentloaded")
+                    page.goto(url + "/legacy", wait_until="domcontentloaded")
                     self.open_notes(page)
                     editor = page.locator(self.EDITOR)
                     expect(editor).to_be_visible(timeout=10_000)
@@ -1466,7 +1466,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 expect(page.get_by_text(
                     "No prompts of yours are tied to this goal yet.",
@@ -1533,7 +1533,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 expect(page.get_by_text("new human prompt", exact=True)
                        ).to_be_visible(timeout=10_000)
@@ -1571,7 +1571,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 expect(page.get_by_text("new human prompt", exact=True)
                        ).to_be_visible(timeout=10_000)
@@ -1631,7 +1631,7 @@ class ChatUiServerTests(unittest.TestCase):
                     permissions=["clipboard-read", "clipboard-write"],
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
@@ -1715,7 +1715,7 @@ class ChatUiServerTests(unittest.TestCase):
                     permissions=["clipboard-read", "clipboard-write"],
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 self.open_notes(page)
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
@@ -1782,7 +1782,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 chips = page.locator(".hc-chip")
                 expect(chips).to_have_count(4, timeout=10_000)
                 self.assertEqual(
@@ -1832,7 +1832,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-left")).to_be_visible(
                     timeout=10_000)
                 # What the columns do while the terminal works is nothing:
@@ -1905,7 +1905,7 @@ class ChatUiServerTests(unittest.TestCase):
                     self.assertEqual([], sources(url))
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
-                    page.goto(url, wait_until="domcontentloaded")
+                    page.goto(url + "/legacy", wait_until="domcontentloaded")
                     expect(page.locator(".hc-preview-mount")).to_be_visible(
                         timeout=10_000)
                     # The rail's node is still built -- the artifact owns it
@@ -2046,7 +2046,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.locator(".hc-rail-right")).to_be_visible(
                     timeout=10_000)
                 expect(page.locator(".hc-inject")).to_have_count(0)
@@ -2073,7 +2073,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(page.locator(".hc")).to_be_visible(timeout=10_000)
                 page.wait_for_timeout(2_000)
                 self.assertIsNone(page.evaluate(
@@ -2142,7 +2142,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
@@ -2220,7 +2220,7 @@ class ChatUiServerTests(unittest.TestCase):
             )
             try:
                 page = browser.new_page(viewport={"width": 1400, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 expect(
                     page.get_by_text("goal in chat a", exact=True).first
                 ).to_be_visible(timeout=10_000)
@@ -2270,7 +2270,7 @@ class PreHydrationMaskTests(unittest.TestCase):
 
     def test_the_page_is_served_hidden_until_the_artifact_unpacks(self):
         with server_for(self.a) as url:
-            with NO_PROXY_OPENER.open(url, timeout=5) as response:
+            with NO_PROXY_OPENER.open(url + "/legacy", timeout=5) as response:
                 body = response.read().decode()
         self.assertIn('id="hc-preboot"', body)
         self.assertLess(body.index('id="hc-preboot"'), body.index("</head>"),
@@ -2338,7 +2338,7 @@ class PreHydrationMaskTests(unittest.TestCase):
                 "  } catch (e) {}"
                 "  requestAnimationFrame(watch);"
                 "})();")
-            page.goto(url)
+            page.goto(url + "/legacy")
             page.wait_for_selector("text=real goal one", timeout=10000)
             seen = page.evaluate("window.__hcVis || []")
             self.assertTrue(
@@ -2395,7 +2395,7 @@ class PreHydrationMaskTests(unittest.TestCase):
                 "  } catch (e) {}"
                 "  requestAnimationFrame(sample);"
                 "})();")
-            page.goto(url)
+            page.goto(url + "/legacy")
             page.wait_for_selector("text=real goal one", timeout=15000)
             frames = page.evaluate("window.__hcGround || []")
             browser.close()
@@ -2428,7 +2428,7 @@ class DeletedGoalBrowserTests(unittest.TestCase):
         with server_for(self.a) as url, sync_playwright() as playwright:
             browser = playwright.chromium.launch(executable_path=browser_path)
             page = browser.new_page()
-            page.goto(url)
+            page.goto(url + "/legacy")
             page.wait_for_selector("text=delete this one", timeout=10000)
             # Found by what it says it does, not by its glyph: the row
             # control draws an archive box now, and a test that hunts
@@ -2485,7 +2485,7 @@ class FullBleedWorkspaceBrowserTests(unittest.TestCase):
             browser = playwright.chromium.launch(executable_path=chrome, headless=True)
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector("text=one goal", timeout=10000)
                 page.wait_for_timeout(1500)
                 g = page.evaluate(self.GEO)
@@ -2919,7 +2919,7 @@ class OnboardingBrowserTests(unittest.TestCase):
         write_scope(self.a, [], [], bound=False)
 
     def open(self, page, url):
-        page.goto(url)
+        page.goto(url + "/legacy")
         page.wait_for_selector(".hc", timeout=15000)
 
     def two_projects(self, url):
@@ -3226,7 +3226,7 @@ class OnboardingLooksLikeTheWorkspaceTests(unittest.TestCase):
         with server_for(self.a) as url, sync_playwright() as pw:
             b = pw.chromium.launch(executable_path=browser_executable())
             page = b.new_page(viewport={"width": 1440, "height": 900})
-            page.goto(url)
+            page.goto(url + "/legacy")
             page.wait_for_selector(".hc-onb", timeout=15_000)
             # The artifact applies its theme after the first paint, so this is
             # about what the reader ends up looking at, not the first frame.
@@ -3314,7 +3314,7 @@ class ProjectsHomeBrowserTests(unittest.TestCase):
         self.home, self.other = PS._resolved(home), PS._resolved(other)
 
     def open(self, page, url):
-        page.goto(url)
+        page.goto(url + "/legacy")
         page.wait_for_selector(".hc", timeout=15000)
 
     def _page(self, pw):

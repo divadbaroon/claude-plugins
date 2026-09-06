@@ -73,7 +73,7 @@ class PreviewBrowserTests(unittest.TestCase):
             executable_path=self.chrome, headless=True,
             args=["--disable-background-networking"])
         page = browser.new_page(viewport={"width": 1400, "height": 900})
-        page.goto(url, wait_until="domcontentloaded")
+        page.goto(url + "/legacy", wait_until="domcontentloaded")
         page.wait_for_selector(".hc-preview-mount", timeout=20_000)
         return browser, page
 
