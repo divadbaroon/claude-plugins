@@ -6,6 +6,7 @@ import difflib
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import socketserver
@@ -76,6 +77,15 @@ GOAL_OPS = frozenset({
     "set_opening", "set_description", "toggle_todo", "set_relevance",
     "add_todo", "set_understanding", "resolve_check", "set_document",
     "set_paper",
+    # The goal page's todo list: one row at a time, on the goal's own list.
+    "add_todo_row", "set_todo_text", "set_todo_done", "remove_todo_row",
+})
+# What the goal page may send through /api/goal-page/op. The page is a
+# narrower surface than the workspace it replaced, and the door it writes
+# through is the same width; anything else is refused by name.
+GOAL_PAGE_OPS = frozenset({
+    "add_goal", "set_notes", "add_todo_row", "set_todo_text",
+    "set_todo_done", "remove_todo_row", "build_todos",
 })
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
 
@@ -273,6 +283,22 @@ class ThreadingHTTPServer(_ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[:2]
 
+    def server_close(self):
+        # The change feed and the file watcher end with the server: every
+        # open stream is told to close, and the watcher is waited for, so a
+        # revision it was mid-way through reading -- under the goal store's
+        # lock -- is finished before the directory it locks is taken away.
+        events = getattr(self, "goal_events", None)
+        if events is not None:
+            events.close()
+        stop = getattr(self, "follow_stop", None)
+        if stop is not None:
+            stop.set()
+        watcher = getattr(self, "goal_watch_thread", None)
+        if watcher is not None and watcher is not threading.current_thread():
+            watcher.join(timeout=10)
+        super().server_close()
+
 
 def _scope(trajdir=None):
     """Resolve legacy global UI scope or an explicitly bound chat scope."""
@@ -329,6 +355,200 @@ def _save_goals(trajdir, goals, important, chat_scoped):
             raise RuntimeError("chat goal state changed during save")
         return
     GM.save(trajdir, goals, important)
+
+
+# --- the goal page: one goal, drawn from the same store -------------------
+#
+# The page at / reads GET /api/goal-page and writes POST /api/goal-page/op;
+# both go through the goals model, so the page, the /legacy workspace and the
+# chat's own hooks are three readers of one goals.json. A change made by any
+# of them reaches an open page through GET /api/goal-page/events, a stream of
+# server-sent events that carries the goals' revision whenever the files
+# change on disk.
+
+SSE_PING_SECONDS = 15
+
+
+def _goal_row(goal):
+    return {"id": str(goal.get("id") or ""),
+            "title": str(goal.get("title") or ""),
+            "status": str(goal.get("status") or "")}
+
+
+def _todo_row(row):
+    status = str(row.get("status") or "")
+    return {"id": str(row.get("id") or ""),
+            "text": str(row.get("text") or ""),
+            "done": status == "done",
+            "status": status}
+
+
+def _pick_goal(tops, wanted):
+    """The goal the page is about.
+
+    The one the address names, when that is a top-level goal here;
+    otherwise the top-level goal touched most recently that is still open;
+    otherwise any that is not archived. Between goals touched at the same
+    moment the later one in the tree wins: the goal added last, when
+    nothing has been done since.
+    """
+    wanted = str(wanted or "").strip()
+    for goal in tops:
+        if wanted and goal.get("id") == wanted:
+            return goal
+    pool = [g for g in tops
+            if g.get("status") in ("active", "in_progress")] or tops
+    chosen = None
+    for goal in pool:
+        if chosen is None or (str(goal.get("updated_at") or "")
+                              >= str(chosen.get("updated_at") or "")):
+            chosen = goal
+    return chosen
+
+
+def _goal_page_payload(trajdir, chat_scoped, wanted=""):
+    """What the goal page draws: one goal, its subgoals, what each holds.
+
+    A workspace with no goal answers ``empty``; the page then asks for one
+    and writes it back through add_goal.
+    """
+    trajdir = _scope(trajdir)
+    with _state_access(trajdir, chat_scoped):
+        goals, important = _load_goals(trajdir, chat_scoped)
+    GM.sanitize(goals)
+    rows = [g for g in goals.get("goals") or [] if isinstance(g, dict)]
+    tops = [g for g in rows
+            if not g.get("parent_goal_id") and g.get("status") != "archived"]
+    goal = _pick_goal(tops, wanted)
+    subgoals, slices = [], {}
+    if goal is not None:
+        for child in rows:
+            if (child.get("parent_goal_id") != goal.get("id")
+                    or child.get("status") == "archived"):
+                continue
+            subgoals.append(_goal_row(child))
+            slices[child["id"]] = {
+                "notes": str(child.get("notes") or ""),
+                "todos": [_todo_row(row) for row
+                          in GM.normalize_todo_items(child.get("todo_items"))],
+            }
+    return {
+        "ok": True,
+        "goal": _goal_row(goal) if goal is not None else None,
+        "empty": goal is None,
+        "subgoals": subgoals,
+        "slices": slices,
+        "goals": [dict(_goal_row(g), updated_at=str(g.get("updated_at") or ""))
+                  for g in tops],
+        "revision": _goal_revision(goals, important),
+    }
+
+
+def _current_revision(trajdir, chat_scoped):
+    """The goals' revision as they are on disk now."""
+    trajdir = _scope(trajdir)
+    with _state_access(trajdir, chat_scoped):
+        goals, important = _load_goals(trajdir, chat_scoped)
+    GM.sanitize(goals)
+    return _goal_revision(goals, important)
+
+
+class GoalEvents:
+    """The goal page's change feed.
+
+    One revision string, handed to every open event stream when it changes.
+    publish() is called by the write route with the revision it just made
+    and by the file watcher with whatever it found; the same revision twice
+    is one event, so a write the page made and the watcher then noticed
+    does not reach it twice.
+    """
+
+    def __init__(self):
+        self._guard = threading.Lock()
+        self._streams = []
+        self._stop = threading.Event()
+        self.revision = None
+
+    @property
+    def closed(self):
+        return self._stop.is_set()
+
+    def wait(self, seconds):
+        """True once the feed is closed; False when the wait ran out."""
+        return self._stop.wait(seconds)
+
+    def subscribe(self):
+        stream = queue.Queue()
+        with self._guard:
+            self._streams.append(stream)
+        return stream
+
+    def unsubscribe(self, stream):
+        with self._guard:
+            if stream in self._streams:
+                self._streams.remove(stream)
+
+    def publish(self, revision):
+        if not revision:
+            return
+        with self._guard:
+            if revision == self.revision:
+                return
+            self.revision = revision
+            streams = list(self._streams)
+        for stream in streams:
+            stream.put(revision)
+
+    def close(self):
+        self._stop.set()
+        with self._guard:
+            streams = list(self._streams)
+        for stream in streams:
+            stream.put(None)
+
+
+def _goal_files(trajdir, chat_scoped):
+    """The files whose change means the page should look again. A chat bound
+    to a project reads that project's tree session, as load_goals does."""
+    if chat_scoped:
+        session_id, root = _chat_identity(trajdir)
+        where = CS.paths(CS.tree_session(session_id, root), root)
+        return (where.goals, where.todos, where.important)
+    scope = Path(trajdir)
+    return (scope / "goals.json", scope / "todos.json",
+            scope / "important.json")
+
+
+def _watch_goal_files(server, events, interval=None):
+    """Publish a new revision whenever the goal files change under the
+    server: the chat writing goals while the reader talks, a build marking
+    a row, a sync pulling. One stat per file per tick; the files are read
+    only when a stat has moved."""
+    interval = float(interval if interval is not None else
+                     os.environ.get("HC_GOAL_WATCH_SECONDS", "0.5"))
+    marks = None
+    while not events.wait(interval):
+        try:
+            files = _goal_files(server.trajdir, server.chat_scoped)
+        except (OSError, ValueError):
+            continue
+        now = []
+        for path in files:
+            try:
+                stat = path.stat()
+                now.append((stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                now.append(None)
+        now = tuple(now)
+        if now == marks:
+            continue
+        marks = now
+        try:
+            events.publish(_current_revision(server.trajdir,
+                                             server.chat_scoped))
+        except (OSError, ValueError, RuntimeError):
+            # Locked, or mid-write: the next tick reads it again.
+            marks = None
 
 
 # --- linked chats: other sessions whose prompts join this workspace --------
@@ -3251,6 +3471,11 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
         if kind in EXPERIMENTAL_OPS and not _experimental_enabled():
             return {"ok": False, "error": EXPERIMENTAL_ERROR}
         g = GM.by_id(goals, op.get("goal_id", ""))
+        # What the branches that fall through to the save answer with:
+        # {"ok": True}, plus whatever a branch adds -- the id of the goal it
+        # made, the row it wrote -- so the page that asked can carry on
+        # without reading the whole tree back.
+        answer = {"ok": True}
         # Execution-state ops touch the agent-run store only: choosing to work
         # on a goal must not rewrite the goal itself.
         if kind in ("enable_capture", "start_analysis"):
@@ -4061,6 +4286,58 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 if prompt_id not in removed:
                     removed.append(prompt_id)
             g["updated_at"] = GM._now()
+        elif kind in ("add_todo_row", "set_todo_text", "set_todo_done",
+                      "remove_todo_row"):
+            # The goal page's todo list, one row at a time. The rows live on
+            # the goal's own list (todo_items), where the build reads them.
+            # A row that is out with the builder is the builder's until it
+            # comes back: the page shows it and leaves it alone.
+            if not g:
+                return {"ok": False,
+                        "error": "goal not found in this workspace"}
+            rows = GM.normalize_todo_items(g.get("todo_items"))
+            g["todo_items"] = rows
+            if kind == "add_todo_row":
+                text = str(op.get("text") or "").strip()
+                if not text:
+                    return {"ok": False, "error": "write the todo first"}
+                row = GM.add_todo_row(g, text)
+                if row is None:
+                    # The goal already has that line: hand that row back
+                    # rather than write it twice.
+                    lowered = text[:400].lower()
+                    row = next((r for r in rows if str(r.get("text") or "")
+                                .strip().lower() == lowered), None)
+                    if row is None:
+                        return {"ok": False, "error": "that todo was not kept"}
+                    answer = {"ok": True, "row": _todo_row(row),
+                              "existing": True}
+                else:
+                    answer = {"ok": True, "row": _todo_row(row)}
+            else:
+                row_id = str(op.get("id") or "")
+                row = next((r for r in rows if r.get("id") == row_id), None)
+                if row is None:
+                    return {"ok": False,
+                            "error": "that todo is no longer on the goal"}
+                if row.get("status") in OUT_WITH_BUILDER:
+                    return {"ok": False,
+                            "error": "that row is with the builder"}
+                if kind == "set_todo_text":
+                    row["text"] = str(op.get("text") or "")[:400]
+                    answer = {"ok": True, "row": _todo_row(row)}
+                elif kind == "set_todo_done":
+                    row["status"] = "done" if op.get("done") else ""
+                    row["question"] = ""
+                    answer = {"ok": True, "row": _todo_row(row)}
+                else:
+                    rows.remove(row)
+                    answer = {"ok": True, "id": row_id}
+            # The markdown is derived from the rows and stored beside them;
+            # left behind, it would be parsed back into rows on the next
+            # load -- the last row removed would come back with a new id.
+            g["todos_md"] = GM.render_todos(rows)
+            g["updated_at"] = GM._now()
         elif kind == "add_goal":
             parent = op.get("parent_goal_id") or None
             if parent and not GM.by_id(goals, parent):
@@ -4093,6 +4370,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
             goals["goals"].append(GM.new_goal(
                 gid, (op.get("title") or "Untitled").strip()[:120], parent,
                 origin="user", project_cwd=where))
+            answer = {"ok": True, "id": gid}
         else:
             # Two different failures used to wear one message. "Unknown" is
             # an operation this build has never had -- most often a page
@@ -4108,7 +4386,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                     "error": "unknown operation: " + str(kind or "")[:60]}
         GM.sanitize(goals)
         _save_goals(trajdir, goals, important, chat_scoped)
-        return {"ok": True}
+        return answer
 
 
 # The colour the dressed chat workspace lands on: the artifact paints its
@@ -4252,6 +4530,24 @@ class H(BaseHTTPRequestHandler):
                 html = html.replace(
                     "</body>", '<script src="/bridge.js"></script>\n</body>', 1)
                 self._send(200, html.encode(), "text/html; charset=utf-8")
+            elif self.path.split("?", 1)[0] == "/api/goal-page":
+                # What the goal page draws, for the goal the address names
+                # or the one this workspace is most recently about.
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                if getattr(self.server, "shared_project", None):
+                    self._send(200, {"ok": False,
+                                     "error": "this is a shared workspace"})
+                else:
+                    try:
+                        self._send(200, _goal_page_payload(
+                            self.server.trajdir, self.server.chat_scoped,
+                            query.get("goal", [""])[0]))
+                    except (OSError, ValueError, RuntimeError) as exc:
+                        self._send(200, {"ok": False,
+                                         "error": str(exc)[:200]})
+            elif self.path.split("?", 1)[0] == "/api/goal-page/events":
+                self._stream_goal_events()
             elif self.path.split("?", 1)[0] == "/api/tree":
                 # The project's files, for the overview's file pane. Where
                 # the project is comes from the chat's manifest; a workspace
@@ -4588,6 +4884,91 @@ class H(BaseHTTPRequestHandler):
         finally:
             self._finish_request()
 
+    def _stream_goal_events(self):
+        """Server-sent events for the goal page.
+
+        One `change` event carrying the goals' revision at the start and
+        another each time the revision changes; a comment line every few
+        seconds keeps the connection known to be alive. The stream ends
+        when the browser goes or the server closes. An open stream is an
+        active request, so a workspace with a page open does not expire.
+        """
+        events = getattr(self.server, "goal_events", None)
+        if events is None or events.closed:
+            self._send(503, {"ok": False, "error": "server is shutting down"})
+            return
+        stream = events.subscribe()
+        try:
+            try:
+                revision = _current_revision(self.server.trajdir,
+                                             self.server.chat_scoped)
+            except (OSError, ValueError, RuntimeError):
+                revision = None
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(b"retry: 2000\n\n")
+            self._send_event(revision)
+            sent = revision
+            while not events.closed:
+                try:
+                    revision = stream.get(timeout=SSE_PING_SECONDS)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+                    continue
+                if revision is None:
+                    break
+                # The watcher's first look republishes the revision this
+                # stream opened on; a revision already sent is not news.
+                if revision == sent:
+                    continue
+                self._send_event(revision)
+                sent = revision
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+        finally:
+            events.unsubscribe(stream)
+
+    def _send_event(self, revision):
+        data = json.dumps({"revision": revision})
+        self.wfile.write(("event: change\ndata: %s\n\n" % data).encode())
+        self.wfile.flush()
+
+    def _apply_goal_page_op(self, body):
+        """The goal page's writes: the operations it may send, through the
+        same _apply the workspace uses, with the goals' revision after the
+        write laid on the answer so the page knows the change as its own."""
+        if not isinstance(body, dict):
+            self._send(400, {"ok": False, "error": "expected an operation"})
+            return
+        if getattr(self.server, "shared_project", None):
+            self._send(200, {"ok": False,
+                             "error": "this is a shared workspace"})
+            return
+        kind = str(body.get("op") or "")
+        if kind not in GOAL_PAGE_OPS:
+            self._send(200, {"ok": False, "error":
+                             "not an operation of the goal page: " + kind[:60]})
+            return
+        with self.server.state_lock:
+            try:
+                result = _apply(body, self.server.trajdir,
+                                self.server.chat_scoped)
+            except (OSError, ValueError, RuntimeError) as exc:
+                result = {"ok": False, "error": str(exc)[:200]}
+            if isinstance(result, dict):
+                try:
+                    result["revision"] = _current_revision(
+                        self.server.trajdir, self.server.chat_scoped)
+                except (OSError, ValueError, RuntimeError):
+                    result["revision"] = None
+        events = getattr(self.server, "goal_events", None)
+        if events is not None and isinstance(result, dict):
+            events.publish(result.get("revision"))
+        self._send(200, result)
+
     def _take_attachment(self):
         """A screenshot pasted into a TODO row: the image bytes, as sent.
 
@@ -4741,6 +5122,9 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/account/sign-out":
                 self._send(200, sign_out(engelbart_cli()))
+                return
+            if self.path == "/api/goal-page/op":
+                self._apply_goal_page_op(body)
                 return
             if self.path == "/api/op":
                 if not isinstance(body, dict):
@@ -4964,6 +5348,15 @@ def _configure_server(server, trajdir, chat_scoped, follow=True,
     server.idle_expired = False
     server.follow_stop = threading.Event()
     server.follow_thread = None
+    # The goal page's change feed: every open /api/goal-page/events stream
+    # hears a new revision when the goal files change under this server.
+    server.goal_events = GoalEvents()
+    server.goal_watch_thread = None
+    if not shared_project:
+        server.goal_watch_thread = threading.Thread(
+            target=_watch_goal_files, args=(server, server.goal_events),
+            daemon=True, name="hc-watch-goals")
+        server.goal_watch_thread.start()
     if chat_scoped and follow:
         # The prompts this workspace offers are the chat's own turns. They
         # used to arrive only through the hooks -- which go quiet the moment

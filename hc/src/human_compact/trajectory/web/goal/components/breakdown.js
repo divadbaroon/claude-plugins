@@ -7,7 +7,7 @@ export function renderBreakdown(state, actions) {
     h("div", { class: "rail-label" }, "Breakdown"),
     state.subgoals.map((subgoal) =>
       renderSubgoal(subgoal, subgoal.id === state.activeId, actions)),
-    state.status === "ready" && (state.addingSubgoal
+    state.status === "ready" && state.goal && (state.addingSubgoal
       ? renderAddInput(state, actions)
       : renderAddButton(actions)));
 }

@@ -1,11 +1,21 @@
 /* What the reader can do on the goal page, each one a change to the store
    and, where something is worth keeping, a call across the service
-   boundary. Components call these and never touch the store themselves. */
+   boundary. Components call these and never touch the store themselves.
 
-import { EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos } from "./store.js";
+   The store is the page's copy of the goal; the server's files are the
+   truth. Every write lands in the store at once and goes to the server
+   behind it; every change the server hears of -- from this page or any
+   other writer -- comes back through the change feed as a revision, and
+   the page reads the goal again unless the revision is one it made. */
+
+import {
+  EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder,
+} from "./store.js";
 
 const NOTES_SAVE_DELAY_MS = 400;
+const TODO_SAVE_DELAY_MS = 400;
 const SIGN_IN_POLL_MS = 2000;
+const REVISIONS_KEPT = 8;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -13,12 +23,27 @@ export function createActions(store, services) {
   const { get, set } = store;
   let seq = 0;
   const nextId = (prefix) => `${prefix}-${(seq += 1)}`;
-  const notesTimers = new Map();
-  let signInRun = 0;   // the sign-in attempt that is current
+  const notesTimers = new Map();   // subgoal id -> the save waiting on its notes
+  const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
+  let signInRun = 0;               // the sign-in attempt that is current
+  let wanted = "";                 // the goal the address names, if any
+  let loadRun = 0;                 // the load whose answer is current
+  let watcher = null;              // the open change feed
+  const seen = [];                 // the last revisions this page loaded or made
+
+  // A revision this page has already seen -- loaded, or made by one of its
+  // own writes -- is not news when the change feed carries it.
+  function saw(revision) {
+    if (!revision) return;
+    seen.push(revision);
+    while (seen.length > REVISIONS_KEPT) seen.shift();
+  }
 
   // A write the page does not wait on: the store already holds the change.
   function persist(promise) {
-    promise.catch((error) => console.error("engelbart: a write failed", error));
+    promise
+      .then((answer) => saw(answer && answer.revision))
+      .catch((error) => console.error("engelbart: a write failed", error));
   }
 
   function changeSlice(id, change) {
@@ -35,29 +60,83 @@ export function createActions(store, services) {
     }
   }
 
-  async function boot() {
-    loadAccount();   // beside the goal, never ahead of it
-    try {
-      const loaded = await services.loadGoal();
-      const slices = {};
-      for (const [id, slice] of Object.entries(loaded.slices || {})) {
-        slices[id] = { ...EMPTY_SLICE, ...slice };
+  // The store with what the server now holds laid under what the reader is
+  // in the middle of: the subgoal they are on, the message they are typing,
+  // the notes or todo text a save is still waiting on, and the conversation,
+  // which the server does not keep yet.
+  function merge(state, loaded) {
+    const slices = {};
+    for (const [id, incoming] of Object.entries(loaded.slices || {})) {
+      const slice = { ...EMPTY_SLICE, ...incoming };
+      const held = state.slices[id];
+      if (held) {
+        slice.chat = held.chat;
+        slice.draft = held.draft;
+        slice.newTodo = held.newTodo;
+        slice.todosShown = held.todosShown;
+        if (notesTimers.has(id)) slice.notes = held.notes;
+        slice.todos = slice.todos.map((todo) => {
+          if (!todoTimers.has(`${id}/${todo.id}`)) return todo;
+          const mine = held.todos.find((t) => t.id === todo.id);
+          return mine ? { ...todo, text: mine.text } : todo;
+        });
       }
-      set({
-        status: "ready",
-        goal: loaded.goal,
-        subgoals: loaded.subgoals,
-        activeId: loaded.subgoals.length ? loaded.subgoals[0].id : null,
-        slices,
-      });
+      slices[id] = slice;
+    }
+    const subgoals = loaded.subgoals || [];
+    const kept = subgoals.some((subgoal) => subgoal.id === state.activeId);
+    return {
+      ...state,
+      status: "ready",
+      goal: loaded.goal,
+      empty: !loaded.goal,
+      subgoals,
+      activeId: kept ? state.activeId : (subgoals.length ? subgoals[0].id : null),
+      slices,
+      revision: loaded.revision,
+    };
+  }
+
+  // Read the goal again and lay it under the page. Only the newest load
+  // draws; an answer that arrives after a later one asked is dropped.
+  async function refresh() {
+    const run = (loadRun += 1);
+    let loaded;
+    try {
+      loaded = await services.loadGoal({ goalId: wanted });
+    } catch (error) {
+      console.error("engelbart: the goal did not load", error);
+      if (get().status === "loading") set({ status: "failed" });
+      return;
+    }
+    if (run !== loadRun) return;
+    saw(loaded.revision);
+    set((state) => merge(state, loaded));
+    if (loaded.goal && !get().preview) loadPanes(loaded.goal.id);
+  }
+
+  async function loadPanes(goalId) {
+    try {
       const [preview, terminal] = await Promise.all([
-        services.getPreview({ goalId: loaded.goal.id }),
-        services.getTerminal({ goalId: loaded.goal.id }),
+        services.getPreview({ goalId }),
+        services.getTerminal({ goalId }),
       ]);
       set({ preview, terminal });
     } catch (error) {
-      console.error("engelbart: the goal did not load", error);
-      set({ status: "failed" });
+      console.error("engelbart: the panes did not load", error);
+    }
+  }
+
+  async function boot() {
+    loadAccount();   // beside the goal, never ahead of it
+    wanted = new URLSearchParams(window.location.search).get("goal") || "";
+    await refresh();
+    if (!watcher && services.watchGoal) {
+      watcher = services.watchGoal({
+        onChange: (revision) => {
+          if (!seen.includes(revision)) refresh();
+        },
+      });
     }
   }
 
@@ -125,8 +204,30 @@ export function createActions(store, services) {
     }
   }
 
+  // A workspace with no goal yet: the line typed becomes the goal at the
+  // top of the tree, and the page is about it from then on.
+  function editGoalDraft(text) {
+    set({ goalDraft: text });
+  }
+
+  async function commitCreateGoal() {
+    const title = get().goalDraft.trim();
+    if (!title) return;
+    set({ goalDraft: "" });
+    try {
+      const made = await services.createGoal({ title });
+      saw(made.revision);
+    } catch (error) {
+      console.error("engelbart: the goal could not be made", error);
+      set({ goalDraft: title });
+      return;
+    }
+    await refresh();
+    if (get().goal) set({ addingSubgoal: true, subgoalDraft: "" });
+  }
+
   function selectSubgoal(id) {
-    set({ activeId: id, tab: "plan" });
+    set({ activeId: id, tab: "plan", buildNote: null });
   }
 
   function showTab(tab) {
@@ -151,10 +252,19 @@ export function createActions(store, services) {
     const title = state.subgoalDraft.trim();
     set({ addingSubgoal: false, subgoalDraft: "" });
     if (!title || !state.goal) return;
-    const subgoal = await services.addSubgoal({ goalId: state.goal.id, title });
+    let subgoal;
+    try {
+      subgoal = await services.addSubgoal({ goalId: state.goal.id, title });
+    } catch (error) {
+      console.error("engelbart: the subgoal could not be added", error);
+      return;
+    }
+    saw(subgoal.revision);
     set((current) => ({
       ...current,
-      subgoals: [...current.subgoals, { id: subgoal.id, title: subgoal.title }],
+      subgoals: current.subgoals.some((s) => s.id === subgoal.id)
+        ? current.subgoals
+        : [...current.subgoals, { id: subgoal.id, title: subgoal.title, status: "active" }],
       activeId: subgoal.id,
       tab: "plan",
     }));
@@ -196,16 +306,28 @@ export function createActions(store, services) {
     changeSlice(id, (current) => ({ chat: [...current.chat, answer] }));
   }
 
+  // A row laid on the list once: a refresh that arrived first may have
+  // brought it already, and a line the subgoal had comes back as that row.
+  function withRow(todos, todo) {
+    if (todos.some((t) => t.id === todo.id)) return todos;
+    return [...todos, { id: todo.id, text: todo.text, done: Boolean(todo.done), status: todo.status || "" }];
+  }
+
   async function acceptProposal(messageId) {
     const state = get();
     const id = state.activeId;
     const message = sliceOf(state, id).chat.find((m) => m.id === messageId);
     if (!message || message.kind !== "proposal" || message.added) return;
-    const todo = await services.addTodo({
-      subgoalId: id, text: message.text, source: { messageId },
-    });
+    let todo;
+    try {
+      todo = await services.addTodo({ subgoalId: id, text: message.text, source: { messageId } });
+    } catch (error) {
+      console.error("engelbart: the todo could not be added", error);
+      return;
+    }
+    saw(todo.revision);
     changeSlice(id, (current) => ({
-      todos: [...current.todos, todo],
+      todos: withRow(current.todos, todo),
       todosShown: true,
       chat: current.chat.map((m) => (m.id === messageId ? { ...m, added: true, todoId: todo.id } : m)),
     }));
@@ -220,24 +342,39 @@ export function createActions(store, services) {
   function toggleTodo(todoId) {
     const id = get().activeId;
     const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo) return;
+    if (!todo || isWithBuilder(todo)) return;
     const done = !todo.done;
     changeSlice(id, (current) => ({
-      todos: current.todos.map((t) => (t.id === todoId ? { ...t, done } : t)),
+      todos: current.todos.map((t) => (t.id === todoId ? { ...t, done, status: done ? "done" : "" } : t)),
     }));
     persist(services.updateTodo({ subgoalId: id, todoId, patch: { done } }));
   }
 
+  // The text lands in the store on every keystroke and goes to the server
+  // once the reader pauses, like the notes.
   function editTodo(todoId, text) {
     const id = get().activeId;
+    const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
+    if (!todo || isWithBuilder(todo)) return;
     changeSlice(id, (current) => ({
       todos: current.todos.map((t) => (t.id === todoId ? { ...t, text } : t)),
     }));
-    persist(services.updateTodo({ subgoalId: id, todoId, patch: { text } }));
+    const key = `${id}/${todoId}`;
+    clearTimeout(todoTimers.get(key));
+    todoTimers.set(key, setTimeout(() => {
+      todoTimers.delete(key);
+      const row = sliceOf(get(), id).todos.find((t) => t.id === todoId);
+      if (row) persist(services.updateTodo({ subgoalId: id, todoId, patch: { text: row.text } }));
+    }, TODO_SAVE_DELAY_MS));
   }
 
   function removeTodo(todoId) {
     const id = get().activeId;
+    const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
+    if (!todo || isWithBuilder(todo)) return;
+    const key = `${id}/${todoId}`;
+    clearTimeout(todoTimers.get(key));
+    todoTimers.delete(key);
     changeSlice(id, (current) => ({ todos: current.todos.filter((t) => t.id !== todoId) }));
     persist(services.removeTodo({ subgoalId: id, todoId }));
   }
@@ -253,41 +390,42 @@ export function createActions(store, services) {
     const text = sliceOf(state, id).newTodo.trim();
     if (!id || !text) return;
     changeSlice(id, { newTodo: "" });
-    const todo = await services.addTodo({ subgoalId: id, text, source: null });
-    changeSlice(id, (current) => ({ todos: [...current.todos, todo] }));
+    let todo;
+    try {
+      todo = await services.addTodo({ subgoalId: id, text, source: null });
+    } catch (error) {
+      console.error("engelbart: the todo could not be added", error);
+      changeSlice(id, { newTodo: text });
+      return;
+    }
+    saw(todo.revision);
+    changeSlice(id, (current) => ({ todos: withRow(current.todos, todo) }));
   }
 
+  // Build all hands the subgoal's open rows to the builder. What happens to
+  // them from there is the server's to say: it marks them as it takes them,
+  // and the page reads the goal again to show it. A build that cannot start
+  // says why, under the button.
   async function buildAll() {
     const state = get();
     const id = state.activeId;
     const slice = sliceOf(state, id);
     if (!id || state.building || !hasOpenTodos(slice)) return;
-    set({ building: id });
-    let result;
+    set({ building: id, buildNote: null });
     try {
-      result = await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: slice.todos });
+      const answer = await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: slice.todos });
+      saw(answer.revision);
     } catch (error) {
-      console.error("engelbart: the build did not start", error);
-      set({ building: null });
+      set({ building: null, buildNote: { text: String((error && error.message) || error), error: true } });
       return;
     }
-    const built = new Set(result.todoIds);
-    set((current) => {
-      const index = current.subgoals.findIndex((s) => s.id === id);
-      const next = current.subgoals[Math.min(index + 1, current.subgoals.length - 1)];
-      return {
-        ...withSlice(current, id, (s) => ({
-          todos: s.todos.map((t) => (built.has(t.id) ? { ...t, done: true } : t)),
-        })),
-        building: null,
-        activeId: next ? next.id : current.activeId,
-        tab: "plan",
-      };
-    });
+    await refresh();
+    set({ building: null });
   }
 
   return {
-    boot, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
+    boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
+    editGoalDraft, commitCreateGoal,
     selectSubgoal, showTab,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editNotes, editDraft, sendMessage, acceptProposal,

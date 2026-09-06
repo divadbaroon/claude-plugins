@@ -1,12 +1,17 @@
 /* The todos of the selected subgoal: each one toggled, edited in place or
-   removed; a row to add one; and Build all. */
+   removed; a row to add one; and Build all. A row the builder holds says
+   so and is left alone until it comes back. */
 
 import { h } from "../dom.js";
-import { activeSlice, hasOpenTodos } from "../store.js";
+import { activeSlice, hasOpenTodos, anyWithBuilder, isWithBuilder } from "../store.js";
+
+// What a row says beside its text while it is not the reader's to edit,
+// and when it came back needing another go.
+const STATUS_LABELS = { queued: "queued", building: "building…", asking: "asking", failed: "failed" };
 
 export function renderTodos(state, actions) {
   const slice = activeSlice(state);
-  const building = state.building === state.activeId;
+  const building = state.building === state.activeId || anyWithBuilder(slice);
   const canBuild = hasOpenTodos(slice) && !state.building;
   return h("div", { key: "todos", class: "todos" },
     h("div", { class: "section-head" },
@@ -34,6 +39,9 @@ export function renderTodos(state, actions) {
           },
         })),
       h("div", { key: "todo-actions", class: "todos-actions" },
+        state.buildNote && h("span", {
+          class: state.buildNote.error ? "build-note is-error" : "build-note", role: "status",
+        }, state.buildNote.text),
         h("button", {
           type: "button",
           class: "build-btn",
@@ -44,12 +52,17 @@ export function renderTodos(state, actions) {
 }
 
 function renderTodo(todo, actions) {
-  return h("div", { key: todo.id, class: todo.done ? "todo is-done" : "todo" },
+  const held = isWithBuilder(todo);
+  const label = STATUS_LABELS[todo.status];
+  const classes = ["todo", todo.done && "is-done", held && "is-held",
+    todo.status === "failed" && "is-failed"].filter(Boolean).join(" ");
+  return h("div", { key: todo.id, class: classes },
     h("button", {
       type: "button",
       class: "todo-mark",
       "aria-label": todo.done ? "Mark as not done" : "Mark as done",
       "aria-pressed": todo.done ? "true" : "false",
+      disabled: held || null,
       onclick: () => actions.toggleTodo(todo.id),
     }, "–"),
     h("input", {
@@ -57,10 +70,12 @@ function renderTodo(todo, actions) {
       type: "text",
       spellcheck: "false",
       "aria-label": "Todo",
+      readonly: held || null,
       value: todo.text,
       oninput: (event) => actions.editTodo(todo.id, event.target.value),
     }),
-    h("button", {
+    label && h("span", { class: `todo-status is-${todo.status}` }, label),
+    !held && h("button", {
       type: "button",
       class: "todo-remove",
       "aria-label": "Remove todo",

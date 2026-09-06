@@ -1,36 +1,27 @@
 /* The boundary between the goal page and everything behind it.
 
-   Every function here is the shape a real service will take -- the goal
-   store, the Bart runtime, the builder, the preview server, the terminal.
+   Every function here takes one object of named arguments and returns a
+   promise, so nothing above this file knows where an answer comes from.
+
+   The goal store is real. loadGoal reads GET /api/goal-page; the writes go
+   through POST /api/goal-page/op -- the same operations the workspace at
+   /legacy applies, to the same goals.json -- and watchGoal opens the
+   server's event stream, which carries the goals' revision whenever the
+   files change on disk: the chat writing goals while the reader talks, a
+   build marking a row, a sync. Every write answers with the revision it
+   made, so the page can tell its own changes from everyone else's.
+
    The account is real: loadAccount asks the server who this machine is
    connected as, and signOut / startSignIn run `engelbart logout` and
-   `engelbart auth` through it. The rest are mocked: their answers are the
-   example content of the design, held in memory for the life of the page.
-   Replace the bodies and keep the signatures; nothing above this file
-   knows the difference.
+   `engelbart auth` through it.
 
-   Each function takes one object of named arguments and returns a promise,
-   so the swap to a fetch is a change inside the function alone. */
+   Still mocked: Bart's replies, the preview and the terminal. Their answers
+   are the example content of the design, held in memory for the life of
+   the page. Replace the bodies and keep the signatures. */
+
+import { WITH_BUILDER } from "./store.js";
 
 const REPLY_DELAY_MS = 900;
-const BUILD_DELAY_MS = 700;
-
-const GOAL = { id: "g-1", title: "Create an interface to import the dataset" };
-
-const SUBGOALS = [
-  { id: "s-1", title: "Create a blank interface with an import button" },
-  { id: "s-2", title: "Save the dataset locally to my project folder" },
-  { id: "s-3", title: "Allow me to inspect the dataset in a CSV viewer" },
-];
-
-const SLICES = {
-  "s-1": {
-    todos: [
-      { id: "t-1", text: "Create a blank interface", done: false },
-      { id: "t-2", text: "Add an import button", done: false },
-    ],
-  },
-};
 
 const PREVIEW = {
   host: "localhost:5173",
@@ -52,22 +43,33 @@ const TERMINAL = {
 const QUESTION = "Imagine this subgoal is done — what is the first thing you would see or click?";
 const LEADING_INTENT = /^(i want to|i need to|i should|let me|allow me to)\s+/i;
 
-// Ids minted here start past every id the seeds above use.
-let seq = 100;
-const nextId = (prefix) => `${prefix}-${(seq += 1)}`;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const copy = (value) => JSON.parse(JSON.stringify(value));
 
+async function get(path) {
+  const response = await fetch(path, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`${path} answered ${response.status}`);
+  return response.json();
+}
+
 // A write to the server. JSON in, JSON out; the media type is what lets
 // the server tell the page apart from any other site's form.
-async function post(path) {
+async function post(path, body = {}) {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: "{}",
+    body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`${path} answered ${response.status}`);
   return response.json();
+}
+
+// One operation on the goals. The server refuses with a reason when it
+// cannot be applied: a row the builder holds, a goal that is gone.
+async function op(operation) {
+  const answer = await post("/api/goal-page/op", operation);
+  if (!answer.ok) throw new Error(answer.error || `${operation.op} was refused`);
+  return answer;
 }
 
 export const services = {
@@ -75,9 +77,7 @@ export const services = {
       installer wrote (auth.json under ~/.human-compact) and answers; the
       page never holds a token of its own. */
   async loadAccount() {
-    const response = await fetch("/api/supabase", { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`account status answered ${response.status}`);
-    const status = await response.json();
+    const status = await get("/api/supabase");
     return {
       connected: Boolean(status.connected),
       signedIn: Boolean(status.signed_in),
@@ -104,27 +104,46 @@ export const services = {
   },
 
   async signInStatus() {
-    const response = await fetch("/api/account/sign-in", { headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`sign-in status answered ${response.status}`);
-    return response.json();
+    return get("/api/account/sign-in");
   },
 
   async cancelSignIn() {
     return post("/api/account/sign-in/cancel");
   },
 
-  /** The goal this page is about, its subgoals, and what each already holds. */
-  async loadGoal() {
-    return copy({ goal: GOAL, subgoals: SUBGOALS, slices: SLICES });
+  /** The goal this page is about, its subgoals, and what each already
+      holds. goalId is the goal the address names, or empty for whichever
+      this workspace is most recently about. A workspace with no goal
+      answers goal null and empty true. */
+  async loadGoal({ goalId } = {}) {
+    const query = goalId ? `?goal=${encodeURIComponent(goalId)}` : "";
+    const answer = await get(`/api/goal-page${query}`);
+    if (!answer.ok) throw new Error(answer.error || "the goal could not be read");
+    return {
+      goal: answer.goal,
+      subgoals: answer.subgoals || [],
+      slices: answer.slices || {},
+      goals: answer.goals || [],
+      empty: Boolean(answer.empty),
+      revision: answer.revision,
+    };
+  },
+
+  /** A goal at the top of the tree, for a workspace that has none yet. */
+  async createGoal({ title }) {
+    const answer = await op({ op: "add_goal", title });
+    return { id: answer.id, title, revision: answer.revision };
   },
 
   /** A new subgoal under the goal; answers with the record as stored. */
   async addSubgoal({ goalId, title }) {
-    return { id: nextId("s"), title, goalId };
+    const answer = await op({ op: "add_goal", title, parent_goal_id: goalId });
+    return { id: answer.id, title, goalId, revision: answer.revision };
   },
 
   async saveNotes({ subgoalId, text }) {
-    return { subgoalId, length: text.length };
+    const answer = await op({ op: "set_notes", goal_id: subgoalId, notes: text });
+    return { subgoalId, revision: answer.revision };
   },
 
   /** Bart's reply to one message, in the conversation of one subgoal.
@@ -139,23 +158,57 @@ export const services = {
   },
 
   /** A todo on a subgoal, typed or accepted from a proposal (source names
-      the proposing message). Answers with the row as stored. */
+      the proposing message). Answers with the row as stored; a line the
+      subgoal already has comes back as that row, marked existing. */
   async addTodo({ subgoalId, text, source }) {
-    return { id: nextId("t"), text, done: false };
+    const answer = await op({ op: "add_todo_row", goal_id: subgoalId, text });
+    return { ...answer.row, existing: Boolean(answer.existing), revision: answer.revision };
   },
 
+  /** One change to a row: { text } or { done }. Refused while the builder
+      holds the row. */
   async updateTodo({ subgoalId, todoId, patch }) {
-    return { subgoalId, todoId, patch };
+    let answer = null;
+    if ("text" in patch) {
+      answer = await op({ op: "set_todo_text", goal_id: subgoalId, id: todoId, text: patch.text });
+    }
+    if ("done" in patch) {
+      answer = await op({ op: "set_todo_done", goal_id: subgoalId, id: todoId, done: Boolean(patch.done) });
+    }
+    return { subgoalId, todoId, row: answer && answer.row, revision: answer && answer.revision };
   },
 
   async removeTodo({ subgoalId, todoId }) {
-    return { subgoalId, todoId };
+    const answer = await op({ op: "remove_todo_row", goal_id: subgoalId, id: todoId });
+    return { subgoalId, todoId, revision: answer.revision };
   },
 
-  /** Build every open todo of a subgoal. Answers with the ones it built. */
+  /** Hand every open todo of a subgoal to the builder. The server marks
+      the rows as it takes them, so the goal's files change and the page
+      hears it. Answers with the rows handed over; refused with the
+      builder's reason when the build cannot start. */
   async startBuild({ goalId, subgoalId, todos }) {
-    await wait(BUILD_DELAY_MS);
-    return { status: "built", todoIds: todos.filter((todo) => !todo.done).map((todo) => todo.id) };
+    const ids = todos
+      .filter((todo) => !todo.done && !WITH_BUILDER.has(todo.status))
+      .map((todo) => todo.id);
+    const answer = await op({ op: "build_todos", goal_id: subgoalId, ids });
+    return { started: true, todoIds: answer.rows || ids, revision: answer.revision };
+  },
+
+  /** The server's change feed: onChange(revision) each time the goals'
+      revision changes, whoever changed them. The browser reconnects a
+      dropped stream on its own. Returns { close }. */
+  watchGoal({ onChange }) {
+    const source = new EventSource("/api/goal-page/events");
+    source.addEventListener("change", (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data && data.revision) onChange(data.revision);
+      } catch (error) {
+        console.error("engelbart: a change event could not be read", error);
+      }
+    });
+    return { close: () => source.close() };
   },
 
   /** Where the goal's app is running, or the placeholder to draw instead. */
