@@ -81,18 +81,45 @@ class TodoWorkspaceBrowserTests(BrowserCase):
             self.emit('verify.passed',[self.rows[1]['id']]);self.expect(second.locator('.todo-status')).to_have_text('Done');self.expect(second.get_by_label('Build activity')).to_have_count(0)
             self.assertEqual([],errors)
 
-    def test_explicit_subgoal_and_top_completion_guard_and_reload(self):
+    def test_subgoal_completion_icons_selection_guard_and_reload(self):
         with server_for(self.chat) as url,self.page_on(url) as (page,errors):
+            self.expect(page.get_by_role('button',name='Complete goal',exact=True)).to_have_count(0)
+            self.expect(page.get_by_role('button',name='Reopen goal',exact=True)).to_have_count(0)
             complete=page.get_by_role('button',name='Complete subgoal: '+self.rows_title(),exact=True)
+            self.expect(complete).to_have_attribute('aria-pressed','false')
+            self.expect(complete).to_have_text('')
+            self.assertGreater(float(complete.evaluate('(el)=>parseFloat(getComputedStyle(el).borderTopWidth)')),0)
+            footprint=complete.bounding_box()
+            # Selecting another title never toggles its completion. Completing
+            # the first subgoal must not steal that selection either.
+            second=page.locator('.sub-title').nth(1);second.click()
+            self.expect(second).to_have_attribute('aria-current','true')
+            self.expect(page.locator('.sub-mark[aria-pressed="true"]')).to_have_count(0)
             complete.click()
-            reopen=page.get_by_role('button',name='Reopen subgoal: '+self.rows_title(),exact=True);self.expect(reopen).to_be_visible()
-            page.reload();self.expect(reopen).to_be_visible();reopen.click();self.expect(complete).to_be_visible()
-            top=page.get_by_role('button',name='Complete goal',exact=True);top.click();self.expect(page.get_by_role('button',name='Reopen goal',exact=True)).to_be_visible()
-            page.get_by_role('button',name='Reopen goal',exact=True).click();self.expect(top).to_be_visible()
+            reopen=page.get_by_role('button',name='Reopen subgoal: '+self.rows_title(),exact=True)
+            self.expect(reopen).to_have_attribute('aria-pressed','true')
+            self.expect(reopen).to_have_text('✓')
+            self.expect(second).to_have_attribute('aria-current','true')
+            self.assertEqual('0px',reopen.evaluate('(el)=>getComputedStyle(el).borderTopWidth'))
+            for dimension in ['width','height']:
+                self.assertEqual(footprint[dimension],reopen.bounding_box()[dimension])
+            page.reload();self.expect(reopen).to_be_visible()
+            reopen.click();self.expect(complete).to_be_visible()
+            page.reload();self.expect(complete).to_have_attribute('aria-pressed','false')
             for kind in ['build.started','verify.started','build.repair_requested','chat.needs_human']:
-                self.emit(kind);self.expect(complete).to_be_disabled();self.expect(top).to_be_disabled()
-                answer=post_json(url+'/api/goal-page/op',{'op':'set_status','goal_id':self.goal,'status':'completed'},{'Origin':url})
+                self.emit(kind);self.expect(complete).to_be_disabled()
+                answer=post_json(url+'/api/goal-page/op',{'op':'set_status','goal_id':self.subs[0],'status':'completed'},{'Origin':url})
                 self.assertFalse(answer['ok'])
+            self.assertEqual([],errors)
+
+    def test_completed_top_goal_has_no_header_completion_control(self):
+        goals,important=self.goals();GM.by_id(goals,self.goal)['status']='completed'
+        CS.save_goals('chat',goals,important,self.root)
+        with server_for(self.chat) as url,self.page_on(url) as (page,errors):
+            self.expect(page.locator('.header')).to_be_visible()
+            self.expect(page.get_by_role('button',name='Complete goal',exact=True)).to_have_count(0)
+            self.expect(page.get_by_role('button',name='Reopen goal',exact=True)).to_have_count(0)
+            self.expect(page.locator('button.sub-mark')).to_have_count(len(self.subs))
             self.assertEqual([],errors)
 
     def rows_title(self):

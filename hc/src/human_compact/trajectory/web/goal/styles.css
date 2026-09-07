@@ -333,14 +333,13 @@ textarea.todo-text { display:block; resize:none; overflow:hidden; overflow-wrap:
 .todo-activity { margin:0 0 12px 22px; padding-top:6px; border-top:1px solid var(--bd); color:var(--fnt); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
 .build-btn.is-secondary { background:none; color:var(--fnt); font-size:12px; padding:6px 0; }
 .sub-title { flex:1; min-width:0; border:0; padding:0; background:none; text-align:left; cursor:pointer; font:inherit; overflow-wrap:anywhere; }
-button.sub-mark { flex:none; padding:0; background:none; cursor:pointer; color:var(--ink); font-size:12px; }
+button.sub-mark { flex:none; padding:0; background:none; cursor:pointer; color:var(--ink); font-size:14px; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
+button.sub-mark[aria-pressed="true"] { border:0; border-radius:0; }
 button.sub-mark:disabled { cursor:default; opacity:.4; }
-.goal-complete { white-space:nowrap; margin-left:auto; }
 @media(max-width:700px) {
  .resize-divider { display:none; }
  .columns.has-todos { display:flex; flex-direction:column; overflow:auto; }
  .brainstorm,.todos { flex:1 0 auto; min-height:250px; }
- .goal-complete { font-size:11px; }
 }
 
 .term-section { font-size:11px; letter-spacing:.12em; color:var(--fnt); margin-bottom:12px; }
