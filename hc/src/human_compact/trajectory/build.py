@@ -282,6 +282,8 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
         indent = "  " * int(row.get("depth") or 0)
         marker = f" [{row['id']}]" if row.get("_picked") else ""
         lines.append(f"{indent}- {row.get('text', '')}{marker}")
+        if row.get("acceptance"):
+            lines.append("  Acceptance (shared with Verifier): " + json.dumps(row["acceptance"]))
         # A row the reader reopened carries every earlier run's verdict and
         # what they said was wrong with it. The work is to fix THAT, not to
         # do the row again from nothing.
@@ -1293,6 +1295,13 @@ class Run:
         # restart check after -- a small change is watched in the preview,
         # not audited.
         self.quick = False
+        self.acceptance = {}
+        self.verification_rows = []
+        self.repair_note = ""
+        from .. import telemetry
+        from .agents.trace import build_context
+        self.telemetry_context = build_context.get() or telemetry.context()
+        self.telemetry_root = self.telemetry_context.run(telemetry.current)
 
     def record(self, **extra) -> Dict[str, Any]:
         rec = load_run(self.session_id, self.root, self.goal_id) or {}
@@ -1302,6 +1311,10 @@ class Run:
             "cwd": self.cwd,
             "pid": self.process.pid if self.process else None,
             "updated_at": _now(),
+            "acceptance": self.acceptance,
+            "picked": list(self.picked),
+            "verification_rows": list(self.verification_rows or self.picked),
+            "repair_note": self.repair_note,
         })
         rec.setdefault("started_at", rec.get("updated_at"))
         rec.update(extra)
@@ -1369,7 +1382,7 @@ class Run:
                         last_message=message[-400:])
             self._say("check", "checking whether these changes go stale"
                                " without a local restart…")
-            self.thread = threading.Thread(target=self._read, daemon=True)
+            self.thread = threading.Thread(target=self.telemetry_context.copy().run, args=(self._read,), daemon=True)
             self.thread.start()
             return
         # The clock the rail shows starts again with every turn of the build,
@@ -1394,7 +1407,7 @@ class Run:
         rows = len(self.picked) or 1
         self._say("start", "carrying on" if resume else
                   "started on %d row%s" % (rows, "" if rows == 1 else "s"))
-        self.thread = threading.Thread(target=self._read, daemon=True)
+        self.thread = threading.Thread(target=self.telemetry_context.copy().run, args=(self._read,), daemon=True)
         self.thread.start()
 
     def _say(self, kind: str, text: str) -> None:
@@ -1691,11 +1704,23 @@ class Run:
         # is left waiting, and the counter starts again from there.
         if not waiting:
             self._bank()
+        # The agents hear that the build ended (agents.orchestrator): a
+        # finished build is verified, and a verdict that fails sends the row
+        # back out with the reason. When that repair went out, the goal is
+        # the repair's now -- no restart check on the run it replaced.
+        repaired = _after_finish(self, ended)
+        if not repaired and self.telemetry_root is not None and self.telemetry_root.name == "todo.build":
+            if ended == "waiting":
+                self.telemetry_root.waiting("user answer")
+            elif ended == "failed":
+                self.telemetry_root.fail(RuntimeError(self.error or "build failed"))
+            else:
+                self.telemetry_root.complete()
         # Rows an older runtime parked behind this run go out now -- unless
         # it stopped on a question, whose answer resumes this same session
         # first; they leave with the resumed run's finish instead. Rows
         # picked since the upgrade never wait: they joined the run itself.
-        if not waiting:
+        if not waiting and not repaired:
             held = _pop_later(self.session_id, self.root, self.goal_id)
             if held:
                 start(self.session_id, self.root, self.goal_id, held)
@@ -1705,6 +1730,25 @@ class Run:
                 # Finished on its own terms, with nothing behind it: the one
                 # question left is whether what it changed is what is running.
                 self._check()
+
+
+def _after_finish(run: "Run", ended: str) -> bool:
+    """Tell the agents a build ended. True when they sent a repair out on
+    this goal. The import is late and the call is guarded: the build's own
+    record is written by now, and nothing the agents do may undo it."""
+    if run.phase == "check":
+        return False
+    try:
+        from .agents import orchestrator as AGENTS, trace
+        token = trace.build_context.set(run.telemetry_context.copy())
+        try:
+            return bool(AGENTS.build_finished(
+                run.session_id, run.root, run.goal_id, ended, [rid for rid in (run.verification_rows or run.picked) if rid not in run.cancelled],
+                run_id=run.claude_session, error=run.error))
+        finally:
+            trace.build_context.reset(token)
+    except Exception:  # noqa: BLE001 -- see above
+        return False
 
 
 # A headless run takes one process per goal. Rows picked while one is out are
@@ -1880,6 +1924,9 @@ def _join(session_id: str, root: Optional[Path], goal_id: str, run: "Run",
     # One build now, for what it reports when it ends and for the rail's
     # stand-in estimate, which is made of how many rows are out.
     run.picked += [i for i in ids if i not in run.picked]
+    run.acceptance.update({r["id"]: r["acceptance"] for r in rows if r.get("acceptance")})
+    if run.verification_rows:
+        run.verification_rows += [i for i in ids if i not in run.verification_rows]
     run.picked_chars += sum(len(str(row.get("text") or "")) for row in rows)
     run.record(rows=len(run.picked))
     return {"ok": True, "joined": True, "rows": ids,
@@ -1971,6 +2018,7 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
     # What this build is, for the cost it will report when it ends: the rows
     # picked, and the text they and their children carry.
     run.picked = list(ids)
+    run.acceptance = {r["id"]: r["acceptance"] for r in rows if r.get("acceptance")}
     run.picked_chars = sum(len(str(row.get("text") or "")) for row in rows)
     try:
         run.spawn(prompt, resume=resume, model=model, effort=effort)
@@ -2077,6 +2125,8 @@ def _row_lines(goal: Dict[str, Any], ids: List[str]) -> List[str]:
         indent = "  " * int(row.get("depth") or 0)
         marker = f" [{row['id']}]" if row.get("_picked") else ""
         lines.append(f"{indent}- {row.get('text', '')}{marker}")
+        if row.get("acceptance"):
+            lines.append("  Acceptance (shared with Verifier): " + json.dumps(row["acceptance"]))
     return lines
 
 
@@ -2239,9 +2289,9 @@ REOPENABLE = ("done",)
 
 
 def reopen(session_id: str, root: Optional[Path], goal_id: str,
-           row_id: str, note: str) -> Dict[str, Any]:
+           row_id: str, note: str, verify_rows=None) -> Dict[str, Any]:
     """Send a finished row back out with what the reader says went wrong."""
-    note = " ".join(str(note or "").split())
+    note = str(note or "").strip()
     if not note:
         return {"ok": False, "error": "say what went wrong first"}
     live = _run_for(session_id, root, goal_id)
@@ -2292,8 +2342,15 @@ def reopen(session_id: str, root: Optional[Path], goal_id: str,
     run = Run(session_id, root, goal_id,
               str((record or {}).get("cwd") or _cwd_for(session_id, root)),
               str(claude_session or uuid.uuid4()))
+    run.picked = [row_id]
+    run.verification_rows = list(verify_rows or [row_id])
+    run.repair_note = note
+    prompt += "\nRepair instruction and verification evidence:\n" + note
+    run.acceptance = {r["id"]: r["acceptance"] for r in items
+                      if r.get("id") in run.verification_rows and r.get("acceptance")}
+    run.picked_chars = sum(len(str(r.get("text") or "")) for r in rows)
     try:
-        run.spawn(json.dumps({"id": row_id, "reopened": note}) if resume
+        run.spawn(json.dumps({"id": row_id, "reopened": note, "acceptance": run.acceptance}) if resume
                   else prompt, resume=resume)
     except (FileNotFoundError, OSError) as exc:
         # Back to done, with the note still on the record: nothing is lost

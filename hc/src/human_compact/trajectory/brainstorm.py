@@ -39,6 +39,7 @@ from typing import Any, Dict, List
 
 from . import goals as GM
 from . import setup_chat as SC
+from .. import telemetry as TELEMETRY
 
 # Which cards this screen draws. `focus` and `offer` are its own; the rest
 # are setup's, in the same shapes, so the modal that draws a question here
@@ -278,8 +279,9 @@ def project_context(root, cwd, raw, engine=None) -> str:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
             SC.setup_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
-        got = engine.generate_json(
-            "\n".join(CONDENSE) + "\n\n" + raw + "\n")
+        with TELEMETRY.purpose("condense"):
+            got = engine.generate_json(
+                "\n".join(CONDENSE) + "\n\n" + raw + "\n")
     except Exception:                                    # noqa: BLE001
         return raw[:CONDENSE_OVER]
     said = ""
@@ -412,6 +414,10 @@ def normalize_card(value) -> Dict[str, Any]:
             out["card"] = "none"
     if not out["say"] and out["card"] == "none":
         out["say"] = ""
+    from .agents import context as CTX
+    updates = CTX.normalize_updates(value.get("contextUpdates"), by="brainstorm")
+    if updates:
+        out["contextUpdates"] = updates
     return out
 
 
@@ -453,8 +459,9 @@ def ask(transcript, context="", engine=None, root=None,
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
             SC.setup_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
-        raw = engine.generate_json(
-            "\n".join(compose(transcript, context, extra)) + "\n")
+        with TELEMETRY.purpose("brainstorm"):
+            raw = engine.generate_json(
+                "\n".join(compose(transcript, context, extra)) + "\n")
     except PROVIDERS.ProviderError as exc:
         return {"ok": False,
                 "error": " ".join(str(exc).split())[:200] + SC.credit_note()}

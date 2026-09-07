@@ -72,6 +72,7 @@ async function op(operation) {
 }
 
 export const services = {
+  recordInteraction(event) { return post("/api/goal-page/interaction", event); },
   /** Who this machine is connected as. The server reads the account the
       installer wrote (auth.json under ~/.human-compact) and answers; the
       page never holds a token of its own. */
@@ -262,7 +263,7 @@ export const services = {
   async getPanes({ subgoalId }) {
     const answer = await get(`/api/goal-page/panes?goal=${encodeURIComponent(subgoalId || "")}`);
     if (!answer.ok) throw new Error(answer.error || "the panes could not be read");
-    return { preview: answer.preview, build: answer.build };
+    return { preview: answer.preview, build: answer.build, chat: answer.chat || [] };
   },
 
   /** One of the preview's operations -- preview_configure, preview_show_ui,

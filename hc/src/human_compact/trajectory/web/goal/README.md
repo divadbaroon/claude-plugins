@@ -88,3 +88,19 @@ The preview and the terminal are still the design's example content, held
 in memory for the life of the page.
 
 The workspace this page replaced still answers at `/legacy`.
+
+## What answers Bart
+
+A message to Bart is routed before a model sees it (`trajectory/agents/`,
+its README has the flow). An ordinary message is answered by the Chat
+agent -- prose, at most a row or two proposed. A message that asks for
+options in so many words goes to the brainstorm, and one that asks for the
+piece to be planned goes to the Path agent; both answer as proposals the
+reader can add. When the Chat agent finds the message turns on a
+preference only the reader can settle, the brainstorm puts that question
+to them; when it turns on a fact of the project, the project directory is
+read and nobody is asked. A build the page starts is verified when it
+ends, and a verdict that fails sends the row back out with the reason,
+twice, before Bart says so in the conversation. Every interaction is
+written to the chat's `agent_events.jsonl`; only the transitions above
+reach the Overseer.

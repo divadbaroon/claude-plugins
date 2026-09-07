@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -149,6 +150,10 @@ def goal(gid, title, **fields):
 
 class BuildRunTests(unittest.TestCase):
     def setUp(self):
+        from human_compact.trajectory.agents import overseer
+        route = mock.patch.object(overseer, "_model", return_value={})
+        route.start()
+        self.addCleanup(route.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -404,7 +409,7 @@ class ReopenTests(BuildRunTests):
         self.assertIn("--resume", calls[1]["args"],
                       "the session that did run 1 is the one told what was wrong")
         self.assertEqual(
-            {"id": "taaaa0001",
+            {"id": "taaaa0001", "acceptance": {},
              "reopened": "truncation still happens in the subagent path"},
             json.loads(calls[1]["prompt"]))
         # The goal it belongs to is working again, not finished.
@@ -1719,7 +1724,7 @@ class RestartCheckTests(BuildRunTests):
             lambda: self.rows()["taaaa0003"][0] == "done", seconds=15))
         # build, check (stopped), build, check: the second build opened
         # fresh, on the check's ruins rather than behind it.
-        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 4, seconds=12))
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 4, seconds=12), self.prompts())
         self.assertNotIn("--resume", self.prompts()[2]["args"])
 
     def test_a_reopen_ends_the_check_and_takes_the_session(self):

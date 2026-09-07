@@ -24,6 +24,8 @@ import threading
 import time
 from typing import Any, Dict, Optional, Set
 
+from .. import telemetry as TELEMETRY
+
 # Long enough that a sentence being typed is one send, short enough that
 # closing the laptop straight after a thought does not lose it.
 DEFAULT_DELAY = 4.0
@@ -89,19 +91,27 @@ def _key(root, cwd) -> str:
     return f"{root or ''}\x00{cwd or ''}"
 
 
-def schedule(root, cwd, _delay: Optional[float] = None) -> bool:
-    """Arm the send, and disarm whatever was armed for this project."""
+def schedule(root, cwd, _delay: Optional[float] = None,
+             tracer=None, run=None) -> bool:
+    """Arm the send, and disarm whatever was armed for this project.
+
+    The send happens on a timer's thread, minutes after the request that
+    armed it: the tracer and the run of that request are carried along, so
+    the send is recorded under the same workspace, as a trace of its own.
+    """
     if not cwd:
         return False
     wait = delay() if _delay is None else _delay
     if wait <= 0:
         return False
+    if tracer is None:
+        tracer, run = TELEMETRY.instance(), TELEMETRY.run()
     key = _key(root, cwd)
     with _GUARD:
         held = _TIMERS.pop(key, None)
         if held is not None:
             held.cancel()
-        timer = threading.Timer(wait, _fire, (root, cwd, key))
+        timer = threading.Timer(wait, _fire, (root, cwd, key, tracer, run))
         # Daemon: a pending send must not keep the workspace from closing.
         # The edit it would have carried is on disk, and the next session
         # sends it.
@@ -161,7 +171,7 @@ def _note(key: str, value: Dict[str, Any]) -> Dict[str, Any]:
     return value
 
 
-def _fire(root, cwd, key: str) -> None:
+def _fire(root, cwd, key: str, tracer=None, run=None) -> None:
     with _GUARD:
         # ``Timer.cancel`` cannot stop a callback that has already begun.
         # If an edit replaced this timer while its callback was waiting for
@@ -176,17 +186,43 @@ def _fire(root, cwd, key: str) -> None:
             return
         _SENDING.add(key)
     try:
-        _send(root, cwd, key)
+        _send(root, cwd, key, tracer, run)
     finally:
         with _GUARD:
             _SENDING.discard(key)
             again = key in _AGAIN
             _AGAIN.discard(key)
     if again:
-        schedule(root, cwd)
+        schedule(root, cwd, tracer=tracer, run=run)
 
 
-def _send(root, cwd, key: str) -> Dict[str, Any]:
+class SendFailed(RuntimeError):
+    pass
+
+
+def _send(root, cwd, key: str, tracer=None, run=None) -> Dict[str, Any]:
+    """The send, as a trace of its own: a workflow root (autosync.push)
+    with the call to the account beneath it. Off the request that armed
+    it, so it needs the tracer and the run handed over; without them it
+    is the plain send."""
+    if tracer is None or not getattr(tracer, "enabled", False):
+        return _send_now(root, cwd, key)
+    seed = dict(run or {})
+    seed["action"] = "autosync"
+    with tracer.with_run(seed):
+        with tracer.operation("autosync.push", "workflow", writes=["project"],
+                              attributes={"engelbart.autosync.key": key}) as op:
+            note = _send_now(root, cwd, key)
+            sent = note.get("sent") if isinstance(note.get("sent"), dict) else None
+            op.set_attributes({"engelbart.autosync.ok": bool(note.get("ok")),
+                               "engelbart.autosync.waiting": bool(note.get("waiting")),
+                               "engelbart.autosync.sent": sorted(sent) if sent else None})
+            if not note.get("ok") and not note.get("waiting"):
+                op.fail(SendFailed(str(note.get("error") or "the send failed")))
+            return note
+
+
+def _send_now(root, cwd, key: str) -> Dict[str, Any]:
     from . import supabase_client as SB
     try:
         state = SB.status(root)
@@ -200,7 +236,24 @@ def _send(root, cwd, key: str) -> Dict[str, Any]:
         return _note(key, {"ok": False, "at": time.time(), "waiting": True,
                            "error": "not signed in to Supabase"})
     try:
-        result = SB.sync_project(root, cwd)
+        host = ""
+        try:
+            host = TELEMETRY.host_of(SB.load_config(root).get("url"))
+        except Exception:  # noqa: BLE001 - the address is a label here
+            host = ""
+        # The call itself: one RPC, the whole project. Its size is what the
+        # attributes say; the rows are not recorded (they are the tree).
+        with TELEMETRY.operation(
+                "supabase.sync-project", "http", writes=["project"],
+                attributes={"http.request.method": "POST",
+                            "url.path": "/rest/v1/rpc/hc_sync_project",
+                            "server.address": host,
+                            "engelbart.db.rpc": "hc_sync_project"}) as op:
+            result = SB.sync_project(root, cwd)
+            sent = result.get("sent") if isinstance(result, dict) else None
+            if isinstance(sent, dict):
+                op.set_attributes({"engelbart.autosync." + k: v
+                                   for k, v in sent.items()})
     except Exception as exc:  # noqa: BLE001 - every failure is a sentence
         return _note(key, {"ok": False, "at": time.time(),
                            "error": str(exc)[:200]})

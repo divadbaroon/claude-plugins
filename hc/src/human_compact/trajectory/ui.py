@@ -26,10 +26,12 @@ from . import agent_exec as AE, chat_state as CS, goals as GM, state
 from ..platform_compat import detached_popen_kwargs, pid_alive, terminate_pid
 from . import autosync as AUTOSYNC
 from . import brainstorm as BRAIN
+from .agents import orchestrator as AGENTS
 from . import preview as PREVIEW
 from . import project_store as PS
 from . import reader as READER
 from . import secure_io as SIO
+from .. import telemetry as TELEMETRY
 from . import setup_chat as SETUP
 
 
@@ -298,6 +300,19 @@ class ThreadingHTTPServer(_ThreadingHTTPServer):
         if watcher is not None and watcher is not threading.current_thread():
             watcher.join(timeout=10)
         super().server_close()
+        # The tracer's sinks end after the last request has: the request
+        # threads are not joined above (they are daemons), so the streams
+        # told to close are given a moment to write their closing records;
+        # then the thread that forwards to the site is given a moment to
+        # send what it holds, and closed.
+        tele = getattr(self, "telemetry", None)
+        if tele is not None:
+            deadline = time.monotonic() + 2.0
+            while ((getattr(self, "active_requests", 0) or tele.live())
+                   and time.monotonic() < deadline):
+                time.sleep(0.02)
+            tele.flush(1.0)
+            tele.close()
 
 
 def _scope(trajdir=None):
@@ -342,19 +357,35 @@ def _state_access(trajdir, chat_scoped):
 
 
 def _load_goals(trajdir, chat_scoped):
-    if chat_scoped:
-        session_id, root = _chat_identity(trajdir)
-        return CS.load_goals(session_id, root)
-    return GM.load(trajdir)
+    # Recorded as the detail every action is made of: which files the
+    # workspace read (the lineage the debugger's data-flow view draws).
+    with TELEMETRY.operation("goals.load", "storage",
+                             reads=["goals", "todos", "important"],
+                             attributes={"engelbart.storage.object": "goals.json"}) as op:
+        if chat_scoped:
+            session_id, root = _chat_identity(trajdir)
+            goals, important = CS.load_goals(session_id, root)
+        else:
+            goals, important = GM.load(trajdir)
+        op.set_attribute("engelbart.goals.count", _goal_count(goals))
+        return goals, important
 
 
 def _save_goals(trajdir, goals, important, chat_scoped):
-    if chat_scoped:
-        session_id, root = _chat_identity(trajdir)
-        if not CS.save_goals(session_id, goals, important, root):
-            raise RuntimeError("chat goal state changed during save")
-        return
-    GM.save(trajdir, goals, important)
+    with TELEMETRY.operation("goals.save", "storage",
+                             writes=["goals", "todos", "important"],
+                             attributes={"engelbart.storage.object": "goals.json",
+                                         "engelbart.goals.count": _goal_count(goals)}):
+        if chat_scoped:
+            session_id, root = _chat_identity(trajdir)
+            if not CS.save_goals(session_id, goals, important, root):
+                raise RuntimeError("chat goal state changed during save")
+            return
+        GM.save(trajdir, goals, important)
+
+
+def _goal_count(goals):
+    return (len(goals.get("goals") or []) if isinstance(goals, dict) else None)
 
 
 # --- the goal page: one goal, drawn from the same store -------------------
@@ -485,88 +516,14 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
 # with one click. Nothing is written to the tree by a reply; the row lands
 # through add_todo_row when they take it, like a row they typed.
 
-def _bart_focus(goal_title, subgoal_title):
-    """What the model is told about where the conversation is."""
-    return [
-        "",
-        "# Where this conversation is",
-        "",
-        "They are talking about one piece of the work: \"%s\", under the "
-        "goal \"%s\". What they want from you is the next TODO row or two "
-        "for that piece, or the one question that decides what those rows "
-        "are." % (subgoal_title, goal_title),
-        "",
-        "Propose rows as `todos` -- flat rows, for that piece; not as "
-        "`subgoals` and not as `goals`. Do not offer to write goals here, "
-        "and do not send an `offer` card for rows either: when you have "
-        "the rows, send them as a `todos` card. Nothing is written until "
-        "they add a row themselves, so a proposed row is the offer.",
-    ]
+# Bart's helpers live with the agents now (agents.orchestrator.focus,
+# agents.replies); these names stay for the tests and callers that read them.
+_bart_focus = AGENTS.focus
+from .agents.replies import choice as _bart_choice  # noqa: E402
+from .agents.replies import from_card as _bart_replies  # noqa: E402
 
 
-def _bart_choice(title, options, note=""):
-    """A question or a choice, as one message the reader can answer by
-    typing: the title, then each option on its own line with its
-    argument, when it has one."""
-    lines = [str(title or "").strip()]
-    said = str(note or "").strip()
-    if said:
-        lines[0] = (lines[0] + " (" + said + ")") if lines[0] else said
-    for option in options or []:
-        if not isinstance(option, dict):
-            continue
-        label = str(option.get("label") or "").strip()
-        why = str(option.get("why") or "").strip()
-        if label:
-            lines.append("- " + label + (" -- " + why if why else ""))
-    return "\n".join(line for line in lines if line)
-
-
-def _bart_replies(card):
-    """A brainstorm card as the messages the page draws, in order.
-
-    Prose is a text message. Each row proposed is its own proposal, whether
-    it came flat or under a piece: the page has one list, the subgoal's,
-    and a proposal is one row for it. A question or a choice is said as
-    text with its options under it, so the reader answers by typing; the
-    page has no form to draw them in. Goals the model proposes are said,
-    not offered: nothing on this page makes a goal.
-    """
-    replies = []
-    say = str(card.get("say") or "").strip()
-    if say:
-        replies.append({"kind": "text", "text": say})
-    kind = str(card.get("card") or "")
-    if kind == "questions":
-        for item in (card.get("questions") or {}).get("items") or []:
-            if isinstance(item, dict):
-                replies.append({"kind": "text", "text": _bart_choice(
-                    item.get("title"), item.get("options"),
-                    item.get("subtitle"))})
-    elif kind == "focus":
-        focus = card.get("focus") or {}
-        replies.append({"kind": "text", "text": _bart_choice(
-            focus.get("title"), focus.get("options"))})
-    elif kind == "goals":
-        for goal in card.get("goals") or []:
-            if isinstance(goal, dict):
-                replies.append({"kind": "text", "text": _bart_choice(
-                    goal.get("label"), [], goal.get("why"))})
-    elif kind == "todos":
-        rows = list(card.get("todos") or [])
-        for piece in card.get("subgoals") or []:
-            if isinstance(piece, dict):
-                rows.extend(piece.get("todos") or [])
-        for text in rows:
-            said = str(text or "").strip()
-            if said:
-                replies.append({"kind": "proposal", "text": said})
-    if not replies:
-        replies.append({"kind": "text", "text": "Bart had nothing to add."})
-    return replies
-
-
-def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
+def _bart_context_read(trajdir, chat_scoped, subgoal_id, transcript):
     """What a reply needs from the tree, read under the lock: the piece
     and its goal by name, and the brainstorm's digest of the project.
 
@@ -593,10 +550,30 @@ def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
         return (held if isinstance(held, dict)
                 else {"ok": False, "error": "the tree could not be read"})
     _kind, _session, root, cwd, op = deferred
-    return {"ok": True, "root": root, "cwd": cwd,
+    return {"ok": True, "root": root, "cwd": cwd, "session": _session,
             "digest": str(op.get("__digest__") or ""),
             "goal": str((parent or {}).get("title") or ""),
-            "subgoal": str(piece.get("title") or "")}
+            "subgoal": str(piece.get("title") or ""),
+            "subgoal_id": str(piece.get("id") or "")}
+
+
+def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
+    """The read, as one operation under the request: how long the lock
+    took, what was found, and how much of the project the model gets."""
+    with TELEMETRY.operation(
+            "bart.context", "processing", reads=["goals", "project"],
+            attributes={"engelbart.bart.subgoal": str(subgoal_id or "")[:80],
+                        "engelbart.bart.turns": (len(transcript)
+                                                 if isinstance(transcript, list)
+                                                 else None)}) as op:
+        held = _bart_context_read(trajdir, chat_scoped, subgoal_id, transcript)
+        if isinstance(held, dict):
+            op.set_attributes({"engelbart.bart.ok": bool(held.get("ok")),
+                               "engelbart.bart.digest_chars":
+                                   len(str(held.get("digest") or ""))})
+            if held.get("ok") is False:
+                op.fail(RequestRefused(held.get("error")))
+        return held
 
 
 def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
@@ -621,7 +598,7 @@ def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
         except (OSError, ValueError):
             pass
     return {"ok": True, "subgoal_id": subgoal_id, "preview": preview,
-            "build": build}
+            "build": build, "chat": _bart_chats(trajdir, chat_scoped).get(subgoal_id, [])}
 
 
 def _bart_chats(trajdir, chat_scoped):
@@ -636,7 +613,7 @@ def _bart_chats(trajdir, chat_scoped):
         return {}
 
 
-def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages):
+def _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages):
     """The page's conversation on one subgoal, written down whole. Under
     the state lock like every write, and pruned to the tree as it stands:
     a conversation about a piece that is gone goes with the piece."""
@@ -658,19 +635,58 @@ def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages):
     return {"ok": True, "messages": kept}
 
 
+def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages):
+    with TELEMETRY.operation(
+            "bart-chat.save", "storage", reads=["goals"], writes=["bart-chat"],
+            attributes={"engelbart.bart.subgoal": str(subgoal_id or "")[:80],
+                        "engelbart.bart.messages": (len(messages)
+                                                    if isinstance(messages, list)
+                                                    else None)}) as op:
+        answer = _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages)
+        if isinstance(answer, dict) and answer.get("ok") is False:
+            op.fail(RequestRefused(answer.get("error")))
+        return answer
+
+
+def _bart_answer_model(held, transcript):
+    """The model's turn, outside the lock. The message is recorded and
+    routed (agents.orchestrator): an ordinary message is answered by the
+    Chat agent; one asking for options goes to the brainstorm; one asking
+    for a plan to the Path agent. HC_AGENTS=0 is the old path -- every
+    message a brainstorm: the project condensed if it is long, the
+    conversation, and where in the project it is; one card back, as the
+    replies the page draws."""
+    if not AGENTS.enabled():
+        context = BRAIN.project_context(held["root"], held["cwd"], held["digest"])
+        card = BRAIN.ask(transcript, context, root=held["root"],
+                         extra=_bart_focus(held["goal"], held["subgoal"]))
+        if not isinstance(card, dict) or not card.get("ok"):
+            error = (card or {}).get("error") if isinstance(card, dict) else ""
+            return {"ok": False, "error": str(error or "Bart could not answer")}
+        return {"ok": True, "say": str(card.get("say") or ""),
+                "card": str(card.get("card") or "none"),
+                "replies": _bart_replies(card)}
+    orch = AGENTS.for_chat(held["session"], held["root"], cwd=str(held.get("cwd") or ""))
+    return orch.bart_message(held, transcript)
+
+
 def _bart_answer(held, transcript):
-    """The model's turn, outside the lock: the project condensed if it is
-    long, the conversation, and where in the project it is; one card
-    back, as the replies the page draws."""
-    context = BRAIN.project_context(held["root"], held["cwd"], held["digest"])
-    card = BRAIN.ask(transcript, context, root=held["root"],
-                     extra=_bart_focus(held["goal"], held["subgoal"]))
-    if not isinstance(card, dict) or not card.get("ok"):
-        error = (card or {}).get("error") if isinstance(card, dict) else ""
-        return {"ok": False, "error": str(error or "Bart could not answer")}
-    return {"ok": True, "say": str(card.get("say") or ""),
-            "card": str(card.get("card") or "none"),
-            "replies": _bart_replies(card)}
+    """The model's turn as one stage of the request. The provider records
+    the call itself beneath it (model.brainstorm: the prompt as sent, the
+    reply as received, the card as parsed); this records what the page
+    was answered with, and fails when Bart could not answer."""
+    with TELEMETRY.operation(
+            "bart.message", "processing", reads=["project", "bart-chat"],
+            attributes={"engelbart.bart.goal": held.get("goal"),
+                        "engelbart.bart.subgoal": held.get("subgoal")}) as op:
+        answer = _bart_answer_model(held, transcript)
+        op.set_attributes({"engelbart.bart.ok": bool(answer.get("ok")),
+                           "engelbart.bart.card": answer.get("card"),
+                           "engelbart.bart.replies": len(answer.get("replies") or [])})
+        op.snapshot("processing_output", answer)
+        if not answer.get("ok"):
+            op.fail(RequestRefused(answer.get("error")))
+        return answer
 
 
 def _goal_page_project(trajdir, chat_scoped):
@@ -712,6 +728,30 @@ def _current_revision(trajdir, chat_scoped):
         goals, important = _load_goals(trajdir, chat_scoped)
     GM.sanitize(goals)
     return _goal_revision(goals, important)
+
+
+def _goal_page_write(body, trajdir, chat_scoped):
+    """One of the page's operations, applied -- and, with the agents on,
+    written to the event log. Rows handed to the build go through the
+    orchestrator, where the Overseer routes them to the Build agent; every
+    other op is applied as before and recorded as the minor event it is,
+    which routes nothing."""
+    kind = str(body.get("op") or "")
+    if kind == "build_todos" and chat_scoped and AGENTS.enabled():
+        session_id, root = _chat_identity(_scope(trajdir))
+        ids = body.get("ids")
+        goal_id = str(body.get("goal_id") or "")
+        orch = AGENTS.for_chat(session_id, root)
+        return orch.build_requested(goal_id, ids if isinstance(ids, list) else [],
+                                    quick=bool(body.get("quick")))
+    result = _apply(body, trajdir, chat_scoped)
+    if chat_scoped and AGENTS.enabled():
+        try:
+            session_id, root = _chat_identity(_scope(trajdir))
+            AGENTS.note_op(session_id, root, body, result if isinstance(result, dict) else None)
+        except (OSError, ValueError):
+            pass
+    return result
 
 
 class GoalEvents:
@@ -3281,9 +3321,22 @@ def _apply(op, trajdir=None, chat_scoped=None):
     # Armed here rather than inside, so the work that happens outside the
     # chat's lock -- building TODOs, cancelling a run -- is covered by the
     # same rule as the edits that happen inside it.
-    result = _apply_dispatch(op, trajdir, chat_scoped)
-    _arm_autosync(op, result, trajdir, chat_scoped)
-    return result
+    #
+    # And recorded here, as the stage of the request the operation is
+    # (apply.<op>): what it answered is its snapshot, the files it read and
+    # wrote are the details beneath it, and a refusal fails it.
+    kind = str(op.get("op") or "") if isinstance(op, dict) else ""
+    with TELEMETRY.operation("apply." + (kind or "unknown"), "processing",
+                             attributes={"engelbart.op": kind}) as span:
+        result = _apply_dispatch(op, trajdir, chat_scoped)
+        _arm_autosync(op, result, trajdir, chat_scoped)
+        if isinstance(result, dict):
+            span.set_attributes({"engelbart.apply.ok": result.get("ok"),
+                                 "engelbart.apply.id": result.get("id")})
+            span.snapshot("processing_output", result)
+            if result.get("ok") is False:
+                span.fail(RequestRefused(result.get("error")))
+        return result
 
 
 def _preview_where(trajdir, chat_scoped):
@@ -3300,7 +3353,7 @@ def _preview_where(trajdir, chat_scoped):
     return session_id, root, cwd
 
 
-def _preview_op(op, trajdir, chat_scoped):
+def _preview_op_run(op, trajdir, chat_scoped):
     """The middle pane's own operations.
 
     None of them read or write the goal tree, so none of them wait on the
@@ -3363,6 +3416,30 @@ def _preview_op(op, trajdir, chat_scoped):
         return PREVIEW.explain_failure(cwd, proc.profile.get("command", ""),
                                        list(proc.lines), proc.exit_code)
     return {"ok": False, "error": "unknown preview operation"}
+
+
+def _preview_op(op, trajdir, chat_scoped):
+    """One of the preview's operations as a stage of the request:
+    preview.start, preview.stop, preview.configure and the rest, with the
+    answer the pane draws as its snapshot. A model the configure step
+    falls back to records under it, as model.preview."""
+    kind = str(op.get("op") or "")
+    short = kind[len("preview_"):] if kind.startswith("preview_") else kind
+    with TELEMETRY.operation(
+            "preview." + (short or "unknown"), "processing", reads=["project"],
+            attributes={"engelbart.preview.op": kind,
+                        "engelbart.preview.profile": op.get("profile_id"),
+                        "engelbart.preview.auto": bool(op.get("auto"))}) as span:
+        with TELEMETRY.purpose("preview"):
+            answer = _preview_op_run(op, trajdir, chat_scoped)
+        if isinstance(answer, dict):
+            span.set_attributes({"engelbart.preview.ok": answer.get("ok"),
+                                 "engelbart.preview.status": answer.get("status"),
+                                 "engelbart.preview.url": answer.get("url")})
+            span.snapshot("processing_output", answer)
+            if answer.get("ok") is False:
+                span.fail(RequestRefused(answer.get("error")))
+        return answer
 
 
 PREVIEW_OPS = ("preview_configure", "preview_pick", "preview_start",
@@ -3719,7 +3796,8 @@ def _generate_prompt(session_id, root, goals, important, goal):
     try:
         provider = PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize")
-        text = provider.generate("\n".join(ask) + "\n")
+        with TELEMETRY.purpose("prompt"):
+            text = provider.generate("\n".join(ask) + "\n")
     except Exception:  # noqa: BLE001 - any provider failure is "no prompt"
         return ""
     return str(text or "").strip()
@@ -4590,6 +4668,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                     return {"ok": False,
                             "error": "that row is with the builder"}
                 if kind == "set_todo_text":
+                    row.pop("acceptance", None)
                     row["text"] = str(op.get("text") or "")[:400]
                     answer = {"ok": True, "row": _todo_row(row)}
                 elif kind == "set_todo_done":
@@ -4691,6 +4770,65 @@ def preboot_mask(chat_scoped):
 
 
 class H(BaseHTTPRequestHandler):
+    # --- telemetry: one trace per request the page acts through ----------
+    _op = None
+    _status = None
+    _refusal = None
+
+    def do_GET(self):
+        self._traced("GET", self._serve_get)
+
+    def do_POST(self):
+        self._traced("POST", self._serve_post)
+
+    def _traced(self, method, serve):
+        """Serve the request inside a workflow operation when the route is
+        one the page acts through (_TRACED_GET, _TRACED_POST): the root of
+        the request's trace, whose id the reply names in
+        x-engelbart-trace-id. Static files and the polls the page repeats
+        are served untraced -- as the site treats its own -- unless
+        ENGELBART_TRACE_POLLS is on. A reply that refuses ({"ok": false},
+        or a 4xx or 5xx) fails the root, so the debugger draws it red
+        without having to read the body."""
+        self._op, self._status, self._refusal = None, None, None
+        tele = getattr(self.server, "telemetry", None)
+        path = self.path.split("?", 1)[0]
+        route = _traced_route(method, path, tele)
+        if route is None:
+            serve()
+            return
+        action, poll = route
+        seed = dict(getattr(self.server, "telemetry_run", None) or {})
+        seed["action"] = action
+        attributes = {"http.request.method": method, "url.path": path}
+        if poll:
+            attributes["engelbart.poll"] = True
+        name = "goal-page." + action + (".poll" if poll else "")
+        with tele.with_run(seed):
+            with tele.operation(name, "workflow", attributes=attributes) as op:
+                self._op = op
+                serve()
+                op.set_attribute("http.response.status_code", self._status)
+                if self._refusal is not None:
+                    code, why = self._refusal
+                    op.fail(RequestRefused(why or "refused", code))
+
+    def _note_request(self, body):
+        """What a POST carried, on the root: the op's name as an
+        attribute, and the body as a snapshot (redacted before it is
+        written: a password in it never is)."""
+        op = self._op
+        if op is None or not op.enabled:
+            return
+        if isinstance(body, dict) and body.get("op"):
+            op.set_attribute("engelbart.op", str(body.get("op"))[:80])
+        op.snapshot("processing_input", body)
+
+    def _progress(self, message, **attributes):
+        op = self._op
+        if op is not None and op.enabled:
+            op.event(message, attributes)
+
     def log_message(self, *a):                  # quiet
         pass
 
@@ -4732,9 +4870,23 @@ class H(BaseHTTPRequestHandler):
 
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        self._status = code
+        op = self._op
+        if op is not None and op.enabled:
+            refused = code >= 400
+            if not isinstance(body, bytes):
+                op.snapshot("processing_output", body)
+                refused = refused or (isinstance(body, dict)
+                                      and body.get("ok") is False)
+            if refused:
+                why = body.get("error") if isinstance(body, dict) else ""
+                self._refusal = (code, str(why or "")[:200])
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        if op is not None and op.enabled:
+            # The trace this reply came from, for whoever wants to read it.
+            self.send_header("x-engelbart-trace-id", op.trace_id)
         # Nothing this server sends may be held. It carries no validators --
         # no ETag, no Last-Modified -- so a browser is free to guess a
         # freshness lifetime for the page and the bundle, and a guess of a
@@ -4745,7 +4897,7 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self):
+    def _serve_get(self):
         if not self._begin_request():
             return
         try:
@@ -5180,13 +5332,21 @@ class H(BaseHTTPRequestHandler):
                                              self.server.chat_scoped)
             except (OSError, ValueError, RuntimeError):
                 revision = None
+            self._status = 200
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-store, must-revalidate")
+            if self._op is not None and self._op.enabled:
+                self.send_header("x-engelbart-trace-id", self._op.trace_id)
             self.end_headers()
             self.wfile.write(b"retry: 2000\n\n")
             self._send_event(revision)
             sent = revision
+            # The stream is one operation for as long as the page is open:
+            # waiting between revisions, a progress event on each.
+            self._progress("revision", **{"engelbart.goals.revision": revision})
+            if self._op is not None:
+                self._op.waiting("revision")
             while not events.closed:
                 try:
                     revision = stream.get(timeout=SSE_PING_SECONDS)
@@ -5202,6 +5362,7 @@ class H(BaseHTTPRequestHandler):
                     continue
                 self._send_event(revision)
                 sent = revision
+                self._progress("revision", **{"engelbart.goals.revision": revision})
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
         finally:
@@ -5230,8 +5391,8 @@ class H(BaseHTTPRequestHandler):
             return
         with self.server.state_lock:
             try:
-                result = _apply(body, self.server.trajdir,
-                                self.server.chat_scoped)
+                result = _goal_page_write(body, self.server.trajdir,
+                                          self.server.chat_scoped)
             except (OSError, ValueError, RuntimeError) as exc:
                 result = {"ok": False, "error": str(exc)[:200]}
             if isinstance(result, dict):
@@ -5443,7 +5604,7 @@ class H(BaseHTTPRequestHandler):
             return
         self._send(200, data, "application/pdf")
 
-    def do_POST(self):
+    def _serve_post(self):
         if not self._begin_request():
             return
         try:
@@ -5475,6 +5636,7 @@ class H(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
+            self._note_request(body)
             if self.path == "/api/account/sign-in":
                 # Behind the JSON media-type check on purpose: a page
                 # from another origin cannot start one.
@@ -5485,6 +5647,18 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/account/sign-out":
                 self._send(200, sign_out(engelbart_cli()))
+                return
+            if self.path == "/api/goal-page/interaction":
+                if not self.server.chat_scoped or getattr(self.server, "shared_project", None):
+                    self._send(400, {"ok": False, "error": "local chat scope required"})
+                    return
+                from .agents import events as EV
+                try:
+                    session, root = _chat_identity(self.server.trajdir)
+                    event = EV.interaction(session, root, body, AGENTS._cwd(session, root))
+                    self._send(200, {"ok": True, "id": event["id"]})
+                except (ValueError, OSError) as exc:
+                    self._send(400, {"ok": False, "error": str(exc)[:200]})
                 return
             if self.path == "/api/goal-page/op":
                 self._apply_goal_page_op(body)
@@ -5707,6 +5881,107 @@ class H(BaseHTTPRequestHandler):
             self._finish_request()
 
 
+class RequestRefused(RuntimeError):
+    """An answer the product gave as a refusal -- {"ok": false}, or a 4xx or
+    5xx status -- recorded as the failure of the operation that gave it."""
+
+    def __init__(self, message, status_code=None):
+        super().__init__(str(message or "refused"))
+        self.status_code = status_code
+
+
+# The routes the page acts through, and the action each is recorded as.
+# The polls -- the panes every few seconds, the sign-in snapshot while a
+# code waits -- are untraced by default, the way the site treats its own.
+_TRACED_GET = {"/api/goal-page": "read", "/api/goal-page/events": "events",
+               "/api/projects": "projects", "/api/reader": "reader",
+               "/api/tree": "tree"}
+_POLLED_GET = {"/api/goal-page/panes": "panes",
+               "/api/account/sign-in": "sign-in",
+               "/api/claude-account": "claude-account"}
+_TRACED_POST = {"/api/goal-page/op": "op", "/api/goal-page/bart": "bart",
+                "/api/goal-page/chat": "chat",
+                "/api/goal-page/preview": "preview",
+                "/api/goal-page/reader": "reader", "/api/op": "workspace-op",
+                "/api/attachment": "attachment", "/api/paper": "paper",
+                "/api/account/sign-in": "sign-in",
+                "/api/account/sign-in/cancel": "sign-in-cancel",
+                "/api/account/sign-out": "sign-out"}
+
+
+def _traced_route(method, path, tele):
+    """(action, poll) for a request the tracer records; None for one it
+    does not."""
+    if tele is None or not getattr(tele, "enabled", False):
+        return None
+    if method == "GET":
+        if path in _TRACED_GET:
+            return _TRACED_GET[path], False
+        if path in _POLLED_GET and tele.settings.get("trace_polls"):
+            return _POLLED_GET[path], True
+        return None
+    if method == "POST" and path in _TRACED_POST:
+        return _TRACED_POST[path], False
+    return None
+
+
+def _telemetry_label(trajdir, chat_scoped):
+    """What the site's run picker calls this workspace: the project's name,
+    as the header names it -- the reader's own name for it when they gave
+    one, else its directory's."""
+    try:
+        session_id, _root = _chat_identity(trajdir)
+        name = _project_identity(trajdir, chat_scoped, session_id).get("name")
+        if not name:
+            name = (_goal_page_project(trajdir, chat_scoped) or {}).get("name")
+    except Exception:  # noqa: BLE001 - a label, never logic
+        name = None
+    return str(name or "")[:120] or None
+
+
+def _telemetry_for(trajdir, chat_scoped, shared_project=None):
+    """The workspace's tracer: one run, named by the chat (chat:<session
+    id>), with the file under the chat's own directory and the forward to
+    the site as its sinks. A workspace with no chat behind it -- the
+    legacy global scope, a shared project -- has no run to record under
+    and traces nothing. Nothing here can fail the server: a tracer that
+    cannot be set up is one that is off."""
+    # The run as the envelope names it: the plugin's environment and
+    # version, then this chat's id, label and member.
+    run = dict(TELEMETRY.run_defaults())
+    run.update({"run_id": None, "label": None, "user_hash": None})
+    try:
+        tele = TELEMETRY.Telemetry()
+        if not chat_scoped or shared_project or not tele.enabled:
+            tele.configure(enabled=False)
+            return tele, run
+        session_id, root = _chat_identity(trajdir)
+        # Resolved, as _chat_identity resolves: the files go under the
+        # chat's real directory, inside the boundary the vault tightens.
+        resolved = Path(trajdir).expanduser().resolve()
+        run["run_id"] = TELEMETRY.RUN_ID_PREFIX + session_id
+        run["label"] = _telemetry_label(trajdir, chat_scoped)
+        try:
+            from . import supabase_client as SB
+            run["user_hash"] = TELEMETRY.user_hash(
+                SB.load_session(root).get("user_id"))
+        except Exception:  # noqa: BLE001 - the site names the member itself
+            run["user_hash"] = None
+        folder = resolved / "telemetry"
+        if tele.settings.get("file"):
+            tele.add_sink(TELEMETRY.FileSink(folder, root=root))
+        if tele.settings.get("forward"):
+            tele.add_sink(TELEMETRY.ForwardSink(
+                folder, run, root=root, site=tele.settings.get("site"),
+                flush_ms=tele.settings.get("flush_ms", 2000),
+                protect=tele.protect, log=tele.log))
+        return tele, run
+    except Exception as exc:  # noqa: BLE001 - never over telemetry
+        print(f"engelbart-telemetry: off for this workspace: {str(exc)[:200]}",
+              file=sys.stderr)
+        return TELEMETRY.Telemetry(settings={"enabled": False}), run
+
+
 def _configure_server(server, trajdir, chat_scoped, follow=True,
                       shared_project=None):
     server.trajdir = trajdir
@@ -5715,6 +5990,8 @@ def _configure_server(server, trajdir, chat_scoped, follow=True,
     # somewhere real -- the static files and the lock live there -- but the
     # state comes from Postgres and nothing here writes.
     server.shared_project = shared_project
+    server.telemetry, server.telemetry_run = _telemetry_for(
+        trajdir, chat_scoped, shared_project)
     server.state_lock = threading.RLock()
     server.expected_host = f"127.0.0.1:{server.server_address[1]}"
     server.activity_lock = threading.Lock()

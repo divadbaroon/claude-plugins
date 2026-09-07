@@ -668,8 +668,9 @@ class Proc:
             with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT_S) as answer:
                 headers = answer.headers
                 self.healthy = True
-        except urllib.error.HTTPError as exc:          # a 404 is still a server
-            headers, self.healthy = exc.headers, True
+        except urllib.error.HTTPError as exc:
+            headers, self.healthy = exc.headers, False
+            exc.close()
         except Exception:                              # noqa: BLE001
             self.healthy, self.embeddable = False, self.embeddable
             return

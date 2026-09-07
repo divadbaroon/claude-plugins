@@ -9,6 +9,7 @@ import urllib.request
 from pathlib import Path
 
 from .secure_io import open_private_append
+from .. import telemetry as TELEMETRY
 
 OLLAMA_URL = os.environ.get("HC_OLLAMA_URL", "http://localhost:11434")
 CLAUDE_TIMEOUT_SECONDS = 180
@@ -30,6 +31,30 @@ WEB_TOOLS = "WebFetch,WebSearch"
 
 class ProviderError(RuntimeError):
     pass
+
+
+def _purpose_of(structured=False, plain=False, read=None, search="", web=False):
+    """What a call is for when no caller named it: the shape of the call."""
+    if search:
+        return "search"
+    if read is not None:
+        return "read"
+    if web:
+        return "web"
+    if structured:
+        return "structured"
+    return "plain" if plain else "generate"
+
+
+def _flag_of(command, flag):
+    try:
+        return command[command.index(flag) + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def _chars(value):
+    return len(value) if isinstance(value, str) else None
 
 
 def _last_json_object(raw):
@@ -134,7 +159,7 @@ def subscription_env(base=None):
 class ClaudeCLI(Base):
     kind = "claude"
     def _run(self, prompt, *, structured=False, plain=False, read=None,
-             search="", web=False):
+             search="", web=False, parse=None):
         command = ["claude", "-p", "--safe-mode", "--model", self.model,
                    "--no-session-persistence"]
         deadline = self.timeout or CLAUDE_TIMEOUT_SECONDS
@@ -180,31 +205,73 @@ class ClaudeCLI(Base):
             # prevents a user's interactive preference (for example xhigh)
             # from exhausting the subprocess deadline.
             command += ["--effort", "low"]
-        try:
-            # Provider subprocesses are implementation details, not user chats.
-            # Mark them so the always-on chat hook cannot recursively launch
-            # another analyzer, and suppress the opt-in global Vault hook too.
-            child_env = subscription_env()
-            child_env["HC_CHAT_INFERENCE"] = "1"
-            child_env.pop("CLAUDE_VAULT", None)
-            r = subprocess.run(
-                command, input=prompt, capture_output=True, text=True,
-                timeout=deadline, env=child_env,
-                cwd=str(search) if search else None)
-        except FileNotFoundError:
-            # Two things can be missing here once a call names a directory to
-            # run in, and "install the CLI" is the wrong thing to say about
-            # the other one.
-            if search and not Path(search).is_dir():
+        # The call is one model operation of whatever request asked for it
+        # (a CLI command that opened no request records nothing): the
+        # prompt as sent, the reply as received, the object as parsed.
+        purpose = TELEMETRY.current_purpose() or _purpose_of(
+            structured=structured, plain=plain, read=read, search=search, web=web)
+        with TELEMETRY.operation("model." + purpose, "model", attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "anthropic",
+                "gen_ai.request.model": self.model,
+                "engelbart.model.gateway": "claude-cli",
+                "engelbart.model.purpose": purpose,
+                "engelbart.model.family": self.model,
+                "engelbart.model.timeout_ms": int(deadline * 1000),
+                "engelbart.model.tools": _flag_of(command, "--tools"),
+                "engelbart.model.effort": _flag_of(command, "--effort"),
+                "engelbart.model.structured": bool(structured),
+                "engelbart.model.cwd": str(search) if search else None,
+                "engelbart.model.credentials": (
+                    "api-key" if os.environ.get("HC_USE_API_KEY") == "1"
+                    else "subscription"),
+                "engelbart.model.prompt_chars": len(prompt)}) as op:
+            # The request as assembled: the CLI's arguments, and the prompt
+            # as the one user message it is. No credential is part of it.
+            op.snapshot("model_request", {
+                "url": "cli://claude", "command": list(command),
+                "body": {"model": self.model,
+                         "messages": [{"role": "user", "content": prompt}]}})
+            try:
+                # Provider subprocesses are implementation details, not user
+                # chats. Mark them so the always-on chat hook cannot
+                # recursively launch another analyzer, and suppress the
+                # opt-in global Vault hook too.
+                child_env = subscription_env()
+                child_env["HC_CHAT_INFERENCE"] = "1"
+                child_env.pop("CLAUDE_VAULT", None)
+                r = subprocess.run(
+                    command, input=prompt, capture_output=True, text=True,
+                    timeout=deadline, env=child_env,
+                    cwd=str(search) if search else None)
+            except FileNotFoundError:
+                # Two things can be missing here once a call names a
+                # directory to run in, and "install the CLI" is the wrong
+                # thing to say about the other one.
+                if search and not Path(search).is_dir():
+                    raise ProviderError(f"{search} is not a directory to look in")
+                raise ProviderError("claude CLI not found on PATH")
+            except NotADirectoryError:
                 raise ProviderError(f"{search} is not a directory to look in")
-            raise ProviderError("claude CLI not found on PATH")
-        except NotADirectoryError:
-            raise ProviderError(f"{search} is not a directory to look in")
-        except subprocess.TimeoutExpired:
-            raise ProviderError(f"claude CLI timed out after {deadline}s")
-        if r.returncode != 0:
-            raise ProviderError(f"claude CLI failed: {r.stderr.strip()[:200]}")
-        return r.stdout
+            except subprocess.TimeoutExpired:
+                raise ProviderError(f"claude CLI timed out after {deadline}s")
+            op.set_attributes({"engelbart.model.exit_code": r.returncode,
+                               "engelbart.model.stdout_chars": _chars(r.stdout),
+                               "engelbart.model.stderr_chars": _chars(r.stderr)})
+            op.snapshot("model_raw_response", {
+                "stdout": r.stdout, "stderr": r.stderr, "returncode": r.returncode})
+            if r.returncode != 0:
+                raise ProviderError(f"claude CLI failed: {r.stderr.strip()[:200]}")
+            if parse is None:
+                return r.stdout
+            try:
+                parsed = parse(r.stdout)
+            except json.JSONDecodeError as e:
+                op.snapshot("model_parsed_response", None)
+                raise ProviderError(
+                    f"{self.identity()} did not return parseable JSON") from e
+            op.snapshot("model_parsed_response", parsed)
+            return parsed
 
     def generate(self, prompt):
         return self._run(prompt)
@@ -220,22 +287,14 @@ class ClaudeCLI(Base):
 
     def generate_json(self, prompt):
         # Avoid a second full model call when a large rebuild response includes
-        # prose or a discarded draft before its corrected final object.
-        raw = self._run(prompt, structured=True)
-        try:
-            return _last_json_object(raw)
-        except json.JSONDecodeError as e:
-            raise ProviderError(
-                f"{self.identity()} did not return parseable JSON") from e
+        # prose or a discarded draft before its corrected final object. The
+        # parse happens inside the call, so its result is recorded with it.
+        return self._run(prompt, structured=True, parse=_last_json_object)
 
     def generate_json_with_web(self, prompt):
         """A structured setup turn allowed to read the reader's public links."""
-        raw = self._run(prompt, structured=True, web=True)
-        try:
-            return _last_json_object(raw)
-        except json.JSONDecodeError as e:
-            raise ProviderError(
-                f"{self.identity()} did not return parseable JSON") from e
+        return self._run(prompt, structured=True, web=True,
+                         parse=_last_json_object)
 
 
 class Ollama(Base):
@@ -258,12 +317,25 @@ class Ollama(Base):
                 "Ollama is not running at " + OLLAMA_URL +
                 " — start it (`ollama serve`) or install: brew install ollama; "
                 "ollama pull " + self.model + ". Refusing to fall back off-device.")
-        try:
-            return self._post("/api/generate",
-                              {"model": self.model, "prompt": prompt,
-                               "stream": False})["response"]
-        except OSError as e:
-            raise ProviderError(f"ollama request failed: {e}")
+        purpose = TELEMETRY.current_purpose() or "generate"
+        with TELEMETRY.operation("model." + purpose, "model", attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "ollama",
+                "gen_ai.request.model": self.model,
+                "engelbart.model.gateway": "ollama",
+                "engelbart.model.purpose": purpose,
+                "engelbart.model.family": self.model,
+                "server.address": TELEMETRY.host_of(OLLAMA_URL),
+                "engelbart.model.prompt_chars": len(prompt)}) as op:
+            body = {"model": self.model, "prompt": prompt, "stream": False}
+            op.snapshot("model_request", {"url": OLLAMA_URL + "/api/generate",
+                                          "body": body})
+            try:
+                answer = self._post("/api/generate", body)
+            except OSError as e:
+                raise ProviderError(f"ollama request failed: {e}")
+            op.snapshot("model_raw_response", answer)
+            return answer["response"]
 
 
 class Mock(Base):
@@ -272,6 +344,23 @@ class Mock(Base):
     and calls.log (dispatch order) support the concurrency tests."""
     kind = "mock"
     def generate_json(self, prompt):
+        purpose = TELEMETRY.current_purpose() or "structured"
+        with TELEMETRY.operation("model." + purpose, "model", attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "mock",
+                "gen_ai.request.model": self.model,
+                "engelbart.model.gateway": "mock",
+                "engelbart.model.purpose": purpose,
+                "engelbart.model.prompt_chars": len(prompt)}) as op:
+            op.snapshot("model_request", {
+                "url": "mock://", "body": {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": prompt}]}})
+            value = self._canned(prompt)
+            op.snapshot("model_parsed_response", value)
+            return value
+
+    def _canned(self, prompt):
         import time
         d = os.environ.get("HC_MOCK_DIR", "")
         which = ("goal_nl" if "goal correction operations" in prompt else
