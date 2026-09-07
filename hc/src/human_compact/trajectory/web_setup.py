@@ -114,9 +114,28 @@ def materialize(payload: Dict[str, Any], root: Optional[Path] = None,
                           payload.get("todos"), payload.get("subgoals") or [],
                           bind=bind, paper=payload.get("paper"),
                           provenance=payload.get("provenance"))
-    if not result.get("ok"):
-        return result
     from . import resources
+    if not result.get("ok"):
+        # Re-importing the same claimed onboarding may retry its resources, but
+        # a name collision with an unrelated project still must not overwrite it.
+        from . import project_store as PS
+        supplied = resources.normalize(payload.get("resources"))
+        ids = {r['provenance'].get('onboardingId') for r in supplied}
+        project = PS.project_named(root, payload.get("name")) if supplied and len(ids) == 1 and None not in ids and '' not in ids else None
+        existing = PS.load_project(root, project['cwd']) if project else {}
+        previous_ids = {r.get('provenance', {}).get('onboardingId') for r in existing.get('resources', [])}
+        if not project or not ids.issubset(previous_ids):
+            return result
+        from . import chat_state as CS
+        bound = False
+        if str(bind or '').strip():
+            try:
+                CS.bind_project(str(bind).strip(), project['cwd'], root)
+                bound = True
+            except Exception:
+                pass
+        result = {"ok": True, "cwd": project['cwd'], "name": project['name'],
+                  "tree_session": existing.get('tree_session', ''), "bound": bound, "reused": True}
     resources.prepare(root, result["cwd"], payload.get("resources") or [])
     reader = payload.get("reader")
     if isinstance(reader, dict) and reader:

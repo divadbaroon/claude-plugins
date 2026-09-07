@@ -17,7 +17,7 @@ export function renderTestPage(state, actions) {
       const rows = state.slices[sub.dataset.key]?.todos || [];
       if (rows.length && rows.every(t => todoPhase(t, state, sub.dataset.key) === "done")) sub.classList.add("is-complete");
     }
-    rail.append(renderRailTodos(state, actions));
+    rail.insertBefore(renderRailTodos(state, actions), rail.querySelector(".resource-list"));
   }
   const bart = page.querySelector(".bart");
   if (bart) {
@@ -33,36 +33,6 @@ export function renderTestPage(state, actions) {
     tabs.querySelector(".host")?.remove();
     tabs.append(h("span", { class: `execution-status is-${phase.status}`, role: "status",
       title: LABELS[phase.status] }, LABELS[phase.status]));
-  }
-  const resources = state.project?.resources || [];
-  if (rail && resources.length) {
-    rail.append(h("section", { class: "resource-list", "aria-label": "Resources" },
-      h("div", { class: "rail-todos-label" }, "Resources"),
-      resources.map(r => h("button", { class: "resource-link", onclick: () => actions.openResource(r.id) },
-        `${r.kind === "paper" ? "▤" : "▣"} ${r.name} · ${({ready:"Ready", acquiring:"Acquiring…", needs_user:"Needs you", failed:"Failed", selected:"Selected"})[r.status] || r.status}`))));
-  }
-  const paper = resources.find(r => r.kind === "paper" && r.status === "ready");
-  if (tabs && paper) {
-    tabs.children[0].after(h("button", { role: "tab", class: state.tab === "paper" ? "tab is-active" : "tab",
-      "aria-selected": String(state.tab === "paper"), onclick: () => actions.openResource(paper.id) }, "Paper"));
-  }
-  if (state.tab === "paper" || state.tab === "resource") {
-    const resource = resources.find(r => r.id === state.resourceId);
-    const main = page.querySelector(".main");
-    if (resource && main) {
-      while (main.children.length > 1) main.lastChild.remove();
-      const content = state.tab === "paper" && resource.status === "ready"
-        ? h("iframe", { class: "paper-frame", title: resource.name, src: state.resourceUrl })
-        : h("section", { class: "resource-detail", "aria-label": "Resource details" },
-            h("h3", {}, resource.name), h("p", {}, `${resource.kind} · ${resource.status}`),
-            resource.error && h("p", {}, resource.error),
-            h("p", {}, "Local: " + (resource.access?.localPath || resource.access?.pdf || "Not acquired")),
-            (resource.metadata?.files || []).map(f => h("div", {},
-              h("p", {}, f.path), h("p", {}, `${f.rowCount ?? "Unknown"} rows · ${f.columns?.length || 0} inspected columns`),
-              h("p", {}, (f.columns || []).map(c => `${c.name} (${c.type})`).join(", ")))),
-            h("p", {}, "Source: " + (resource.source?.url || resource.source?.objectPath || "")));
-      main.append(content);
-    }
   }
   return page;
 }

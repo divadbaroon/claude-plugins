@@ -295,3 +295,18 @@ input, textarea { outline: none; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* Research materials stay subordinate to Plan and use the existing center pane. */
+.resource-list { margin-top: 24px; padding: 16px 0; border-top: 1px solid var(--bd); }
+.resource-link { display: block; width: 100%; text-align: left; padding: 7px 0; border: 0; background: none; color: var(--mut); font: inherit; font-size: 12px; cursor: pointer; overflow-wrap: anywhere; }
+.resource-link:hover { color: var(--ink); }
+.paper-frame { width: 100%; flex: 1; min-height: 55vh; border: 1px solid var(--bd); }
+.resource-detail { padding: 24px 0; overflow: auto; font-size: 13px; overflow-wrap: anywhere; }
+.resource-detail p { margin: 12px 0; }
+.resource-provenance { color: var(--mut); }
+@media (max-width: 700px) {
+  .body { flex-direction: column; overflow: auto; }
+  .rail { width: 100%; max-height: 38vh; flex-shrink: 0; border-bottom: 1px solid var(--bd); }
+  .main { flex: 1 0 55vh; }
+  .tabs { flex-wrap: wrap; }
+}

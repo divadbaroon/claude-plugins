@@ -58,9 +58,3 @@
   .test-workspace .preview, .test-workspace .terminal { min-height: 280px; }
   .test-workspace .tabs { flex-wrap: wrap; gap: 12px; }
 }
-
-/* Research materials are subordinate to the existing Plan. */
-.resource-list { margin-top: 24px; padding: 16px 0; border-top: 1px solid var(--line, #e5e5e5); }
-.resource-link { display: block; width: 100%; text-align: left; padding: 7px 0; border: 0; background: none; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
-.paper-frame { width: 100%; flex: 1; min-height: 65vh; border: 1px solid var(--line, #e5e5e5); }
-.resource-detail { padding: 24px; overflow: auto; font-size: 13px; overflow-wrap: anywhere; }

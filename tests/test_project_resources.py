@@ -135,6 +135,7 @@ class ResourceTests(unittest.TestCase):
 
 
 class ResourceBrowserTests(BrowserCase):
+    route = "/test"
     def test_resources_pdf_and_details_survive_reload(self):
         seed_design(self.chat)
         cwd = bind_project(self)
@@ -143,24 +144,172 @@ class ResourceBrowserTests(BrowserCase):
         CS.paths("chat", self.root).manifest.write_text(json.dumps(manifest))
         def fetcher(url,path,limit): path.write_bytes(pdf_bytes() if path.suffix == '.pdf' else b'timestamp,event\n1,edit\n2,run\n')
         R.prepare(self.root, cwd, [resource('paper'),resource()], fetch=fetcher)
-        with server_for(self.chat) as url, self.page_on(url + '/test') as (page, errors):
+        with server_for(self.chat) as url, self.page_on(url + self.route) as (page, errors):
             self.expect(page.get_by_role('tab', name='Paper', exact=True)).to_be_visible()
             page.get_by_role('button', name='▤ Research paper · Ready').click()
             self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src', '/api/project-paper?id=paper-one')
             self.assertEqual(pdf_bytes(), fetch(url+'/api/project-paper?id=paper-one')[2])
             self.assertEqual(404, fetch(url+'/api/project-paper?id=../../etc/passwd')[0])
             page.wait_for_timeout(1500)  # Native PDF plugin paints asynchronously.
-            page.screenshot(path='/private/tmp/resources-paper.png')
+            page.screenshot(path='/private/tmp/recovery-' + ('production' if self.route == '/' else 'test') + '-paper.png')
             page.reload(); self.expect(page.get_by_role('tab', name='Paper', exact=True)).to_be_visible()
             page.get_by_role('button', name='▣ Session events · Ready').click()
             self.expect(page.get_by_label('Resource details')).to_contain_text('2 rows')
             self.expect(page.get_by_label('Resource details')).to_contain_text('timestamp')
-            page.screenshot(path='/private/tmp/resources-dataset.png')
+            page.screenshot(path='/private/tmp/recovery-' + ('production' if self.route == '/' else 'test') + '-dataset.png')
             for label in ('Bart', 'Live preview', 'Terminal'):
                 page.get_by_role('tab', name=label, exact=True).click()
             self.assertEqual([], errors)
     def test_no_paper_no_tab(self):
         seed_design(self.chat)
-        with server_for(self.chat) as url, self.page_on(url+'/test') as (page, errors):
+        with server_for(self.chat) as url, self.page_on(url+self.route) as (page, errors):
             self.expect(page.get_by_role('tab', name='Paper', exact=True)).to_have_count(0)
             self.expect(page.get_by_label('Resources', exact=True)).to_have_count(0)
+
+
+class ProductionResourceBrowserTests(ResourceBrowserTests):
+    route = '/'
+
+    def test_fallback_and_blocked_resources_are_truthful_and_compact(self):
+        seed_design(self.chat)
+        cwd = bind_project(self)
+        manifest = CS.load_manifest('chat', self.root)
+        manifest['project_home'] = str(cwd)
+        CS.paths('chat', self.root).manifest.write_text(json.dumps(manifest))
+        fallback = resource()
+        fallback['provenance'] = {'fallbackOf': {'title': 'Original ICU records', 'kind': 'compatible_substitute',
+            'access': {'state': 'restricted'}, 'reason': 'Original requires author approval',
+            'source': [{'url': 'https://lab.example/records'}]}}
+        R.prepare(self.root, cwd, [fallback], fetch=lambda url,path,limit:path.write_bytes(b'timestamp,event\n1,edit\n'))
+        blocked = dict(resource(gated=True), id='gated', name='Gated dataset')
+        failed = dict(resource(), id='failed', name='Missing dataset')
+        R.prepare(self.root,cwd,[blocked,failed],fetch=lambda *args:(_ for _ in ()).throw(OSError('offline')))
+        with server_for(self.chat) as url, self.page_on(url) as (page,errors):
+            page.get_by_role('button',name='▣ Session events · Ready').click()
+            details = page.get_by_label('Resource details')
+            self.expect(details).to_contain_text('Fallback for Original ICU records')
+            self.expect(details).to_contain_text('.engelbart-resources/dataset-one/download.csv')
+            self.expect(details).to_contain_text('timestamp')
+            self.expect(details).not_to_contain_text('sampleSummary')
+            page.get_by_role('button',name='▣ Gated dataset · Needs you').click()
+            self.expect(details).to_contain_text('Needs you')
+            self.expect(details).not_to_contain_text('Ready')
+            page.get_by_role('button',name='▣ Missing dataset · Failed').click()
+            self.expect(details).to_contain_text('Failed')
+            page.set_viewport_size({'width':390,'height':844})
+            self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),390)
+            page.screenshot(path='/private/tmp/recovery-production-resources-mobile.png')
+            for label in ('Bart','Live preview','Terminal'):
+                page.get_by_role('tab',name=label,exact=True).click()
+            self.assertEqual([],errors)
+
+
+class ResourceRetryTests(unittest.TestCase):
+    setUp = ResourceTests.setUp
+    prepare = ResourceTests.prepare
+
+    def test_ready_paper_is_reused_only_while_both_artifacts_are_intact(self):
+        r = self.prepare(resource('paper'), pdf_bytes())
+        fetcher = mock.Mock(side_effect=lambda url,path,limit:path.write_bytes(pdf_bytes()))
+        R.prepare(self.root,self.cwd,[resource('paper')],fetch=fetcher)
+        fetcher.assert_not_called()
+        for key in ('text','pdf'):
+            (self.cwd / r['access'][key]).unlink()
+            rows = R.prepare(self.root,self.cwd,[resource('paper')],fetch=fetcher)
+            self.assertEqual('ready',rows[0]['status']);self.assertEqual(1,len(rows))
+        self.assertEqual(2,fetcher.call_count)
+        (self.cwd / r['access']['pdf']).write_bytes(b'corrupt')
+        self.assertEqual('ready',R.prepare(self.root,self.cwd,[resource('paper')],fetch=fetcher)[0]['status'])
+        self.assertEqual(3,fetcher.call_count)
+
+    def test_failed_needs_user_and_interrupted_records_retry_with_fresh_source(self):
+        for status in ('failed','needs_user','acquiring'):
+            with self.subTest(status=status):
+                old = dict(resource(gated=True),status=status,provenance={'origin':'keep this'})
+                old['source']['downloadUrl'] = 'https://expired.example/old.csv'
+                PS.save_project(self.root,self.cwd,{'resources':[old]})
+                new = dict(resource(gated=False,downloadUrl='https://public.example/events.csv?token=transient'),status=status)
+                fetched=[]; transitions=[]
+                save=PS.save_project
+                def track(root,cwd,value):
+                    transitions.append(value['resources'][0]['status'])
+                    return save(root,cwd,value)
+                def fetcher(url,path,limit): fetched.append(url);path.write_bytes(b'event\nedit\n')
+                with mock.patch.object(PS,'save_project',side_effect=track):
+                    rows=R.prepare(self.root,self.cwd,[new],fetch=fetcher)
+                self.assertEqual(1,len(rows));self.assertEqual('ready',rows[0]['status'])
+                self.assertEqual('keep this',rows[0]['provenance']['origin'])
+                self.assertEqual(['acquiring','ready'],transitions)
+                self.assertEqual(['https://public.example/events.csv?token=transient'],fetched)
+                self.assertNotIn('transient',json.dumps(PS.load_project(self.root,self.cwd)))
+                again=mock.Mock(side_effect=AssertionError('healthy record must be reused'))
+                R.prepare(self.root,self.cwd,[new],fetch=again);again.assert_not_called()
+
+    def test_missing_and_invalid_primary_files_are_reprepared(self):
+        for damage in ('missing','invalid','missing_directory'):
+            with self.subTest(damage=damage):
+                r=self.prepare(resource(),b'event\nedit\n')
+                path=self.cwd/r['access']['primaryFiles'][0]
+                if damage == 'missing': path.unlink()
+                elif damage == 'missing_directory': R.shutil.rmtree(path.parent)
+                else: path.write_bytes(b'event\nxxxx\n') # Same size, changed bounded fingerprint.
+                fetcher=mock.Mock(side_effect=lambda url,path,limit:path.write_bytes(b'event\nrun\n'))
+                rows=R.prepare(self.root,self.cwd,[resource()],fetch=fetcher)
+                self.assertEqual(1,fetcher.call_count);self.assertEqual(1,len(rows));self.assertEqual('ready',rows[0]['status'])
+
+    def test_repeated_failure_updates_one_record_and_stays_failed(self):
+        fail=mock.Mock(side_effect=OSError('network token must not leak'))
+        for _ in range(3):
+            rows=R.prepare(self.root,self.cwd,[resource()],fetch=fail)
+            self.assertEqual(1,len(rows));self.assertEqual('failed',rows[0]['status'])
+            self.assertNotIn('token must not leak',rows[0]['error'])
+        self.assertEqual(3,fail.call_count)
+
+    def test_synthetic_manifest_is_materialized_by_same_inspector(self):
+        record=resource(inlineCsv='session_id,measurement\ndemo-1,4\ndemo-1,7\n')
+        record['name']='Synthetic stand-in for ICU records'
+        record['provenance']={'fallbackOf':{'title':'ICU records','kind':'synthetic_fallback','reason':'Requires author approval'}}
+        fetcher=mock.Mock(side_effect=AssertionError('inline fixture is not a download'))
+        rows=R.prepare(self.root,self.cwd,[record],fetch=fetcher)
+        self.assertEqual('ready',rows[0]['status']);self.assertEqual(2,rows[0]['metadata']['files'][0]['rowCount'])
+        self.assertIn('synthetic_fallback',R.context(self.root,self.cwd))
+        self.assertIn('ICU records',R.context(self.root,self.cwd))
+        self.assertEqual(1,len(R.prepare(self.root,self.cwd,[record],fetch=fetcher)))
+        fetcher.assert_not_called()
+
+
+    def test_same_onboarding_claim_can_retry_without_rewriting_project_or_duplicating_resources(self):
+        payload=web_payload()
+        record=resource();record['provenance']={'onboardingId':'onboarding-one'}
+        payload['resources']=[record]
+        prepare=R.prepare
+        with mock.patch.object(R,'prepare',side_effect=lambda root,cwd,rows:prepare(root,cwd,rows,fetch=lambda *args:(_ for _ in ()).throw(OSError('offline')))):
+            first=WS.materialize(payload,self.root)
+        self.assertTrue(first['ok'])
+        self.assertEqual('failed',PS.load_project(self.root,first['cwd'])['resources'][0]['status'])
+        tree_before=CS.paths(first['tree_session'],self.root).goals.read_bytes()
+        fetcher=mock.Mock(side_effect=lambda url,path,limit:path.write_bytes(b'event\nedit\n'))
+        with mock.patch.object(R,'prepare',side_effect=lambda root,cwd,rows:prepare(root,cwd,rows,fetch=fetcher)):
+            second=WS.materialize(payload,self.root)
+            third=WS.materialize(payload,self.root)
+        self.assertTrue(second['ok']);self.assertTrue(third['ok'])
+        self.assertEqual(first['cwd'],third['cwd']);self.assertEqual(1,fetcher.call_count)
+        records=PS.load_project(self.root,first['cwd'])['resources']
+        self.assertEqual(1,len(records));self.assertEqual('ready',records[0]['status'])
+        self.assertEqual(tree_before,CS.paths(first['tree_session'],self.root).goals.read_bytes())
+        payload['resources'][0]['provenance']['onboardingId']='different-onboarding'
+        self.assertFalse(WS.materialize(payload,self.root)['ok'])
+
+
+    def test_signed_dataset_url_and_nested_access_evidence_are_not_persisted(self):
+        signed='https://data.example/events.csv?X-Amz-Signature=secret&Expires=10'
+        record=resource(url=signed)
+        record['metadata']={'accessCheck':{'downloadUrl':signed}}
+        record['provenance']={'fallbackOf':{'source':[{'url':signed}]}}
+        fetcher=mock.Mock(side_effect=lambda url,path,limit:path.write_bytes(b'event\nedit\n'))
+        rows=R.prepare(self.root,self.cwd,[record],fetch=fetcher)
+        self.assertEqual(signed,fetcher.call_args.args[0])
+        self.assertEqual('ready',rows[0]['status'])
+        persisted=json.dumps(PS.load_project(self.root,self.cwd))
+        self.assertNotIn('secret',persisted);self.assertNotIn('downloadUrl',persisted)
+        self.assertEqual('https://data.example/events.csv',rows[0]['source']['url'])
