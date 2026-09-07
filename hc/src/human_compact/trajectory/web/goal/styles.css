@@ -106,9 +106,7 @@ input, textarea { outline: none; }
 .home-note { margin: 14px 0 0; font: 13px/1.5 var(--font-sans); color: var(--del); }
 .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
 .card { position: relative; display: flex; flex-direction: column; gap: 7px; min-height: 118px; padding: 16px 18px 14px; border: 1px solid #000; border-radius: 0; background: #fff; color: #000; text-align: left; cursor: pointer; }
-.card:hover { outline: 1px solid #000; outline-offset: -3px; }
 .card:disabled { cursor: progress; opacity: var(--hover-opacity); }
-.card.is-here { outline: 1px solid #000; outline-offset: -3px; }
 .card-name { display: flex; align-items: baseline; gap: 8px; font: 500 14px/1.35 var(--font-sans); color: #000; text-wrap: pretty; }
 .card-check { flex: none; width: 18px; height: 18px; border-radius: var(--radius-round); background: #000; color: #fff; font: 600 11px/18px var(--font-sans); text-align: center; }
 .card-text { flex: 1 1 auto; font: 13px/1.5 var(--font-sans); color: #000; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
