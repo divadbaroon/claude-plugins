@@ -29,8 +29,10 @@ sys.path.insert(0, str(ROOT / "hc" / "src"))
 
 from human_compact.trajectory import autosync as AUTOSYNC  # noqa: E402
 from human_compact.trajectory import brainstorm as BRAIN  # noqa: E402
+from human_compact.trajectory import build as BUILD  # noqa: E402
 from human_compact.trajectory import chat_state as CS  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
+from human_compact.trajectory import preview as PV  # noqa: E402
 from human_compact.trajectory import reader as READER  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
 from human_compact.trajectory import web_setup as WS  # noqa: E402
@@ -124,6 +126,38 @@ PIECE_NOTES = {
     "Client PUTs": "Browser writes to storage\n\nWhy this matters: it is the traffic being moved",
     "Retire the proxy": "Delete the old path\n\nWhy this matters: two paths is one too many",
 }
+
+
+def bind_project(case, serving_port=None):
+    """A project directory for the case's chat, named in the chat's manifest
+    the way the directory a chat was started in is. With ``serving_port``
+    it holds a page and a script that serves it there; without, a script
+    that only prints. Whatever it started is stopped when the case ends."""
+    project = case.root / "project"
+    project.mkdir(exist_ok=True)
+    if serving_port:
+        (project / "index.html").write_text("<h1>the app</h1>")
+        (project / "serve.py").write_text(
+            "import http.server, socketserver\n"
+            f"srv = socketserver.TCPServer(('127.0.0.1', {serving_port}),"
+            " http.server.SimpleHTTPRequestHandler)\n"
+            f"print('http://127.0.0.1:{serving_port}/')\n"
+            "srv.serve_forever()\n")
+        # The Procfile names the interpreter running these tests, so the
+        # run does not hang on which `python` the machine has on its PATH.
+        (project / "Procfile").write_text(f"web: {sys.executable} serve.py\n")
+    else:
+        (project / "main.py").write_text("print('hello')\n")
+    CS.paths(case.chat.name, case.root).manifest.write_text(json.dumps({
+        "cwd": str(project), "project_bound_at": "2026-01-01T00:00:00+00:00"}))
+
+    def quiet():
+        proc = PV.running(project)
+        if proc:
+            proc.stop()
+        PV.forget(project)
+    case.addCleanup(quiet)
+    return project
 
 
 def claim_web_setup(case, payload=WEB_SETUP):
@@ -501,6 +535,44 @@ class GoalDataRouteTests(ChatCase):
             # The address still names any of them.
             self.assertEqual(bare, get_json(url + f"/api/goal-page?goal={bare}")["goal"]["id"])
 
+    def test_the_goals_list_says_how_far_each_has_come(self):
+        # The list the project's goals view draws: for each top-level goal,
+        # why it was offered and how many of its pieces are finished. Done
+        # when every piece is, or the goal was marked so; a goal with
+        # nothing under it is not done for want of pieces.
+        far = ui._apply({"op": "add_goal", "title": "Far along"}, self.chat)["id"]
+        one = ui._apply({"op": "add_goal", "title": "One", "parent_goal_id": far}, self.chat)["id"]
+        two = ui._apply({"op": "add_goal", "title": "Two", "parent_goal_id": far}, self.chat)["id"]
+        ui._apply({"op": "add_goal", "title": "Gone", "parent_goal_id": far}, self.chat)
+        bare = ui._apply({"op": "add_goal", "title": "Bare"}, self.chat)["id"]
+        goals, important = self.goals()
+        for g in goals["goals"]:
+            if g["id"] == far:
+                g["description"] = "it pays for the rest"
+            if g["id"] == one:
+                g["status"] = "completed"
+            if g["title"] == "Gone":
+                g["status"] = "archived"
+        CS.save_goals("chat", goals, important, self.root)
+        with server_for(self.chat) as url:
+            cards = {g["title"]: g for g in get_json(url + "/api/goal-page")["goals"]}
+            self.assertEqual({"id": far, "title": "Far along", "status": "active",
+                              "why": "it pays for the rest", "subgoals": 2,
+                              "completed": 1, "done": False},
+                             {k: v for k, v in cards["Far along"].items() if k != "updated_at"})
+            self.assertEqual({"why": "", "subgoals": 0, "completed": 0, "done": False},
+                             {k: cards["Bare"][k] for k in ("why", "subgoals", "completed", "done")})
+            goals, important = self.goals()
+            for g in goals["goals"]:
+                if g["id"] == two:
+                    g["status"] = "completed"
+                if g["id"] == bare:
+                    g["status"] = "completed"
+            CS.save_goals("chat", goals, important, self.root)
+            cards = {g["title"]: g for g in get_json(url + "/api/goal-page")["goals"]}
+            self.assertEqual((2, 2, True), tuple(cards["Far along"][k] for k in ("subgoals", "completed", "done")))
+            self.assertTrue(cards["Bare"]["done"])
+
     def test_a_project_set_up_on_the_web_opens_on_the_direction_chosen(self):
         chat, tree = claim_web_setup(self)
         # The chat's own workspace and the project's read the same tree,
@@ -527,8 +599,10 @@ class GoalDataRouteTests(ChatCase):
                              answer["project"])
             # The directions not taken are kept, out of the way: the
             # address could still name one.
-            self.assertEqual(["Direct-to-storage uploads", "Resumable uploads", "Upload quotas"],
-                             [g["title"] for g in answer["goals"]])
+            self.assertEqual([("Direct-to-storage uploads", "the API is the bottleneck", 3),
+                              ("Resumable uploads", "large files fail midway", 0),
+                              ("Upload quotas", "storage is unmetered", 0)],
+                             [(g["title"], g["why"], g["subgoals"]) for g in answer["goals"]])
         # The notes are the reader's from here: a save through the page's
         # door replaces the seed, and the page reads the saved text back.
         with server_for(chat) as url:
@@ -708,6 +782,64 @@ class GoalDataRouteTests(ChatCase):
             finally:
                 response.close()
                 connection.close()
+
+
+class PanesRouteTests(ChatCase):
+    """The side panes' route: the preview engine's state and the build log,
+    and the preview's own operations behind it."""
+
+    def panes(self, url, subgoal):
+        return get_json(url + "/api/goal-page/panes?goal=" + subgoal)
+
+    def test_a_chat_in_no_project_has_nothing_to_run_and_no_build_yet(self):
+        goal, subgoals = seed_design(self.chat)
+        with server_for(self.chat) as url:
+            answer = self.panes(url, subgoals[0])
+            self.assertTrue(answer["ok"])
+            self.assertEqual(subgoals[0], answer["subgoal_id"])
+            self.assertEqual("unconfigured", answer["preview"]["status"])
+            self.assertIn("not bound to a project", answer["preview"]["reason"])
+            self.assertEqual({"lines": [], "run": None}, answer["build"])
+
+    def test_the_project_is_worked_out_on_a_click_and_the_build_log_is_the_subgoal_s(self):
+        goal, subgoals = seed_design(self.chat)
+        bind_project(self, serving_port=8996)
+        BUILD.note_activity("chat", self.root, subgoals[0], "start", "started on 2 rows")
+        BUILD.note_activity("chat", self.root, subgoals[0], "tool", "Edit app.py")
+        with server_for(self.chat) as url:
+            # Nothing runs and nothing is worked out by reading the pane.
+            before = self.panes(url, subgoals[0])
+            self.assertEqual("unconfigured", before["preview"]["status"])
+            self.assertFalse(before["preview"]["configured"])
+            self.assertEqual(["started on 2 rows", "Edit app.py"],
+                             [l["text"] for l in before["build"]["lines"]])
+            self.assertEqual([], self.panes(url, subgoals[1])["build"]["lines"])
+            # The click: detection reads the files and finds the script
+            # that serves, so the pane can offer its page.
+            found = post_json(url + "/api/goal-page/preview",
+                              {"op": "preview_configure", "auto": True}, {"Origin": url})
+            self.assertTrue(found["ok"], found)
+            after = self.panes(url, subgoals[0])["preview"]
+            self.assertEqual("ready", after["status"])
+            self.assertTrue(after["ui"]["available"], after["ui"])
+            self.assertIn("serve.py", after["profile"]["command"])
+            self.assertIsNone(PV.running(self.root / "project"))
+            # Not the preview's operation, not an operation, not JSON.
+            for body in ({"op": "add_goal", "title": "x"}, {"op": ""}, {"op": "preview_bogus"}):
+                answer = post_json(url + "/api/goal-page/preview", body, {"Origin": url})
+                self.assertFalse(answer["ok"], body)
+                self.assertIn("not an operation of the preview", answer["error"])
+            request = urllib.request.Request(
+                url + "/api/goal-page/preview", data=b"op=preview_stop", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
+            # Stopping what is not running says so rather than pretending.
+            answer = post_json(url + "/api/goal-page/preview",
+                               {"op": "preview_stop"}, {"Origin": url})
+            self.assertFalse(answer["ok"])
 
 
 class BartRouteTests(ChatCase):
@@ -919,6 +1051,42 @@ class AccountRouteTests(ChatCase):
         answer = self.status()
         self.assertTrue(answer["connected"])
         self.assertEqual("someone@example.com", answer["email"])
+
+
+class ReaderRouteTests(ChatCase):
+    """The level in the account menu: read with the profile every prompt
+    reads, and written back onto it without touching the rest."""
+
+    def test_the_level_is_kept_on_the_profile_and_the_rest_stays(self):
+        READER.save({"name": "Maya", "year": "3", "major": "Statistics", "level": "some",
+                     "knowledge": [{"area": "Kalman filters", "level": 50}]}, self.root)
+        with mock.patch("human_compact.trajectory.supabase_client.set_reader_profile",
+                        side_effect=RuntimeError("not signed in")), \
+                server_for(self.chat) as url:
+            before = get_json(url + "/api/reader")
+            self.assertEqual(("some", "Some technical detail"),
+                             (before["profile"]["level"], before["level_label"]))
+            answer = post_json(url + "/api/goal-page/reader", {"level": "expert"}, {"Origin": url})
+            self.assertTrue(answer["ok"])
+            self.assertEqual(("expert", "Expert"), (answer["profile"]["level"], answer["level_label"]))
+            self.assertFalse(answer["synced"])
+            held = READER.load(self.root)
+            self.assertEqual("expert", held["level"])
+            self.assertEqual(("Maya", "3", "Statistics"), (held["name"], held["year"], held["major"]))
+            self.assertEqual([("Kalman filters", 50)],
+                             [(k["area"], k["level"]) for k in held["knowledge"]])
+            self.assertEqual("Expert", get_json(url + "/api/reader")["level_label"])
+            # Only the four levels; anything else is refused and nothing moves.
+            for body in ({"level": "guru"}, {"level": ""}, {}):
+                self.assertFalse(post_json(url + "/api/goal-page/reader", body, {"Origin": url})["ok"], body)
+            self.assertEqual("expert", READER.load(self.root)["level"])
+            request = urllib.request.Request(
+                url + "/api/goal-page/reader", data=b"level=plain", method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                NO_PROXY_OPENER.open(request, timeout=5)
+            with caught.exception:
+                self.assertEqual(415, caught.exception.code)
 
 
 class AccountCommandTests(ChatCase):
@@ -1136,7 +1304,7 @@ class GoalPageBrowserTests(BrowserCase):
         with mock.patch("human_compact.trajectory.build.start", start), \
                 mock.patch.object(BRAIN, "ask", ask), \
                 server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            # The goal, its breakdown, and the first subgoal selected with
+            # The goal, its plan, and the first subgoal selected with
             # its own two todos -- all of it from the chat's goals.json.
             expect(page.get_by_role("heading", name=GOAL_TITLE)).to_be_visible()
             subs = page.locator(".rail .sub")
@@ -1147,14 +1315,12 @@ class GoalPageBrowserTests(BrowserCase):
             expect(rows.nth(0).locator(".todo-text")).to_have_value(FIRST_TODOS[0])
             expect(page.get_by_role("button", name="Build all")).to_be_enabled()
 
-            # Notes belong to the subgoal they were written on, and reach
-            # the chat's files once the reader pauses.
-            page.locator(".notes-input").fill("first notes")
+            # The rail is the plan; the pane is Bart, and no notes above him.
+            expect(page.locator(".rail-label")).to_have_text("Plan")
+            expect(page.get_by_role("tab", name="Bart")).to_have_attribute("aria-selected", "true")
+            expect(page.locator(".notes-input")).to_have_count(0)
             subs.nth(1).click()
             expect(subs.nth(1)).to_have_class(active)
-            expect(page.locator(".notes-input")).to_have_value("")
-            self.assertTrue(wait_for(
-                lambda: GM.by_id(self.goals()[0], subgoals[0])["notes"] == "first notes"))
             # No todos yet, so the pane is folded away behind its button.
             expect(page.get_by_role("button", name="Show todos")).to_be_visible()
             expect(page.locator(".todo-list")).to_have_count(0)
@@ -1222,25 +1388,23 @@ class GoalPageBrowserTests(BrowserCase):
                 re.compile("Imagine this subgoal is done"))
             expect(page.locator(".rail .sub").nth(0).locator(".msg")).to_have_count(0)
 
-            # Back on the first subgoal: its notes, its todos, none of the
-            # second's conversation.
+            # Back on the first subgoal: its todos, none of the second's
+            # conversation.
             subs.nth(0).click()
-            expect(page.locator(".notes-input")).to_have_value("first notes")
             expect(rows).to_have_count(2)
             expect(page.locator(".msg")).to_have_count(0)
 
-            # The other two panes, and the host beside them.
+            # The other two panes: this chat is in no project, and both say
+            # so rather than drawing something -- no address beside them.
             page.get_by_role("tab", name="Live preview").click()
-            expect(page.get_by_role("button", name="Import dataset")).to_be_visible()
-            expect(page.get_by_text("CSV only · up to 100mb")).to_be_visible()
-            expect(page.locator(".host")).to_have_text("localhost:5173")
-            page.get_by_role("tab", name="Terminal").click()
-            expect(page.locator(".terminal")).to_contain_text("$ npm run dev")
-            expect(page.locator(".terminal")).to_contain_text("ready · http://localhost:5173")
-            expect(page.locator(".host")).to_have_text("localhost:5173")
-            page.get_by_role("tab", name="Plan").click()
+            expect(page.locator(".preview")).to_contain_text("not bound to a project")
+            expect(page.get_by_role("button", name="Find how to run it")).to_have_count(0)
             expect(page.locator(".host")).to_have_count(0)
-            expect(page.locator(".notes-input")).to_have_value("first notes")
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal")).to_contain_text("no build has run on this subgoal yet")
+            expect(page.locator(".host")).to_have_count(0)
+            page.get_by_role("tab", name="Bart").click()
+            expect(rows).to_have_count(2)
 
             # A subgoal added from the rail is selected as it lands, and is
             # a goal under this one in the chat's tree.
@@ -1272,7 +1436,6 @@ class GoalPageBrowserTests(BrowserCase):
             expect(subs.nth(4)).to_have_text("Validate the dataset's columns")
             expect(subs.nth(3)).to_have_class(active)
             subs.nth(0).click()
-            expect(page.locator(".notes-input")).to_have_value("first notes")
             expect(rows).to_have_count(2)
 
             # Build all hands the open rows to the builder. Refused, it says
@@ -1313,9 +1476,8 @@ class GoalPageBrowserTests(BrowserCase):
             # rail is ready for the first subgoal and the pane says so.
             expect(page.get_by_role("heading", name=GOAL_TITLE)).to_be_visible()
             expect(page.get_by_label("What is the goal?")).to_have_count(0)
-            expect(page.get_by_role("tab", name="Plan")).to_be_visible()
+            expect(page.get_by_role("tab", name="Bart")).to_be_visible()
             expect(page.locator(".pane.is-blank")).to_contain_text("Break it into subgoals")
-            expect(page.locator(".notes-input")).to_have_count(0)
             first = page.get_by_label("New subgoal")
             expect(first).to_be_focused()
             goals, _important = self.goals()
@@ -1323,7 +1485,7 @@ class GoalPageBrowserTests(BrowserCase):
                              [(g["title"], g["status"]) for g in goals["goals"]])
             self.assertFalse(goals["goals"][0].get("parent_goal_id"))
             # Escape leaves the hint with its own way in; the first subgoal
-            # named is selected, with its notes and conversation.
+            # named is selected, with its conversation.
             first.press("Escape")
             page.get_by_role("button", name="+ Add the first subgoal").click()
             first = page.get_by_label("New subgoal")
@@ -1332,7 +1494,7 @@ class GoalPageBrowserTests(BrowserCase):
             first.press("Enter")
             expect(page.locator(".rail .sub")).to_have_count(1)
             expect(page.locator(".rail .sub").nth(0)).to_have_class(re.compile(r"\bis-active\b"))
-            expect(page.locator(".notes-input")).to_be_visible()
+            expect(page.get_by_label("Message Bart")).to_be_visible()
             expect(page.locator(".pane.is-blank")).to_have_count(0)
             # This load and the next.
             page.reload(wait_until="domcontentloaded")
@@ -1345,35 +1507,134 @@ class GoalPageBrowserTests(BrowserCase):
         chat, _tree = claim_web_setup(self)
         with server_for(chat) as url, self.page_on(url) as (page, errors):
             # The header is the path to where the reader is -- the project
-            # from the web setup, then the direction they chose -- with the
-            # plan they approved under it.
+            # from the web setup, then the direction they chose -- and
+            # nothing else: the plan is on the goals list, not up here.
             expect(page.locator(".crumbs")).to_contain_text("Engelbart")
             expect(page.locator(".project-name")).to_have_text("Signed uploads")
             expect(page.get_by_role("heading", name="Direct-to-storage uploads")).to_be_visible()
-            expect(page.locator(".goal-plan")).to_have_text(
-                "Move uploads off the API server.\nSign, then PUT.")
+            expect(page.locator(".goal-plan")).to_have_count(0)
             expect(page.get_by_label("What is the goal?")).to_have_count(0)
-            # The pieces are the rail, the first one open, its notes what
-            # the setup said about it and its rows ready to build.
+            # The pieces are the rail, the first one open with its rows
+            # ready to build. What the setup said about each piece is in
+            # the tree as its notes, which this page does not draw.
+            expect(page.locator(".rail-label")).to_have_text("Plan")
             expect(page.locator(".rail .sub")).to_have_text(
                 ["Signing route", "Client PUTs", "Retire the proxy"])
-            expect(page.locator(".notes-input")).to_have_value(PIECE_NOTES["Signing route"])
+            expect(page.locator(".notes-input")).to_have_count(0)
             rows = page.locator(".todo-list .todo:not(.todo-new)")
             expect(rows).to_have_count(2)
             expect(rows.nth(0).locator(".todo-text")).to_have_value("Add POST /uploads/sign")
             expect(rows.nth(1).locator(".todo-text")).to_have_value("Scope the token")
             page.locator(".rail .sub").nth(2).click()
-            expect(page.locator(".notes-input")).to_have_value(PIECE_NOTES["Retire the proxy"])
-            # Editable as before: typed over, saved to the tree, kept.
-            page.locator(".notes-input").fill("Delete the old path once the client PUTs land.")
-            self.assertTrue(wait_for(lambda: any(
-                g.get("notes") == "Delete the old path once the client PUTs land."
-                for g in CS.load_goals(chat.name, self.root)[0]["goals"])))
+            expect(page.locator(".todo-list .todo:not(.todo-new)")).to_have_count(0)
+            self.assertEqual(PIECE_NOTES["Retire the proxy"], next(
+                g["notes"] for g in CS.load_goals(chat.name, self.root)[0]["goals"]
+                if g["title"] == "Retire the proxy"))
             page.reload(wait_until="domcontentloaded")
             expect(page.locator(".project-name")).to_have_text("Signed uploads")
-            page.locator(".rail .sub").nth(2).click()
-            expect(page.locator(".notes-input")).to_have_value(
-                "Delete the old path once the client PUTs land.")
+            expect(page.locator(".rail .sub")).to_have_text(
+                ["Signing route", "Client PUTs", "Retire the proxy"])
+            # The brand is every project: this one, first, marked as the
+            # workspace the page is in.
+            page.get_by_role("button", name="Engelbart", exact=True).click()
+            cards = page.locator(".home .card")
+            expect(page.get_by_role("heading", name="Projects")).to_be_visible()
+            expect(cards.first.locator(".card-name")).to_have_text("Signed uploads")
+            expect(cards.first).to_have_class(re.compile(r"\bis-here\b"))
+            expect(cards.first.locator(".card-text")).to_have_text("Move uploads off the API server.")
+            expect(cards.first.locator(".card-facts")).to_contain_text("this workspace")
+            # The project's name is its goals: the three directions offered,
+            # each with its why, the chosen one open with its pieces counted.
+            page.locator(".project-name").click()
+            expect(page.get_by_role("heading", name="Goals of Signed uploads")).to_be_visible()
+            expect(page.locator(".home-sub")).to_have_text("Move uploads off the API server.\nSign, then PUT.")
+            cards = page.locator(".home .card")
+            expect(cards.locator(".card-name")).to_have_text(
+                ["Direct-to-storage uploads", "Resumable uploads", "Upload quotas"])
+            expect(cards.locator(".card-text")).to_have_text(
+                ["the API is the bottleneck", "large files fail midway", "storage is unmetered"])
+            expect(cards.nth(0)).to_have_class(re.compile(r"\bis-here\b"))
+            expect(cards.nth(0).locator(".card-facts")).to_have_text("0 of 3 subgoals doneopen")
+            expect(cards.nth(1).locator(".card-facts")).to_have_text("nothing under it yet")
+            expect(page.locator(".card.is-done")).to_have_count(0)
+            # A goal card opens that goal here, and the address names it, so
+            # a reload stays on it.
+            cards.nth(1).click()
+            expect(page.get_by_role("heading", name="Resumable uploads")).to_be_visible()
+            expect(page.locator(".rail .sub")).to_have_count(0)
+            expect(page.get_by_text("Break it into subgoals", exact=False)).to_be_visible()
+            self.assertIn("goal=", page.url)
+            page.reload(wait_until="domcontentloaded")
+            expect(page.get_by_role("heading", name="Resumable uploads")).to_be_visible()
+            # The goal's name is the way back to it from either list.
+            page.locator(".project-name").click()
+            expect(page.get_by_role("heading", name="Goals of Signed uploads")).to_be_visible()
+            page.locator(".goal-title button").click()
+            expect(page.locator(".rail-label")).to_have_text("Plan")
+            # A direction whose every piece is finished says so on its card.
+            goals, important = CS.load_goals(chat.name, self.root)
+            for g in goals["goals"]:
+                if g["title"] in ("Signing route", "Client PUTs", "Retire the proxy"):
+                    g["status"] = "completed"
+            CS.save_goals(chat.name, goals, important, self.root)
+            page.reload(wait_until="domcontentloaded")
+            page.locator(".project-name").click()
+            done = page.locator(".home .card.is-done")
+            expect(done).to_have_count(1)
+            expect(done.locator(".card-name")).to_have_text("✓Direct-to-storage uploads")
+            expect(done.locator(".card-facts")).to_have_text("Done")
+            expect(done).to_have_attribute("aria-label", "Direct-to-storage uploads, done")
+            self.assertEqual([], errors)
+
+    def test_the_preview_shows_the_project_s_page_and_the_terminal_follows_the_build(self):
+        expect = self.expect
+        port = 8995
+        goal, subgoals = seed_design(self.chat)
+        project = bind_project(self, serving_port=port)
+        BUILD.note_activity("chat", self.root, subgoals[0], "start", "started on 2 rows")
+        BUILD.note_activity("chat", self.root, subgoals[0], "say", "Adding the import button first.")
+        with server_for(self.chat) as url, self.page_on(url) as (page, errors):
+            # The Terminal is the open subgoal's build log, stamped.
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal .term-line")).to_have_count(3)
+            expect(page.locator(".terminal")).to_contain_text("started on 2 rows")
+            expect(page.locator(".terminal .term-say")).to_have_text(
+                re.compile(r"\d\d:\d\d:\d\d  Adding the import button first\."))
+            expect(page.locator(".term-prompt")).to_have_count(0)
+            page.locator(".rail .sub").nth(1).click()
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal")).to_contain_text("no build has run on this subgoal yet")
+            expect(page.locator(".terminal")).not_to_contain_text("started on 2 rows")
+
+            # The Live preview: nothing was run by opening it. One click works
+            # the project out, the next shows its page, in a frame, with the
+            # address beside the tabs; Stop ends it and says so.
+            page.get_by_role("tab", name="Live preview").click()
+            expect(page.locator(".preview")).to_contain_text("Nothing is set up to run yet")
+            self.assertIsNone(PV.running(project))
+            page.get_by_role("button", name="Find how to run it").click()
+            expect(page.locator(".pv-cmd")).to_contain_text("serve.py", timeout=10_000)
+            self.assertIsNone(PV.running(project))
+            page.get_by_role("button", name="Show UI").click()
+            frame = page.locator(".preview-frame")
+            expect(frame).to_be_visible(timeout=20_000)
+            expect(frame).to_have_attribute("src", re.compile(f"127\\.0\\.0\\.1:{port}"))
+            expect(page.locator(".host")).to_have_text(f"127.0.0.1:{port}")
+            expect(page.locator(".preview-url")).to_contain_text(f"127.0.0.1:{port}")
+            expect(frame.content_frame.get_by_role("heading", name="the app")).to_be_visible()
+            # The terminal has the run too: its command and what it printed.
+            page.get_by_role("tab", name="Terminal").click()
+            expect(page.locator(".terminal .term-cmd").first).to_contain_text("serve.py")
+            expect(page.locator(".terminal")).to_contain_text(f"http://127.0.0.1:{port}/")
+            expect(page.locator(".term-prompt")).to_be_visible()
+            page.get_by_role("tab", name="Live preview").click()
+            page.get_by_role("button", name="Stop").click()
+            expect(page.locator(".preview")).to_contain_text("It ended", timeout=10_000)
+            expect(page.locator(".host")).to_have_count(0)
+            self.assertTrue(wait_for(lambda: PV.running(project) is None
+                                     or not PV.running(project).alive()))
+            page.get_by_role("button", name="Back to the start").click()
+            expect(page.get_by_role("button", name="Show UI")).to_be_visible(timeout=10_000)
             self.assertEqual([], errors)
 
     def test_the_account_icon_says_who_the_machine_is_connected_as(self):
@@ -1395,6 +1656,37 @@ class GoalPageBrowserTests(BrowserCase):
             expect(menu).to_contain_text("Not connected")
             expect(menu.get_by_role("menuitem", name="Sign in")).to_be_visible()
             expect(menu.get_by_role("menuitem", name="Sign out")).to_have_count(0)
+            # Under a rule, the reader's level: nothing set yet, so the
+            # slider stands at the start and the stops are all open.
+            expect(menu.locator(".menu-rule")).to_have_count(1)
+            expect(menu.locator(".menu-cap")).to_have_text("Expertise")
+            expect(menu.locator(".slider-name")).to_have_text("Not set")
+            stops = menu.get_by_role("radio")
+            expect(stops).to_have_text(["Plain", "Some detail", "Technical", "Expert"])
+            expect(menu.get_by_role("radio", checked=True)).to_have_count(0)
+            # A stop picked is kept on the profile every prompt reads, and
+            # the slider says what it now means.
+            with mock.patch("human_compact.trajectory.supabase_client.set_reader_profile",
+                            side_effect=RuntimeError("not signed in")):
+                stops.nth(2).click()
+                expect(menu.locator(".slider-name")).to_have_text("Fully technical")
+                expect(menu.locator(".slider-desc")).to_contain_text("Assumes you know the field well")
+                expect(menu.get_by_role("radio", checked=True)).to_have_text("Technical")
+                wait_for(lambda: READER.load(self.root)["level"] == "full")
+                # A drag on the track lands on the stop under the finger.
+                track = menu.locator(".slider-track")
+                box = track.bounding_box()
+                page.mouse.move(box["x"] + box["width"] * 0.1, box["y"] + box["height"] / 2)
+                page.mouse.down()
+                page.mouse.move(box["x"] + box["width"] * 0.95, box["y"] + box["height"] / 2, steps=4)
+                page.mouse.up()
+                expect(menu.get_by_role("radio", checked=True)).to_have_text("Expert")
+                wait_for(lambda: READER.load(self.root)["level"] == "expert")
+            # Reopened, the slider stands where the profile is.
+            page.keyboard.press("Escape")
+            expect(menu).to_have_count(0)
+            account.click()
+            expect(menu.locator(".slider-name")).to_have_text("Expert")
             page.keyboard.press("Escape")
             expect(menu).to_have_count(0)
             account.click()

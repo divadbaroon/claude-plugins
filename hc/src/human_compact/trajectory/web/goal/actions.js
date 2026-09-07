@@ -12,7 +12,7 @@ import {
   EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder,
 } from "./store.js";
 
-const NOTES_SAVE_DELAY_MS = 400;
+const PANES_POLL_MS = 2000;
 const TODO_SAVE_DELAY_MS = 400;
 const SIGN_IN_POLL_MS = 2000;
 const REVISIONS_KEPT = 8;
@@ -26,12 +26,12 @@ export function createActions(store, services) {
   // carries the ids it was saved with, and a new message must not take one.
   const stamp = Date.now().toString(36);
   const nextId = (prefix) => `${prefix}-${stamp}-${(seq += 1)}`;
-  const notesTimers = new Map();   // subgoal id -> the save waiting on its notes
   const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
   let signInRun = 0;               // the sign-in attempt that is current
   let wanted = "";                 // the goal the address names, if any
   let loadRun = 0;                 // the load whose answer is current
-  let watcher = null;              // the open change feed
+  let watcher = null;
+  let panesTimer = null;              // the open change feed
   const seen = [];                 // the last revisions this page loaded or made
 
   // A revision this page has already seen -- loaded, or made by one of its
@@ -65,7 +65,7 @@ export function createActions(store, services) {
 
   // The store with what the server now holds laid under what the reader is
   // in the middle of: the subgoal they are on, the message they are typing,
-  // the notes or todo text a save is still waiting on, and the conversation,
+  // the todo text a save is still waiting on, and the conversation,
   // which this page writes and so keeps its own copy of once it has one.
   function merge(state, loaded) {
     const slices = {};
@@ -77,7 +77,6 @@ export function createActions(store, services) {
         slice.draft = held.draft;
         slice.newTodo = held.newTodo;
         slice.todosShown = held.todosShown;
-        if (notesTimers.has(id)) slice.notes = held.notes;
         slice.todos = slice.todos.map((todo) => {
           if (!todoTimers.has(`${id}/${todo.id}`)) return todo;
           const mine = held.todos.find((t) => t.id === todo.id);
@@ -93,6 +92,7 @@ export function createActions(store, services) {
       status: "ready",
       goal: loaded.goal,
       project: loaded.project || null,
+      goals: loaded.goals || [],
       empty: !loaded.goal,
       subgoals,
       activeId: kept ? state.activeId : (subgoals.length ? subgoals[0].id : null),
@@ -116,19 +116,35 @@ export function createActions(store, services) {
     if (run !== loadRun) return;
     saw(loaded.revision);
     set((state) => merge(state, loaded));
-    if (loaded.goal && !get().preview) loadPanes(loaded.goal.id);
+    loadPanes();
   }
 
-  async function loadPanes(goalId) {
+  // The side panes for the open subgoal: the project's run and the
+  // subgoal's build log. Read again on every refresh, on a switch of
+  // subgoal or tab, and on a slow poll while something is being watched --
+  // a build out, a process running, or a pane other than Bart's open.
+  let panesRun = 0;
+  async function loadPanes() {
+    const id = get().activeId;
+    if (!id) return;
+    const run = (panesRun += 1);
+    let panes;
     try {
-      const [preview, terminal] = await Promise.all([
-        services.getPreview({ goalId }),
-        services.getTerminal({ goalId }),
-      ]);
-      set({ preview, terminal });
+      panes = await services.getPanes({ subgoalId: id });
     } catch (error) {
       console.error("engelbart: the panes did not load", error);
+      return;
     }
+    if (run !== panesRun || get().activeId !== id) return;
+    set({ panes, panesFor: id });
+  }
+
+  function watching(state) {
+    const preview = state.panes && state.panes.preview;
+    const build = state.panes && state.panes.build;
+    return state.tab !== "bart" || Boolean(state.building)
+      || Boolean(preview && (preview.status === "running" || preview.status === "starting"))
+      || Boolean(build && build.run && build.run.running);
   }
 
   async function boot() {
@@ -142,10 +158,97 @@ export function createActions(store, services) {
         },
       });
     }
+    if (!panesTimer) {
+      panesTimer = setInterval(() => { if (watching(get())) loadPanes(); }, PANES_POLL_MS);
+    }
+  }
+
+  // --- the header's path, each step a view --------------------------------
+  //
+  // The brand is every project, the project's name is its goals, and the
+  // goal's name is the goal itself. The goals view draws from the list the
+  // page already loads; the projects view asks the server when it opens.
+
+  function showGoal() {
+    set({ view: "goal", projectsNote: null });
+  }
+
+  function showGoals() {
+    set({ view: "goals", projectsNote: null });
+  }
+
+  async function showProjects() {
+    set({ view: "projects", projectsNote: null });
+    try {
+      const { projects, active } = await services.listProjects();
+      if (get().view === "projects") set({ projects, projectsHere: active });
+    } catch (error) {
+      console.error("engelbart: the projects could not be read", error);
+      set({ projects: [], projectsNote: { text: String((error && error.message) || error) } });
+    }
+  }
+
+  // Another goal of this project: the address names it, so a reload keeps
+  // it, and the page reads it the way it read the first.
+  async function openGoal(id) {
+    wanted = id;
+    const url = new URL(window.location.href);
+    url.searchParams.set("goal", id);
+    window.history.pushState(null, "", url);
+    set({ view: "goal", tab: "bart", activeId: null, panes: null, panesFor: null });
+    await refresh();
+  }
+
+  // Another project's workspace is another window's; this one only follows
+  // the address the server gives. The project this page is in just closes
+  // the list.
+  async function openProject(cwd) {
+    if (get().projectsBusy) return;
+    if (cwd === get().projectsHere) { showGoals(); return; }
+    set({ projectsBusy: true, projectsNote: null });
+    try {
+      const { url } = await services.openProject({ cwd });
+      if (!url) throw new Error("the project has no workspace to open");
+      window.location.href = url;
+    } catch (error) {
+      set({ projectsBusy: false, projectsNote: { text: String((error && error.message) || error) } });
+    }
   }
 
   function toggleAccount() {
-    set((state) => ({ ...state, accountOpen: !state.accountOpen }));
+    const opening = !get().accountOpen;
+    set({ accountOpen: opening });
+    if (opening) loadReader();
+  }
+
+  // --- the reader's level, in the account menu -----------------------------
+  //
+  // Read when the menu opens, so the slider stands where the profile is.
+  // A stop the reader picks is drawn at once and kept through the
+  // server; what it says when it would not is shown under the slider.
+
+  async function loadReader() {
+    try {
+      set({ reader: await services.loadReader(), readerNote: null });
+    } catch (error) {
+      console.error("engelbart: the profile could not be read", error);
+      set({ reader: { profile: {}, levelLabel: "" },
+            readerNote: { text: String((error && error.message) || error) } });
+    }
+  }
+
+  async function setLevel(level) {
+    if (get().readerBusy) return;
+    const before = get().reader;
+    set({ readerBusy: true, readerNote: null,
+          reader: { profile: { ...((before && before.profile) || {}), level }, levelLabel: "" } });
+    try {
+      const reader = await services.saveLevel({ level });
+      set({ reader, readerBusy: false });
+    } catch (error) {
+      set({ reader: before, readerBusy: false,
+            readerNote: { text: String((error && error.message) || error) } });
+    }
   }
 
   function closeAccount() {
@@ -231,12 +334,36 @@ export function createActions(store, services) {
   }
 
   function selectSubgoal(id) {
-    set({ activeId: id, tab: "plan", buildNote: null });
+    set({ activeId: id, tab: "bart", buildNote: null, previewNote: null });
+    loadPanes();
   }
 
   function showTab(tab) {
     set({ tab });
+    if (tab !== "bart") loadPanes();
   }
+
+  // The preview's own operations, each a click: what the engine answers
+  // when it would not is said under the pane, and the pane is read again
+  // either way so it draws what is now true.
+  async function previewOp(op) {
+    if (get().previewBusy) return;
+    set({ previewBusy: true, previewNote: null });
+    let answer;
+    try {
+      answer = await services.previewOp(op);
+    } catch (error) {
+      answer = { ok: false, error: String((error && error.message) || error) };
+    }
+    const said = answer && !answer.ok ? (answer.reason || answer.error) : "";
+    set({ previewBusy: false, previewNote: said ? { text: said } : null });
+    await loadPanes();
+  }
+  const previewConfigure = () => previewOp({ op: "preview_configure" });
+  const previewShowUi = () => previewOp({ op: "preview_show_ui" });
+  const previewRun = (profileId) => previewOp({ op: "preview_start", profile_id: profileId || "" });
+  const previewStop = () => previewOp({ op: "preview_stop" });
+  const previewForget = () => previewOp({ op: "preview_forget" });
 
   function beginAddSubgoal() {
     set({ addingSubgoal: true, subgoalDraft: "" });
@@ -270,19 +397,8 @@ export function createActions(store, services) {
         ? current.subgoals
         : [...current.subgoals, { id: subgoal.id, title: subgoal.title, status: "active" }],
       activeId: subgoal.id,
-      tab: "plan",
+      tab: "bart",
     }));
-  }
-
-  function editNotes(text) {
-    const id = get().activeId;
-    if (!id) return;
-    changeSlice(id, { notes: text });
-    clearTimeout(notesTimers.get(id));
-    notesTimers.set(id, setTimeout(() => {
-      notesTimers.delete(id);
-      persist(services.saveNotes({ subgoalId: id, text: sliceOf(get(), id).notes }));
-    }, NOTES_SAVE_DELAY_MS));
   }
 
   function editDraft(text) {
@@ -377,7 +493,7 @@ export function createActions(store, services) {
   }
 
   // The text lands in the store on every keystroke and goes to the server
-  // once the reader pauses, like the notes.
+  // once the reader pauses.
   function editTodo(todoId, text) {
     const id = get().activeId;
     const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
@@ -451,10 +567,13 @@ export function createActions(store, services) {
 
   return {
     boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
+    showGoal, showGoals, showProjects, openGoal, openProject,
+    loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
-    selectSubgoal, showTab,
+    selectSubgoal, showTab, loadPanes,
+    previewConfigure, previewShowUi, previewRun, previewStop, previewForget,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
-    editNotes, editDraft, sendMessage, acceptProposal,
+    editDraft, sendMessage, acceptProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
     buildAll,
   };

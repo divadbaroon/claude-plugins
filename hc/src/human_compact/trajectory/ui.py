@@ -383,6 +383,22 @@ def _todo_row(row):
             "status": status}
 
 
+def _goal_card(goal, children):
+    """A top-level goal as the goals list draws it: the row, when it was
+    touched, why it was offered (the setup writes that as the description),
+    how many pieces are under it and how many of those are finished. Done
+    when every piece is, or the goal itself was marked so."""
+    kids = [c for c in children if c.get("status") != "archived"]
+    finished = sum(1 for c in kids if c.get("status") == "completed")
+    return dict(_goal_row(goal),
+                updated_at=str(goal.get("updated_at") or ""),
+                why=str(goal.get("description") or "").strip(),
+                subgoals=len(kids),
+                completed=finished,
+                done=(goal.get("status") == "completed"
+                      or (bool(kids) and finished == len(kids))))
+
+
 def _pick_goal(tops, wanted, worked=()):
     """The goal the page is about.
 
@@ -450,7 +466,8 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
         "empty": goal is None,
         "subgoals": subgoals,
         "slices": slices,
-        "goals": [dict(_goal_row(g), updated_at=str(g.get("updated_at") or ""))
+        "goals": [_goal_card(g, [c for c in rows
+                                  if c.get("parent_goal_id") == g.get("id")])
                   for g in tops],
         "project": _goal_page_project(trajdir, chat_scoped),
         "revision": _goal_revision(goals, important),
@@ -582,6 +599,31 @@ def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
             "subgoal": str(piece.get("title") or "")}
 
 
+def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
+    """What the goal page's two side panes draw, in one read.
+
+    The Live preview is the middle pane's engine (``preview.state``): the
+    project's run profiles, the process this server started for it, and
+    whether the address it printed still answers -- the project's, whichever
+    subgoal is open. The Terminal is the build log of the subgoal itself:
+    what its build has been doing, line by line, and where the run stands.
+    Nothing here starts anything or asks a model; it is read on a poll.
+    """
+    subgoal_id = str(subgoal_id or "")
+    preview = _preview_state(trajdir, chat_scoped, subgoal_id)
+    build = {"lines": [], "run": None}
+    if chat_scoped and subgoal_id:
+        from . import build as BUILD
+        try:
+            session_id, root = _chat_identity(_scope(trajdir))
+            build = {"lines": BUILD.load_activity(session_id, root, subgoal_id),
+                     "run": BUILD.live(session_id, root).get(subgoal_id)}
+        except (OSError, ValueError):
+            pass
+    return {"ok": True, "subgoal_id": subgoal_id, "preview": preview,
+            "build": build}
+
+
 def _bart_chats(trajdir, chat_scoped):
     """Every subgoal's conversation with Bart, by id; none for a vault
     with no chat behind it, which has nowhere to keep one."""
@@ -632,8 +674,8 @@ def _bart_answer(held, transcript):
 
 
 def _goal_page_project(trajdir, chat_scoped):
-    """The project this workspace is in, for the header: its name and the
-    plan agreed at setup.
+    """The project this workspace is in, for the header: its name, and the
+    plan agreed at setup for the goals list.
 
     The chat's binding says which project, as everywhere else; a workspace
     this vault minted for a project's directory has no binding and is asked
@@ -4772,6 +4814,16 @@ class H(BaseHTTPRequestHandler):
                                          "error": str(exc)[:200]})
             elif self.path.split("?", 1)[0] == "/api/goal-page/events":
                 self._stream_goal_events()
+            elif self.path.split("?", 1)[0] == "/api/goal-page/panes":
+                # The preview's state and the build log of one subgoal.
+                from urllib.parse import parse_qs, urlsplit
+                query = parse_qs(urlsplit(self.path).query)
+                try:
+                    self._send(200, _goal_page_panes(
+                        self.server.trajdir, self.server.chat_scoped,
+                        query.get("goal", [""])[0]))
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self._send(200, {"ok": False, "error": str(exc)[:200]})
             elif self.path.split("?", 1)[0] == "/api/tree":
                 # The project's files, for the overview's file pane. Where
                 # the project is comes from the chat's manifest; a workspace
@@ -5218,6 +5270,48 @@ class H(BaseHTTPRequestHandler):
             return
         self._send(200, _bart_answer(held, body.get("transcript")))
 
+    def _run_preview_op(self, body):
+        """One of the preview's own operations from the goal page: find how
+        the project runs, show its page, run it, stop it. None of them touch
+        the goal tree, so none wait on the state lock (see _preview_op)."""
+        if not isinstance(body, dict):
+            self._send(400, {"ok": False, "error": "expected an operation"})
+            return
+        if getattr(self.server, "shared_project", None):
+            self._send(200, {"ok": False,
+                             "error": "this is a shared workspace"})
+            return
+        kind = str(body.get("op") or "")
+        if kind not in PREVIEW_OPS:
+            self._send(200, {"ok": False, "error":
+                             "not an operation of the preview: " + kind[:60]})
+            return
+        try:
+            answer = _preview_op(body, self.server.trajdir,
+                                 self.server.chat_scoped)
+        except (OSError, ValueError, RuntimeError) as exc:
+            answer = {"ok": False, "error": str(exc)[:200]}
+        self._send(200, answer)
+
+    def _set_reader_level(self, body):
+        """The reader's level, from the slider in the account menu: one of
+        reader.LEVELS, kept on the profile every prompt reads, with the rest
+        of the profile as it was. Account-scoped like GET /api/reader."""
+        if not isinstance(body, dict):
+            self._send(400, {"ok": False, "error": "expected a level"})
+            return
+        level = str(body.get("level") or "").strip().lower()
+        if level not in READER.LEVELS:
+            self._send(200, {"ok": False,
+                             "error": "not a level: " + level[:40]})
+            return
+        root = (_chat_identity(self.server.trajdir)[1]
+                if self.server.chat_scoped else None)
+        profile = dict(READER.load(root), level=level)
+        answer = READER.remember(profile, root)
+        answer["level_label"] = READER.LEVEL_NAMES.get(level, "")
+        self._send(200, answer)
+
     def _keep_bart_chat(self, body):
         """The page's conversation on one subgoal, saved whole after every
         change to it, so a reload draws what was on screen."""
@@ -5400,6 +5494,12 @@ class H(BaseHTTPRequestHandler):
                 return
             if self.path == "/api/goal-page/chat":
                 self._keep_bart_chat(body)
+                return
+            if self.path == "/api/goal-page/preview":
+                self._run_preview_op(body)
+                return
+            if self.path == "/api/goal-page/reader":
+                self._set_reader_level(body)
                 return
             if self.path == "/api/op":
                 if not isinstance(body, dict):

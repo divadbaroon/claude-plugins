@@ -24,30 +24,15 @@
    saveChat writes it whole after every change, and loadGoal brings it
    back in each subgoal's slice.
 
-   Still mocked: the preview and the terminal. Their answers are the
-   example content of the design, held in memory for the life of the page.
-   Replace the bodies and keep the signatures. */
+   The panes are real. getPanes reads GET /api/goal-page/panes: the Live
+   preview is the middle pane's engine from /legacy -- what the project
+   can run, the process the server started for it, the address it answers
+   on -- and the Terminal is the build log of the open subgoal. previewOp
+   sends the preview's own operations (find how to run it, show its page,
+   run, stop) to POST /api/goal-page/preview. Nothing runs on a page load;
+   every start is a click. */
 
 import { WITH_BUILDER } from "./store.js";
-
-const PREVIEW = {
-  host: "localhost:5173",
-  app: "dataset-importer",
-  url: null,   // a real preview answers with the address to frame
-  placeholder: { action: "Import dataset", hint: "CSV only · up to 100mb" },
-};
-
-const TERMINAL = {
-  lines: [
-    { kind: "cmd", text: 'bart build "Create a blank interface with an import button"' },
-    { kind: "out", text: "[1/2] built · create a blank interface" },
-    { kind: "out", text: "[2/2] built · add an import button" },
-    { kind: "cmd", text: "npm run dev" },
-    { kind: "out", text: "ready · http://localhost:5173" },
-  ],
-};
-
-const copy = (value) => JSON.parse(JSON.stringify(value));
 
 async function get(path) {
   const response = await fetch(path, { headers: { Accept: "application/json" } });
@@ -103,6 +88,21 @@ export const services = {
   /** Disconnect this machine. The server runs `engelbart logout`: the
       machine token is revoked at the backend, the Claude Code helper is
       unwired and auth.json is removed. Resolves to what the CLI said. */
+  /** The reader's profile, as every prompt reads it: the four answers
+      and, for the menu, the level's name. Account-scoped. */
+  async loadReader() {
+    const answer = await get("/api/reader");
+    if (!answer.ok) throw new Error(answer.error || "the profile could not be read");
+    return { profile: answer.profile || {}, levelLabel: answer.level_label || "" };
+  },
+
+  /** One of the four levels, kept on the profile. */
+  async saveLevel({ level }) {
+    const answer = await post("/api/goal-page/reader", { level });
+    if (!answer.ok) throw new Error(answer.error || "the level could not be saved");
+    return { profile: answer.profile || {}, levelLabel: answer.level_label || "" };
+  },
+
   async signOut() {
     const answer = await post("/api/account/sign-out");
     if (!answer.ok) throw new Error(answer.error || "sign out failed");
@@ -123,6 +123,22 @@ export const services = {
 
   async cancelSignIn() {
     return post("/api/account/sign-in/cancel");
+  },
+
+  /** Every project this vault knows, newest worked-in first, and which
+      one this workspace is in. */
+  async listProjects() {
+    const answer = await get("/api/projects");
+    if (!answer.ok) throw new Error(answer.error || "the projects could not be read");
+    return { projects: answer.projects || [], active: answer.active || "" };
+  },
+
+  /** Another project's workspace, opened beside this one: the server
+      answers with its address. The same door /legacy uses. */
+  async openProject({ cwd }) {
+    const answer = await post("/api/op", { op: "open_project", cwd });
+    if (!answer.ok) throw new Error(answer.error || "that project could not be opened");
+    return { url: answer.url || "" };
   },
 
   /** The goal this page is about, its subgoals, and what each already
@@ -155,11 +171,6 @@ export const services = {
   async addSubgoal({ goalId, title }) {
     const answer = await op({ op: "add_goal", title, parent_goal_id: goalId });
     return { id: answer.id, title, goalId, revision: answer.revision };
-  },
-
-  async saveNotes({ subgoalId, text }) {
-    const answer = await op({ op: "set_notes", goal_id: subgoalId, notes: text });
-    return { subgoalId, revision: answer.revision };
   },
 
   /** Bart's reply to one message, in the conversation of one subgoal.
@@ -244,13 +255,20 @@ export const services = {
     return { close: () => source.close() };
   },
 
-  /** Where the goal's app is running, or the placeholder to draw instead. */
-  async getPreview({ goalId }) {
-    return copy(PREVIEW);
+  /** The two side panes for one subgoal, in one read: the project's run
+      as the preview engine sees it (status, surface, profiles, blockers,
+      the running process and its url), and the subgoal's build log
+      ({ lines: [{ at, kind, text }], run }). */
+  async getPanes({ subgoalId }) {
+    const answer = await get(`/api/goal-page/panes?goal=${encodeURIComponent(subgoalId || "")}`);
+    if (!answer.ok) throw new Error(answer.error || "the panes could not be read");
+    return { preview: answer.preview, build: answer.build };
   },
 
-  /** The terminal the builder works in, as lines. */
-  async getTerminal({ goalId }) {
-    return copy(TERMINAL);
+  /** One of the preview's operations -- preview_configure, preview_show_ui,
+      preview_start, preview_stop, preview_forget -- with its arguments.
+      Answers as the engine does: { ok } with a reason when it would not. */
+  async previewOp(op) {
+    return post("/api/goal-page/preview", op);
   },
 };

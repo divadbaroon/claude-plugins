@@ -10,7 +10,7 @@ step; the browser loads them as they are.
     store.js        the state tree and the readers on it (one slice per subgoal)
     actions.js      what the reader can do; the only writer of the store
     services.js     the boundary to everything behind the page (the goals,
-                    the account and Bart are real, the panes mocked)
+                    the account, Bart and the panes are all real)
     dom.js          h() to build a tree, mount() to morph the page toward it
     components/     one render function per region, pure in state and actions
 
@@ -25,19 +25,28 @@ the bodies, keep the signatures.
 The goals are real. `loadGoal` reads `GET /api/goal-page`: the goal the
 address names (`/?goal=<id>`), or when it names none the top-level goal
 touched most recently, among those in progress or with something under
-them; its subgoals; for each the notes and the todo rows, straight from the
+them; its subgoals; for each the todo rows, straight from the
 chat's `goals.json` through the goals model; and the project the chat is
-in, whose name and plan the header shows. This is how a project finished
+in, whose name the header shows. This is how a project finished
 in the web onboarding arrives: `/bart` claims it, writes its tree and binds
 the chat, and the page opens on the direction the reader chose (the ones
 they were offered and did not take stay in the tree, with nothing under
-them) with its pieces as subgoals, each piece's notes seeded from the
-setup's description and its why, and the plan under the goal. A workspace
+them) with its pieces as subgoals (each
+piece's notes are seeded from the setup's description and its why, kept
+in the tree for `/legacy` and the hooks; this page does not draw notes). The
+header's path is the way around: the brand opens every project the vault
+knows (`GET /api/projects`, a card each, opening one goes to its workspace
+through `open_project`), the project's name opens this project's goals as
+cards -- the direction's why, how many pieces are done, a check when all of
+them are -- and a goal card opens that goal here, named on the address. The
+account menu has the reader's level under a rule, on the bar slider the web
+setup asks it with (`GET /api/reader`, `POST /api/goal-page/reader` with one
+of `reader.LEVELS`; the rest of the profile is kept as it was). A workspace
 with no goal answers empty, and the page asks for one in a line; a goal
-with nothing under it yet asks for its first subgoal, since the notes,
-the conversation and the todos each belong to one. Every
+with nothing under it yet asks for its first subgoal, since the
+conversation and the todos each belong to one. Every
 write is one operation on `POST /api/goal-page/op` -- `add_goal`,
-`set_notes`, `add_todo_row`, `set_todo_text`, `set_todo_done`,
+`add_todo_row`, `set_todo_text`, `set_todo_done`,
 `remove_todo_row`, `build_todos` -- the same operations the workspace at
 `/legacy` applies, so the two pages and the chat's hooks write one file.
 Each answer carries the goals' revision after the write.
