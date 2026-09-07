@@ -1262,6 +1262,7 @@ class Run:
         self.claude_session = claude_session
         self.process: Optional[subprocess.Popen] = None
         self.thread: Optional[threading.Thread] = None
+        self._spawn_guard = threading.RLock()
         self.asked: Optional[str] = None
         self.error = ""
         self.retries = 0
@@ -1360,6 +1361,13 @@ class Run:
 
     def spawn(self, message: str, resume: bool, phase: str = "rows",
               model: str = "", effort: str = "") -> None:
+        # Stop/reopen must not observe a process whose reader is unpublished
+        # or assigned but not started. Never hold this guard while joining.
+        with self._spawn_guard:
+            self._spawn(message, resume, phase, model, effort)
+
+    def _spawn(self, message: str, resume: bool, phase: str,
+               model: str, effort: str) -> None:
         from .providers import subscription_env
         if phase == "rows":
             self.had_live_process = relevant_live_process(self.session_id, self.root, self.cwd)
@@ -1485,18 +1493,19 @@ class Run:
     def stop(self) -> bool:
         """End the process: the reader pulled back everything it was doing.
         The reader thread sees the exit and finishes the run as cancelled."""
-        if not self.alive():
-            return False
-        self.stopped = True
-        assert self.process
-        try:
-            kill_process_tree(self.process.pid)
-        except Exception:  # noqa: BLE001 - fall back to a direct terminate
-            try:
-                self.process.terminate()
-            except OSError:
+        with self._spawn_guard:
+            if not self.alive():
                 return False
-        return True
+            self.stopped = True
+            assert self.process
+            try:
+                kill_process_tree(self.process.pid)
+            except Exception:  # noqa: BLE001 - fall back to a direct terminate
+                try:
+                    self.process.terminate()
+                except OSError:
+                    return False
+            return True
 
     def redirect(self, message: str) -> bool:
         """Tell a running build something: end the process and resume its

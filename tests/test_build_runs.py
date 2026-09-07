@@ -1755,6 +1755,40 @@ class RestartCheckTests(BuildRunTests):
         self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 4, seconds=12), self.prompts())
         self.assertNotIn("--resume", self.prompts()[2]["args"])
 
+    def test_reopen_waits_until_the_restart_reader_has_started(self):
+        import threading
+        self.on("yes", hold=1)
+        paused, release, requested = threading.Event(), threading.Event(), threading.Event()
+        original_start = threading.Thread.start
+        results, errors = [], []
+        def delayed_start(thread):
+            reader = thread._args[0] if thread._args else None
+            owner = getattr(reader, "__self__", None)
+            if getattr(owner, "phase", None) == "check" and not paused.is_set():
+                paused.set()
+                if not release.wait(5): raise RuntimeError("test did not release reader startup")
+            return original_start(thread)
+        def reopen():
+            requested.set()
+            try: results.append(BUILD.reopen(self.session, self.root, "g1", "taaaa0001", "wrong file"))
+            except Exception as exc: errors.append(exc)
+        with mock.patch.object(threading.Thread, "start", delayed_start):
+            self.build()
+            self.assertTrue(paused.wait(5))
+            worker = threading.Thread(target=reopen)
+            original_start(worker)
+            self.assertTrue(requested.wait(2))
+            try:
+                time.sleep(.05)
+                self.assertTrue(worker.is_alive(), errors)
+            finally:
+                release.set()
+                worker.join(12)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual([], errors)
+            self.assertTrue(results[0]["ok"], results)
+            self.assertTrue(self.wait_for(lambda: self.rows()["taaaa0001"][0] == "done"))
+
     def test_a_reopen_ends_the_check_and_takes_the_session(self):
         self.on("yes", hold=4)
         self.build()
