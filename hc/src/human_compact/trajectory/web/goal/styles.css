@@ -105,21 +105,16 @@ input, textarea { outline: none; }
 .home-empty { margin: 30px 0; font: 14px/1.5 var(--font-sans); color: var(--fnt); }
 .home-note { margin: 14px 0 0; font: 13px/1.5 var(--font-sans); color: var(--del); }
 .home-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.card { position: relative; display: flex; flex-direction: column; gap: 7px; min-height: 118px; padding: 16px 18px 14px; border: 1px solid var(--dark-300); border-radius: var(--radius-sm); background: var(--dark-0); color: var(--dark-900); text-align: left; cursor: pointer; transition: border-color var(--dur-fast); }
-.card:hover { border-color: var(--dark-700); }
+.card { position: relative; display: flex; flex-direction: column; gap: 7px; min-height: 118px; padding: 16px 18px 14px; border: 1px solid #fff; border-radius: 0; background: #000; color: #fff; text-align: left; cursor: pointer; }
+.card:hover { outline: 1px solid #fff; outline-offset: -2px; }
 .card:disabled { cursor: progress; opacity: var(--hover-opacity); }
-.card.is-here { border-color: var(--blue-400); box-shadow: inset 3px 0 0 var(--blue-400); }
-.card.is-done { background: var(--dark-150); }
-.card-name { display: flex; align-items: baseline; gap: 8px; font: 500 14px/1.35 var(--font-sans); color: var(--dark-900); text-wrap: pretty; }
-.card.is-here .card-name { color: var(--blue-400); }
-.card-check { flex: none; width: 18px; height: 18px; border-radius: var(--radius-round); background: var(--dark-900); color: var(--dark-0); font: 600 11px/18px var(--font-sans); text-align: center; }
-.card.is-done .card-name { color: var(--dark-700); }
-.card-text { flex: 1 1 auto; font: 13px/1.5 var(--font-sans); color: var(--dark-700); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.card-text.is-empty { color: var(--gray-500); font-style: italic; }
-.card-where { font: 11px/1.4 var(--font-mono); color: var(--gray-500); overflow-wrap: anywhere; }
-.card-facts { display: flex; flex-wrap: wrap; gap: 12px; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: var(--gray-500); }
-.card-here { color: var(--blue-400); }
-.card-done { color: var(--dark-900); }
+.card.is-here { outline: 1px solid #fff; outline-offset: -2px; }
+.card-name { display: flex; align-items: baseline; gap: 8px; font: 500 14px/1.35 var(--font-sans); color: #fff; text-wrap: pretty; }
+.card-check { flex: none; width: 18px; height: 18px; border-radius: var(--radius-round); background: #fff; color: #000; font: 600 11px/18px var(--font-sans); text-align: center; }
+.card-text { flex: 1 1 auto; font: 13px/1.5 var(--font-sans); color: #fff; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.card-text.is-empty { font-style: italic; }
+.card-where { font: 11px/1.4 var(--font-mono); color: #fff; overflow-wrap: anywhere; }
+.card-facts { display: flex; flex-wrap: wrap; gap: 12px; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: #fff; }
 /* The circle is taller than the brand line; the header stays the design's height. */
 .account { position: relative; margin: -5px 8px -5px auto; flex: none; display: flex; }
 .account-btn { display: flex; padding: 0; border: 0; background: transparent; border-radius: var(--radius-round); cursor: pointer; }
