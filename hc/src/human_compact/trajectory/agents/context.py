@@ -124,6 +124,7 @@ def assemble(session_id, root, event, carry=None):
     parent = GM.by_id(goals, piece.get("parent_goal_id")) or piece
     plan = sorted(goals.get("goals") or [], key=lambda g: g.get("id") != selected)
     cwd = CS.bound_project(session_id, root) or CS.load_manifest(session_id, root).get("cwd")
+    from .. import resources
     authored = project_store.load_project(root, cwd) if cwd else {}
     objective = authored.get("objective") or "\n".join(str(g.get("title") or "")
         for g in plan if not g.get("parent_goal_id"))
@@ -144,7 +145,8 @@ def assemble(session_id, root, event, carry=None):
         "recentActivity": events.summary(session_id, root), "triggerResult": event.get("payload")},
         chars=1000, items=40)
 
-    budgets = {"project": 3000, "currentGoal": 1200, "plan": 8000, "selectedSubgoal": 100,
+    sections["resources"] = resources.context(root, cwd) if cwd else ""
+    budgets = {"resources": 7000, "project": 3000, "currentGoal": 1200, "plan": 8000, "selectedSubgoal": 100,
                "currentRun": 1800, "user": 1600, "persistentContext": 4000,
                "recentResults": 2000, "recentBartTurns": 2400, "recentActivity": 2400,
                "triggerResult": 3000}

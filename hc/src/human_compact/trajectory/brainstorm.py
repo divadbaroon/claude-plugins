@@ -254,6 +254,11 @@ def save_cache(root, cwd, key: str, text: str) -> bool:
 
 
 def project_context(root, cwd, raw, engine=None) -> str:
+    from . import resources
+    return _project_context(root, cwd, raw, engine) + (resources.context(root, cwd) if cwd else "")
+
+
+def _project_context(root, cwd, raw, engine=None) -> str:
     """The project, short enough to send on every turn of every brainstorm.
 
     A tree that renders under ``CONDENSE_OVER`` is already short: it is sent

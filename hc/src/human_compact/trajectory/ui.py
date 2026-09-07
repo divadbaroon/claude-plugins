@@ -502,6 +502,7 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
                                   if c.get("parent_goal_id") == g.get("id")])
                   for g in tops],
         "project": _goal_page_project(trajdir, chat_scoped),
+        "phases": _goal_page_phases(trajdir, chat_scoped),
         "revision": _goal_revision(goals, important),
     }
 
@@ -628,6 +629,16 @@ def _goal_page_build_phase(session_id, root, subgoal_id):
     return phase
 
 
+def _goal_page_phases(trajdir, chat_scoped):
+    """Each subgoal's real lifecycle, including the ones not currently selected."""
+    if not chat_scoped:
+        return {}
+    sid, root = _chat_identity(_scope(trajdir))
+    goals, _ = CS.load_goals(sid, root)
+    return {g["id"]: _goal_page_build_phase(sid, root, g["id"])
+            for g in goals.get("goals", []) if g.get("parent_goal_id")}
+
+
 def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
     """What the goal page's two side panes draw, in one read.
 
@@ -653,7 +664,7 @@ def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
         except (OSError, ValueError):
             pass
     return {"ok": True, "subgoal_id": subgoal_id, "preview": preview,
-            "build": build, "chat": _bart_chats(trajdir, chat_scoped).get(subgoal_id, [])}
+            "build": build, "phases": _goal_page_phases(trajdir, chat_scoped), "chat": _bart_chats(trajdir, chat_scoped).get(subgoal_id, [])}
 
 
 def _bart_chats(trajdir, chat_scoped):
@@ -773,7 +784,7 @@ def _goal_page_project(trajdir, chat_scoped):
     plan = str(record.get("description") or "").strip() or objective
     if not (name or plan):
         return None
-    return {"name": name, "objective": objective, "plan": plan}
+    return {"name": name, "objective": objective, "plan": plan, **({"resources": record["resources"]} if record.get("resources") else {})}
 
 
 def _current_revision(trajdir, chat_scoped):
@@ -5067,6 +5078,17 @@ class H(BaseHTTPRequestHandler):
                     self._send(200, {"ok": False, "error": "no such source"})
                 else:
                     self._send(200, source_body(root, who["cwd"], found))
+            elif self.path.split("?", 1)[0] == "/api/project-paper":
+                from . import resources as project_resources
+                from urllib.parse import parse_qs, urlsplit
+                try:
+                    sid, root = _chat_identity(self.server.trajdir)
+                    cwd = CS.bound_project(sid, root) or CS.load_manifest(sid, root).get("cwd")
+                    rid = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+                    path = project_resources.paper_file(root, cwd, rid)
+                    self._send(200, path.read_bytes(), "application/pdf")
+                except (ValueError, OSError, TypeError):
+                    self._send(404, b"No ready project paper", "text/plain")
             elif self.path.split("?", 1)[0] == "/api/paper-pdf":
                 # The PDF uploaded for a goal's Paper tab, served as bytes for
                 # the browser's own viewer. The path arrives from the client,

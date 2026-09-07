@@ -188,3 +188,38 @@ changes continue through the existing Plan state and Bart reply contracts.
 `tests/test_goal_lifecycle.py` covers classification, resume, cold-run metadata,
 repair deduplication, evidence, and the real loopback page/composer. Model and
 runtime execution boundaries are controlled fixtures, not live-provider tests.
+
+### Project resources and inactive lifecycle truth
+
+`project.resources` is the project store's durable resource list. Claim preparation
+keeps downloaded PDFs and extracted text, or verified tabular data, beneath the
+project's ignored `.engelbart-resources/<id>/` directory. Paper readiness requires
+both readable PDF and extracted text. Dataset readiness requires opening actual
+CSV/TSV, Parquet, JSON/JSONL, or safely extracted ZIP contents. Automatic downloads
+and total ZIP extraction are capped at 50 MiB by default (`HC_RESOURCE_MAX_BYTES`);
+papers additionally cap at 20 MiB. Restricted or ambiguous sources need user action.
+No downloaded file is executed. Public network addresses and redirects are checked,
+and local paper serving accepts only a ready persisted resource ID, never a path.
+
+Only `/test` adds the contextual Paper tab, subordinate Resources list, and temporary
+resource detail content. It uses existing actions/services and the shared project
+response. Native PDF rendering requires no PDF viewer dependency in the browser.
+PDF text and Parquet support in the local runtime require pypdf and pyarrow; the
+installer resolves wheel-declared dependencies. Release vendoring still follows
+the existing committed-source workflow.
+
+Onboarding `available` is an access preflight, not local `ready`. The claim carries
+the verified direct target and explicit fallback provenance. Preparation currently
+runs at local claim, when a project directory exists, and reaches terminal states
+before returning. No extra cloud acquisition job, resource cache, or agent exists.
+The existing bounded project context supplies artifact references and a short
+untrusted paper excerpt, with dataset schema summaries but no raw dataset samples.
+
+Both the initial goal response and existing pane poll include `phases`, keyed by
+subgoal ID, from the same lifecycle event projection used for active work. The
+alternate Plan completion check calls `todoPhase(todo, state, subgoalId)` for every
+row, including inactive subgoals. Checking, fixing, needs-user, and failed work
+cannot appear successful merely because the builder wrote raw `done` rows. Manual
+completion on legacy rows with no lifecycle history retains its existing behavior.
+`tests/test_inactive_lifecycle.py` exercises the exact switch-away/repair/recheck/
+pass sequence in the real loopback browser.
