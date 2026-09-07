@@ -43,7 +43,8 @@ function renderBody(state, preview, actions) {
 
   // A page: the project itself, framed.
   if (preview.url && (preview.status === "running" || preview.status === "starting")) {
-    return h("iframe", { key: `frame:${preview.url}`, class: "preview-frame", src: preview.url, title: "Live preview" });
+    return h("iframe", { key: `frame:${preview.url}`, class: "preview-frame", src: preview.url, title: "Live preview",
+      onload: () => actions.interaction("artifact.opened", { url: preview.url, kind: "preview" }) });
   }
 
   switch (preview.status) {

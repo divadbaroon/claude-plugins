@@ -1,7 +1,7 @@
 """The Verifier: whether the Build's "done" holds.
 
-Deterministic, and cheap: no model. A build that ends says its rows are
-done; this reads what is on disk afterwards -- the rows' statuses on the
+Deterministic checks first, then semantic artifact inspection. A build that
+ends says its rows are done; this reads what is on disk afterwards -- the rows' statuses on the
 tree, the run record, and the preview's health when a preview is up --
 and gives one verdict with the evidence under it. Extra ``checks`` may be
 handed in (a command to run, a page to fetch); each is a callable taking
@@ -35,6 +35,8 @@ def verify(session_id: str, root: Optional[Path], goal_id: str,
 
 def _verify(session_id, root, goal_id, row_ids, runtime, checks) -> Dict[str, Any]:
     evidence: Dict[str, Any] = {}
+    if not row_ids:
+        return _fail("the run contains no rows to verify", evidence)
     goals, _important = CS.load_goals(session_id, root)
     goal = GM.by_id(goals, goal_id)
     if not goal:
@@ -73,6 +75,17 @@ def _verify(session_id, root, goal_id, row_ids, runtime, checks) -> Dict[str, An
                 state.get("status"), state.get("exit_code")), evidence)
         if state.get("status") == "running" and state.get("healthy") is False:
             return _fail("the project is running but its page does not answer", evidence)
+    saved = record.get("acceptance") or {}
+    criteria = {rid: saved.get(rid) or rows[rid].get("acceptance") for rid in row_ids}
+    evidence["acceptance"] = criteria
+    if any(criteria.get(rid) for rid in row_ids):
+        try:
+            artifact = runtime.verify_artifact(criteria, evidence.get("preview") or {})
+        except Exception as exc:
+            artifact = {"passed": False, "reason": "artifact inspection unavailable: " + str(exc)[:160]}
+        evidence["artifact"] = artifact
+        if not artifact.get("passed"):
+            return _fail(artifact.get("reason") or "the artifact does not meet acceptance", evidence)
     for check in checks or ():
         try:
             passed, reason = check(runtime)
@@ -91,7 +104,9 @@ def _preview(runtime, session_id: str) -> Dict[str, Any]:
         state = runtime.preview_state(session_id)
     except Exception as exc:  # noqa: BLE001
         return {"status": "unknown", "error": str(exc)[:200]}
-    return state if isinstance(state, dict) else {}
+    if not isinstance(state, dict):
+        return {}
+    return dict(state, **(state.get("run") or {}))
 
 
 def _text(row: Dict[str, Any]) -> str:

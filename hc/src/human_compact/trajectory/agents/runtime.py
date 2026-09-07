@@ -3,9 +3,7 @@
 Every read of a file, every command, every preview start and every build
 the agents cause goes through one of these. ``LocalRuntime`` is this
 machine: the project directory on disk, subprocess for commands, the
-preview engine and the build for the rest. A sandboxed runtime -- Daytona
-is the one planned -- is another class with these same methods, chosen by
-``make``; nothing in the agents or on the page would change.
+preview engine and the build for the rest. The Runtime interface keeps execution separate from agent decisions.
 
 The methods are spans (``trace``), named for what they are: file.read,
 file.write, command.exec, preview.start; the orchestrator wraps ``build``
@@ -20,7 +18,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from . import trace
 
-KINDS = ("local", "daytona")
+KINDS = ("local",)
 READ_LIMIT = 20_000
 COMMAND_TIMEOUT_S = 60
 # What ``discover`` looks at: the files that say what a project is and how
@@ -71,6 +69,13 @@ class Runtime:
     def reopen(self, session_id: str, root: Optional[Path], goal_id: str,
                row_id: str, note: str) -> Dict[str, Any]:
         raise NotImplementedError
+
+
+    def verify_artifact(self, criteria, preview):
+        raise NotImplementedError
+
+    def repair(self, session_id, root, goal_id, row_id, note, rows):
+        return self.reopen(session_id, root, goal_id, row_id, note)
 
 
 class LocalRuntime(Runtime):
@@ -168,18 +173,18 @@ class LocalRuntime(Runtime):
         from .. import build as BUILD
         return BUILD.reopen(session_id, root, goal_id, row_id, note)
 
+    def repair(self, session_id, root, goal_id, row_id, note, rows):
+        from .. import build
+        return build.reopen(session_id, root, goal_id, row_id, note, verify_rows=rows)
+
+    def verify_artifact(self, criteria, preview):
+        from . import artifacts
+        return artifacts.verify(self, criteria, preview)
+
 
 def make(kind: Optional[str] = None, cwd: str = "", root: Optional[Path] = None) -> Runtime:
-    """The runtime for this install: HC_AGENT_RUNTIME, local by default.
-
-    ``daytona`` is named so the switch exists where it will be flipped;
-    until the class does, asking for it says so rather than running the
-    build on this machine under a name that promises otherwise.
-    """
+    """The local runtime for this install."""
     kind = (kind or os.environ.get("HC_AGENT_RUNTIME", "") or "local").strip().lower()
     if kind == "local":
         return LocalRuntime(cwd, root)
-    if kind == "daytona":
-        raise RuntimeError("DaytonaRuntime is not here yet: the Build agent runs "
-                           "locally until it lands (HC_AGENT_RUNTIME=local)")
     raise ValueError("not a runtime: %r (one of %s)" % (kind, ", ".join(KINDS)))

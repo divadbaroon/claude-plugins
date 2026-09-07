@@ -359,6 +359,14 @@ class ChatCase(unittest.TestCase):
                                            "HC_AUTOSYNC_SECONDS": "0"})
         env.start()
         self.addCleanup(env.stop)
+        from human_compact.trajectory.agents import overseer, acceptance
+        route = mock.patch.object(overseer, "_model", return_value={})
+        route.start()
+        self.addCleanup(route.stop)
+        derive = mock.patch.object(acceptance, "derive", side_effect=lambda rows, *a, **kw:
+            {r["id"]: {"criterion": "Observable: " + r["text"], "checks": []} for r in rows})
+        derive.start()
+        self.addCleanup(derive.stop)
 
     def tearDown(self):
         self.tmp.cleanup()

@@ -1907,6 +1907,8 @@ def bart_messages(value: Any) -> List[Dict[str, Any]]:
             "who": who, "kind": kind, "text": text}
         if kind == "proposal":
             message["added"] = bool(row.get("added"))
+            if row.get("rejected"):
+                message["rejected"] = True
             todo_id = str(row.get("todoId") or "")[:40]
             if todo_id:
                 message["todoId"] = todo_id
@@ -1960,6 +1962,11 @@ def save_bart_chat(
         rows = dict(rows) if isinstance(rows, dict) else {}
         if keep is not None:
             rows = {k: v for k, v in rows.items() if k in set(keep)}
+        existing = (rows.get(str(goal_id)) or {}).get("messages") or []
+        ids = {m.get("id") for m in wanted}
+        wanted += [m for m in bart_messages(existing)
+                   if str(m.get("id") or "").startswith("sys-") and m.get("id") not in ids]
+        wanted = wanted[-BART_CHAT_LIMIT:]
         if wanted:
             rows[str(goal_id)] = {"messages": wanted, "updated_at": _now_ms()}
         else:
@@ -2202,3 +2209,13 @@ def render_context_injection(
     # A diff of a document that was rewritten end to end is longer than the
     # document; there is nothing to be gained by sending it twice over.
     return keep(delta if len(delta) < len(full) else full)
+
+
+def append_bart_message(session_id, goal_id, text, root=None):
+    """Append under the same lock as browser saves; stable ids survive stale saves."""
+    import uuid
+    with session_lock(tree_session(session_id, root), root, wait_s=5):
+        messages = load_bart_chats(session_id, root).get(goal_id, [])
+        messages.append({"id": "sys-" + uuid.uuid4().hex[:12], "who": "bart",
+                         "kind": "text", "text": str(text)[:4000]})
+        return save_bart_chat(session_id, goal_id, messages, root)

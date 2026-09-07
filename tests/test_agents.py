@@ -82,6 +82,9 @@ class FakeRuntime(RT.Runtime):
         return {"ok": True, "started": True, "rows": list(row_ids), "quick": quick,
                 "claude_session_id": "run-%d" % len(self.builds)}
 
+    def verify_artifact(self, criteria, preview):
+        return {"passed": True, "reason": "test artifact matches"}
+
     def reopen(self, session_id, root, goal_id, row_id, note):
         self.reopens.append((goal_id, row_id, note))
         return {"ok": True, "row": row_id}
@@ -122,6 +125,14 @@ class AgentCase(unittest.TestCase):
         self.project = self.root / "project"
         self.project.mkdir()
         p.manifest.write_text(json.dumps({"cwd": str(self.project)}))
+        route_model = mock.patch.object(OVERSEER, "_model", return_value={})
+        route_model.start()
+        self.addCleanup(route_model.stop)
+        from human_compact.trajectory.agents import acceptance
+        derive = mock.patch.object(acceptance, "derive", side_effect=lambda rows, *a, **kw:
+            {r["id"]: {"criterion": "Observable: " + r["text"], "checks": []} for r in rows})
+        derive.start()
+        self.addCleanup(derive.stop)
         self.runtime = FakeRuntime(self.session, self.root, str(self.project))
         self.tracer = TRACE.Tracer(self.session, self.root)
 
@@ -291,7 +302,7 @@ class BuildLoopTests(AgentCase):
         self.assertIn("verify.passed", self.events())
         self.assertEqual([], self.runtime.reopens)
         kinds = [(u["kind"], u["todoId"]) for u in CTX.load(self.session, self.root)]
-        self.assertEqual([("verification_result", ""), ("todo_status", ROWS[0]),
+        self.assertEqual([("run_result", ""), ("artifact", ""), ("verification_result", ""), ("todo_status", ROWS[0]),
                           ("todo_status", ROWS[1])], kinds)
         self.assertEqual(0, orch.state()["attempts"].get(PIECE, 0))
         # The Terminal saw it.
@@ -434,12 +445,12 @@ class TriggerPolicyTests(AgentCase):
 
 
 class RuntimeTests(AgentCase):
-    def test_local_is_the_runtime_and_daytona_is_named_but_not_here(self):
+    def test_local_is_the_only_runtime(self):
         local = RT.make(cwd=str(self.project), root=self.root)
         self.assertIsInstance(local, RT.LocalRuntime)
         self.assertEqual({"kind": "local", "cwd": str(self.project)}, local.describe())
-        with mock.patch.dict(os.environ, {"HC_AGENT_RUNTIME": "daytona"}):
-            with self.assertRaisesRegex(RuntimeError, "DaytonaRuntime is not here yet"):
+        with mock.patch.dict(os.environ, {"HC_AGENT_RUNTIME": "unsupported"}):
+            with self.assertRaisesRegex(ValueError, "not a runtime"):
                 RT.make(cwd=str(self.project), root=self.root)
         with self.assertRaises(ValueError):
             RT.make("cloud", cwd=str(self.project))

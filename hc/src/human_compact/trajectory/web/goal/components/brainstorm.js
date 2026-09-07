@@ -9,7 +9,7 @@ export function renderBrainstorm(state, actions, withTodos) {
   const ready = slice.draft.trim().length > 0 && !slice.thinking;
   return h("div", { class: "brainstorm" },
     h("div", { class: "section-head" },
-      h("span", { class: "section-label" }, "Brainstorm"),
+      h("span", { class: "section-label" }, "Conversation"),
       !withTodos && h("button", {
         type: "button", class: "ghost-btn", onclick: actions.toggleTodosPane,
       }, "Show todos")),
@@ -72,11 +72,14 @@ function renderProposal(message, actions) {
     h("div", { class: "proposal-row" },
       h("span", { class: "todo-mark", "aria-hidden": "true" }, "–"),
       h("span", { class: "proposal-text" }, message.text)),
-    message.added
+    message.rejected ? h("div", { class: "proposal-note" }, "skipped") : message.added
       ? h("div", { class: "proposal-note" }, "added to todos")
       : h("div", { class: "proposal-actions" },
         h("button", {
           type: "button", class: "primary-btn",
           onclick: () => actions.acceptProposal(message.id),
-        }, "Add")));
+        }, "Add"),
+        h("button", { type: "button", class: "ghost-btn",
+          onclick: () => actions.rejectProposal(message.id) }, "Skip")));
+
 }

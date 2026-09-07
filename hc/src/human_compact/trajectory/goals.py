@@ -597,6 +597,10 @@ def normalize_todo_items(value) -> list:
                  "depth": depth, "status": status,
                  "question": str(row.get("question") or "")[:400]
                  if status == "asking" else ""}
+        from .agents.acceptance import normalize as normalize_acceptance
+        acceptance = normalize_acceptance(row.get("acceptance"))
+        if acceptance:
+            clean["acceptance"] = acceptance
         # Handed to the agent, rather than kept by the reader. See TODO_AGENT:
         # the field exists only in the handed-over case.
         if str(row.get("owner") or "") == TODO_AGENT:

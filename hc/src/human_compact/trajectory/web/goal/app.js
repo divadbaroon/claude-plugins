@@ -49,3 +49,17 @@ document.addEventListener("keydown", (event) => {
 
 // For the console and the tests; nothing on the page reads it.
 window.engelbart = { store, actions, services };
+
+// Cross-origin preview content stays opaque; entering the frame is still a
+// meaningful local interaction and never causes a model call.
+window.addEventListener("blur", () => {
+  setTimeout(() => {
+    if (document.activeElement && document.activeElement.matches("iframe.preview-frame")) {
+      actions.interaction("preview.interacted", { action: "focused" });
+    }
+  }, 0);
+});
+document.addEventListener("click", (event) => {
+  const link = event.target.closest("a[data-artifact]");
+  if (link) actions.interaction("artifact.opened", { artifact: link.getAttribute("data-artifact") });
+}, true);

@@ -96,6 +96,7 @@ _BRAINSTORM = re.compile(
 _PLAN = re.compile(
     r"(?i)\b(plan (this|it|the (work|piece|steps)) out|break (this|it) (down|into)"
     r"|what are the steps|lay out the (steps|rows|work|plan)"
+    r"|help me plan|plan (this|the project|our next steps)|let['’]?s plan"
     r"|(write|draft|propose) (the |a )?(plan|todo rows|rows|steps) for)\b")
 
 

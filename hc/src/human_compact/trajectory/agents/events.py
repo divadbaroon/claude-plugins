@@ -68,7 +68,7 @@ def new_event(type: str, source: str, payload: Optional[Dict[str, Any]] = None, 
 def _bounded(payload: Dict[str, Any]) -> Dict[str, Any]:
     """A payload is context, not storage: long strings are cut."""
     out: Dict[str, Any] = {}
-    for key, value in payload.items():
+    for key, value in bounded(payload, chars=MAX_PAYLOAD_CHARS).items():
         if isinstance(value, str) and len(value) > MAX_PAYLOAD_CHARS:
             value = value[:MAX_PAYLOAD_CHARS]
         out[str(key)] = value
@@ -77,13 +77,14 @@ def _bounded(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def record(session_id: str, root: Optional[Path], event: Dict[str, Any]) -> Dict[str, Any]:
     """Append one event. Returns it, as written."""
-    spot = path(session_id, root)
-    spot.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-    with open_private_append(spot, root=spot.parent, secure_parent=False) as fh:
-        fh.write(line + "\n")
-    _rotate(spot)
-    return event
+    with CS.session_lock(session_id, root, wait_s=5):
+        spot = path(session_id, root)
+        spot.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        with open_private_append(spot, root=spot.parent, secure_parent=False) as fh:
+            fh.write(line + "\n")
+        _rotate(spot)
+        return event
 
 
 def _rotate(spot: Path) -> None:
@@ -130,3 +131,36 @@ def clear(session_id: str, root: Optional[Path]) -> None:
         os.remove(path(session_id, root))
     except OSError:
         pass
+
+
+INTERACTIONS = frozenset({"project.opened", "goal.opened", "subgoal.selected",
+    "tab.changed", "preview.opened", "preview.closed", "preview.interacted",
+    "artifact.opened", "plan.suggestion_accepted", "plan.suggestion_rejected",
+    "todo.add_started", "build.cancelled", "chat.saved"})
+
+
+def bounded(value, chars=600, items=20, depth=0):
+    if depth > 7:
+        return str(value)[:chars]
+    if isinstance(value, dict):
+        return {str(k)[:80]: bounded(v, chars, items, depth+1)
+                for k, v in list(value.items())[:items]}
+    if isinstance(value, (list, tuple)):
+        return [bounded(v, chars, items, depth+1) for v in value[:items]]
+    return value[:chars] if isinstance(value, str) else value
+
+
+def interaction(session_id, root, body, project_id=""):
+    if not isinstance(body, dict) or body.get("type") not in INTERACTIONS:
+        raise ValueError("unknown interaction")
+    return record(session_id, root, new_event(body["type"], USER,
+        bounded(body.get("payload") or {}), project_id=project_id,
+        subgoal_id=str(body.get("subgoalId") or "")[:80]))
+
+
+def summary(session_id, root):
+    recent = read(session_id, root, limit=40)
+    counts = {}
+    for e in recent:
+        counts[e["type"]] = counts.get(e["type"], 0) + 1
+    return {"counts": counts, "recent": bounded(recent[-12:])}

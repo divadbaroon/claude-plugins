@@ -21,6 +21,15 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createActions(store, services) {
   const { get, set } = store;
+  function interaction(type, payload = {}) {
+    if (services.recordInteraction) {
+      services.recordInteraction({ type, payload, subgoalId: get().activeId || "" }).catch(() => {});
+    }
+  }
+  function withSystemMessages(held, incoming) {
+    const ids = new Set(held.map((m) => m.id));
+    return [...held, ...incoming.filter((m) => m.id.startsWith("sys-") && !ids.has(m.id))];
+  }
   let seq = 0;
   // Stamped per page load: a conversation read back from the server
   // carries the ids it was saved with, and a new message must not take one.
@@ -73,7 +82,7 @@ export function createActions(store, services) {
       const slice = { ...EMPTY_SLICE, ...incoming };
       const held = state.slices[id];
       if (held) {
-        slice.chat = held.chat;
+        slice.chat = withSystemMessages(held.chat, slice.chat || []);
         slice.draft = held.draft;
         slice.newTodo = held.newTodo;
         slice.todosShown = held.todosShown;
@@ -137,6 +146,7 @@ export function createActions(store, services) {
     }
     if (run !== panesRun || get().activeId !== id) return;
     set({ panes, panesFor: id });
+    changeSlice(id, (current) => ({ chat: withSystemMessages(current.chat, panes.chat || []) }));
   }
 
   function watching(state) {
@@ -151,6 +161,8 @@ export function createActions(store, services) {
     loadAccount();   // beside the goal, never ahead of it
     wanted = new URLSearchParams(window.location.search).get("goal") || "";
     await refresh();
+    interaction("project.opened");
+    interaction("goal.opened", { goalId: wanted });
     if (!watcher && services.watchGoal) {
       watcher = services.watchGoal({
         onChange: (revision) => {
@@ -159,7 +171,7 @@ export function createActions(store, services) {
       });
     }
     if (!panesTimer) {
-      panesTimer = setInterval(() => { if (watching(get())) loadPanes(); }, PANES_POLL_MS);
+      panesTimer = setInterval(() => { loadPanes(); }, PANES_POLL_MS);
     }
   }
 
@@ -191,6 +203,7 @@ export function createActions(store, services) {
   // Another goal of this project: the address names it, so a reload keeps
   // it, and the page reads it the way it read the first.
   async function openGoal(id) {
+    interaction("goal.opened", { goalId: id });
     wanted = id;
     const url = new URL(window.location.href);
     url.searchParams.set("goal", id);
@@ -334,11 +347,15 @@ export function createActions(store, services) {
   }
 
   function selectSubgoal(id) {
+    interaction("subgoal.selected", { selected: id });
     set({ activeId: id, tab: "bart", buildNote: null, previewNote: null });
     loadPanes();
   }
 
   function showTab(tab) {
+    interaction("tab.changed", { from: get().tab, to: tab });
+    if (get().tab === "preview" && tab !== "preview") interaction("preview.closed");
+    if (tab === "preview" && get().tab !== tab) interaction("preview.opened");
     set({ tab });
     if (tab !== "bart") loadPanes();
   }
@@ -347,6 +364,7 @@ export function createActions(store, services) {
   // when it would not is said under the pane, and the pane is read again
   // either way so it draws what is now true.
   async function previewOp(op) {
+    interaction("preview.interacted", op);
     if (get().previewBusy) return;
     set({ previewBusy: true, previewNote: null });
     let answer;
@@ -438,12 +456,14 @@ export function createActions(store, services) {
     }));
     changeSlice(id, (current) => ({ thinking: false, chat: [...current.chat, ...answers] }));
     keepChat(id);
+    await refresh();
   }
 
   // The conversation, written down whole after each change to it. The
   // page is its only writer, so the copy on screen is the truth and the
   // server's is a record of it.
   function keepChat(id) {
+    interaction("chat.saved", { subgoalId: id });
     persist(services.saveChat({ subgoalId: id, messages: sliceOf(get(), id).chat }));
   }
 
@@ -467,11 +487,20 @@ export function createActions(store, services) {
       return;
     }
     saw(todo.revision);
+    interaction("plan.suggestion_accepted", { messageId });
     changeSlice(id, (current) => ({
       todos: withRow(current.todos, todo),
       todosShown: true,
       chat: current.chat.map((m) => (m.id === messageId ? { ...m, added: true, todoId: todo.id } : m)),
     }));
+    keepChat(id);
+  }
+
+  function rejectProposal(messageId) {
+    const id = get().activeId;
+    changeSlice(id, (current) => ({ chat: current.chat.map((m) =>
+      m.id === messageId && !m.added ? { ...m, rejected: true } : m) }));
+    interaction("plan.suggestion_rejected", { messageId });
     keepChat(id);
   }
 
@@ -522,6 +551,7 @@ export function createActions(store, services) {
   }
 
   function editNewTodo(text) {
+    if (!sliceOf(get(), get().activeId).newTodo && text) interaction("todo.add_started");
     const id = get().activeId;
     if (id) changeSlice(id, { newTodo: text });
   }
@@ -566,14 +596,14 @@ export function createActions(store, services) {
   }
 
   return {
-    boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
+    interaction, boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
     showGoal, showGoals, showProjects, openGoal, openProject,
     loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
     selectSubgoal, showTab, loadPanes,
     previewConfigure, previewShowUi, previewRun, previewStop, previewForget,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
-    editDraft, sendMessage, acceptProposal,
+    editDraft, sendMessage, acceptProposal, rejectProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
     buildAll,
   };

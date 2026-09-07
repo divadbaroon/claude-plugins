@@ -1,12 +1,8 @@
 """Spans, so a turn can be followed end to end.
 
-No OpenTelemetry here -- hc has no such dependency, and a page served
-from one process does not need a collector to see itself. Each span is
-one JSON line in ``agent_trace.jsonl`` beside the event log, in the
-shape an exporter would want later: name, trace and span ids, the
-parent's id, start and end, attributes, status. Spans nest through a
-thread-local stack, so ``bart.message`` -> ``overseer.route`` ->
-``chat.reply`` is three lines that point at each other.
+Agent stages use the existing goal-page telemetry contract and debugger sinks.
+The local JSONL remains a diagnostic log; it does not define debugger roots.
+Background builds explicitly carry their lifecycle context to reader threads.
 
 The names used across the package::
 
@@ -18,6 +14,7 @@ The names used across the package::
 from __future__ import annotations
 
 import json
+import contextvars
 import threading
 import time
 import uuid
@@ -30,6 +27,7 @@ from .. import chat_state as CS
 from ..secure_io import open_private_append
 
 _local = threading.local()
+build_context = contextvars.ContextVar("agent_build_context", default=None)
 
 
 def _stack() -> List[Dict[str, Any]]:
@@ -83,8 +81,23 @@ class Tracer:
         }
         began = time.monotonic()
         stack.append(span)
+        from ... import telemetry
+        purpose = attrs.get("agent") if name == "model.call" else ""
+        operation_name = "agent.model" if name == "model.call" else name
         try:
-            yield span
+            from contextlib import nullcontext
+            active = telemetry.current()
+            already_wrapped = name == "bart.message" and active is not None and active.name == name
+            scope = (nullcontext(active) if already_wrapped or name in ("model.call", "build.finished", "todo.build")
+                     else telemetry.operation(operation_name, "processing", attributes=attrs))
+            with scope as op, telemetry.purpose(purpose or telemetry.current_purpose()):
+                try:
+                    yield span
+                finally:
+                    if op is not None:
+                        op.set_attributes(span["attrs"])
+                    if op is not None and span.get("status") == "error":
+                        op.fail(RuntimeError(span.get("error") or "operation failed"))
         except BaseException as exc:
             span["status"] = "error"
             span["error"] = " ".join(f"{type(exc).__name__}: {exc}".split())[:200]

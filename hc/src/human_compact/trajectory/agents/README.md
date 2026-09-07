@@ -1,105 +1,89 @@
-# The agents behind the goal page
+# Agents behind the goal page
 
-The page keeps four surfaces -- Plan, Bart, Live preview, Terminal. Behind
-them, six roles, each a module here with one entry point, and an
-orchestrator that hands a turn to the right one.
+The reader sees Plan, Bart, Live preview and Terminal. The agents have no separate UI.
 
-## The rule
-
-Every interaction is written to a local event log; the Overseer is asked
-only on meaningful transitions. Concretely:
-
-```
-page / build ──► orchestrator.emit(event) ──► agent_events.jsonl   (always)
-                        │
-                        └─ policy.is_meaningful(event)?
-                              no  ─► done (a row edited, a draft saved, a span)
-                              yes ─► overseer.route(event, state) ─► one decision
-                                        ├─ chat        ─► agents/chat.py       (one small model call)
-                                        ├─ brainstorm  ─► agents/brainstorm.py (the existing brainstorm.ask)
-                                        ├─ replan      ─► agents/path.py       (brainstorm.ask, todos card forced)
-                                        ├─ build       ─► runtime.build / runtime.reopen  (build.start / build.reopen)
-                                        ├─ verify      ─► agents/verifier.py   (no model)
-                                        └─ none
+```text
+interaction → local event log → cheap wake-up policy
+                                  ├─ minor event → done
+                                  └─ meaningful transition → Overseer
+                                      ├─ Chat ↔ local environment discovery
+                                      ├─ Brainstorm (human preference/options)
+                                      ├─ Path → minimal structured plan change
+                                      ├─ Build → Verifier → bounded repair
+                                      └─ none
+verified result → shared context updated → Overseer reassesses the project
 ```
 
-The meaningful transitions (`policy.MEANINGFUL`): a message to Bart, rows
-handed to the build, a plan asked for, a build finishing, failing or
-stopping to ask, a verdict from the Verifier, and the Chat agent declaring
-an uncertainty. Everything else -- `todo.added`, `todo.text_edited`,
-`todo.done_toggled`, `notes.edited`, `chat.saved`, every span -- is recorded
-and goes no further.
+`policy.py` decides whether an event wakes routing. `overseer.py` makes semantic
+project decisions through the configured model with bounded project direction,
+current goal, subgoals/todos, selected work, current run, reader profile, durable
+facts, recent results, Bart turns, interactions and the triggering result. Explicit
+Bart intent is enforced: ordinary messages go to Chat, options to Brainstorm,
+planning to Path. Environment uncertainty is inspected locally. Build requests,
+build completion and the repair limit have deterministic guards. A routing outage
+uses a conservative fallback and is recorded on the telemetry span.
 
-## A Bart message
+`path.py` returns and applies `keep_plan`, `add_subgoal`, `revise_subgoal`,
+`reorder_subgoal`, `replace_subgoal`, `add_todos`, `revise_todos`, and
+`remove_obsolete_todo`. It validates a complete patch before one locked save,
+rejects stale snapshots and protects running/completed work. The existing goal
+change feed refreshes Plan; Bart supplies the explanation.
 
-```
-POST /api/goal-page/bart
-  ui._bart_context (under the lock: the piece, its goal, the digest)
-  ui._bart_answer  → orchestrator.for_chat(...).bart_message(held, transcript)
-      emit bart.message (user)
-      overseer.route → policy.bart_intent(text)
-          words ask for options  → brainstorm  → brainstorm.reply → replies
-          words ask for a plan   → replan      → path.plan        → proposals
-          otherwise              → chat        → chat.ask         → prose (+ a row or two)
-              chat says needs.kind = human_preference
-                  → emit chat.needs_human → overseer → brainstorm, with that question
-              chat says needs.kind = environment
-                  → emit chat.needs_discovery → overseer → chat again,
-                    after runtime.discover(question); the reader is never asked
-      emit chat.replied | brainstorm.replied | path.planned (agent)
-```
+`acceptance.py` derives a minimal observable criterion when absent and persists
+it before the Build agent starts. The same contract enters the build prompt and
+run record. `verifier.py` checks row statuses, process error/exit and nested preview
+health first, then `artifacts.py` inspects real artifacts. Browser checks use
+Playwright on the loopback preview and can assert visible content, accessible
+controls and bounded click/fill behavior. File checks read through LocalRuntime.
+Prose criteria use model judgment grounded in inspected artifacts; missing
+inspection evidence fails. HTTP errors, including 404, are not healthy previews.
 
-## A build
+A failed verdict carries its actual evidence into the repair instruction, including
+fresh-session repairs. Repair runs retain the selected row and original set of
+rows to reverify. Two repairs are allowed, then Bart and Terminal explain the
+failure. Successful verification updates shared context before the Overseer
+chooses none, explanation, preference discussion or a Path revision. It does not
+unconditionally replan or start the next build.
 
-```
-POST /api/goal-page/op {op: build_todos}
-  ui._goal_page_write → orchestrator.build_requested(goal, rows)
-      emit todo.build_requested (user) → overseer → build → runtime.build → build.start
-      emit build.started
-  ... the headless claude works; build.Run._finish writes the run record ...
-  build._after_finish → orchestrator.build_finished(goal, ended, rows)
-      idle    → emit build.completed → overseer → verify → verifier.verify
-                    pass → emit verify.passed → overseer → none
-                             + context: verification_result, todo_status per row
-                    fail → emit verify.failed → overseer
-                             attempts < 2 → build → runtime.reopen(row, "Verification failed: ...")
-                             attempts = 2 → chat  → a plain message into the piece's
-                                            conversation and the Terminal; no model
-      failed  → emit build.failed   → overseer → none (+ context: run_result)
-      waiting → emit build.question → overseer → none (the answer resumes the run)
-```
+`POST /api/goal-page/interaction` accepts only minor interaction names. It records
+bounded local data and cannot invoke routing. The page records project/goal opens,
+subgoal selection, tabs, preview open/close/focus/controls, opened preview artifacts,
+proposal acceptance/rejection, starting a new todo and chat saves. Cross-origin
+preview internals remain opaque; entering the frame is recorded without reading
+its contents. Build cancellation is also recorded by the build lifecycle.
 
-The Terminal pane shows the Verifier's lines (`verifying the build`,
-`verified: ...`, `verification failed: ...`, `repair 1 of 2: ...`) through
-the build's own activity feed.
+Shared context supports all nine kinds: `new_fact`, `user_preference`,
+`project_constraint`, `decision`, `discovered_dependency`, `todo_status`,
+`run_result`, `artifact`, `verification_result`. Updates use stable subject keys to
+supersede obsolete information; current facts are rendered first. Session locks
+serialize context/event writes. System Bart messages have stable IDs, survive
+stale browser saves and appear through the existing pane poll on already-open
+pages.
 
-## Files, per chat (beside goals.json, via chat_state.paths)
+Agent spans feed the existing `human_compact.telemetry` debugger contract. No new
+debugger UI is introduced. `bart.message` contains `overseer.route` and
+`chat.reply → model.chat`. The asynchronous `todo.build` operation is carried into
+the build reader thread, verification, repairs and final reassessment. The local
+`agent_trace.jsonl` remains a diagnostic record; debugger traces use the shared
+telemetry sink and IDs.
 
-- `agent_events.jsonl` -- the log. One LocalEvent a line:
-  `{id, projectId, timestamp, type, source, payload, subgoalId, todoId, runId}`.
-  Rotated past 2 MB to its last 2000 lines.
-- `agent_trace.jsonl` -- spans: `bart.message > overseer.route > chat.reply`,
-  `todo.build > overseer.route > build.agent`, `build.finished > verifier.agent`,
-  and inside the runtime `file.read`, `file.write`, `command.exec`, `preview.start`,
-  `model.call`. Same shape as an OTel span; no dependency.
-- `agent_context.json` -- shared context updates: `new_fact`, `user_preference`,
-  `project_constraint`, `decision`, `discovered_dependency`, `todo_status`,
-  `run_result`, `artifact`, `verification_result`. `context.render` puts the
-  durable ones under "What is already known" in every agent's prompt.
-- `agent_state.json` -- repair attempts per subgoal.
+Local files beside the chat's goals:
 
-## The runtime
+- `agent_events.jsonl`: rotating interaction/result log (2 MB / 2,000-line tail).
+- `agent_context.json`: at most 200 current context updates.
+- `agent_state.json`: repair counts per subgoal.
+- Existing build records: selected rows, verification rows, acceptance and repair instruction.
 
-`runtime.Runtime` is the interface: `describe`, `read_file`, `write_file`,
-`run`, `discover`, `preview_state`, `start_preview`, `build`, `reopen`.
-`LocalRuntime` is this machine. `runtime.make()` reads `HC_AGENT_RUNTIME`
-(default `local`); `daytona` is named and refuses with a clear message until
-the class lands. The agents and the page never touch the project except
-through the runtime the orchestrator holds.
+`Runtime` is the interface and `LocalRuntime` is its only implementation.
+`HC_AGENT_RUNTIME` accepts `local` only. `HC_AGENTS=0` retains legacy Bart/build
+behavior. `HC_CHAT_PROVIDER` chooses the model provider.
 
-## Switches
+Browser verification requires Python Playwright and Chromium or an installed
+Chrome (`HC_BROWSER_EXECUTABLE` can name it). Missing browser tooling fails the
+artifact check; it never turns page health into a semantic pass. The headless
+Build lifecycle is covered end to end; the optional legacy connected-session
+queue still relies on its hook completion path and is not an asynchronous
+headless trace. Cross-process server restarts cannot resume an in-memory trace.
 
-- `HC_AGENTS=0` -- the old path: every Bart message is the brainstorm, a
-  finished build is not verified, nothing is logged.
-- `HC_AGENT_RUNTIME` -- `local` (default) or, later, `daytona`.
-- `HC_CHAT_PROVIDER` -- as before, the provider every model call uses.
+Before merging, run the native installed cross-repository round trip and the
+macOS, Ubuntu and Windows workflow gates specified in the repository AGENTS.md.

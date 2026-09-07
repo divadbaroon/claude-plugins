@@ -129,13 +129,14 @@ class Orchestrator:
 
     def _attempts(self, subgoal_id: str, set_to: Optional[int] = None,
                   add: int = 0) -> int:
-        state = self.state()
-        held = int(state["attempts"].get(subgoal_id, 0) or 0)
-        if set_to is not None or add:
-            held = set_to if set_to is not None else held + add
-            state["attempts"][subgoal_id] = held
-            self._save_state(state)
-        return held
+        with CS.session_lock(self.session_id, self.root, wait_s=5):
+            state = self.state()
+            held = int(state["attempts"].get(subgoal_id, 0) or 0)
+            if set_to is not None or add:
+                held = set_to if set_to is not None else held + add
+                state["attempts"][subgoal_id] = held
+                self._save_state(state)
+            return held
 
     # --- routing ---------------------------------------------------------------
 
@@ -146,9 +147,13 @@ class Orchestrator:
         when nothing was asked or the decision was ``none``."""
         if not POLICY.is_meaningful(event):
             return None
+        if event["type"] == POLICY.VERIFY_PASSED:
+            for item in OVERSEER.fallback(event, self.state())["contextUpdates"]:
+                CTX.apply(self.session_id, self.root, item)
         with trace.span("overseer.route", event=event["type"]):
             self.overseer_calls += 1
-            decision = OVERSEER.route(event, self.state())
+            state = dict(self.state(), **CTX.assemble(self.session_id, self.root, event, carry))
+            decision = self.agents.get("overseer", OVERSEER.route)(event, state, root=self.root)
         self.emit(POLICY.OVERSEER_ROUTED, EV.SYSTEM,
                   {"event": event["type"], "action": decision["action"],
                    "reason": decision["reason"]},
@@ -166,6 +171,13 @@ class Orchestrator:
         step = {"event": event["type"], "action": decision["action"],
                 "reason": decision["reason"]}
         self.steps.append(step)
+        target = decision.get("targetSubgoalId")
+        if target and target != event.get("subgoalId") and event["type"] not in (
+                POLICY.BUILD_REQUESTED, POLICY.BUILD_COMPLETED, POLICY.VERIFY_FAILED):
+            from .. import goals as GM
+            goals, _ = CS.load_goals(self.session_id, self.root)
+            if GM.by_id(goals, target):
+                event = dict(event, subgoalId=target)
         result = self._dispatch(decision, event, dict(carry or {}))
         step["result"] = _brief(result)
         return result
@@ -214,8 +226,13 @@ class Orchestrator:
         result["flow"] = list(self.steps)
         return result
 
+    def _learn(self, answer, by, subgoal_id):
+        for item in CTX.normalize_updates(answer.get("contextUpdates"), by, subgoal_id):
+            CTX.apply(self.session_id, self.root, item)
+
     def _known(self, subgoal_id: str) -> List[str]:
-        return CTX.render(self.session_id, self.root, subgoal_id)
+        return CTX.render(self.session_id, self.root, subgoal_id) + [
+            "Recent activity: " + json.dumps(EV.summary(self.session_id, self.root))]
 
     def _chat(self, decision, event, carry) -> Dict[str, Any]:
         subgoal_id = str(event.get("subgoalId") or decision.get("targetSubgoalId") or "")
@@ -232,8 +249,7 @@ class Orchestrator:
                       {"question": question, "chars": len(discovered)}, subgoal_id=subgoal_id)
             CTX.apply(self.session_id, self.root, CTX.update(
                 CTX.DISCOVERED_DEPENDENCY,
-                "asked of the directory: %s -- %s" % (question, discovered.splitlines()[1][:200]
-                                                       if len(discovered.splitlines()) > 1 else ""),
+                "asked of the directory: %s -- %s" % (question, discovered[:450]),
                 subgoal_id=subgoal_id))
             carry["discovered"] = discovered
         with trace.span("chat.reply"):
@@ -244,6 +260,7 @@ class Orchestrator:
         if not isinstance(answer, dict) or not answer.get("ok"):
             error = (answer or {}).get("error") if isinstance(answer, dict) else ""
             return {"ok": False, "error": str(error or "Bart could not answer"), "route": "chat"}
+        self._learn(answer, "chat", subgoal_id)
         needs = answer.get("needs") or {}
         replies = REPLIES.from_chat(answer)
         if needs.get("kind") == CHAT.HUMAN and not carry.get("asked_human"):
@@ -274,21 +291,32 @@ class Orchestrator:
             answer = self.agents["brainstorm"](
                 carry.get("transcript") or [], carry.get("context", ""),
                 focus=focus(carry.get("goal", ""), carry.get("subgoal", "")),
-                known=self._known(subgoal_id), question=str(carry.get("question") or ""),
+                known=self._known(subgoal_id), question=str(carry.get("question") or (decision.get("reason") if carry.get("background") else "") or ""),
                 root=self.root)
         if isinstance(answer, dict) and answer.get("ok"):
+            self._learn(answer, "brainstorm", subgoal_id)
             self.emit(POLICY.BRAINSTORM_REPLIED, EV.AGENT,
                       {"card": answer.get("card")}, subgoal_id=subgoal_id)
         return dict(answer or {"ok": False, "error": "Bart could not answer"}, route="brainstorm")
 
     def _plan(self, decision, event, carry) -> Dict[str, Any]:
         subgoal_id = str(event.get("subgoalId") or "")
+        expected, _ = CS.load_goals(self.session_id, self.root)
+        project = CTX.assemble(self.session_id, self.root, event, carry)
+        project["routingReason"] = str(decision.get("reason") or "")[:600]
         with trace.span("path.plan"):
             answer = self.agents["path"](
-                carry.get("transcript") or [], carry.get("context", ""),
-                focus=focus(carry.get("goal", ""), carry.get("subgoal", "")),
+                carry.get("transcript") or [], json.dumps(project, default=str),
+                focus=chat_focus(carry.get("goal", ""), carry.get("subgoal", "")),
                 known=self._known(subgoal_id), root=self.root)
         if isinstance(answer, dict) and answer.get("ok"):
+            try:
+                applied = PATH.apply(self.session_id, self.root, answer.get("changes") or [], expected)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc), "route": "replan"}
+            if applied:
+                CTX.apply(self.session_id, self.root, CTX.update(CTX.DECISION,
+                    answer.get("say") or "Updated the path", key="current_path", by="path"))
             self.emit(POLICY.PATH_PLANNED, EV.AGENT,
                       {"rows": sum(1 for r in answer.get("replies") or [] if r.get("kind") == "proposal")},
                       subgoal_id=subgoal_id)
@@ -303,11 +331,7 @@ class Orchestrator:
                 "Have a look at the preview and the Terminal, and tell me what "
                 "you see or what to change." % (OVERSEER.REPAIR_LIMIT + 1, reason))
         try:
-            chats = CS.load_bart_chats(self.session_id, self.root)
-            held = list(chats.get(subgoal_id) or [])
-            held.append({"id": "esc" + os.urandom(3).hex(), "who": "bart",
-                         "kind": "text", "text": said})
-            CS.save_bart_chat(self.session_id, subgoal_id, held, self.root)
+            CS.append_bart_message(self.session_id, subgoal_id, said, self.root)
         except (OSError, ValueError, RuntimeError):
             pass
         BUILD.note_activity(self.session_id, self.root, subgoal_id, "verify",
@@ -324,26 +348,43 @@ class Orchestrator:
                         quick: bool = False) -> Dict[str, Any]:
         """The page's Build: recorded, routed, started."""
         ids = [str(r) for r in row_ids if isinstance(r, str)]
-        with self.tracer.span("todo.build", goal=goal_id, rows=len(ids)):
-            trace.use(self.tracer)
+        from ... import telemetry
+        lifecycle = telemetry.start_operation("todo.build", "workflow", attributes={"goal": goal_id})
+        with telemetry.activate(lifecycle):
+            token = trace.build_context.set(telemetry.context())
             try:
-                event = self.emit(POLICY.BUILD_REQUESTED, EV.USER,
-                                  {"rows": ids, "quick": bool(quick)}, subgoal_id=goal_id,
-                                  todo_id=ids[0] if len(ids) == 1 else "")
-                result = self.handle(event, {"rows": ids, "quick": bool(quick)})
+                with self.tracer.span("todo.build", goal=goal_id, rows=len(ids)):
+                    trace.use(self.tracer)
+                    try:
+                        event = self.emit(POLICY.BUILD_REQUESTED, EV.USER,
+                                          {"rows": ids, "quick": bool(quick)}, subgoal_id=goal_id,
+                                          todo_id=ids[0] if len(ids) == 1 else "")
+                        result = self.handle(event, {"rows": ids, "quick": bool(quick)})
+                    finally:
+                        trace.use(None)
             finally:
-                trace.use(None)
+                trace.build_context.reset(token)
+        if not isinstance(result, dict) or not result.get("ok"):
+            lifecycle.fail(RuntimeError((result or {}).get("error") or "build did not start"))
+        elif result.get("queued") or result.get("joined"):
+            lifecycle.complete({"queued": True})
         return result or {"ok": False, "error": "the build was not started"}
 
     def _build(self, decision, event, carry) -> Dict[str, Any]:
         goal_id = str(event.get("subgoalId") or decision.get("targetSubgoalId") or "")
         if event.get("type") == POLICY.BUILD_REQUESTED:
             ids = [str(r) for r in (carry.get("rows") or [])]
+            from . import acceptance
+            try:
+                criteria = acceptance.ensure(self.session_id, self.root, goal_id, ids,
+                    CTX.assemble(self.session_id, self.root, event, carry))
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)[:200]}
+            self._attempts(goal_id, set_to=0)
             with trace.span("build.agent", goal=goal_id, rows=len(ids), quick=bool(carry.get("quick"))):
                 result = self.runtime.build(self.session_id, self.root, goal_id, ids,
                                             quick=bool(carry.get("quick")))
             if isinstance(result, dict) and result.get("ok"):
-                self._attempts(goal_id, set_to=0)
                 self.emit(POLICY.BUILD_STARTED, EV.SYSTEM,
                           {"rows": list(result.get("rows") or ids), "quick": bool(carry.get("quick"))},
                           subgoal_id=goal_id, run_id=str(result.get("claude_session_id") or ""))
@@ -353,17 +394,22 @@ class Orchestrator:
         # again from nothing.
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         rows = [str(r) for r in (payload.get("rows") or carry.get("rows") or [])]
-        row_id = str(decision.get("targetTodoId") or (rows[0] if rows else ""))
+        evidence = carry.get("evidence", payload.get("evidence")) or {}
+        statuses = (evidence.get("rows") or {}) if isinstance(evidence, dict) else {}
+        failed_rows = [rid for rid in rows if statuses.get(rid) == "failed"]
+        row_id = str(decision.get("targetTodoId") or
+                     (failed_rows[0] if failed_rows else rows[0] if rows else ""))
         reason = str(payload.get("reason") or decision.get("reason") or "the check failed")
         attempt = self._attempts(goal_id, add=1)
         note = ("Verification failed: %s. Fix that; the rows in this build were: %s"
                 % (reason, ", ".join(rows) or row_id))
+        note += "\nVerification evidence: " + json.dumps(carry.get("evidence", payload.get("evidence")) or {}, ensure_ascii=False)
         BUILD.note_activity(self.session_id, self.root, goal_id, "verify",
                             "repair %d of %d: %s" % (attempt, OVERSEER.REPAIR_LIMIT, reason))
         self.emit(POLICY.REPAIR_REQUESTED, EV.AGENT, {"attempt": attempt, "reason": reason,
                                                         "rows": rows}, subgoal_id=goal_id, todo_id=row_id)
         with trace.span("build.agent", goal=goal_id, row=row_id, repair=attempt):
-            result = self.runtime.reopen(self.session_id, self.root, goal_id, row_id, note)
+            result = self.runtime.repair(self.session_id, self.root, goal_id, row_id, note, rows)
         if isinstance(result, dict) and result.get("ok"):
             self.emit(POLICY.BUILD_STARTED, EV.SYSTEM, {"rows": rows, "repair": attempt},
                       subgoal_id=goal_id, todo_id=row_id)
@@ -404,9 +450,25 @@ class Orchestrator:
                             {"rows": rows, "reason": reason,
                              "evidence": (verdict or {}).get("evidence")},
                             subgoal_id=goal_id, run_id=run_id)
+        CTX.apply(self.session_id, self.root, CTX.update(CTX.RUN_RESULT,
+            "build ended; verification " + ("passed" if passed else "failed") + ": " + reason,
+            subgoal_id=goal_id, run_id=run_id, key="current_run"))
+        artifact = (verdict or {}).get("evidence", {}).get("artifact")
+        if artifact:
+            CTX.apply(self.session_id, self.root, CTX.update(CTX.ARTIFACT,
+                json.dumps(artifact, ensure_ascii=False)[:600], subgoal_id=goal_id, key="current_artifact"))
         if passed:
             self._attempts(goal_id, set_to=0)
-        followed = self.handle(outcome, {"rows": rows, "run_id": run_id})
+        followed = self.handle(outcome, {"rows": rows, "run_id": run_id,
+            "evidence": (verdict or {}).get("evidence"),
+            **({"transcript": [{"role": "user", "text": "Explain the verified result and the next step: " + reason}],
+                "context": json.dumps(CTX.assemble(self.session_id, self.root, outcome)),
+                "background": True} if passed else {})})
+        if passed and isinstance(followed, dict):
+            messages = [str(r.get("text") or "") for r in followed.get("replies") or [] if isinstance(r, dict)]
+            said = "\n\n".join(m for m in messages if m) or str(followed.get("say") or "")
+            if said:
+                CS.append_bart_message(self.session_id, goal_id, said, self.root)
         return followed if followed is not None else {"ok": True, "route": "verify",
                                                      "passed": passed, "reason": reason}
 

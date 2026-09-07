@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from .. import setup_chat as SC
 from . import trace
+from . import context as CTX
 
 MAX_SAY = 1200
 MAX_TODOS = 3
@@ -55,7 +56,7 @@ PROMPT = [
 
 def compose(transcript, context: str = "", focus=(), known=(),
             discovered: str = "") -> List[str]:
-    lines = list(PROMPT)
+    lines = list(PROMPT) + [CTX.UPDATE_INSTRUCTIONS]
     if context:
         lines += ["", "# The project", "", str(context).rstrip()]
     lines += list(focus or [])
@@ -86,7 +87,11 @@ def normalize(raw: Any) -> Dict[str, Any]:
     question = " ".join(str(needs.get("question") or "").split())[:400]
     if kind not in NEEDS or not question:
         kind, question = "", ""
-    return {"say": say, "todos": todos, "needs": {"kind": kind, "question": question}}
+    out = {"say": say, "todos": todos, "needs": {"kind": kind, "question": question}}
+    updates = CTX.normalize_updates(value.get("contextUpdates"), by="chat")
+    if updates:
+        out["contextUpdates"] = updates
+    return out
 
 
 def ask(transcript, context: str = "", focus=(), known=(), discovered: str = "",

@@ -15,11 +15,12 @@ from typing import Any, Dict, List
 from .. import brainstorm as BRAIN
 from . import replies as REPLIES
 from . import trace
+from . import context as CTX
 
 
 def reply(transcript, context: str = "", focus=(), known=(), question: str = "",
           root=None, engine=None) -> Dict[str, Any]:
-    extra: List[str] = list(focus or []) + list(known or [])
+    extra: List[str] = list(focus or []) + list(known or []) + [CTX.UPDATE_INSTRUCTIONS]
     if question:
         extra += ["", "# The question to put to them", "",
                   "The reader's choice decides the next rows and only they can",
@@ -32,4 +33,4 @@ def reply(transcript, context: str = "", focus=(), known=(), question: str = "",
         return {"ok": False, "error": str(error or "Bart could not answer")}
     return {"ok": True, "say": str(card.get("say") or ""),
             "card": str(card.get("card") or "none"),
-            "replies": REPLIES.from_card(card)}
+            "replies": REPLIES.from_card(card), "contextUpdates": card.get("contextUpdates") or []}
