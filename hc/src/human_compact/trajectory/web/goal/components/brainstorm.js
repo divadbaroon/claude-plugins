@@ -63,7 +63,8 @@ function renderMessage(message, actions) {
 function renderThinking() {
   return h("div", { key: "thinking", class: "msg from-bart is-thinking" },
     h("span", { class: "msg-who" }, "bart"),
-    h("div", { class: "bubble is-thinking", role: "status", "aria-label": "Bart is thinking" }, "…"));
+    h("div", { class: "bubble is-thinking", role: "status", "aria-label": "Bart is thinking" },
+      [0, 1, 2].map(i => h("span", { class: "thinking-dot", "aria-hidden": "true", style: `animation-delay: ${i * 150}ms` }, "•"))));
 }
 
 function renderProposal(message, actions) {
