@@ -30,7 +30,7 @@ export function renderPage(state, actions) {
 }
 
 function renderPane(state, actions) {
-  if (state.tab === "paper" || state.tab === "resource") return renderResourcePane(state);
+  if (state.tab === "paper" || state.tab === "dataset" || state.tab === "resource") return renderResourcePane(state, actions);
   if (state.tab === "preview") return renderPreview(state, actions);
   if (state.tab === "terminal") return renderTerminal(state);
   if (state.status === "ready" && !state.subgoals.length) return renderFirstSubgoal(state, actions);

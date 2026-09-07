@@ -73,6 +73,7 @@ async function op(operation) {
 
 export const services = {
   projectPaperUrl,
+  projectDataset(id) { return get(`/api/project-dataset?id=${encodeURIComponent(id)}`); },
   recordInteraction(event) { return post("/api/goal-page/interaction", event); },
   /** Who this machine is connected as. The server reads the account the
       installer wrote (auth.json under ~/.human-compact) and answers; the

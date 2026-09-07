@@ -193,7 +193,7 @@ def inspect_table(path):
     if not schema:
         raise ValueError('No readable data columns')
     return {'format': suffix[1:], 'size': path.stat().st_size, 'columns': schema,
-            'rowCount': count, 'sampleSummary': json.dumps(sample, default=str, ensure_ascii=False)[:2000]}
+            'rowCount': count, 'sample': [{str(k)[:120]: str(v)[:240] for k, v in list(row.items())[:20]} for row in sample[:10]], 'sampleSummary': json.dumps(sample, default=str, ensure_ascii=False)[:2000]}
 
 
 def extract(archive, folder, limit):
@@ -421,3 +421,18 @@ def paper_file(root, cwd, rid):
             if path.is_file() and path.suffix == '.pdf':
                 return path
     raise FileNotFoundError('No ready project paper')
+
+
+def dataset_preview(root, cwd, rid):
+    """Bounded inspection of the first persisted primary file; no client path."""
+    for r in PS.load_project(root, cwd).get("resources") or []:
+        if r.get("id") != rid or r.get("kind") != "dataset" or r.get("status") != "ready":
+            continue
+        files = r.get("metadata", {}).get("files", [])
+        primary = r.get("access", {}).get("primaryFiles", [])
+        if not files or not primary or files[0].get("path") not in primary:
+            break
+        if isinstance(files[0].get("sample"), list):
+            return files[0]
+        return dict(inspect_table(safe_path(cwd, files[0]["path"])), path=files[0]["path"])
+    raise FileNotFoundError("No ready project dataset")

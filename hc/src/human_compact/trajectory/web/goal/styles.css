@@ -313,3 +313,7 @@ input, textarea { outline: none; }
   .main { flex: 1 0 55vh; }
   .tabs { flex-wrap: wrap; }
 }
+
+.dataset-preview { overflow-x: auto; max-width: 100%; }
+.dataset-preview table { border-collapse: collapse; font-size: 12px; text-align: left; }
+.dataset-preview th, .dataset-preview td { padding: 6px 12px; border-bottom: 1px solid var(--line, #eee); max-width: 240px; overflow-wrap: anywhere; }

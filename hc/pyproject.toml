@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "human-compact"
-version = "0.19.27"
+version = "0.19.28"
 description = "Session-scoped goal workspaces and persistent context for Claude Code."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["pypdf>=5,<7", "pyarrow>=18,<24"]
 authors = [{ name = "David Baroon" }]
 license = { text = "MIT" }
+
+[project.optional-dependencies]
+web = ["playwright>=1.50,<2"]
 
 [project.scripts]
 hc-backup = "human_compact.cli:main"

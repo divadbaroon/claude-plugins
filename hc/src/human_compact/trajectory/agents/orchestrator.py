@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from .. import brainstorm as BRAIN
 from .. import build as BUILD
 from .. import chat_state as CS
+from .. import goals as GM
 from ..secure_io import atomic_write_json
 from . import brainstorm as BRAINSTORM_AGENT
 from . import chat as CHAT
@@ -473,12 +474,18 @@ class Orchestrator:
     # --- Build and the loop after it ----------------------------------------------
 
     def build_requested(self, goal_id: str, row_ids: Sequence[str],
-                        quick: bool = False) -> Dict[str, Any]:
+                        quick: Optional[bool] = None) -> Dict[str, Any]:
         """The page's Build: recorded, routed, started."""
         ids = [str(r) for r in row_ids if isinstance(r, str)]
+        if quick is None:
+            goals, _ = CS.load_goals(self.session_id, self.root)
+            goal = GM.by_id(goals, goal_id) or {}
+            selected = [r for r in goal.get("todo_items", []) if r.get("id") in ids]
+            quick = len(selected) == len(ids) and BUILD.prefer_quick(BUILD.picked_with_children(goal.get("todo_items", []), ids))
         from ... import telemetry
         lifecycle = telemetry.start_operation("todo.build", "workflow", attributes={"goal": goal_id})
         with telemetry.activate(lifecycle):
+            trace.phase("build.click")
             token = trace.build_context.set(telemetry.context())
             try:
                 with self.tracer.span("todo.build", goal=goal_id, rows=len(ids)):
@@ -493,10 +500,38 @@ class Orchestrator:
             finally:
                 trace.build_context.reset(token)
         if not isinstance(result, dict) or not result.get("ok"):
+            self.emit("build.cancelled", EV.SYSTEM, {"rows": ids, "error": (result or {}).get("error") or "build did not start"}, subgoal_id=goal_id)
             lifecycle.fail(RuntimeError((result or {}).get("error") or "build did not start"))
         elif result.get("queued") or result.get("joined"):
             lifecycle.complete({"queued": True})
         return result or {"ok": False, "error": "the build was not started"}
+
+    def preview_failed(self, goal_id, reason, lines):
+        """Repair a previously built artifact through the same bounded loop."""
+        record = BUILD.load_run(self.session_id, self.root, goal_id) or {}
+        goals, _ = CS.load_goals(self.session_id, self.root)
+        goal = GM.by_id(goals, goal_id) or {}
+        ids = [r["id"] for r in goal.get("todo_items", [])
+               if r.get("id") in (record.get("acceptance") or {}) and r.get("status") == "done"]
+        if not ids:
+            return {"ok": False, "error": "There is no completed build with saved acceptance to repair."}
+        from ... import telemetry
+        lifecycle = telemetry.start_operation("todo.build", "workflow", attributes={"goal": goal_id, "origin": "preview"})
+        evidence = {"preview_startup": {"passed": False, "reason": str(reason)[:300],
+                                       "lines": [str(line)[:500] for line in lines[-20:]]}}
+        with telemetry.activate(lifecycle):
+            token = trace.build_context.set(telemetry.context())
+            trace.use(self.tracer)
+            try:
+                event = self.emit(POLICY.VERIFY_FAILED, EV.SYSTEM,
+                    {"rows": ids, "reason": reason, "evidence": evidence}, subgoal_id=goal_id)
+                result = self.handle(event, {"rows": ids, "evidence": evidence})
+            finally:
+                trace.use(None)
+                trace.build_context.reset(token)
+        if not isinstance(result, dict) or not result.get("ok"):
+            lifecycle.complete()
+        return result or {"ok": False, "error": reason}
 
     def _build(self, decision, event, carry) -> Dict[str, Any]:
         goal_id = str(event.get("subgoalId") or decision.get("targetSubgoalId") or "")
@@ -508,6 +543,7 @@ class Orchestrator:
                     CTX.assemble(self.session_id, self.root, event, carry))
             except Exception as exc:
                 return {"ok": False, "error": str(exc)[:200]}
+            trace.phase("acceptance.ready")
             self._attempts(goal_id, set_to=0)
             with trace.span("build.agent", goal=goal_id, rows=len(ids), quick=bool(carry.get("quick"))):
                 result = self.runtime.build(self.session_id, self.root, goal_id, ids,
@@ -534,6 +570,7 @@ class Orchestrator:
         note += "\nVerification evidence: " + json.dumps(carry.get("evidence", payload.get("evidence")) or {}, ensure_ascii=False)
         BUILD.note_activity(self.session_id, self.root, goal_id, "verify",
                             "repair %d of %d: %s" % (attempt, OVERSEER.REPAIR_LIMIT, reason))
+        trace.phase("repair.started")
         self.emit(POLICY.REPAIR_REQUESTED, EV.AGENT, {"attempt": attempt, "reason": reason,
                                                         "rows": rows}, subgoal_id=goal_id, todo_id=row_id)
         with trace.span("build.agent", goal=goal_id, row=row_id, repair=attempt):
@@ -569,6 +606,7 @@ class Orchestrator:
         goal_id = str(event.get("subgoalId") or "")
         rows = [str(r) for r in (carry.get("rows") or (event.get("payload") or {}).get("rows") or [])]
         run_id = str(carry.get("run_id") or event.get("runId") or "")
+        trace.phase("verifier.started")
         self.emit(POLICY.VERIFY_STARTED, EV.SYSTEM, {"rows": rows}, subgoal_id=goal_id, run_id=run_id)
         BUILD.note_activity(self.session_id, self.root, goal_id, "verify", "verifying the build")
         verdict = self.agents["verify"](self.session_id, self.root, goal_id, rows,
@@ -590,6 +628,7 @@ class Orchestrator:
             CTX.apply(self.session_id, self.root, CTX.update(CTX.ARTIFACT,
                 json.dumps(artifact, ensure_ascii=False)[:600], subgoal_id=goal_id, key="current_artifact"))
         if passed:
+            trace.phase("build.done")
             self._attempts(goal_id, set_to=0)
         followed = self.handle(outcome, {"rows": rows, "run_id": run_id,
             "evidence": (verdict or {}).get("evidence"),

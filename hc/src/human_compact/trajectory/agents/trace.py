@@ -158,3 +158,11 @@ def current() -> Tracer:
 def span(name: str, **attrs: Any) -> Iterator[Dict[str, Any]]:
     with current().span(name, **attrs) as s:
         yield s
+
+
+def phase(name, **attributes):
+    """A measured boundary in the existing operation, not a second trace."""
+    from ... import telemetry
+    active = telemetry.current()
+    if active:
+        active.event(name, attributes)

@@ -15,6 +15,7 @@ export function renderTodos(state, actions) {
       h("button", {
         type: "button", class: "ghost-btn", onclick: actions.toggleTodosPane,
       }, "Hide todos")),
+    renderActivity(state, slice),
     h("div", { class: "todo-list" },
       slice.todos.map((todo) => renderTodo(todo, actions, state)),
       h("div", { key: "todo-new", class: "todo todo-new" },
@@ -79,4 +80,15 @@ function renderTodo(todo, actions, state) {
       "aria-label": "Remove todo",
       onclick: () => actions.removeTodo(todo.id),
     }, "×"));
+}
+
+function renderActivity(state, slice) {
+  const phase = slice.todos.map(todo => todoPhase(todo, state)).find(p => ["building", "checking", "fixing"].includes(p));
+  if (!phase) return null;
+  const lines = state.panesFor === state.activeId ? state.panes?.build?.lines || [] : [];
+  // Tool summaries are factual, already bounded by the build recorder. Model
+  // prose, estimates and internal verifier evidence stay in Terminal.
+  const latest = [...lines].reverse().find(line => line.kind === "tool");
+  return h("p", { class: "build-note", role: "status", "aria-label": "Build activity" },
+    `${TODO_LABELS[phase] || phase}${phase === "building" && latest ? " · " + latest.text.slice(0, 160) : ""}`);
 }

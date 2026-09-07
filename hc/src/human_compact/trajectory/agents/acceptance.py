@@ -1,6 +1,7 @@
 """One observable contract, persisted before Build and reused by Verifier."""
 import json
 import os
+import threading
 
 from .. import chat_state as CS, goals as GM, providers, setup_chat
 from ... import telemetry
@@ -59,7 +60,21 @@ must not be asked for environment facts. Context and TODOs follow:\n'''
     return raw.get("criteria", {}) if isinstance(raw, dict) else {}
 
 
+_derivations = {}
+_derivations_guard = threading.Lock()
+
+
 def ensure(session_id, root, goal_id, ids, context=None, engine=None):
+    # A Build click can join in-flight precomputation instead of paying for
+    # a second identical derivation. Re-read persisted criteria after waiting.
+    key = (session_id, str(root), goal_id)
+    with _derivations_guard:
+        lock = _derivations.setdefault(key, threading.RLock())
+    with lock:
+        return _ensure(session_id, root, goal_id, ids, context, engine)
+
+
+def _ensure(session_id, root, goal_id, ids, context=None, engine=None):
     goals, _ = CS.load_goals(session_id, root)
     goal = GM.by_id(goals, goal_id) or {}
     rows = [r for r in goal.get("todo_items", []) if r.get("id") in ids]
@@ -83,3 +98,32 @@ def ensure(session_id, root, goal_id, ids, context=None, engine=None):
         if missing and not CS.save_goals(session_id, current, important, root):
             raise ValueError("goal state changed while saving acceptance")
         return {r["id"]: actual[r["id"]]["acceptance"] for r in rows}
+
+
+# At most one background derivation per goal; edits during a call are re-read.
+# Failed preparation is retried by ensure at Build, never in an endless loop.
+_pending = set()
+_pending_lock = threading.Lock()
+
+
+def prepare(session_id, root, goal_id):
+    key = (session_id, str(root), goal_id)
+    with _pending_lock:
+        if key in _pending:
+            return
+        _pending.add(key)
+    def work():
+        try:
+            from . import context
+            goals, _ = CS.load_goals(session_id, root)
+            goal = GM.by_id(goals, goal_id) or {}
+            ids = [r["id"] for r in goal.get("todo_items", []) if not normalize(r.get("acceptance"))]
+            if ids:
+                ensure(session_id, root, goal_id, ids, context.assemble(session_id, root, {"subgoalId": goal_id}))
+        except Exception:
+            # Best effort only: Build retains the synchronous correctness gate.
+            pass
+        finally:
+            with _pending_lock:
+                _pending.discard(key)
+    threading.Thread(target=work, name="acceptance-preparation", daemon=True).start()

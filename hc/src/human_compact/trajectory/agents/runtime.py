@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -165,6 +166,36 @@ class LocalRuntime(Runtime):
             return PV.state(self.root, self.cwd, session_id=session_id)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "status": "unknown", "error": str(exc)[:200]}
+
+    def ensure_preview(self, session_id: str = "", timeout: float = 45) -> Dict[str, Any]:
+        """Start only a detected repository profile, respecting explicit Stop."""
+        from .. import preview as PV
+        def snapshot():
+            state = self.preview_state(session_id)
+            return dict(state, **(state.get("run") or {}))
+        current = snapshot()
+        if current.get("url") and current.get("healthy") is not False:
+            return current
+        with trace.span("preview.startup"):
+            if current.get("status") not in ("running", "starting"):
+                previous = PV.running(self.cwd)
+                recovering = bool(getattr(previous, "recovery_attempted", False))
+                result = PV.show_ui(self.root, self.cwd, session_id=session_id, auto=True)
+                fresh = PV.running(self.cwd)
+                if recovering and fresh:
+                    fresh.recovery_attempted = True
+                if not result.get("ok"):
+                    return dict(current, startup={"ok": False, "reason": result.get("error") or result.get("reason")})
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                current = snapshot()
+                if current.get("url") and current.get("healthy") is not False:
+                    trace.phase("preview.healthy")
+                    return dict(current, startup={"ok": True})
+                if current.get("status") in ("failed", "exited", "finished"):
+                    break
+                time.sleep(0.2)
+            return dict(current, startup={"ok": False, "reason": "The app did not become healthy", "lines": current.get("lines", [])[-20:]})
 
     def start_preview(self, profile: Dict[str, Any]) -> Dict[str, Any]:
         from .. import preview as PV

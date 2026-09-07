@@ -645,7 +645,8 @@ class GoalDataRouteTests(ChatCase):
             self.assertEqual("Sign with a KMS key.",
                              get_json(url + "/api/goal-page")["slices"][first]["notes"])
 
-    def test_the_page_writes_through_its_own_door(self):
+    @mock.patch("human_compact.trajectory.agents.acceptance.prepare")
+    def test_the_page_writes_through_its_own_door(self, prepare):
         goal, subgoals = seed_design(self.chat)
         with server_for(self.chat) as url:
             def op(body):
@@ -1570,9 +1571,10 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".todo-status").nth(0)).to_have_text("Building…")
             expect(page.locator(".build-btn")).to_have_text(re.compile("Building…"))
             expect(page.locator(".build-btn")).to_be_disabled()
-            expect(page.locator(".build-note")).to_have_count(0)
+            expect(page.locator(".todos-actions .build-note")).to_have_count(0)
             expect(rows.nth(0).locator(".todo-text")).to_have_attribute("readonly", "")
             expect(rows.nth(0).get_by_role("button", name="Remove todo")).to_have_count(0)
+            page.wait_for_function("window.engelbart.store.get().building === null")
             self.assertEqual([(text, "building") for text in FIRST_TODOS],
                              stored_rows(self.chat, subgoals[0]))
 

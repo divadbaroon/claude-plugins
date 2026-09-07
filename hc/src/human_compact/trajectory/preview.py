@@ -1091,6 +1091,8 @@ def state(root: Optional[Path], cwd, intent: Optional[Dict[str, Any]] = None,
     }
     if proc:
         out["run"] = proc.snapshot()
+        out["recovery"] = getattr(proc, "recovery", None)
+        out["recovery_attempted"] = bool(getattr(proc, "recovery_attempted", False))
         out["url"] = proc.url if proc.healthy else ""
     if isinstance(intent, dict) and intent:
         out["intent"] = intent
@@ -1172,6 +1174,7 @@ def configure(root: Optional[Path], cwd, engine=None,
             item["verified"] = True
             item["verified_at"] = was.get("verified_at", "")
     record = {"fingerprint": fingerprint(where), "detected_at": _now(),
+              "autostart": config.get("autostart", True),
               "source": source, "profiles": profiles,
               "primary": profiles[0]["id"] if profiles else "",
               "verified_at": config.get("verified_at", ""),
@@ -1316,6 +1319,41 @@ def explain_failure(cwd, command: str, lines: List[str], exit_code,
             "reason": reason[:300],
             "command": str(value.get("command") or "").strip()[:400],
             "why": str(value.get("why") or "").strip()[:300]}
+
+
+def recover(root, cwd, session_id="", engine=None):
+    """One diagnosis and at most one repository-derived restart per failed run.
+
+    A diagnostic command is evidence, never execution authorization.
+    """
+    proc = running(cwd)
+    if not proc or proc.alive():
+        return {"ok": False, "error": "there is no stopped run to diagnose"}
+    if getattr(proc, "recovery", None):
+        return proc.recovery
+    proc.recovery = {"ok": False, "status": "diagnosing", "reason": "Diagnosing why the app did not start…"}
+    diagnosis = explain_failure(cwd, proc.profile.get("command", ""), list(proc.lines), proc.exit_code, engine)
+    result = dict(diagnosis, status="failed")
+    if diagnosis.get("ok"):
+        configure(root, cwd, detect_only=True)
+        config = read_config(root, cwd)
+        profile = ui_profile(config)
+        proposed = diagnosis.get("command", "").strip()
+        human = any(word in diagnosis.get("reason", "").lower() for word in ("credential", "api key", "license", "sign in", "password", "secret"))
+        if human:
+            result.update(ok=False, status="needs_user")
+        elif (not getattr(proc, "recovery_attempted", False) and profile
+              and config.get("source") != "model" and not blockers(cwd, profile)
+              and proposed in ("", str(profile.get("command") or "").strip())):
+            result = show_ui(root, cwd, session_id=session_id, auto=True)
+            result["status"] = "restarting" if result.get("ok") else "failed"
+            fresh = running(cwd)
+            if fresh:
+                fresh.recovery_attempted = True
+        else:
+            result.update(ok=False, status="failed", needs_build=not getattr(proc, "recovery_attempted", False))
+    proc.recovery = result
+    return result
 
 
 def intent_for(cwd, goal_title: str, todo_text: str, profile: Dict[str, Any],

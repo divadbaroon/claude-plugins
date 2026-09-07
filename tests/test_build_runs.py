@@ -1073,6 +1073,9 @@ class WatchingABuildTests(BuildRunTests):
     def test_the_state_says_how_far_in_the_build_is_and_what_it_last_did(self):
         BUILD.start(self.session, self.root, "g1", ["taaaa0001"])
         self.assertTrue(self.settled())
+        # Status and the activity log are separate durable writes. Wait for
+        # the final activity as well as the terminal process status.
+        self.assertTrue(self.wait_for(lambda: (BUILD.live(self.session, self.root)["g1"].get("last") or {}).get("text") == "waiting on your answer"))
         live = BUILD.live(self.session, self.root)["g1"]
         self.assertEqual("waiting", live["status"])
         self.assertFalse(live["running"])
@@ -1566,6 +1569,9 @@ class RestartCheckTests(BuildRunTests):
     touched by it."""
 
     def on(self, verdict="no", hold=None):
+        live_process = mock.patch.object(BUILD, "relevant_live_process", return_value=True)
+        live_process.start()
+        self.addCleanup(live_process.stop)
         # Per test rather than in setUp: the base class's tests run again
         # under this one, and they count prompts with the check off.
         os.environ["HC_BUILD_RESTART_CHECK"] = "1"

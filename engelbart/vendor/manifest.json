@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "package": "engelbart-cli",
-  "version": "0.19.27",
-  "wheel": "human_compact-0.19.27-py3-none-any.whl",
-  "sha256": "72e7bab769a4dcff54b92c37d690e6f56ad64e3c535bb5f352541224842b3a77",
-  "sourceRevision": "377d9a3e536956cc5984d1b18dbd8b34f125d7dd"
+  "version": "0.19.28",
+  "wheel": "human_compact-0.19.28-py3-none-any.whl",
+  "sha256": "5d014a99e40ef86b7761be43c7b32e89f622c44ac6c7bac913ccc8e26651001a",
+  "sourceRevision": "a927a7a063b4ff0f46e7af1e9cd8a5c8b91a1bba"
 }
