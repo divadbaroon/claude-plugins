@@ -73,6 +73,21 @@ async function op(operation) {
 
 export const services = {
   projectPaperUrl,
+  uploadDataset(file, onInspecting) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/project-dataset/upload");
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.setRequestHeader("X-HC-Name", encodeURIComponent(file.name));
+      xhr.upload.onload = () => onInspecting?.();
+      xhr.onload = () => {
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch (_) { reject(new Error("The dataset could not be uploaded. Try again.")); }
+      };
+      xhr.onerror = () => reject(new Error("The dataset could not be uploaded. Check that Engelbart is running."));
+      xhr.send(file);
+    });
+  },
   projectDataset(id) { return get(`/api/project-dataset?id=${encodeURIComponent(id)}`); },
   recordInteraction(event) { return post("/api/goal-page/interaction", event); },
   /** Who this machine is connected as. The server reads the account the

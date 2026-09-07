@@ -502,7 +502,7 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
                   for g in tops],
         "project": _goal_page_project(trajdir, chat_scoped),
         "phases": _goal_page_phases(trajdir, chat_scoped),
-        "revision": _goal_revision(goals, important),
+        "revision": _resource_revision(_goal_revision(goals, important), trajdir, chat_scoped),
     }
 
 
@@ -795,7 +795,17 @@ def _goal_page_project(trajdir, chat_scoped):
     plan = str(record.get("description") or "").strip() or objective
     if not (name or plan):
         return None
-    return {"name": name, "objective": objective, "plan": plan, **({"resources": record["resources"]} if record.get("resources") else {})}
+    return {"name": name, "objective": objective, "plan": plan, **({"resources": record["resources"]} if record.get("resources") else {}), **({"activeDatasetId": record["activeDatasetId"]} if record.get("activeDatasetId") else {})}
+
+
+def _resource_revision(revision, trajdir, chat_scoped):
+    project = _goal_page_project(trajdir, chat_scoped)
+    resources = (project or {}).get('resources')
+    if not resources:
+        return revision
+    import hashlib
+    value = json.dumps([resources, project.get('activeDatasetId')], sort_keys=True)
+    return revision + ':' + hashlib.sha256(value.encode()).hexdigest()[:16]
 
 
 def _current_revision(trajdir, chat_scoped):
@@ -804,7 +814,7 @@ def _current_revision(trajdir, chat_scoped):
     with _state_access(trajdir, chat_scoped):
         goals, important = _load_goals(trajdir, chat_scoped)
     GM.sanitize(goals)
-    return _goal_revision(goals, important)
+    return _resource_revision(_goal_revision(goals, important), trajdir, chat_scoped)
 
 
 def _goal_page_write(body, trajdir, chat_scoped):
@@ -894,7 +904,9 @@ def _goal_files(trajdir, chat_scoped):
     if chat_scoped:
         session_id, root = _chat_identity(trajdir)
         where = CS.paths(CS.tree_session(session_id, root), root)
-        return (where.goals, where.todos, where.important)
+        files = (where.goals, where.todos, where.important)
+        cwd = CS.bound_project(session_id, root) or CS.load_manifest(session_id, root).get('cwd')
+        return files + ((PS.project_path(root, cwd),) if cwd else ())
     scope = Path(trajdir)
     return (scope / "goals.json", scope / "todos.json",
             scope / "important.json")
@@ -5657,6 +5669,45 @@ class H(BaseHTTPRequestHandler):
         self._send(200, {"ok": True, "path": str(path),
                          "name": name or path.name})
 
+    def _take_dataset(self):
+        """Raw file upload on the existing local-only resource boundary."""
+        from . import resources as R
+        from urllib.parse import unquote
+        if not self.server.chat_scoped or getattr(self.server, 'shared_project', None):
+            self._send(400, {'ok': False, 'error': 'Open a local project before uploading a dataset'})
+            return
+        types = self.headers.get_all('Content-Type', [])
+        lengths = self.headers.get_all('Content-Length', [])
+        try:
+            size = int(lengths[0]) if len(lengths) == 1 else -1
+        except ValueError:
+            size = -1
+        if len(types) != 1 or types[0].split(';')[0] != 'application/octet-stream':
+            self._send(415, {'ok': False, 'error': 'A dataset file is required'})
+            return
+        if size <= 0 or size > R.upload_limit():
+            self._send(413 if size > R.upload_limit() else 400,
+                       {'ok': False, 'error': 'This file is too large to inspect locally.' if size > 0 else 'The file is empty.'})
+            return
+        if self.headers.get_all('Transfer-Encoding') or len(self.headers.get_all('X-HC-Name', [])) != 1:
+            self._send(400, {'ok': False, 'error': 'Send one dataset file with its original filename.'})
+            return
+        filename = unquote(self.headers.get('X-HC-Name') or '')
+        try:
+            sid, root = _chat_identity(self.server.trajdir)
+            cwd = CS.bound_project(sid, root) or CS.load_manifest(sid, root).get('cwd')
+            if not cwd:
+                raise ValueError('Open a local project before uploading a dataset')
+            before = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(15)
+                resource = R.upload_dataset(root, cwd, filename, self.rfile, size)
+            finally:
+                self.connection.settimeout(before)
+            self._send(200, {'ok': resource['status'] == 'ready', 'resource': resource, 'error': resource['error']})
+        except (ValueError, OSError, TimeoutError) as exc:
+            self._send(400, {'ok': False, 'error': str(exc)[:200] if isinstance(exc, ValueError) else 'The dataset could not be stored. Try uploading it again.'})
+
     def _take_paper(self):
         """A PDF uploaded for a goal's Paper tab: the file bytes, as sent.
 
@@ -5735,6 +5786,9 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
+            if self.path == "/api/project-dataset/upload":
+                self._take_dataset()
+                return
             if self.path == "/api/attachment":
                 self._take_attachment()
                 return

@@ -48,7 +48,7 @@ class ProductionWorkspaceTests(BrowserCase):
     def test_paper_only(self):
         self.prepare(['paper'])
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Paper'])
+            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
 
     def test_dataset_only(self):
         self.prepare(['dataset'])

@@ -598,6 +598,25 @@ export function createActions(store, services) {
     showGoal, showGoals, showProjects, openGoal, openProject,
     loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
+    async uploadDataset(file) {
+      if (!file || get().datasetUpload?.busy) return;
+      if (!/\.(csv|tsv|parquet|xlsx)$/i.test(file.name)) {
+        set({datasetUpload:{error:true,text:"Upload a CSV, TSV, Parquet or XLSX file."}});return;
+      }
+      if (!file.size || file.size > 50 * 1024 * 1024) {
+        set({datasetUpload:{error:true,text:file.size ? "This file is too large to inspect locally." : "The file is empty."}});return;
+      }
+      set({datasetUpload:{busy:true,text:"Uploading…"}});
+      try {
+        const answer = await services.uploadDataset(file, () => set({datasetUpload:{busy:true,text:"Inspecting…"}}));
+        await refresh();
+        if (answer.resource && get().project?.resources?.some(r => r.id === answer.resource.id)) {
+          set({resourceId:answer.resource.id,resourceUrl:""});showTab("dataset");
+          interaction("artifact.opened",{resourceId:answer.resource.id});
+        }
+        set({datasetUpload:answer.ok ? null : {error:true,text:answer.error || "No readable tabular data was found."}});
+      } catch (error) { set({datasetUpload:{error:true,text:error.message}}); }
+    },
     async openResource(id) {
       const resource = get().project?.resources?.find(r => r.id === id);
       if (!resource) return;

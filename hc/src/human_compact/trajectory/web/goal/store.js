@@ -25,6 +25,7 @@ export function initialState() {
   return {
     status: "loading",      // "loading" | "ready" | "failed"
     goal: null,             // { id, title, status }
+    datasetUpload: null,    // local transfer/inspection state, never the durable dataset
     project: null,          // the project the workspace is in: { name, objective, plan }, or null
     view: "goal",           // "goal" | "goals" (this project's goals) | "projects" (every project)
     goals: [],              // the project's top-level goals: [{ id, title, status, why, subgoals, completed, done }]

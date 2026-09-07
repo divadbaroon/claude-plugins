@@ -344,3 +344,10 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 
 .term-section { font-size:11px; letter-spacing:.12em; color:var(--fnt); margin-bottom:12px; }
 .preview-output { border-top:1px solid var(--bd); margin-top:24px; padding-top:16px; }
+
+.dataset-upload { padding:12px 0; margin-bottom:12px; border-bottom:1px solid var(--bd); color:var(--fnt); font-size:12px; }
+.dataset-upload-button { display:inline-block; position:relative; margin-right:12px; cursor:pointer; }
+.dataset-upload-button input { position:absolute; inset:0; width:100%; opacity:0; cursor:pointer; }
+.dataset-upload-button:focus-within { outline:2px solid var(--ink); outline-offset:2px; }
+.dataset-upload [role="alert"] { color:var(--ink); }
+.dataset-preview td { max-width:260px; overflow-wrap:anywhere; white-space:normal; }
