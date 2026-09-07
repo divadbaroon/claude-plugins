@@ -1984,7 +1984,7 @@ def prefer_quick(rows) -> bool:
         return override == "quick"
     if not 1 <= len(rows) <= 3:
         return False
-    risky = re.compile(r"\b(auth\w*|security|credential\w*|secret\w*|migrat\w*|refactor\w*|architecture|rewrite|redesign|entire|everything|investigate|explore|research|figure out|delete|destructive|deployment|cross.repo|dependency|dependencies|database|payment\w*)\b", re.I)
+    risky = re.compile(r"\b(auth\w*|oauth|login|sign.in|password\w*|encrypt\w*|permission\w*|sudo|chmod|chown|rm|uninstall|upgrade|security|credential\w*|secret\w*|migrat\w*|refactor\w*|architecture|rewrite|redesign|entire|everything|investigate|explore|research|figure out|delete|destructive|deployment|cross.repo|dependency|dependencies|database|payment\w*)\b", re.I)
     bounded = re.compile(r"\b(dropdown|slider|button|label\w*|layout|render|display|timeline|local dataset|prepared dataset|synthetic dataset|checkbox|input|css|html)\b", re.I)
     return all(0 < len(str(r.get("text") or "")) <= (300 if len(rows) == 1 else 500)
                and not risky.search(str(r.get("text") or ""))

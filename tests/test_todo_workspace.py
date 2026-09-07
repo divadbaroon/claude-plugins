@@ -35,7 +35,7 @@ class TodoContracts(AgentCase):
     def test_one_concrete_row_is_quick_without_magic_ui_keywords(self):
         with mock.patch.dict(os.environ,{'HC_BUILD_LANE':'auto'}):
             self.assertTrue(build.prefer_quick([{'text':'Write a sample therapist instruction and matching software files.'}]))
-            for text in ['Fix it','Rewrite the entire project','Add authentication','Delete the database','Explore possible research directions']:
+            for text in ['Fix it','Rewrite the entire project','Add authentication','Configure OAuth login','Run sudo rm -rf the cache','Change filesystem permissions','Delete the database','Explore possible research directions']:
                 self.assertFalse(build.prefer_quick([{'text':text}]),text)
 
     def test_greeting_cannot_propose_or_resume_background_work(self):
