@@ -1366,7 +1366,10 @@ class BrowserCase(ChatCase):
             self.skipTest("playwright is not installed")
         self.chrome = browser_executable()
         if not self.chrome:
-            self.skipTest("Chrome/Chromium is not installed")
+            # Use Playwright's installed Chromium in CI; launch failures must
+            # fail coverage, rather than silently skipping the browser suite.
+            with sync_playwright() as runtime:
+                self.chrome = runtime.chromium.executable_path
         self.expect, self.sync_playwright = expect, sync_playwright
 
     def tearDown(self):

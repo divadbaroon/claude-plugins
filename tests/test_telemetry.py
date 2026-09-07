@@ -186,6 +186,14 @@ class RedactionTests(unittest.TestCase):
         self.assertEqual(503, err["status_code"])
         self.assertIsNone(R.sanitize_error(None))
 
+    def test_error_metadata_lookup_cannot_replace_the_original_error(self):
+        class BrokenResponse(RuntimeError):
+            code = 503
+            def __getattr__(self, name):
+                raise KeyError("closed response")
+        self.assertEqual({"name": "BrokenResponse", "message": "unavailable", "status_code": 503},
+                         R.sanitize_error(BrokenResponse("unavailable"), secrets=set()))
+
     def test_urls_lose_their_query_and_name_their_host(self):
         self.assertEqual("https://berkeley.mathetic.com/api/x", R.safe_url("https://berkeley.mathetic.com/api/x?token=1#f"))
         self.assertEqual("", R.safe_url("not a url"))

@@ -103,6 +103,11 @@ class ProjectTests(unittest.TestCase):
             "HC_CHAT_FOLLOW_SECONDS": "0.1"})
         self.env.start()
         self.addCleanup(self.env.stop)
+        # These tests exercise project persistence, not model inference.
+        # Do not leave detached real analyzers running after fixture teardown.
+        analyzer = mock.patch.object(ui, "_request_analysis")
+        analyzer.start()
+        self.addCleanup(analyzer.stop)
 
     def test_the_state_names_the_project_from_the_manifest(self):
         with server_for(self.trajdir) as url:
@@ -475,9 +480,16 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual("",
                              get_json(url + "/api/state")["project"]["objective"])
         # Stored under the vault base, not in any one session's directory.
-        stored = list((self.root / "projects").glob("*.json"))
+        records = [json.loads(path.read_text())
+                   for path in (self.root / "projects").glob("*.json")]
+        # Opening the other project may persist its tree-session binding.
+        # Deduplication means one record for THIS directory, not one record
+        # for all directories the test has opened.
+        stored = [r for r in records if r["project"]["cwd"] == PS._resolved(self.project)]
         self.assertEqual(1, len(stored))
-        record = json.loads(stored[0].read_text())
+        self.assertEqual(1, sum(r["project"].get("objective") == "Ship the thing, well."
+                                for r in records))
+        record = stored[0]
         # In the file's `project` section: the flat shape it was first
         # written in is migrated on read, not written any more.
         self.assertEqual("Ship the thing, well.", record["project"]["objective"])

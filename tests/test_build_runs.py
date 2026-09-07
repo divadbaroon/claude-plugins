@@ -1720,6 +1720,9 @@ class RestartCheckTests(BuildRunTests):
         self.on("no", hold=4)
         self.build()
         self.assertTrue(self.wait_for(lambda: self.live()["status"] == "checking"))
+        # `checking` is published before the subprocess starts. Wait until
+        # the fixture has actually entered the check we intend to interrupt.
+        self.assertTrue(self.wait_for(lambda: len(self.prompts()) == 2))
         out = BUILD.start(self.session, self.root, "g1", ["taaaa0003"])
         self.assertTrue(out.get("started"), out)
         self.assertEqual("building", self.rows()["taaaa0003"][0])
