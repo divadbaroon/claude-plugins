@@ -201,9 +201,13 @@ papers additionally cap at 20 MiB. Restricted or ambiguous sources need user act
 No downloaded file is executed. Public network addresses and redirects are checked,
 and local paper serving accepts only a ready persisted resource ID, never a path.
 
-Only `/test` adds the contextual Paper tab, subordinate Resources list, and temporary
-resource detail content. It uses existing actions/services and the shared project
-response. Native PDF rendering requires no PDF viewer dependency in the browser.
+Production `/` and `/test` share `components/resources.js`: the contextual Paper
+tab, subordinate Resources list, and temporary dataset detail content. Production
+`breakdown.js`, `tabs.js`, and `page.js` compose it through existing actions/services
+and shared `project.resources`, `resourceId`, `resourceUrl`, and tab state. The
+alternate renderer no longer implements a separate resource UI. Details expose
+bounded schema/path/status/source and fallback provenance, never raw samples. A
+small narrow-screen rule stacks the rail above the center and wraps existing tabs. Native PDF rendering requires no PDF viewer dependency in the browser.
 PDF text and Parquet support in the local runtime require pypdf and pyarrow; the
 installer resolves wheel-declared dependencies. Release vendoring still follows
 the existing committed-source workflow.
@@ -223,3 +227,30 @@ cannot appear successful merely because the builder wrote raw `done` rows. Manua
 completion on legacy rows with no lifecycle history retains its existing behavior.
 `tests/test_inactive_lifecycle.py` exercises the exact switch-away/repair/recheck/
 pass sequence in the real loopback browser.
+
+
+### Resource recovery
+
+`prepare()` reuses only `cached_ready()` resources. Validation checks safe paths,
+present PDF/text or listed inspected primary files, plausible headers, and sizes.
+Fresh preparations store a size plus first/last 4 KiB fingerprint per artifact.
+This catches common truncation/replacement without hashing or reparsing a large
+file at startup; it does not detect arbitrary interior-only edits that preserve
+size and both edges. Legacy records have no fingerprint and use basic format checks.
+
+Supplying a failed, needs-user, interrupted, missing, or detectably corrupt resource
+again retries acquisition in place with the fresh source and preserved provenance.
+Acquiring and terminal state are persisted; no background retry loop is added.
+Newly supplied unresolved/discovered manifests still do not trigger acquisition.
+Signed `downloadUrl` fields and token-bearing URL queries are removed from persisted
+source and nested access/provenance evidence. ZIP retry discards the previous
+managed extraction so stale files cannot validate a new broken archive.
+
+`web_setup.materialize()` recognizes a repeated onboarding ID from existing durable
+resource provenance, allowing the same handoff to retry resources without replacing
+project/goals. A different onboarding that merely shares its name remains a collision.
+
+An explicitly labeled `synthetic_fallback` may carry at most 8 KiB of `source.inlineCsv`.
+Preparation writes it through the same file/schema inspector before marking Ready.
+Its original/source/reason/structure provenance reaches bounded agent context and the
+shared details view. There is no synthetic execution or additional resource system.

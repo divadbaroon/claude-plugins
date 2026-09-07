@@ -6,6 +6,7 @@
 import { h } from "../dom.js";
 import { renderHeader } from "./header.js";
 import { renderBreakdown } from "./breakdown.js";
+import { renderResourcePane } from "./resources.js";
 import { renderTabs } from "./tabs.js";
 import { renderBart } from "./bart.js";
 import { renderPreview } from "./preview.js";
@@ -29,6 +30,7 @@ export function renderPage(state, actions) {
 }
 
 function renderPane(state, actions) {
+  if (state.tab === "paper" || state.tab === "resource") return renderResourcePane(state);
   if (state.tab === "preview") return renderPreview(state, actions);
   if (state.tab === "terminal") return renderTerminal(state);
   if (state.status === "ready" && !state.subgoals.length) return renderFirstSubgoal(state, actions);
