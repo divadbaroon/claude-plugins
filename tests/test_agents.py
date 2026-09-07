@@ -308,7 +308,7 @@ class BuildLoopTests(AgentCase):
         # The Terminal saw it.
         said = [l["text"] for l in BUILD.load_activity(self.session, self.root, PIECE)
                 if not l["text"].startswith("check evidence:")]
-        self.assertEqual(["verifying the build",
+        self.assertEqual(["Checking the result",
                           "verified: every row is done, the run ended clean"], said)
         self.assertEqual(["build.finished", "build.finished > overseer.route",
                           "build.finished > verifier.agent",
@@ -343,8 +343,8 @@ class BuildLoopTests(AgentCase):
         self.assertNotIn("3 times", chat[-1]["text"])
         self.assertEqual(0, orch.state()["attempts"][PIECE])
         lines = [l["text"] for l in BUILD.load_activity(self.session, self.root, PIECE)]
-        self.assertIn("repair 1 of 2: the page returns 500", lines)
-        self.assertIn("repair 2 of 2: the page returns 500", lines)
+        self.assertEqual(2, lines.count("Fixing: the page returns 500"))
+        self.assertFalse(any("repair 2 of 2" in line for line in lines))
         self.assertIn("verification failed 3 times; asking you", lines)
 
     def test_a_build_that_failed_or_asked_is_left_to_the_page(self):

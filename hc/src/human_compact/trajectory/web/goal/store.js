@@ -123,7 +123,7 @@ export function lifecycleOf(state, subgoalId = state.activeId) {
 export function todoPhase(todo, state, subgoalId = state.activeId) {
   const phase = lifecycleOf(state, subgoalId);
   if (phase?.todoIds.includes(todo.id) && phase.status !== "cancelled") return phase.status;
-  if (state.building === subgoalId && !todo.done && !isWithBuilder(todo)) return "building";
+  if (state.building === subgoalId && (!state.buildingIds || state.buildingIds.includes(todo.id)) && !todo.done && !isWithBuilder(todo)) return "building";
   // A raw build question has not yet been classified as human-dependent.
   return todo.done ? "done" : todo.status === "asking" ? "checking" : todo.status || "";
 }
@@ -131,5 +131,11 @@ export function workInFlight(state) {
   return ["building", "checking", "fixing"].includes(lifecycleOf(state)?.status);
 }
 export function todoHeld(todo, state) {
-  return isWithBuilder(todo) || ["building", "checking", "fixing"].includes(todoPhase(todo, state));
+  return isWithBuilder(todo) || ["building", "checking", "fixing", "needs_user"].includes(todoPhase(todo, state));
+}
+
+export function completionHeld(state, id) {
+  const ids = id === state.goal?.id ? [id, ...state.subgoals.map(s=>s.id)] : [id];
+  return ids.some(sid => state.building === sid || ["building","checking","fixing","needs_user"].includes(lifecycleOf(state,sid)?.status)
+    || (state.slices[sid]?.todos || []).some(isWithBuilder));
 }

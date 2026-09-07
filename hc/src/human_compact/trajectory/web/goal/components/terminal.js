@@ -15,12 +15,14 @@ export function renderTerminal(state) {
   const live = Boolean((build.run && build.run.running)
     || (preview && (preview.status === "running" || preview.status === "starting")));
   return h("section", { key: "pane-terminal", class: "pane terminal", role: "tabpanel" },
+    h("div", { class: "term-section" }, "BUILD"),
     h("div", { class: "term-line term-head" }, headline(build)),
     lines.map((line, i) => h("div", {
       key: `${line.at}-${i}`,
       class: line.kind === "say" ? "term-line term-say" : "term-line",
     }, `${stamp(line.at)}  ${line.text}`)),
     run && run.command && [
+      h("div", {class:"term-section preview-output"}, "PREVIEW"),
       h("div", { key: "run-cmd", class: "term-line term-cmd" }, `$ ${run.command}`),
       (run.lines || []).map((text, i) => h("div", { key: `run-${i}`, class: "term-line" }, text)),
     ],

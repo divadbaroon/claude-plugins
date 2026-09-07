@@ -133,7 +133,7 @@ class SecondPassTests(AgentCase):
         self.assertIn("fact 14", "\n".join(CTX.render(self.session, self.root, PIECE, limit=2)))
 
     def test_acceptance_is_saved_and_shared_by_build_and_verifier(self):
-        contract = {"criterion": "The saved file contains dataset rows", "checks": [
+        contract = {"criterion": "The saved file contains dataset rows", "coverage": "complete", "checks": [
             {"kind": "file", "path": "dataset.txt", "contains": "row one"}]}
         with mock.patch.object(acceptance, "derive", return_value={r: contract for r in ROWS}):
             got = acceptance.ensure(self.session, self.root, PIECE, ROWS)
@@ -369,7 +369,7 @@ class ArtifactBrowserTests(AgentCase):
             self.assertFalse(proc.healthy)
             mark_rows(self.session, self.root, PIECE, ROWS, "done")
             BUILD._save_run(self.session, self.root, {"goal_id": PIECE, "status": "idle", "exit_code": 0,
-                "acceptance": {r: {"criterion": "Export control is visible", "checks": [control]} for r in ROWS}})
+                "acceptance": {r: {"criterion": "Export control is visible", "coverage": "complete", "checks": [control]} for r in ROWS}})
             rt = RT.LocalRuntime(str(self.project), self.root)
             for suffix, expected in (("/wrong", False), ("/right", True)):
                 with mock.patch.object(rt, "preview_state", return_value={"status": "running", "run": {

@@ -4,6 +4,7 @@
    in its menu. */
 
 import { h, svg } from "../dom.js";
+import { completionHeld } from "../store.js";
 import { renderExpertise } from "./expertise.js";
 
 const ICONS = {
@@ -40,6 +41,10 @@ export function renderHeader(state, actions) {
           type: "button", class: "crumb-btn", title: "The goal",
           "aria-current": here === "goal" ? "page" : null, onclick: actions.showGoal,
         }, state.goal.title))),
+    state.goal && state.view==="goal" && h("button", {type:"button",class:"ghost-btn goal-complete",
+      disabled:completionHeld(state,state.goal.id)||null,
+      "aria-label":state.goal.status==="completed"?"Reopen goal":"Complete goal",
+      onclick:()=>actions.toggleGoalCompletion(state.goal.id)}, state.goal.status==="completed"?"✓ Reopen goal":"Complete goal"),
     renderAccount(state, actions));
 }
 

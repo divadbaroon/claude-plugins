@@ -4,6 +4,7 @@
    a workspace with no goal yet, the one line that asks for it. */
 
 import { h } from "../dom.js";
+import { separator } from "../layout.js";
 import { renderHeader } from "./header.js";
 import { renderBreakdown } from "./breakdown.js";
 import { renderResourcePane } from "./resources.js";
@@ -21,6 +22,7 @@ export function renderPage(state, actions) {
     : state.view === "goals" ? renderGoals(state, actions)
     : h("div", { class: "body" },
       !empty && renderBreakdown(state, actions),
+      !empty && separator("plan", "Plan width"),
       h("main", { class: empty ? "main is-empty" : "main" },
         state.status === "failed"
           ? h("p", { class: "notice" }, "The goal could not be loaded.")

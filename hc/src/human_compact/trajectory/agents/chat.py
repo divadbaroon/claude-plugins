@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from .. import setup_chat as SC
 from . import trace
+from . import presentation as PUBLIC
 from . import context as CTX
 
 MAX_SAY = 1200
@@ -79,12 +80,12 @@ def compose(transcript, context: str = "", focus=(), known=(),
 
 def normalize(raw: Any) -> Dict[str, Any]:
     value = raw if isinstance(raw, dict) else {}
-    say = " ".join(str(value.get("say") or "").split())[:MAX_SAY]
+    say = PUBLIC.text(value.get("say"), MAX_SAY, allow_ids=True)
     todos = [" ".join(str(t).split())[:SC.MAX_LABEL]
              for t in (value.get("todos") or []) if str(t or "").strip()][:MAX_TODOS]
     needs = value.get("needs") if isinstance(value.get("needs"), dict) else {}
     kind = str(needs.get("kind") or "").strip().lower()
-    question = " ".join(str(needs.get("question") or "").split())[:400]
+    question = PUBLIC.text(needs.get("question"), 400)
     if kind not in NEEDS or not question:
         kind, question = "", ""
     out = {"say": say, "todos": todos, "needs": {"kind": kind, "question": question}}
@@ -113,6 +114,11 @@ def ask(transcript, context: str = "", focus=(), known=(), discovered: str = "",
     except Exception as exc:                             # noqa: BLE001
         return SC.unexpected(exc)
     answer = normalize(raw)
+    last = next((t.get("text", "") for t in reversed(transcript or []) if t.get("role") in ("you", "user")), "")
+    answer["say"] = PUBLIC.text(answer["say"], MAX_SAY, PUBLIC.debug_requested(last))
+    if PUBLIC.smalltalk(last):
+        answer["todos"] = []
+        answer["needs"] = {"kind":"", "question":""}
     if not answer["say"] and not answer["todos"] and not answer["needs"]["kind"]:
         return {"ok": False, "error": "the model answered with nothing"}
     return dict(answer, ok=True)

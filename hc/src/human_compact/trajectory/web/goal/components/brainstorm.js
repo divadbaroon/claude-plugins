@@ -15,7 +15,7 @@ export function renderBrainstorm(state, actions, withTodos) {
       }, "Show todos")),
     h("div", { class: "feed", "data-feed": "", role: "log" },
       h("div", { key: `feed:${state.activeId}`, class: "feed-inner" },
-        slice.chat.map((message) => renderMessage(message, actions)),
+        slice.chat.filter(message=>message.kind!=="proposal" || message.added || !slice.todos.some(t=>equivalent(t.text)===equivalent(message.text))).map((message) => renderMessage(message, actions)),
         slice.thinking && renderThinking())),
     h("div", { class: "composer" },
       h("div", { class: "composer-box" },
@@ -50,10 +50,11 @@ export function renderBrainstorm(state, actions, withTodos) {
 
 function renderMessage(message, actions) {
   return h("div", {
-    key: message.id,
+    key: message.id, "data-channel":message.channel || (message.id.startsWith("sys-")?"lifecycle":"conversation"),
+    "data-turn":message.turnId || null,
     class: message.who === "you" ? "msg from-you" : "msg from-bart",
   },
-  h("span", { class: "msg-who" }, message.who),
+  h("span", { class: "msg-who" }, message.channel==="lifecycle" || message.id.startsWith("sys-") ? "bart · work update" : message.who),
   message.kind === "proposal"
     ? renderProposal(message, actions)
     : h("div", { class: message.kind === "error" ? "bubble is-error" : "bubble" }, message.text));
@@ -73,7 +74,7 @@ function renderProposal(message, actions) {
     h("div", { class: "proposal-row" },
       h("span", { class: "todo-mark", "aria-hidden": "true" }, "–"),
       h("span", { class: "proposal-text" }, message.text)),
-    message.rejected ? h("div", { class: "proposal-note" }, "skipped") : message.added
+    message.rejected ? h("div", { class: "proposal-note" }, "Not added") : message.added
       ? h("div", { class: "proposal-note" }, "added to todos")
       : h("div", { class: "proposal-actions" },
         h("button", {
@@ -84,3 +85,5 @@ function renderProposal(message, actions) {
           onclick: () => actions.rejectProposal(message.id) }, "Skip")));
 
 }
+
+const equivalent = value => String(value || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu," ").trim();

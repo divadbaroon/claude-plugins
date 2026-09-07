@@ -2,27 +2,26 @@
    row that adds one. */
 
 import { h } from "../dom.js";
+import { completionHeld } from "../store.js";
 
 export function renderBreakdown(state, actions) {
   return h("aside", { class: "rail", "aria-label": "Plan" },
     h("div", { class: "rail-label" }, "Plan"),
     state.subgoals.map((subgoal) =>
-      renderSubgoal(subgoal, subgoal.id === state.activeId, actions)),
+      renderSubgoal(subgoal, subgoal.id === state.activeId, actions, state)),
     state.status === "ready" && state.goal && (state.addingSubgoal
       ? renderAddInput(state, actions)
       : renderAddButton(actions)));
 }
 
-function renderSubgoal(subgoal, active, actions) {
-  return h("button", {
-    key: subgoal.id,
-    type: "button",
-    class: active ? "sub is-active" : "sub",
-    "aria-current": active ? "true" : null,
-    onclick: () => actions.selectSubgoal(subgoal.id),
-  },
-  h("span", { class: "sub-mark", "aria-hidden": "true" }),
-  h("span", { class: "sub-title" }, subgoal.title));
+function renderSubgoal(subgoal, active, actions, state) {
+  const done=subgoal.status==="completed";
+  return h("div", {key:subgoal.id, class:active?"sub is-active":"sub", "aria-current":active?"true":null},
+    h("button",{type:"button",class:"sub-mark", "aria-label":`${done?"Reopen":"Complete"} subgoal: ${subgoal.title}`,
+      "aria-pressed":String(done),disabled:completionHeld(state,subgoal.id)||null,
+      onclick:()=>actions.toggleGoalCompletion(subgoal.id)},done?"✓":""),
+    h("button",{type:"button",class:"sub-title", "aria-current":active?"true":null,
+      onclick:()=>actions.selectSubgoal(subgoal.id)},subgoal.title));
 }
 
 function renderAddButton(actions) {

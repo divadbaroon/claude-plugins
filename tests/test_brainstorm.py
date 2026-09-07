@@ -215,8 +215,8 @@ class NoSequenceTests(unittest.TestCase):
         from human_compact.trajectory import providers as PROVIDERS
 
         engine = self.Engine({"card": "none", "say": "noted"})
-        with mock.patch.object(PROVIDERS, "make",
-                               return_value=engine) as made:
+        with mock.patch.dict("os.environ", {"HC_CHAT_PROVIDER": "claude"}), \
+             mock.patch.object(PROVIDERS, "make", return_value=engine) as made:
             with mock.patch.object(SC, "setup_model", return_value="sonnet-x"):
                 out = BS.ask([{"role": "you", "text": "hello"}])
         self.assertTrue(out["ok"], out)

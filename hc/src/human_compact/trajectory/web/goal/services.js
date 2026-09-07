@@ -185,7 +185,7 @@ export const services = {
       with the reason when the model could not be reached. */
   async sendBartMessage({ goalId, subgoalId, text, history, todos }) {
     const transcript = [
-      ...history.filter((m) => m.kind !== "error").map(asTurn),
+      ...history.filter((m) => m.kind === "text" && m.channel !== "lifecycle" && !m.id?.startsWith("sys-")).map(asTurn),
       { role: "you", text },
     ];
     const answer = await post("/api/goal-page/bart", {
@@ -234,6 +234,8 @@ export const services = {
       the rows as it takes them, so the goal's files change and the page
       hears it. Answers with the rows handed over; refused with the
       builder's reason when the build cannot start. */
+  async setGoalStatus(id, status) { return op({op:"set_status", goal_id:id, status}); },
+
   async startBuild({ goalId, subgoalId, todos }) {
     const ids = todos
       .filter((todo) => !todo.done && !WITH_BUILDER.has(todo.status))

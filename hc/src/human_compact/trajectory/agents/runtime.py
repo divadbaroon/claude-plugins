@@ -102,7 +102,8 @@ class LocalRuntime(Runtime):
 
     def read_file(self, relative: str, limit: int = READ_LIMIT) -> str:
         with trace.span("file.read", path=str(relative)):
-            return self._inside(relative).read_text(encoding="utf-8", errors="replace")[:limit]
+            with self._inside(relative).open(encoding="utf-8", errors="replace") as stream:
+                return stream.read(limit)
 
     def write_file(self, relative: str, text: str) -> None:
         with trace.span("file.write", path=str(relative), chars=len(text or "")):

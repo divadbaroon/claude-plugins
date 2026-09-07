@@ -350,6 +350,7 @@ class ChatCase(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)  # setUp skips still need cleanup.
         self.root = Path(self.tmp.name)
         self.chat = self.root / "chat"
         self.chat.mkdir()
@@ -601,7 +602,7 @@ class GoalDataRouteTests(ChatCase):
                     g["status"] = "completed"
             CS.save_goals("chat", goals, important, self.root)
             cards = {g["title"]: g for g in get_json(url + "/api/goal-page")["goals"]}
-            self.assertEqual((2, 2, True), tuple(cards["Far along"][k] for k in ("subgoals", "completed", "done")))
+            self.assertEqual((2, 2, False), tuple(cards["Far along"][k] for k in ("subgoals", "completed", "done")))
             self.assertTrue(cards["Bare"]["done"])
 
     def test_a_project_set_up_on_the_web_opens_on_the_direction_chosen(self):
@@ -1488,7 +1489,6 @@ class GoalPageBrowserTests(BrowserCase):
             expect(composer).to_be_focused()
             self.assertEqual(
                 [("you", "I want to save the file as parquet"),
-                 ("bart", "Proposed TODO row: save the file as parquet (added to the list)"),
                  ("you", "and then?")],
                 [(t["role"], t["text"]) for t in ask.asked[1]["transcript"]])
 
@@ -1691,7 +1691,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.get_by_role("heading", name="Goals of Signed uploads")).to_be_visible()
             page.locator(".goal-title button").click()
             expect(page.locator(".rail-label")).to_have_text("Plan")
-            # A direction whose every piece is finished says so on its card.
+            # Completing every piece does not replace the user’s final goal decision.
             goals, important = CS.load_goals(chat.name, self.root)
             for g in goals["goals"]:
                 if g["title"] in ("Signing route", "Client PUTs", "Retire the proxy"):
@@ -1700,6 +1700,12 @@ class GoalPageBrowserTests(BrowserCase):
             page.reload(wait_until="domcontentloaded")
             page.locator(".project-name").click()
             done = page.locator(".home .card.is-done")
+            expect(done).to_have_count(0)
+            for g in goals["goals"]:
+                if g["title"] == "Direct-to-storage uploads": g["status"] = "completed"
+            CS.save_goals(chat.name, goals, important, self.root)
+            page.reload(wait_until="domcontentloaded")
+            page.locator(".project-name").click()
             expect(done).to_have_count(1)
             expect(done.locator(".card-name")).to_have_text("✓Direct-to-storage uploads")
             expect(done.locator(".card-facts")).to_have_text("Done")

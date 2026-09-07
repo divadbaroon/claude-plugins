@@ -87,7 +87,7 @@ GOAL_OPS = frozenset({
 # through is the same width; anything else is refused by name.
 GOAL_PAGE_OPS = frozenset({
     "add_goal", "set_notes", "add_todo_row", "set_todo_text",
-    "set_todo_done", "remove_todo_row", "build_todos",
+    "set_todo_done", "remove_todo_row", "build_todos", "set_status",
 })
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
 
@@ -427,8 +427,7 @@ def _goal_card(goal, children):
                 why=str(goal.get("description") or "").strip(),
                 subgoals=len(kids),
                 completed=finished,
-                done=(goal.get("status") == "completed"
-                      or (bool(kids) and finished == len(kids))))
+                done=(goal.get("status") == "completed"))
 
 
 def _pick_goal(tops, wanted, worked=()):
@@ -594,6 +593,7 @@ def _goal_page_build_phase(session_id, root, subgoal_id):
                 "build.cancelled": "cancelled"}
     phase = None
     before_human = None
+    started_at = ""
     rows = []
     edits = {"todo.done_toggled", "todo.text_edited", "todo.removed"}
     for event in events.read(session_id, root, types=set(statuses) | edits | {"human.answered"},
@@ -621,10 +621,12 @@ def _goal_page_build_phase(session_id, root, subgoal_id):
             continue
         if isinstance(payload.get("rows"), list):
             rows = [r for r in payload["rows"] if isinstance(r, str)]
+        if event["type"] == "todo.build_requested" or (event["type"] == "build.started" and not payload.get("repair")):
+            started_at = event.get("timestamp", "")
         status = statuses[event["type"]]
         if event["type"] == "build.started" and payload.get("repair"):
             status = "fixing"
-        phase = {"status": status, "todoIds": rows, "at": event.get("timestamp", ""),
+        phase = {"status": status, "todoIds": rows, "at": event.get("timestamp", ""), "startedAt": started_at,
                  "reason": str(payload.get("reason") or payload.get("error") or "")[:600]}
     return phase
 
@@ -656,7 +658,8 @@ def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
         from . import build as BUILD
         try:
             session_id, root = _chat_identity(_scope(trajdir))
-            build = {"lines": BUILD.load_activity(session_id, root, subgoal_id),
+            from .agents.communication import terminal_lines
+            build = {"lines": terminal_lines(BUILD.load_activity(session_id, root, subgoal_id)),
                      "run": BUILD.live(session_id, root).get(subgoal_id)}
             phase = _goal_page_build_phase(session_id, root, subgoal_id)
             if phase is not None:
@@ -746,6 +749,14 @@ def _bart_answer(held, transcript):
             attributes={"engelbart.bart.goal": held.get("goal"),
                         "engelbart.bart.subgoal": held.get("subgoal")}) as op:
         answer = _bart_answer_model(held, transcript)
+        from .agents import presentation as public
+        last = next((t.get("text", "") for t in reversed(transcript or []) if t.get("role") in ("user", "you")), "")
+        cleaned = []
+        for reply in answer.get("replies") or []:
+            if public.smalltalk(last) and reply.get("kind") != "text": continue
+            cleaned.append(dict(reply, text=public.text(reply.get("text"), 1200, public.debug_requested(last))))
+        if public.smalltalk(last): cleaned = cleaned[:1]
+        if "replies" in answer: answer["replies"] = cleaned
         op.set_attributes({"engelbart.bart.ok": bool(answer.get("ok")),
                            "engelbart.bart.card": answer.get("card"),
                            "engelbart.bart.replies": len(answer.get("replies") or [])})
@@ -4564,6 +4575,18 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
         if kind == "rename_goal" and g and op.get("title", "").strip():
             g["title"] = op["title"].strip()[:120]
         elif kind == "set_status" and g and GM.norm_status(op.get("status")):
+            if chat_scoped:
+                sid, root = _chat_identity(trajdir)
+                ids = {g["id"]}
+                while True:
+                    expanded = ids | {row["id"] for row in goals.get("goals", []) if row.get("parent_goal_id") in ids}
+                    if expanded == ids: break
+                    ids = expanded
+                for gid in ids:
+                    phase = _goal_page_build_phase(sid, root, gid) or {}
+                    piece = GM.by_id(goals, gid) or {}
+                    if phase.get("status") in ("building", "checking", "fixing", "needs_user") or any(r.get("status") in ("queued", "building", "asking") for r in piece.get("todo_items", [])):
+                        return {"ok": False, "error": "Finish or resolve the active work before changing completion."}
             g["status"] = GM.norm_status(op["status"])
         elif kind == "set_priority" and g and op.get("priority") in ("urgent", "high", "normal"):
             g["priority"] = op["priority"]
@@ -5489,7 +5512,7 @@ class H(BaseHTTPRequestHandler):
                              "error": "this is a shared workspace"})
             return
         kind = str(body.get("op") or "")
-        if kind not in GOAL_PAGE_OPS:
+        if kind not in GOAL_PAGE_OPS or (kind == "set_status" and body.get("status") not in ("active", "completed")):
             self._send(200, {"ok": False, "error":
                              "not an operation of the goal page: " + kind[:60]})
             return
