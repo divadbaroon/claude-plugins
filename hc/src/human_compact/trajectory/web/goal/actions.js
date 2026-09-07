@@ -6,7 +6,7 @@
    truth. Every write lands in the store at once and goes to the server
    behind it; every change the server hears of -- from this page or any
    other writer -- comes back through the change feed as a revision, and
-   the page reads the goal again unless the revision is one it made. */
+   the page reads the goal again unless it already draws that revision. */
 
 import {
   EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder,
@@ -15,7 +15,6 @@ import {
 const PANES_POLL_MS = 2000;
 const TODO_SAVE_DELAY_MS = 400;
 const SIGN_IN_POLL_MS = 2000;
-const REVISIONS_KEPT = 8;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -26,35 +25,31 @@ export function createActions(store, services) {
       services.recordInteraction({ type, payload, subgoalId: get().activeId || "" }).catch(() => {});
     }
   }
-  function withSystemMessages(held, incoming) {
-    const ids = new Set(held.map((m) => m.id));
-    return [...held, ...incoming.filter((m) => m.id.startsWith("sys-") && !ids.has(m.id))];
+  function mergeMessages(held, incoming) {
+    const messages = new Map(held.map(m => [m.id, m]));
+    for (const message of incoming) {
+      const before = messages.get(message.id) || {};
+      messages.set(message.id, { ...before, ...message,
+        ...(before.added ? { added: true } : {}),
+        ...(before.rejected ? { rejected: true } : {}) });
+    }
+    return [...messages.values()];
   }
   let seq = 0;
   // Stamped per page load: a conversation read back from the server
   // carries the ids it was saved with, and a new message must not take one.
-  const stamp = Date.now().toString(36);
+  const stamp = crypto.randomUUID();
   const nextId = (prefix) => `${prefix}-${stamp}-${(seq += 1)}`;
   const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
   let signInRun = 0;               // the sign-in attempt that is current
   let wanted = "";                 // the goal the address names, if any
   let loadRun = 0;                 // the load whose answer is current
   let watcher = null;
-  let panesTimer = null;              // the open change feed
-  const seen = [];                 // the last revisions this page loaded or made
-
-  // A revision this page has already seen -- loaded, or made by one of its
-  // own writes -- is not news when the change feed carries it.
-  function saw(revision) {
-    if (!revision) return;
-    seen.push(revision);
-    while (seen.length > REVISIONS_KEPT) seen.shift();
-  }
+  let panesTimer = null;          // the shared pane poll
 
   // A write the page does not wait on: the store already holds the change.
   function persist(promise) {
     promise
-      .then((answer) => saw(answer && answer.revision))
       .catch((error) => console.error("engelbart: a write failed", error));
   }
 
@@ -74,15 +69,16 @@ export function createActions(store, services) {
 
   // The store with what the server now holds laid under what the reader is
   // in the middle of: the subgoal they are on, the message they are typing,
-  // the todo text a save is still waiting on, and the conversation,
-  // which this page writes and so keeps its own copy of once it has one.
+  // the todo text a save is still waiting on, and conversation turns
+  // still on their way to disk.
   function merge(state, loaded) {
     const slices = {};
     for (const [id, incoming] of Object.entries(loaded.slices || {})) {
       const slice = { ...EMPTY_SLICE, ...incoming };
       const held = state.slices[id];
       if (held) {
-        slice.chat = withSystemMessages(held.chat, slice.chat || []);
+        slice.chat = mergeMessages(held.chat, slice.chat || []);
+        slice.thinking = held.thinking;
         slice.draft = held.draft;
         slice.newTodo = held.newTodo;
         slice.todosShown = held.todosShown;
@@ -123,7 +119,7 @@ export function createActions(store, services) {
       return;
     }
     if (run !== loadRun) return;
-    saw(loaded.revision);
+
     set((state) => merge(state, loaded));
     loadPanes();
   }
@@ -146,7 +142,7 @@ export function createActions(store, services) {
     }
     if (run !== panesRun || get().activeId !== id) return;
     set({ panes, panesFor: id });
-    changeSlice(id, (current) => ({ chat: withSystemMessages(current.chat, panes.chat || []) }));
+    changeSlice(id, (current) => ({ chat: mergeMessages(current.chat, panes.chat || []) }));
   }
 
   function watching(state) {
@@ -166,7 +162,9 @@ export function createActions(store, services) {
     if (!watcher && services.watchGoal) {
       watcher = services.watchGoal({
         onChange: (revision) => {
-          if (!seen.includes(revision)) refresh();
+          // A remote edit can restore an older revision (add then remove).
+          // Only the revision currently drawn is safe to ignore.
+          if (revision !== get().revision) refresh();
         },
       });
     }
@@ -335,8 +333,7 @@ export function createActions(store, services) {
     if (!title) return;
     set({ goalDraft: "" });
     try {
-      const made = await services.createGoal({ title });
-      saw(made.revision);
+      await services.createGoal({ title });
     } catch (error) {
       console.error("engelbart: the goal could not be made", error);
       set({ goalDraft: title });
@@ -408,7 +405,7 @@ export function createActions(store, services) {
       console.error("engelbart: the subgoal could not be added", error);
       return;
     }
-    saw(subgoal.revision);
+
     set((current) => ({
       ...current,
       subgoals: current.subgoals.some((s) => s.id === subgoal.id)
@@ -459,9 +456,7 @@ export function createActions(store, services) {
     await refresh();
   }
 
-  // The conversation, written down whole after each change to it. The
-  // page is its only writer, so the copy on screen is the truth and the
-  // server's is a record of it.
+  // Save through the shared merge boundary: other open pages may also write.
   function keepChat(id) {
     interaction("chat.saved", { subgoalId: id });
     persist(services.saveChat({ subgoalId: id, messages: sliceOf(get(), id).chat }));
@@ -486,7 +481,7 @@ export function createActions(store, services) {
       console.error("engelbart: the todo could not be added", error);
       return;
     }
-    saw(todo.revision);
+
     interaction("plan.suggestion_accepted", { messageId });
     changeSlice(id, (current) => ({
       todos: withRow(current.todos, todo),
@@ -570,7 +565,7 @@ export function createActions(store, services) {
       changeSlice(id, { newTodo: text });
       return;
     }
-    saw(todo.revision);
+
     changeSlice(id, (current) => ({ todos: withRow(current.todos, todo) }));
   }
 
@@ -585,8 +580,7 @@ export function createActions(store, services) {
     if (!id || state.building || !hasOpenTodos(slice)) return;
     set({ building: id, buildNote: null });
     try {
-      const answer = await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: slice.todos });
-      saw(answer.revision);
+      await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: slice.todos });
     } catch (error) {
       set({ building: null, buildNote: { text: String((error && error.message) || error), error: true } });
       return;
