@@ -1288,6 +1288,7 @@ class Run:
         # first rather than replacing it or missing the resume entirely.
         self.redirect_with = ""
         self._word = threading.Lock()
+        self._record_lock = threading.RLock()
         # What the process up right now is doing: building the rows, or --
         # once they are done -- checking whether the program needs a restart
         # (see RESTART_CHECK). The check is the same session, resumed on a
@@ -1310,22 +1311,24 @@ class Run:
         self.telemetry_root = self.telemetry_context.run(telemetry.current)
 
     def record(self, **extra) -> Dict[str, Any]:
-        rec = load_run(self.session_id, self.root, self.goal_id) or {}
-        rec.update({
-            "goal_id": self.goal_id,
-            "claude_session_id": self.claude_session,
-            "cwd": self.cwd,
-            "pid": self.process.pid if self.process else None,
-            "updated_at": _now(),
-            "acceptance": self.acceptance,
-            "picked": list(self.picked),
-            "verification_rows": list(self.verification_rows or self.picked),
-            "repair_note": self.repair_note,
-        })
-        rec.setdefault("started_at", rec.get("updated_at"))
-        rec.update(extra)
-        _save_run(self.session_id, self.root, rec)
-        return rec
+        with self._record_lock:
+            rec = load_run(self.session_id, self.root, self.goal_id) or {}
+            rec.update({
+                "goal_id": self.goal_id,
+                "claude_session_id": self.claude_session,
+                "cwd": self.cwd,
+                "pid": self.process.pid if self.process else None,
+                "updated_at": _now(),
+                "acceptance": self.acceptance,
+                "picked": list(self.picked),
+                "verification_rows": list(self.verification_rows or self.picked),
+                "repair_note": self.repair_note,
+            })
+            rec.setdefault("started_at", rec.get("updated_at"))
+            rec.update(extra)
+            _save_run(self.session_id, self.root, rec)
+            return rec
+
 
     def alive(self) -> bool:
         return bool(self.process and self.process.poll() is None)

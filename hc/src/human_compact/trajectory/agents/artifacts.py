@@ -12,10 +12,36 @@ def browser_executable():
     import shutil
     for candidate in (os.environ.get("HC_BROWSER_EXECUTABLE"),
                       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                      shutil.which("chromium"), shutil.which("google-chrome")):
+                      shutil.which("chromium"), shutil.which("google-chrome"),
+                      str(Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Microsoft/Edge/Application/msedge.exe") if os.name == "nt" and os.environ.get("PROGRAMFILES(X86)") else None,
+                      str(Path(os.environ.get("PROGRAMFILES", "")) / "Google/Chrome/Application/chrome.exe") if os.name == "nt" and os.environ.get("PROGRAMFILES") else None):
         if candidate and Path(candidate).is_file():
             return candidate
     return None
+
+
+def _browser_cache():
+    from ..web_setup import managed_root
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(managed_root() / "browsers"))
+
+
+def prepare_browser():
+    """Install prerequisite: system Chromium or a managed Playwright browser.
+
+    Only the installed Playwright package's fixed browser-install command runs.
+    Project and model-provided commands cannot enter this path.
+    """
+    import subprocess
+    import sys
+    from playwright.sync_api import sync_playwright
+    if browser_executable():
+        return
+    _browser_cache()
+    with sync_playwright() as p:
+        if Path(p.chromium.executable_path).is_file():
+            return
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                   check=True, timeout=240)
 
 
 def inspect_page(url, checks):
@@ -24,6 +50,7 @@ def inspect_page(url, checks):
     if parsed.scheme not in ("http", "https") or parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
         raise ValueError("preview inspection requires a loopback URL")
     from playwright.sync_api import sync_playwright
+    _browser_cache()
     results = []
     with sync_playwright() as p:
         kwargs = {"headless": True}

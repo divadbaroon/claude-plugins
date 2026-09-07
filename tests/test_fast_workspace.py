@@ -183,3 +183,38 @@ class FastWorkspaceTests(AgentCase):
             verdict = verifier.verify(self.session, self.root, PIECE, ROWS, rt)
         self.assertFalse(verdict['passed'])
         self.assertEqual('process refused', verdict['evidence']['preview_startup']['error'])
+
+    def test_concurrent_activity_record_cannot_erase_joined_row_count(self):
+        import threading
+        run = build.Run(self.session, self.root, PIECE, str(self.project), 'fixture')
+        run.record(rows=1)
+        read = build.load_run
+        first_read, release, second_read = threading.Event(), threading.Event(), threading.Event()
+        def load(*args):
+            value = read(*args)
+            if threading.current_thread().name == 'activity-writer':
+                first_read.set(); release.wait(2)
+            elif threading.current_thread().name == 'joined-writer':
+                second_read.set()
+            return value
+        with mock.patch.object(build, 'load_run', side_effect=load):
+            a = threading.Thread(name='activity-writer', target=lambda:run.record(estimate={'minutes':1}))
+            b = threading.Thread(name='joined-writer', target=lambda:run.record(rows=2))
+            a.start(); self.assertTrue(first_read.wait(2)); b.start()
+            try:
+                self.assertFalse(second_read.wait(.1), 'concurrent read-modify-write was not isolated')
+            finally:
+                release.set(); a.join(2); b.join(2)
+        self.assertEqual(2, read(self.session, self.root, PIECE)['rows'])
+        self.assertEqual({'minutes':1}, read(self.session, self.root, PIECE)['estimate'])
+
+    def test_browser_setup_reuses_system_browser_or_runs_only_fixed_installer(self):
+        import sys
+        from human_compact.trajectory.agents import artifacts
+        driver = mock.MagicMock()
+        driver.sync_playwright.return_value.__enter__.return_value.chromium.executable_path = str(self.project/'missing-browser')
+        with mock.patch.dict(sys.modules, {'playwright.sync_api':driver}), mock.patch.object(artifacts, 'browser_executable', return_value='/system/browser'), mock.patch('subprocess.run') as install:
+            artifacts.prepare_browser(); install.assert_not_called()
+        with mock.patch.dict(sys.modules, {'playwright.sync_api':driver}), mock.patch.object(artifacts, 'browser_executable', return_value=None), mock.patch.dict(os.environ), mock.patch('subprocess.run') as install:
+            artifacts.prepare_browser()
+            install.assert_called_once_with([sys.executable,'-m','playwright','install','chromium'],check=True,timeout=240)

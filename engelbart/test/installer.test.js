@@ -668,3 +668,22 @@ test('switchLauncher (win32): an owned upgrade re-points the shim to the new run
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test('native Python installation requests the declared web extra from the verified wheel', async () => {
+  const { buildRuntime } = require('../lib/installer');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-web-extra-'));
+  const staging = path.join(root, 'runtime');
+  const wheelPath = path.join(root, 'a wheel.whl');
+  const calls = [];
+  try {
+    await buildRuntime({ root, staging, vendor: { wheelPath, version: '0.19.28' },
+      target: { platform: 'darwin' }, platform: 'darwin', env: { HUMAN_COMPACT_PYTHON: 'fixture-python' },
+      output: capture().stream, runner(command, args) {
+        calls.push(args);
+        if (args[0] === '-m' && args[1] === 'venv') fakeRuntime(args[2]);
+        return { status: 0, stdout: '', stderr: '' };
+      } });
+    const pip = calls.find(args => args[1] === 'pip');
+    assert.equal(pip.at(-1), `human-compact[web] @ ${require('url').pathToFileURL(wheelPath).href}`);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
