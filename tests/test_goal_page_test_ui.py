@@ -6,6 +6,8 @@ Only model replies and the external build executable are replaced in tests.
 import json
 import re
 import socket
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 from test_goal_page import (ChatCase, BrowserCase, seed_design, server_for, fetch,
@@ -117,7 +119,7 @@ class AlternateBrowser(BrowserCase):
             expect(normal.locator('.from-bart .bubble')).to_have_text('This is the persisted reply.', timeout=7000)
             page.get_by_role('button', name='Add', exact=True).click()
             expect(normal.locator('.proposal-note')).to_have_text('added to todos', timeout=7000)
-            page.screenshot(path='/private/tmp/engelbart-test-conversation.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'engelbart-test-conversation.png'))
             page.reload()
             expect(page.locator('.from-bart .bubble')).to_have_text('This is the persisted reply.')
             expect(page.get_by_label('Todo', exact=True).last).to_have_value('Add a useful test')
@@ -180,15 +182,15 @@ class AlternateBrowser(BrowserCase):
             expect(frame).to_be_visible(timeout=20000)
             expect(frame.content_frame.get_by_role('heading', name='the app')).to_be_visible()
             frame.content_frame.get_by_role('heading', name='the app').click()
-            page.screenshot(path='/private/tmp/engelbart-test-preview.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'engelbart-test-preview.png'))
             page.get_by_role('button', name='Stop', exact=True).click()
             expect(page.locator('.preview')).to_contain_text('It ended', timeout=10000)
             page.get_by_role('tab', name='Bart', exact=True).click()
-            page.screenshot(path='/private/tmp/engelbart-test-desktop.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'engelbart-test-desktop.png'))
             page.set_viewport_size({'width': 390, 'height': 844})
             expect(page.get_by_label('Message Bart')).to_be_visible()
             self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'), 390)
-            page.screenshot(path='/private/tmp/engelbart-test-mobile.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'engelbart-test-mobile.png'))
             types = {e['type'] for e in AGENT_EVENTS.read('chat', self.root)}
             self.assertTrue({'preview.opened', 'preview.closed', 'preview.interacted', 'artifact.opened'}.issubset(types))
             self.assertEqual([], errors)

@@ -151,12 +151,12 @@ class ResourceBrowserTests(BrowserCase):
             self.assertEqual(pdf_bytes(), fetch(url+'/api/project-paper?id=paper-one')[2])
             self.assertEqual(404, fetch(url+'/api/project-paper?id=../../etc/passwd')[0])
             page.wait_for_timeout(1500)  # Native PDF plugin paints asynchronously.
-            page.screenshot(path='/private/tmp/recovery-' + ('production' if self.route == '/' else 'test') + '-paper.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'recovery-' + ('production' if self.route == '/' else 'test') + '-paper.png'))
             page.reload(); self.expect(page.get_by_role('tab', name='Paper', exact=True)).to_be_visible()
             page.get_by_role('button', name='▣ Session events · Ready').click()
             self.expect(page.get_by_label('Resource details')).to_contain_text('2 rows')
             self.expect(page.get_by_label('Resource details')).to_contain_text('timestamp')
-            page.screenshot(path='/private/tmp/recovery-' + ('production' if self.route == '/' else 'test') + '-dataset.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'recovery-' + ('production' if self.route == '/' else 'test') + '-dataset.png'))
             for label in ('Bart', 'Live preview', 'Terminal'):
                 page.get_by_role('tab', name=label, exact=True).click()
             self.assertEqual([], errors)
@@ -198,7 +198,7 @@ class ProductionResourceBrowserTests(ResourceBrowserTests):
             self.expect(details).to_contain_text('Failed')
             page.set_viewport_size({'width':390,'height':844})
             self.assertLessEqual(page.evaluate('document.documentElement.scrollWidth'),390)
-            page.screenshot(path='/private/tmp/recovery-production-resources-mobile.png')
+            page.screenshot(path=str(Path(tempfile.gettempdir()) / 'recovery-production-resources-mobile.png'))
             for label in ('Bart','Live preview','Terminal'):
                 page.get_by_role('tab',name=label,exact=True).click()
             self.assertEqual([],errors)
