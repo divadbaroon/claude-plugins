@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "human-compact"
-version = "0.19.30"
+version = "0.19.31"
 description = "Session-scoped goal workspaces and persistent context for Claude Code."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["pypdf>=5,<7", "pyarrow>=18,<24"]
+dependencies = ["pypdf>=5,<7", "pyarrow>=18,<24", "openpyxl>=3.1,<4", "defusedxml>=0.7,<1"]
 authors = [{ name = "David Baroon" }]
 license = { text = "MIT" }
 

@@ -43,7 +43,7 @@ jobs:
       - run: python -m pip install ./hc playwright
       - run: python -m playwright install --with-deps chromium
       - name: Exercise production resources and both goal-page renderers
-        run: python -W error::ResourceWarning -m unittest test_todo_workspace test_todo_workspace_browser test_fast_workspace test_fast_workspace_browser test_agent_second_pass test_project_resources test_inactive_lifecycle test_goal_page test_goal_page_test_ui test_goal_page_telemetry -v
+        run: python -W error::ResourceWarning -m unittest test_dataset_upload test_todo_workspace test_todo_workspace_browser test_fast_workspace test_fast_workspace_browser test_agent_second_pass test_project_resources test_inactive_lifecycle test_goal_page test_goal_page_test_ui test_goal_page_telemetry -v
         env:
           PYTHONPATH: hc/src:tests
           ENGELBART_TELEMETRY_FORWARD: "0"
