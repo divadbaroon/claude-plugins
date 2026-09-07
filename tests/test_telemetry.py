@@ -490,7 +490,8 @@ class FileSinkTests(unittest.TestCase):
         sink = T.FileSink(folder, root=self.root)
         with mock.patch.object(SINKS, "ROTATE_BYTES", 400):
             sink.on_event({"event_id": "1", "x": "y" * 300})
-            (folder / "records.jsonl").open("a").write("{not json\n")
+            with (folder / "records.jsonl").open("a") as stream:
+                stream.write("{not json\n")
             sink.on_event({"event_id": "2", "x": "z" * 300})
         names = sorted(p.name for p in folder.glob("*.jsonl"))
         self.assertEqual(2, len(names), names)
