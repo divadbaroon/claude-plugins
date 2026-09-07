@@ -392,11 +392,28 @@ class ForwardTests(TelemetryCase):
         self.addCleanup(site.close)
         self.env(ENGELBART_TELEMETRY_FORWARD="true", ENGELBART_TELEMETRY_URL=site.url,
                  ENGELBART_TELEMETRY_FLUSH_MS="50")
-        with server_for(self.chat) as url:
+        def delivered():
+            return {op["operation_id"]: op for post in site.posts
+                    for op in post["body"]["operations"]}
+        apply = ui._apply
+        def after_started_envelope(*args, **kwargs):
+            # Cross a real flush boundary while the request is in flight.
+            # Running records are intentional live telemetry, followed by
+            # the terminal update for that same operation ID.
+            wait_for(lambda: any(op["name"] == "goal-page.op" and op["status"] == "running"
+                                 for op in delivered().values()), 5)
+            return apply(*args, **kwargs)
+        with mock.patch.object(ui, "_apply", side_effect=after_started_envelope), server_for(self.chat) as url:
             fetch(url + "/api/goal-page")
             op_headers, answer = self.add_goal(url)
-        self.assertTrue(wait_for(lambda: site.posts, 5), "the envelope was not sent")
-        operations = [op for post in site.posts for op in post["body"]["operations"]]
+        self.assertTrue(answer["ok"], answer)
+        expected = {"goal-page.read", "goal-page.op", "apply.add_goal", "goals.save"}
+        self.assertTrue(wait_for(lambda: expected <= {op["name"] for op in delivered().values()
+                                                       if op["status"] == "completed"}, 5),
+                        "terminal operation updates were not sent")
+        self.assertTrue(any(op["name"] == "goal-page.op" and op["status"] == "running"
+                            for post in site.posts for op in post["body"]["operations"]))
+        operations = list(delivered().values())
         [first] = site.posts[:1]
         self.assertEqual("/api/engelbart-telemetry", first["path"])
         self.assertEqual("Bearer " + TOKEN, first["headers"]["Authorization"])
@@ -409,7 +426,7 @@ class ForwardTests(TelemetryCase):
         self.assertLessEqual({"goal-page.read", "goal-page.op", "apply.add_goal", "goals.save"}, names)
         for op in operations:
             self.assertEqual(T.user_hash("user-1"), op["attributes"]["engelbart.user_hash"], op["name"])
-            self.assertEqual("completed", op["status"], "the end of every operation is what is sent")
+            self.assertEqual("completed", op["status"], "every operation must eventually receive its terminal update")
         self.assertEqual(op_headers["x-engelbart-trace-id"],
                          next(op for op in operations if op["name"] == "goal-page.op")["trace_id"])
         kinds = {s["kind"] for post in site.posts for s in post["body"]["snapshots"]}
