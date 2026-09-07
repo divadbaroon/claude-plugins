@@ -1,0 +1,60 @@
+/* Latin Source Code Pro extracted from the supplied standalone design. */
+@font-face {
+  font-family: 'Source Code Pro'; font-style: normal; font-weight: 400 600;
+  font-display: swap; src: url('/goal/test/source-code-pro.woff2') format('woff2');
+}
+/* Workspace half of Engelbart Workspace (standalone).html. The simulated
+   execution/debugger column is deliberately outside this frontend. */
+.test-workspace { --font-mono: 'Source Code Pro', ui-monospace, SFMono-Regular, Menlo, monospace; }
+.test-workspace .rail { width: clamp(250px, 32%, 340px); padding: 24px 18px 20px 22px; gap: 2px; }
+.test-workspace .crumbs { flex-wrap: wrap; }
+.test-workspace .sub { flex: none; align-items: flex-start; gap: 10px; padding: 9px 12px; }
+.test-workspace .sub-title { font-size: 14px; line-height: 1.45; text-wrap: pretty; }
+.test-workspace .sub-mark { margin-top: 3px; width: 12px; height: 12px; }
+.test-workspace .sub.is-complete .sub-title { color: var(--fnt); }
+.test-workspace .sub.is-complete .sub-mark { border: 0; }
+.test-workspace .sub.is-complete .sub-mark::after { content: '✓'; color: var(--fnt); }
+.test-workspace .sub-add { flex: none; gap: 10px; padding: 7px 12px; }
+.rail-todos { flex: 1; display: flex; flex-direction: column; min-height: min-content; }
+.rail-todos-label { flex: none; margin: 18px 0 4px; padding-left: 12px; font: var(--text-microcap); letter-spacing: 1.6px; text-transform: uppercase; color: var(--fnt); }
+.rail-todos .todo-list { padding: 0; flex: none; }
+.rail-todos .todo { align-items: flex-start; gap: 10px; padding: 6px 12px; }
+.rail-todos .todo-content { flex: 1; min-width: 0; }
+.rail-todos .todo-text { display: block; width: 100%; padding: 0; margin: 0; resize: none; field-sizing: content; min-height: 1lh; font: 14px/1.45 var(--font-sans); }
+.rail-todos .todo-mark { font: 13.5px/1.45 var(--font-sans); color: var(--bd2); }
+.rail-todos .todo-status { display: block; margin-top: 3px; font: 500 9px/1.45 var(--font-sans); letter-spacing: 1.3px; }
+.rail-todos .todo-status.is-new { color: var(--fnt); }
+.rail-todos .todo-status.is-needs_user, .rail-todos .todo-status.is-asking { color: var(--acc); }
+.rail-todos .todo-remove { margin-top: 1px; }
+.rail-todos .todos-actions { flex: none; gap: 10px; padding: 14px 4px 0 12px; }
+.rail-todos .build-btn { margin-left: auto; padding: 7px 12px; white-space: nowrap; }
+.test-workspace .bart .brainstorm { flex: 1; overflow: hidden; }
+.test-workspace .feed { padding: 14px 16px; }
+.test-workspace .feed-inner { gap: 12px; }
+.test-workspace .bubble { min-width: 0; overflow-wrap: anywhere; }
+.test-workspace .proposal { max-width: 520px; }
+.test-workspace .proposal-actions { gap: 8px; justify-content: flex-start; }
+.test-workspace .proposal-actions .ghost-btn { margin: 0; padding: 7px 12px; font-size: 13px; }
+.execution-status { margin-left: auto; font: 500 12px/1 var(--font-sans); white-space: nowrap; }
+.execution-status::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: currentColor; margin-right: 7px; }
+.execution-status.is-needs_user { color: var(--acc); }
+.execution-status.is-failed { color: var(--del); }
+.test-workspace .terminal { line-height: 1.75; }
+.test-workspace .term-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.test-workspace .preview-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.test-workspace .preview-frame { min-height: 0; }
+.test-workspace .preview-body { overflow: auto; }
+.test-workspace .home-grid { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 312px)); }
+.test-workspace .card { padding: 14px 16px 12px; border: 2px solid var(--acc); border-radius: 10px; background: var(--term-bg); }
+.test-workspace .card-name { color: var(--blue-400); }
+.test-workspace .card-text { color: var(--term-ink); }
+.test-workspace .card-where, .test-workspace .card-facts { color: var(--dark-700); }
+.test-workspace .account-menu { min-width: min(280px, calc(100vw - 48px)); }
+@media (max-width: 700px) {
+  .test-workspace .header { padding: 16px; }
+  .test-workspace .body { flex-direction: column; overflow: auto; }
+  .test-workspace .rail { width: 100%; max-height: 38vh; min-height: 160px; padding: 16px; border-bottom: 1px solid var(--bd); }
+  .test-workspace .main { flex: 1 0 55vh; padding: 12px 16px 16px; }
+  .test-workspace .preview, .test-workspace .terminal { min-height: 280px; }
+  .test-workspace .tabs { flex-wrap: wrap; gap: 12px; }
+}

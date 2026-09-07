@@ -129,6 +129,7 @@ GOAL_PAGE_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
+    ".woff2": "font/woff2",
 }
 _GOAL_ASSET_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -139,7 +140,7 @@ def goal_page_asset(relpath):
     The name arrives from the browser, so it is honoured only as a plain
     relative path to one of the page's own kinds of file: no absolute
     paths, no parent references, nothing outside web/goal, and nothing
-    but html, css and js.
+    but html, css, js and woff2.
     """
     parts = str(relpath).split("/")
     if not all(_GOAL_ASSET_SEGMENT.match(part) for part in parts):
@@ -576,6 +577,42 @@ def _bart_context(trajdir, chat_scoped, subgoal_id, transcript):
         return held
 
 
+def _goal_page_build_phase(session_id, root, subgoal_id):
+    """Read-only display projection of existing lifecycle events, never a route.
+
+    Rows can already say done while their artifacts are still being checked.
+    Keep the lifecycle's row scope across an escalation (which names no rows).
+    No prompts, evidence or internal routing decisions cross this boundary.
+    """
+    from .agents import events
+    statuses = {"build.started": "building", "verify.started": "checking",
+                "verify.passed": "done", "verify.failed": "failed",
+                "build.repair_requested": "fixing", "verify.escalated": "needs_user",
+                "build.question": "needs_user", "build.failed": "failed",
+                "build.cancelled": "cancelled"}
+    phase = None
+    rows = []
+    edits = {"todo.done_toggled", "todo.text_edited", "todo.removed"}
+    for event in events.read(session_id, root, types=set(statuses) | edits,
+                             subgoal_id=subgoal_id, limit=80):
+        payload = event.get("payload") or {}
+        if event["type"] in edits:
+            # A user's subsequent edit settles that row's old failure/wait.
+            # Active work remains owned by its run until the run reports back.
+            if phase and phase["status"] not in ("building", "checking", "fixing") and payload.get("ok"):
+                rows = [r for r in rows if r != event.get("todoId")]
+                phase = dict(phase, todoIds=rows) if rows else None
+            continue
+        if isinstance(payload.get("rows"), list):
+            rows = [r for r in payload["rows"] if isinstance(r, str)]
+        status = statuses[event["type"]]
+        if event["type"] == "build.started" and payload.get("repair"):
+            status = "fixing"
+        phase = {"status": status, "todoIds": rows, "at": event.get("timestamp", ""),
+                 "reason": str(payload.get("reason") or payload.get("error") or "")[:600]}
+    return phase
+
+
 def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
     """What the goal page's two side panes draw, in one read.
 
@@ -595,6 +632,9 @@ def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
             session_id, root = _chat_identity(_scope(trajdir))
             build = {"lines": BUILD.load_activity(session_id, root, subgoal_id),
                      "run": BUILD.live(session_id, root).get(subgoal_id)}
+            phase = _goal_page_build_phase(session_id, root, subgoal_id)
+            if phase is not None:
+                build["phase"] = phase
         except (OSError, ValueError):
             pass
     return {"ok": True, "subgoal_id": subgoal_id, "preview": preview,
@@ -631,7 +671,7 @@ def _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages):
     keep = {g.get("id") for g in goals.get("goals") or []
             if isinstance(g, dict) and g.get("id")}
     session_id, root = _chat_identity(trajdir)
-    kept = CS.save_bart_chat(session_id, piece["id"], messages, root, keep=keep)
+    kept = CS.save_bart_chat(session_id, piece["id"], messages, root, keep=keep, merge=bool(messages))
     return {"ok": True, "messages": kept}
 
 
@@ -4911,6 +4951,12 @@ class H(BaseHTTPRequestHandler):
                 # here with ?quick=1 on it, and a workspace that 404'd on its
                 # own address would be the last thing that reader saw.
                 page = goal_page_asset("index.html")
+                if page is None:
+                    self._send(404, {"error": "not found"})
+                else:
+                    self._send(200, page[0], page[1])
+            elif self.path.split("?", 1)[0] in ("/test", "/test/"):
+                page = goal_page_asset("test/index.html")
                 if page is None:
                     self._send(404, {"error": "not found"})
                 else:

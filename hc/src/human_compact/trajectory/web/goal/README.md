@@ -6,7 +6,8 @@ step; the browser loads them as they are.
 
     index.html      the shell: fonts, styles.css, app.js
     styles.css      the design's tokens and one class per element
-    app.js          creates the store, the actions and the first draw
+    app.js          selects the production renderer
+    bootstrap.js    shared store/actions, first draw, polling and event listeners
     store.js        the state tree and the readers on it (one slice per subgoal)
     actions.js      what the reader can do; the only writer of the store
     services.js     the boundary to everything behind the page (the goals,
@@ -54,8 +55,7 @@ Each answer carries the goals' revision after the write.
 The page hears about everyone else's writes through `GET
 /api/goal-page/events`, a stream of server-sent events. The server stats
 the goal files every half second and, when one has moved, sends the new
-revision; the page reads the goal again unless the revision is one it made
-itself, and lays the answer under whatever the reader is in the middle of.
+revision; the page reads the goal again unless it already displays that revision, and lays the answer under whatever the reader is in the middle of.
 A row the builder holds (`queued`, `building`, `asking`) says so and is
 left alone until it comes back. Local files are the truth; the chat's
 autosync sends them to the account four seconds after the last edit.
@@ -71,8 +71,7 @@ page that approves it, and waits, while the page asks `GET
 the installer put at `~/.local/bin/engelbart`, or whatever `ENGELBART_CLI`
 names.
 
-Bart is the brainstorm behind `/legacy`, told which subgoal the
-conversation is about. `POST /api/goal-page/bart` takes the subgoal's whole
+Bart uses the existing agent routing, told which subgoal the conversation is about. `POST /api/goal-page/bart` takes the subgoal's whole
 conversation, reads and digests the tree under the state lock, asks the
 model outside it on the reader's own account (`claude` in safe mode, as
 setup and the brainstorm do), and answers with what to draw: prose as
@@ -81,11 +80,11 @@ text, each row it proposed as a proposal the reader adds with one click
 or a choice is said as text with its options, and answered by typing. The
 conversation is kept beside the goals, per subgoal, in the page's own
 shape (`chat_state.save_bart_chat`, `bart.json` in the tree's session):
-`POST /api/goal-page/chat` writes it whole after every change, and the
+`POST /api/goal-page/chat` merges nonempty saves by stable message id after every change, and the
 payload's slices carry it back, so a reload draws what was on screen.
 
-The preview and the terminal are still the design's example content, held
-in memory for the life of the page.
+The preview and Terminal read the real preview engine and build activity through
+`GET /api/goal-page/panes`. Preview operations use `/api/goal-page/preview`.
 
 The workspace this page replaced still answers at `/legacy`.
 
@@ -95,8 +94,8 @@ A message to Bart is routed before a model sees it (`trajectory/agents/`,
 its README has the flow). An ordinary message is answered by the Chat
 agent -- prose, at most a row or two proposed. A message that asks for
 options in so many words goes to the brainstorm, and one that asks for the
-piece to be planned goes to the Path agent; both answer as proposals the
-reader can add. When the Chat agent finds the message turns on a
+project to be planned goes to the Path agent, which can revise subgoals and
+todos. Responses use the same Bart conversation and todo-proposal contract. When the Chat agent finds the message turns on a
 preference only the reader can settle, the brainstorm puts that question
 to them; when it turns on a fact of the project, the project directory is
 read and nobody is asked. A build the page starts is verified when it
@@ -104,3 +103,60 @@ ends, and a verdict that fails sends the row back out with the reason,
 twice, before Bart says so in the conversation. Every interaction is
 written to the chat's `agent_events.jsonl`; only the transitions above
 reach the Overseer.
+
+
+## Alternate workspace at `/test`
+
+`/test` and `/test?goal=<id>` serve `test/index.html` on the same server and
+session. `/` retains its production shell, stylesheet and renderer. Both use
+`bootstrap.js`, `store.js`, `actions.js`, and `services.js`; there is no separate
+disk state, API namespace, model caller, or execution system.
+
+The workspace half of `Engelbart Workspace (standalone).html` supplies the visual
+layout. `test/page.js` composes existing components, puts editable todos and Build
+all in the Plan rail, and gives the conversation the main Bart pane. The bundled
+Latin Source Code Pro font comes from the supplied design. At phone widths the
+scrollable rail stacks above the main pane.
+
+| Design interaction | State | Shared action → service/API |
+| --- | --- | --- |
+| Plan subgoal | `subgoals`, `activeId` | `selectSubgoal` → pane read + interaction event |
+| Add subgoal | `subgoalDraft` | `commitAddSubgoal` → `addSubgoal` → `add_goal` |
+| Todo edit/toggle/remove | active slice `todos` | `editTodo` / `toggleTodo` / `removeTodo` → existing todo operations |
+| Add todo | active slice `newTodo` | `commitNewTodo` → `addTodo` → `add_todo_row` |
+| Bart composer | active slice `draft`, `chat` | `sendMessage` → `sendBartMessage` / `saveChat` → Bart/chat APIs |
+| Todo proposal Add/Skip | active slice `chat` | `acceptProposal` / `rejectProposal` → existing todo/chat APIs and events |
+| Build all | active slice `todos` | `buildAll` → `startBuild` → `build_todos` |
+| Live Preview | `panes.preview` | existing preview actions → `previewOp` → preview API |
+| Terminal | `panes.build.lines`, `.run`, preview output | existing pane polling |
+| Header and account | project, goals, account, reader | existing project/goal navigation, auth and expertise actions |
+
+Small shared contract extensions:
+
+- Optional `panes.build.phase = {status, todoIds, at, reason}` is a read-only
+  projection of existing recorded lifecycle events. It distinguishes checking,
+  fixing and needs-user from the todo row's storage status. No agent code changes.
+  Subsequent successful user edits remove affected rows from old terminal phases.
+- Nonempty chat saves merge message ids under the existing session lock, keeping
+  other pages' unseen turns and settled proposals. An explicit empty save retains
+  the existing clear behavior. Polling imports ordinary turns as well as system
+  messages; page-specific UUIDs avoid collisions between simultaneous pages.
+- Goal change notifications compare with the revision currently displayed, so a
+  remote add/edit/remove sequence returning to an earlier revision is visible.
+
+The design's simulated debugger, model counters, timers, percentages, demo
+preview and terminal text are not included. Existing agent explanations, choices,
+and questions render as Bart prose; todo proposals retain Add/Skip. The current
+contract has no structured choice buttons, deferred Apply/Keep-plan card, retry/skip
+failure card, or preview-check badge strip. Those visual widgets are not fabricated.
+Actual plan changes still arrive through the goal event stream; evidence and
+execution activity remain available in Terminal and the existing debugger.
+
+Validation: `tests/test_goal_page_test_ui.py` reuses the goal-page Playwright and
+isolated loopback server fixtures. It covers both routes, shared edits and
+conversations, existing Build invocation, plan updates, account/expertise,
+preview discovery/start/iframe/stop, activity/events, lifecycle labels, responsive
+layout, query selection, and stale-save protection. Model replies and the external
+build executable are replaced at their existing boundaries; HTTP, files, event
+capture and preview processes are real. Cross-repository installed round-trip and
+platform workflow gates remain required before a merge.

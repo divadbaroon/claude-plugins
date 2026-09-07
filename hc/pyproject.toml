@@ -20,4 +20,4 @@ bart = "human_compact.cli:bart_main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-human_compact = ["assets/**/*", "assets/plugin/.claude-plugin/*", "assets/bart-skill/*", "trajectory/web/*", "trajectory/web/static/*", "trajectory/web/goal/*", "trajectory/web/goal/components/*"]
+human_compact = ["assets/**/*", "assets/plugin/.claude-plugin/*", "assets/bart-skill/*", "trajectory/web/*", "trajectory/web/static/*", "trajectory/web/goal/*", "trajectory/web/goal/components/*", "trajectory/web/goal/test/*"]

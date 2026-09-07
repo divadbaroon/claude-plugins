@@ -1945,8 +1945,9 @@ def save_bart_chat(
     root: Optional[Path] = None,
     keep: Optional[Any] = None,
     wait_s: float = 5.0,
+    merge: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Write one subgoal's conversation down, whole, replacing what was there.
+    """Save a subgoal's conversation; optionally merge stable message ids.
 
     Called after every change to it -- a message sent, a reply landed, a
     proposal taken -- because there is no end to save at: the reader
@@ -1954,6 +1955,8 @@ def save_bart_chat(
     ``keep``, when given, names the goal ids still in the tree; a record for
     a goal that is gone goes with it, so the file does not outlive the tree.
     """
+    # Browser saves merge by stable message id so another open workspace
+    # cannot erase unseen turns. Other callers retain replacement semantics.
     wanted = bart_messages(messages)
     session_id = tree_session(session_id, root)
     with session_lock(session_id, root, wait_s=wait_s) as p:
@@ -1963,6 +1966,17 @@ def save_bart_chat(
         if keep is not None:
             rows = {k: v for k, v in rows.items() if k in set(keep)}
         existing = (rows.get(str(goal_id)) or {}).get("messages") or []
+        if merge:
+            combined = {m["id"]: m for m in bart_messages(existing)}
+            for message in wanted:
+                before = combined.get(message["id"], {})
+                updated = {**before, **message}
+                # A stale tab cannot undo an accepted/rejected proposal.
+                for key in ("added", "rejected"):
+                    if before.get(key):
+                        updated[key] = True
+                combined[message["id"]] = updated
+            wanted = list(combined.values())
         ids = {m.get("id") for m in wanted}
         wanted += [m for m in bart_messages(existing)
                    if str(m.get("id") or "").startswith("sys-") and m.get("id") not in ids]
