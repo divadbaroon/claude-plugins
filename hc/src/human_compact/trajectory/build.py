@@ -173,6 +173,8 @@ def project_lines(session_id: str, root: Optional[Path]) -> List[str]:
     # tree allows itself, and for the same reason.
     for source in GM.normalize_sources(record.get("sources"))[:6]:
         lines.append(f"- SOURCE ({source['type']}): {source['label']}")
+    from . import resources
+    lines.append(resources.context(root, cwd))
     return lines
 
 

@@ -496,6 +496,9 @@ def load_project(root: Optional[Path], cwd) -> Dict[str, Any]:
     provenance = normalize_provenance(section.get("provenance"))
     if provenance:
         out["provenance"] = provenance
+    from . import resources
+    if section.get("resources"):
+        out["resources"] = resources.normalize(section["resources"])
     # Where the project's goals are. Read back as well as written: this is
     # the authored half a regeneration rebuilds the record from, and a key
     # written on one side of the whitelist and not the other is dropped by
@@ -575,6 +578,9 @@ def _project_section(cwd, authored: Dict[str, Any]) -> Dict[str, Any]:
     provenance = normalize_provenance(authored.get("provenance"))
     if provenance:
         section["provenance"] = provenance
+    from . import resources
+    if authored.get("resources"):
+        section["resources"] = resources.normalize(authored["resources"])
     # Which store holds the project's goals. Carried through explicitly: this
     # section is rebuilt from a whitelist on every write, so a key merely
     # present in the record it was read from would be dropped by the next

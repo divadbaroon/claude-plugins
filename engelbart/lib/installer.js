@@ -433,7 +433,7 @@ function createRuntimeWithPython(runner, python, staging, wheelPath, version, en
   if (result.status !== 0) return false;
   const runtimePython = runtimeExecutables(staging, platform).python;
   result = runner(runtimePython, [
-    '-m', 'pip', 'install', '--disable-pip-version-check', '--no-index', '--no-deps', wheelPath,
+    '-m', 'pip', 'install', '--disable-pip-version-check', wheelPath,
   ], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   return result.status === 0 && validateRuntime(runner, staging, version, platform);
 }
@@ -586,7 +586,7 @@ async function buildRuntime(options) {
   }, 'managed Python creation');
   checkedCommand(runner, uv, [
     'pip', 'install', '--python', runtimeExecutables(staging, platform).python,
-    '--no-index', '--no-deps', vendor.wheelPath,
+    vendor.wheelPath,
   ], { env: uvEnv, stdio: ['ignore', 'pipe', 'pipe'] }, 'backend installation');
   if (!validateRuntime(runner, staging, vendor.version, platform)) {
     throw new Error('installed backend failed its version check');

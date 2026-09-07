@@ -97,6 +97,7 @@ export function createActions(store, services) {
       status: "ready",
       goal: loaded.goal,
       project: loaded.project || null,
+      phases: loaded.phases || {},
       goals: loaded.goals || [],
       empty: !loaded.goal,
       subgoals,
@@ -141,7 +142,7 @@ export function createActions(store, services) {
       return;
     }
     if (run !== panesRun || get().activeId !== id) return;
-    set({ panes, panesFor: id });
+    set({ panes, panesFor: id, phases: panes.phases || get().phases });
     changeSlice(id, (current) => ({ chat: mergeMessages(current.chat, panes.chat || []) }));
   }
 
@@ -594,6 +595,13 @@ export function createActions(store, services) {
     showGoal, showGoals, showProjects, openGoal, openProject,
     loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
+    openResource(id) {
+      const resource = get().project?.resources?.find(r => r.id === id);
+      if (!resource) return;
+      interaction("artifact.opened", { resourceId: id });
+      set({ resourceId: id, resourceUrl: resource.kind === "paper" ? services.projectPaperUrl(id) : "" });
+      showTab(resource.kind === "paper" && resource.status === "ready" ? "paper" : "resource");
+    },
     selectSubgoal, showTab, loadPanes,
     previewConfigure, previewShowUi, previewRun, previewStop, previewForget,
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,

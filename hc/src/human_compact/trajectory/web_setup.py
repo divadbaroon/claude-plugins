@@ -116,6 +116,8 @@ def materialize(payload: Dict[str, Any], root: Optional[Path] = None,
                           provenance=payload.get("provenance"))
     if not result.get("ok"):
         return result
+    from . import resources
+    resources.prepare(root, result["cwd"], payload.get("resources") or [])
     reader = payload.get("reader")
     if isinstance(reader, dict) and reader:
         from . import reader as READER
