@@ -111,3 +111,23 @@ export function hasOpenTodos(slice) {
 export function anyWithBuilder(slice) {
   return slice.todos.some(isWithBuilder);
 }
+
+
+// Server-recorded lifecycle; no inference from time or process output.
+export const TODO_LABELS = { queued: "Queued", building: "Building…", checking: "Checking…",
+  fixing: "Fixing…", needs_user: "Needs you", done: "Done", failed: "Failed" };
+export function lifecycleOf(state) {
+  return state.panesFor === state.activeId ? state.panes?.build?.phase : null;
+}
+export function todoPhase(todo, state) {
+  const phase = lifecycleOf(state);
+  if (phase?.todoIds.includes(todo.id) && phase.status !== "cancelled") return phase.status;
+  // A raw build question has not yet been classified as human-dependent.
+  return todo.done ? "done" : todo.status === "asking" ? "checking" : todo.status || "";
+}
+export function workInFlight(state) {
+  return ["building", "checking", "fixing"].includes(lifecycleOf(state)?.status);
+}
+export function todoHeld(todo, state) {
+  return isWithBuilder(todo) || ["building", "checking", "fixing"].includes(todoPhase(todo, state));
+}

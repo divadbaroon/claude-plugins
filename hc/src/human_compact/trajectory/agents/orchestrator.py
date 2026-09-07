@@ -35,6 +35,7 @@ from . import policy as POLICY
 from . import replies as REPLIES
 from . import runtime as RT
 from . import trace
+from . import communication as COMM
 from . import verifier as VERIFIER
 
 # HC_AGENTS=0 turns the routing off: Bart goes straight to the brainstorm
@@ -184,6 +185,12 @@ class Orchestrator:
 
     def _dispatch(self, decision, event, carry) -> Optional[Dict[str, Any]]:
         action = decision["action"]
+        if event["type"] == POLICY.BUILD_QUESTION:
+            return self._build_question(event)
+        if event["type"] == POLICY.BUILD_FAILED:
+            goal = event.get("subgoalId", "")
+            topic = COMM.subject(self.session_id, self.root, goal, event.get("payload", {}).get("rows", []))
+            COMM.publish(self.session_id, self.root, goal, "failed", COMM.summary("failed", topic))
         if action == OVERSEER.NONE:
             return None
         if action == OVERSEER.CHAT:
@@ -217,7 +224,9 @@ class Orchestrator:
                          "subgoal": str(held.get("subgoal") or "")}
                 event = self.emit(POLICY.BART_MESSAGE, EV.USER, {"text": text},
                                   subgoal_id=subgoal_id)
-                result = self.handle(event, carry)
+                result = self._answer_pending(event, carry)
+                if result is None:
+                    result = self.handle(event, carry)
             finally:
                 trace.use(None)
         if not result:
@@ -225,6 +234,113 @@ class Orchestrator:
         result.setdefault("card", "none")
         result["flow"] = list(self.steps)
         return result
+
+    def _answer_pending(self, event, carry):
+        goal = event.get("subgoalId", "")
+        pending = COMM.pending(self.session_id, self.root, goal)
+        if not pending:
+            return None
+        payload = pending.get("payload") or {}
+        if payload.get("resume") != "build":
+            # The normal conversation consumes the answer with its question in
+            # context. Only a successful response without a new dependency clears it.
+            result = self.handle(event, dict(carry, pending_question=payload.get("question", "")))
+            latest = COMM.pending(self.session_id, self.root, goal)
+            if (result and result.get("ok") and result.get("resolution") in ("resume", "cancel")
+                    and latest and latest["id"] == pending["id"]):
+                self.emit("human.answered", EV.USER, {"questionId": pending["id"]}, subgoal_id=goal)
+            return result
+        answer = self.agents["chat"](carry["transcript"], carry.get("context", ""),
+            focus=["A build is paused on this question: " + str(payload.get("question") or ""),
+                   "Determine whether the reader's last message resolves it. If it does not, "
+                   "return needs.kind=human_preference with the one remaining question. "
+                   "Do not treat a question about progress as an answer. Additionally return resolution: "
+                   "resume only for an answer authorizing continuation, cancel for an explicit request to stop, "
+                   "or wait otherwise. Never ask the reader to paste secrets into the conversation."],
+            known=self._known(goal), root=self.root)
+        if not answer or not answer.get("ok"):
+            return {"ok": False, "error": "I couldn’t process that answer. Please try again."}
+        if (answer.get("needs") or {}).get("kind") or answer.get("resolution") not in ("resume", "cancel"):
+            return {"ok": True, "replies": [{"kind": "text", "text": payload.get("question", "")}], "route": "chat"}
+        try:
+            if answer.get("resolution") == "cancel":
+                result = self.runtime.cancel(self.session_id, self.root, goal, payload.get("rows") or [pending.get("todoId", "")])
+            else:
+                self.emit(POLICY.BUILD_STARTED, EV.SYSTEM, {"rows": payload.get("rows") or [pending.get("todoId")]}, subgoal_id=goal)
+                result = self.runtime.answer(self.session_id, self.root, goal, pending.get("todoId", ""),
+                                             POLICY.last_user_text(carry["transcript"]))
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+        if not result or not result.get("ok"):
+            self.emit(POLICY.CHAT_NEEDS_HUMAN, EV.AGENT, payload, subgoal_id=goal, todo_id=pending.get("todoId", ""))
+            BUILD.note_activity(self.session_id, self.root, goal, "error", (result or {}).get("error") or "resume failed")
+            return {"ok": False, "error": "I couldn’t resume the work. The details are in Terminal."}
+        self._learn(answer, "chat", goal)
+        self.emit("human.answered", EV.USER, {"questionId": pending["id"]}, subgoal_id=goal)
+        if answer.get("resolution") == "cancel":
+            self.emit("build.cancelled", EV.SYSTEM, {"rows": payload.get("rows") or [pending.get("todoId")]}, subgoal_id=goal)
+        return {"ok": True, "replies": [], "route": "build"}
+
+    def _build_question(self, event):
+        from .. import goals as GM
+        goal = event.get("subgoalId", "")
+        goals, _ = CS.load_goals(self.session_id, self.root)
+        rows = (GM.by_id(goals, goal) or {}).get("todo_items") or []
+        row = next((r for r in rows if r.get("status") == "asking" and r.get("question")), None)
+        if not row:
+            return None
+        question = row["question"]
+        answer = self.agents["chat"]([{"role": "user", "text": question}],
+            json.dumps(CTX.assemble(self.session_id, self.root, event)),
+            focus=["Classify this paused build question before involving the reader. "
+                   "Use needs.kind=human_preference ONLY for a preference, direction, subjective tradeoff, "
+                   "unavailable secret/credential or physical/manual action. Ask one clear question. "
+                   "Repo facts, columns, file locations and implementation details are environment; "
+                   "return needs.kind=environment. Do not ask the reader to investigate."],
+            known=self._known(goal), root=self.root)
+        needs = (answer or {}).get("needs") or {}
+        if (answer or {}).get("ok") and needs.get("kind") == CHAT.HUMAN:
+            question = str(needs.get("question") or question)
+            self.emit(POLICY.CHAT_NEEDS_HUMAN, EV.AGENT,
+                {"question": question, "rows": [row["id"]], "resume": "build"},
+                subgoal_id=goal, todo_id=row["id"])
+            COMM.publish(self.session_id, self.root, goal, "question", question, problem=question)
+            return {"ok": True, "route": "chat", "replies": [{"kind": "text", "text": question}]}
+        # Resolve environment questions locally and return them to the same
+        # build. Bound repeated identical discovery without mislabeling it human.
+        previous = self.events(types=[POLICY.DISCOVERED, POLICY.BUILD_REQUESTED], subgoal_id=goal)
+        previous = previous[next((i + 1 for i in range(len(previous)-1, -1, -1)
+                                  if previous[i]["type"] == POLICY.BUILD_REQUESTED), 0):]
+        if any(e.get("payload", {}).get("buildQuestion") == question for e in previous):
+            return self._fail_question(goal, row["id"], "local discovery did not resolve the build question")
+        try:
+            discovered = self.runtime.discover(question)
+        except Exception as exc:
+            return self._fail_question(goal, row["id"], str(exc))
+        self.emit(POLICY.DISCOVERED, EV.SYSTEM, {"buildQuestion": question}, subgoal_id=goal)
+        self.emit(POLICY.BUILD_STARTED, EV.SYSTEM, {"rows": (event.get("payload") or {}).get("rows") or [row["id"]]}, subgoal_id=goal)
+        try:
+            result = self.runtime.answer(self.session_id, self.root, goal, row["id"],
+                "Resolve this from the project, without asking the reader. Local inspection:\n" + discovered)
+        except Exception as exc:
+            return self._fail_question(goal, row["id"], str(exc))
+        if not result or not result.get("ok"):
+            return self._fail_question(goal, row["id"], (result or {}).get("error") or "could not resume discovery")
+        return dict(result, route="build")
+
+    def _fail_question(self, goal, row_id, error):
+        from .. import goals as GM
+        with CS.session_lock(self.session_id, self.root, wait_s=5):
+            goals, important = CS.load_goals(self.session_id, self.root)
+            for row in (GM.by_id(goals, goal) or {}).get("todo_items") or []:
+                if row.get("id") == row_id:
+                    row.update(status="failed", question="")
+            CS.save_goals(self.session_id, goals, important, self.root)
+        BUILD.note_activity(self.session_id, self.root, goal, "error", error)
+        self.emit(POLICY.BUILD_FAILED, EV.SYSTEM, {"rows": [row_id], "error": error}, subgoal_id=goal)
+        topic = COMM.subject(self.session_id, self.root, goal, [row_id])
+        COMM.publish(self.session_id, self.root, goal, "failed", COMM.summary("failed", topic))
+        return {"ok": False, "route": "none"}
 
     def _learn(self, answer, by, subgoal_id):
         for item in CTX.normalize_updates(answer.get("contextUpdates"), by, subgoal_id):
@@ -255,7 +371,11 @@ class Orchestrator:
         with trace.span("chat.reply"):
             answer = self.agents["chat"](
                 carry["transcript"], carry.get("context", ""),
-                focus=chat_focus(carry.get("goal", ""), carry.get("subgoal", "")),
+                focus=chat_focus(carry.get("goal", ""), carry.get("subgoal", "")) + (
+                    ["Pending human question: " + carry["pending_question"],
+                     "Return resolution=resume only when the last message resolves that question, "
+                     "cancel if explicitly abandoned, or wait otherwise. A progress question does not resolve it."]
+                    if carry.get("pending_question") else []),
                 known=self._known(subgoal_id), discovered=discovered, root=self.root)
         if not isinstance(answer, dict) or not answer.get("ok"):
             error = (answer or {}).get("error") if isinstance(answer, dict) else ""
@@ -266,7 +386,7 @@ class Orchestrator:
         if needs.get("kind") == CHAT.HUMAN and not carry.get("asked_human"):
             carry["asked_human"] = True
             asked = self.emit(POLICY.CHAT_NEEDS_HUMAN, EV.AGENT,
-                              {"question": needs.get("question")}, subgoal_id=subgoal_id)
+                              {"question": needs.get("question"), "resume": "conversation", "rows": carry.get("rows") or []}, subgoal_id=subgoal_id)
             more = self.handle(asked, dict(carry, question=needs.get("question")))
             if more and more.get("ok"):
                 return dict(more, replies=replies + list(more.get("replies") or []))
@@ -283,7 +403,7 @@ class Orchestrator:
                   {"say": answer.get("say"), "todos": len(answer.get("todos") or [])},
                   subgoal_id=subgoal_id)
         return {"ok": True, "say": str(answer.get("say") or ""), "card": "none",
-                "replies": replies, "route": "chat"}
+                "replies": replies, "route": "chat", "resolution": answer.get("resolution", "")}
 
     def _brainstorm(self, decision, event, carry) -> Dict[str, Any]:
         subgoal_id = str(event.get("subgoalId") or "")
@@ -295,6 +415,13 @@ class Orchestrator:
                 root=self.root)
         if isinstance(answer, dict) and answer.get("ok"):
             self._learn(answer, "brainstorm", subgoal_id)
+            if carry.get("background") and answer.get("card") in ("questions", "focus"):
+                questions = [r.get("text") for r in answer.get("replies") or [] if r.get("kind") == "text"]
+                if questions:
+                    self.emit(POLICY.CHAT_NEEDS_HUMAN, EV.AGENT,
+                              {"question": questions[-1], "rows": carry.get("rows") or [],
+                               "resume": "conversation"}, subgoal_id=subgoal_id)
+
             self.emit(POLICY.BRAINSTORM_REPLIED, EV.AGENT,
                       {"card": answer.get("card")}, subgoal_id=subgoal_id)
         return dict(answer or {"ok": False, "error": "Bart could not answer"}, route="brainstorm")
@@ -327,15 +454,16 @@ class Orchestrator:
         conversation, and a line in the Terminal, with no model asked."""
         subgoal_id = str(event.get("subgoalId") or "")
         reason = str((event.get("payload") or {}).get("reason") or decision.get("reason") or "")
-        said = ("I built this %d times and it still does not check out: %s. "
-                "Have a look at the preview and the Terminal, and tell me what "
-                "you see or what to change." % (OVERSEER.REPAIR_LIMIT + 1, reason))
-        try:
-            CS.append_bart_message(self.session_id, subgoal_id, said, self.root)
-        except (OSError, ValueError, RuntimeError):
-            pass
+        topic = COMM.subject(self.session_id, self.root, subgoal_id,
+                             (event.get("payload") or {}).get("rows") or [])
+        said = COMM.summary("escalated", topic)
+        COMM.publish(self.session_id, self.root, subgoal_id, "escalated", said)
         BUILD.note_activity(self.session_id, self.root, subgoal_id, "verify",
                             "verification failed %d times; asking you" % (OVERSEER.REPAIR_LIMIT + 1))
+        rows = (event.get("payload") or {}).get("rows") or []
+        self.emit(POLICY.CHAT_NEEDS_HUMAN, EV.AGENT,
+                  {"question": said, "rows": rows, "resume": "build"}, subgoal_id=subgoal_id,
+                  todo_id=rows[0] if rows else "")
         self.emit(POLICY.VERIFY_ESCALATED, EV.AGENT, {"reason": reason, "said": said},
                   subgoal_id=subgoal_id)
         self._attempts(subgoal_id, set_to=0)
@@ -413,6 +541,9 @@ class Orchestrator:
         if isinstance(result, dict) and result.get("ok"):
             self.emit(POLICY.BUILD_STARTED, EV.SYSTEM, {"rows": rows, "repair": attempt},
                       subgoal_id=goal_id, todo_id=row_id)
+            topic = COMM.subject(self.session_id, self.root, goal_id, rows, evidence)
+            COMM.publish(self.session_id, self.root, goal_id, "repair",
+                         COMM.summary("repair", topic, reason), problem=reason)
         return dict(result or {"ok": False}, route="build", repair=attempt)
 
     def build_finished(self, goal_id: str, ended: str, row_ids: Sequence[str],
@@ -442,6 +573,7 @@ class Orchestrator:
         BUILD.note_activity(self.session_id, self.root, goal_id, "verify", "verifying the build")
         verdict = self.agents["verify"](self.session_id, self.root, goal_id, rows,
                                         self.runtime, self.checks)
+        COMM.evidence_to_terminal(self.session_id, self.root, goal_id, (verdict or {}).get("evidence") or {})
         passed = bool(isinstance(verdict, dict) and verdict.get("passed"))
         reason = str((verdict or {}).get("reason") or "")
         BUILD.note_activity(self.session_id, self.root, goal_id, "verify",
@@ -464,11 +596,17 @@ class Orchestrator:
             **({"transcript": [{"role": "user", "text": "Explain the verified result and the next step: " + reason}],
                 "context": json.dumps(CTX.assemble(self.session_id, self.root, outcome)),
                 "background": True} if passed else {})})
-        if passed and isinstance(followed, dict):
-            messages = [str(r.get("text") or "") for r in followed.get("replies") or [] if isinstance(r, dict)]
-            said = "\n\n".join(m for m in messages if m) or str(followed.get("say") or "")
-            if said:
-                CS.append_bart_message(self.session_id, goal_id, said, self.root)
+        if passed:
+            topic = COMM.subject(self.session_id, self.root, goal_id, rows, (verdict or {}).get("evidence"))
+            said = ""
+            if isinstance(followed, dict) and followed.get("ok"):
+                texts = [COMM.plain(r.get("text")) for r in followed.get("replies", []) if r.get("kind") == "text"]
+                said = (texts[-1] if texts and followed.get("route") == "brainstorm"
+                        else COMM.plain(followed.get("say")))
+                if not said:
+                    said = " ".join(COMM.plain(r.get("text")) for r in followed.get("replies", [])
+                                    if r.get("kind") == "text").strip()
+            COMM.publish(self.session_id, self.root, goal_id, "done", said or COMM.summary("done", topic))
         return followed if followed is not None else {"ok": True, "route": "verify",
                                                      "passed": passed, "reason": reason}
 

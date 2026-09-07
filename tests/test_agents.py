@@ -306,7 +306,8 @@ class BuildLoopTests(AgentCase):
                           ("todo_status", ROWS[1])], kinds)
         self.assertEqual(0, orch.state()["attempts"].get(PIECE, 0))
         # The Terminal saw it.
-        said = [l["text"] for l in BUILD.load_activity(self.session, self.root, PIECE)]
+        said = [l["text"] for l in BUILD.load_activity(self.session, self.root, PIECE)
+                if not l["text"].startswith("check evidence:")]
         self.assertEqual(["verifying the build",
                           "verified: every row is done, the run ended clean"], said)
         self.assertEqual(["build.finished", "build.finished > overseer.route",
@@ -338,7 +339,8 @@ class BuildLoopTests(AgentCase):
         self.assertIn("verify.escalated", self.events())
         chat = CS.load_bart_chats(self.session, self.root)[PIECE]
         self.assertEqual("bart", chat[-1]["who"])
-        self.assertIn("3 times and it still does not check out: the page returns 500", chat[-1]["text"])
+        self.assertIn("try a different approach", chat[-1]["text"])
+        self.assertNotIn("3 times", chat[-1]["text"])
         self.assertEqual(0, orch.state()["attempts"][PIECE])
         lines = [l["text"] for l in BUILD.load_activity(self.session, self.root, PIECE)]
         self.assertIn("repair 1 of 2: the page returns 500", lines)

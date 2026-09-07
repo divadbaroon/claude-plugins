@@ -588,14 +588,29 @@ def _goal_page_build_phase(session_id, root, subgoal_id):
     statuses = {"build.started": "building", "verify.started": "checking",
                 "verify.passed": "done", "verify.failed": "failed",
                 "build.repair_requested": "fixing", "verify.escalated": "needs_user",
-                "build.question": "needs_user", "build.failed": "failed",
+                "build.question": "checking", "chat.needs_human": "needs_user",
+                "build.failed": "failed",
                 "build.cancelled": "cancelled"}
     phase = None
+    before_human = None
     rows = []
     edits = {"todo.done_toggled", "todo.text_edited", "todo.removed"}
-    for event in events.read(session_id, root, types=set(statuses) | edits,
+    for event in events.read(session_id, root, types=set(statuses) | edits | {"human.answered"},
                              subgoal_id=subgoal_id, limit=80):
         payload = event.get("payload") or {}
+        if event["type"] == "human.answered":
+            if phase and phase["status"] == "needs_user":
+                phase = before_human
+                rows = phase["todoIds"] if phase else []
+            continue
+        if event["type"] == "chat.needs_human":
+            if not phase or phase["status"] != "needs_user":
+                before_human = phase
+            if not payload.get("rows"):
+                goals, _ = CS.load_goals(session_id, root)
+                piece = GM.by_id(goals, subgoal_id) or {}
+                payload = dict(payload, rows=[r["id"] for r in piece.get("todo_items", [])
+                                             if not r.get("done") and r.get("status") not in ("building", "queued", "asking")])
         if event["type"] in edits:
             # A user's subsequent edit settles that row's old failure/wait.
             # Active work remains owned by its run until the run reports back.

@@ -150,7 +150,11 @@ def goal(gid, title, **fields):
 
 class BuildRunTests(unittest.TestCase):
     def setUp(self):
-        from human_compact.trajectory.agents import overseer
+        from human_compact.trajectory.agents import overseer, chat
+        classify = mock.patch.object(chat, "ask", side_effect=lambda transcript, *a, **kw:
+            {"ok": True, "needs": {"kind": "human_preference", "question": transcript[-1]["text"]}})
+        classify.start()
+        self.addCleanup(classify.stop)
         route = mock.patch.object(overseer, "_model", return_value={})
         route.start()
         self.addCleanup(route.stop)

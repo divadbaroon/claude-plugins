@@ -1,26 +1,12 @@
 /* Alternate rendering only. Every control uses the shared workspace actions. */
 import { h } from "../dom.js";
-import { activeSlice, activeSubgoal, isWithBuilder, hasOpenTodos } from "../store.js";
+import { activeSlice, activeSubgoal, hasOpenTodos, todoPhase, todoHeld, lifecycleOf, TODO_LABELS } from "../store.js";
 import { renderPage } from "../components/page.js";
 import { renderBrainstorm } from "../components/brainstorm.js";
 
-const LABELS = { "": "Not started", queued: "Queued", building: "Building",
-  checking: "Checking", fixing: "Fixing", asking: "Needs user", needs_user: "Needs user",
-  failed: "Failed", done: "Done", cancelled: "Not started" };
+const LABELS = { "": "Not started", cancelled: "Not started", ...TODO_LABELS };
 const BUSY = new Set(["building", "checking", "fixing", "queued"]);
-
-function phaseOf(state) {
-  return state.panesFor === state.activeId ? state.panes?.build?.phase : null;
-}
-
-export function todoPhase(todo, state) {
-  const phase = phaseOf(state);
-  // Run-level checking can follow a row being marked done. Do not display
-  // completion until that run's recorded check has actually passed.
-  if (phase?.todoIds.includes(todo.id) &&
-      ["building", "checking", "fixing", "needs_user", "failed"].includes(phase.status)) return phase.status;
-  return todo.done ? "done" : todo.status || "";
-}
+const phaseOf = lifecycleOf;
 
 export function renderTestPage(state, actions) {
   const page = renderPage(state, actions);
@@ -46,7 +32,7 @@ export function renderTestPage(state, actions) {
   if (tabs && phase && LABELS[phase.status]) {
     tabs.querySelector(".host")?.remove();
     tabs.append(h("span", { class: `execution-status is-${phase.status}`, role: "status",
-      title: phase.reason || LABELS[phase.status] }, LABELS[phase.status]));
+      title: LABELS[phase.status] }, LABELS[phase.status]));
   }
   return page;
 }
@@ -58,7 +44,7 @@ function renderRailTodos(state, actions) {
     h("div", { class: "rail-todos-label", title: activeSubgoal(state)?.title }, "Todos · this subgoal"),
     h("div", { class: "todo-list" }, slice.todos.map(todo => {
       const status = todoPhase(todo, state);
-      const held = isWithBuilder(todo) || BUSY.has(status);
+      const held = todoHeld(todo, state);
       return h("div", { key: todo.id, class: `todo is-${status || "new"}${held ? " is-held" : ""}` },
         h("button", { type: "button", class: "todo-mark", disabled: held,
           "aria-label": todo.done ? "Mark as not done" : "Mark as done",

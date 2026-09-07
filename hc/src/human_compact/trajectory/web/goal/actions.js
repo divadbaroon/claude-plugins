@@ -9,7 +9,7 @@
    the page reads the goal again unless it already draws that revision. */
 
 import {
-  EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder,
+  EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder, workInFlight,
 } from "./store.js";
 
 const PANES_POLL_MS = 2000;
@@ -577,7 +577,7 @@ export function createActions(store, services) {
     const state = get();
     const id = state.activeId;
     const slice = sliceOf(state, id);
-    if (!id || state.building || !hasOpenTodos(slice)) return;
+    if (!id || state.building || workInFlight(state) || !hasOpenTodos(slice)) return;
     set({ building: id, buildNote: null });
     try {
       await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: slice.todos });

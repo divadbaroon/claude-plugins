@@ -41,7 +41,7 @@ PROMPT = [
     "If you cannot answer without knowing something, say which of two",
     "things it is. If it is the reader's own preference or intent -- which",
     "of two reasonable ways they want, what they mean by a word only they",
-    "can define -- set needs.kind to \"human_preference\" and put the one",
+    "can define, an unavailable credential, or a physical/manual action -- set needs.kind to \"human_preference\" and put the one",
     "question in needs.question. If it is a fact about the project that",
     "the directory would show -- which framework, where a file is, how it",
     "runs -- set needs.kind to \"environment\" and name the fact in",
@@ -88,6 +88,8 @@ def normalize(raw: Any) -> Dict[str, Any]:
     if kind not in NEEDS or not question:
         kind, question = "", ""
     out = {"say": say, "todos": todos, "needs": {"kind": kind, "question": question}}
+    if value.get("resolution") in ("resume", "wait", "cancel"):
+        out["resolution"] = value["resolution"]
     updates = CTX.normalize_updates(value.get("contextUpdates"), by="chat")
     if updates:
         out["contextUpdates"] = updates

@@ -71,6 +71,14 @@ class Runtime:
         raise NotImplementedError
 
 
+    def cancel(self, session_id, root, goal_id, row_ids):
+        from .. import build
+        return build.cancel(session_id, root, goal_id, row_ids)
+
+    def answer(self, session_id, root, goal_id, row_id, text):
+        from .. import build
+        return build.answer(session_id, root, goal_id, row_id, text)
+
     def verify_artifact(self, criteria, preview):
         raise NotImplementedError
 
