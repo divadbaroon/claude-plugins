@@ -40,7 +40,8 @@ class CommunicationTests(AgentCase):
         self.assertEqual(2, len(self.messages()))
         self.assertIn('Changing the threshold', self.messages()[-1]['text'])
         self.assertNotIn('locator', str(self.messages()))
-        self.assertIn('#threshold', str(BUILD.load_activity(self.session, self.root, PIECE)))
+        self.assertNotIn('#threshold', str(BUILD.load_activity(self.session, self.root, PIECE)))
+        self.assertIn('#threshold', str(EV.read(self.session, self.root, types=['verify.failed'])))
         COMM.publish(self.session, self.root, PIECE, 'done', 'Duplicate poll')
         self.assertEqual(2, len(self.messages()))
 

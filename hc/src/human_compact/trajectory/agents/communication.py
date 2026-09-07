@@ -5,6 +5,7 @@ import re
 
 from .. import chat_state as CS, goals as GM, build as BUILD
 from . import events as EV
+from . import presentation as PUBLIC
 
 # Mechanics belong in Terminal, including provider errors and browser locators.
 TECHNICAL = re.compile(r'(?i)(https?://|HTTP\s*\d|playwright|locator|traceback|exit.code|'
@@ -13,7 +14,7 @@ TECHNICAL = re.compile(r'(?i)(https?://|HTTP\s*\d|playwright|locator|traceback|e
 
 def plain(value):
     text = ' '.join(str(value or '').split())
-    return text[:300].rstrip(' .') if text and not TECHNICAL.search(text) else ''
+    return PUBLIC.text(text, 300).rstrip(' .') if text and not TECHNICAL.search(text) else ''
 
 
 def subject(session, root, goal, rows, evidence=None):
@@ -49,11 +50,45 @@ def publish(session, root, goal, kind, text, problem=''):
     return CS.append_bart_message(session, goal, text, root, message_id='sys-life-' + key)
 
 
+def check_label(check):
+    kind=check.get("kind")
+    if kind in ("control", "control_value"):
+        target=f"{check.get('name', 'Requested')} {check.get('role', 'control')}"
+        if kind=="control": return target + (" is visible" if check.get("visible",True) else " is hidden")
+        suffix={"empty":" is empty", "nonempty":" has a value", "equals":" has the expected value", "contains":" contains the expected value"}
+        if check.get("from_file"): return target + " matches " + check["from_file"]
+        return target+suffix.get(check.get("match"), " has the expected value")
+    if kind=="layout": return " and ".join(c.get("name", "control") for c in check.get("controls", []))+" are side by side"
+    if kind=="text": return "Page shows “"+PUBLIC.text(check.get("text"),100)+"”"
+    return str(check.get("path") or "File") + {"file_exists":" exists", "file_nonempty":" is not empty", "file":" contains the expected content"}.get(kind, " satisfies its check")
+
+
 def evidence_to_terminal(session, root, goal, evidence):
-    text = json.dumps(evidence, ensure_ascii=False, indent=2, default=str)
-    for line in text[:20000].splitlines():
-        for start in range(0, max(1, len(line)), 180):
-            BUILD.note_activity(session, root, goal, 'verify', 'check evidence: ' + line[start:start+180])
+    # Full observations remain in the existing debugger and event store.
+    from ... import telemetry
+    with telemetry.operation("verification.evidence", "processing") as op:
+        op.snapshot("processing_output", evidence)
+    artifact=evidence.get("artifact") or {}
+    for result in (artifact.get("page") or {}).get("checks", []):
+        BUILD.note_activity(session,root,goal,"verify",("✓ " if result.get("passed") else "✗ ")+check_label(result.get("expected") or {}))
+    for result in artifact.get("files", []):
+        BUILD.note_activity(session,root,goal,"verify",("✓ " if result.get("passed") else "✗ ")+check_label(result.get("expected") or {"path":result.get("path")}))
+    startup=evidence.get("preview_startup") or {}
+    if startup:
+        BUILD.note_activity(session,root,goal,"verify", "Started preview" if startup.get("ok") else "Preview startup failed: "+PUBLIC.text(startup.get("error") or startup.get("reason"),160))
+
+
+def terminal_lines(lines):
+    """Product projection; historical raw evidence remains in developer storage."""
+    out=[]
+    for line in lines:
+        text=str(line.get("text") or "")
+        if text.startswith("check evidence:") or text.lstrip().startswith(("{", "}", "[", "]")): continue
+        text=re.sub(r"repair \d+ of \d+:\s*", "Fixing: ", text, flags=re.I)
+        text=re.sub(r"verification failed \d+ times; asking you", "Checks still fail; your input is needed", text)
+        text=PUBLIC.text(text,300)
+        if text: out.append(dict(line,text=text))
+    return out
 
 
 def pending(session, root, goal):

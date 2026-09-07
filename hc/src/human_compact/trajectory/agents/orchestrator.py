@@ -28,6 +28,7 @@ from .. import goals as GM
 from ..secure_io import atomic_write_json
 from . import brainstorm as BRAINSTORM_AGENT
 from . import chat as CHAT
+from . import presentation as PUBLIC
 from . import context as CTX
 from . import events as EV
 from . import overseer as OVERSEER
@@ -156,6 +157,8 @@ class Orchestrator:
             self.overseer_calls += 1
             state = dict(self.state(), **CTX.assemble(self.session_id, self.root, event, carry))
             decision = self.agents.get("overseer", OVERSEER.route)(event, state, root=self.root)
+        if event["type"] == POLICY.BART_MESSAGE and PUBLIC.smalltalk((event.get("payload") or {}).get("text")):
+            decision = dict(decision, action=OVERSEER.CHAT, targetSubgoalId=event.get("subgoalId", ""))
         self.emit(POLICY.OVERSEER_ROUTED, EV.SYSTEM,
                   {"event": event["type"], "action": decision["action"],
                    "reason": decision["reason"]},
@@ -225,7 +228,7 @@ class Orchestrator:
                          "subgoal": str(held.get("subgoal") or "")}
                 event = self.emit(POLICY.BART_MESSAGE, EV.USER, {"text": text},
                                   subgoal_id=subgoal_id)
-                result = self._answer_pending(event, carry)
+                result = None if PUBLIC.smalltalk(text) else self._answer_pending(event, carry)
                 if result is None:
                     result = self.handle(event, carry)
             finally:
@@ -382,6 +385,19 @@ class Orchestrator:
             error = (answer or {}).get("error") if isinstance(answer, dict) else ""
             return {"ok": False, "error": str(error or "Bart could not answer"), "route": "chat"}
         self._learn(answer, "chat", subgoal_id)
+        last = POLICY.last_user_text(carry["transcript"])
+        answer = dict(answer, say=PUBLIC.text(answer.get("say"), CHAT.MAX_SAY, PUBLIC.debug_requested(last)))
+        if PUBLIC.smalltalk(last):
+            answer.update(todos=[], needs={})
+        goals, _ = CS.load_goals(self.session_id, self.root)
+        piece = GM.by_id(goals, subgoal_id) or {}
+        existing = {PUBLIC.equivalent(r.get("text")) for r in piece.get("todo_items", [])}
+        unique = []
+        for proposed in answer.get("todos") or []:
+            key = PUBLIC.equivalent(proposed)
+            if key and key not in existing:
+                unique.append(PUBLIC.text(proposed, 400)); existing.add(key)
+        answer["todos"] = unique
         needs = answer.get("needs") or {}
         replies = REPLIES.from_chat(answer)
         if needs.get("kind") == CHAT.HUMAN and not carry.get("asked_human"):
@@ -569,7 +585,7 @@ class Orchestrator:
                 % (reason, ", ".join(rows) or row_id))
         note += "\nVerification evidence: " + json.dumps(carry.get("evidence", payload.get("evidence")) or {}, ensure_ascii=False)
         BUILD.note_activity(self.session_id, self.root, goal_id, "verify",
-                            "repair %d of %d: %s" % (attempt, OVERSEER.REPAIR_LIMIT, reason))
+                            "Fixing: " + PUBLIC.text(reason, 160))
         trace.phase("repair.started")
         self.emit(POLICY.REPAIR_REQUESTED, EV.AGENT, {"attempt": attempt, "reason": reason,
                                                         "rows": rows}, subgoal_id=goal_id, todo_id=row_id)
@@ -608,7 +624,7 @@ class Orchestrator:
         run_id = str(carry.get("run_id") or event.get("runId") or "")
         trace.phase("verifier.started")
         self.emit(POLICY.VERIFY_STARTED, EV.SYSTEM, {"rows": rows}, subgoal_id=goal_id, run_id=run_id)
-        BUILD.note_activity(self.session_id, self.root, goal_id, "verify", "verifying the build")
+        BUILD.note_activity(self.session_id, self.root, goal_id, "verify", "Checking the result")
         verdict = self.agents["verify"](self.session_id, self.root, goal_id, rows,
                                         self.runtime, self.checks)
         COMM.evidence_to_terminal(self.session_id, self.root, goal_id, (verdict or {}).get("evidence") or {})

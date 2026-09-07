@@ -117,7 +117,7 @@ class FastWorkspaceTests(AgentCase):
         (self.project / 'Procfile').write_text('web: ' + shlex.quote(sys.executable) + ' serve.py\n')
         goals, important = CS.load_goals(self.session, self.root)
         for row in GM.by_id(goals, PIECE)['todo_items']:
-            row.update(status='done', done=True, acceptance={'criterion': 'Export is visible', 'checks': [{'kind': 'control', 'role': 'button', 'name': 'Export'}]})
+            row.update(status='done', done=True, acceptance={'criterion': 'Export is visible', 'coverage': 'complete', 'checks': [{'kind': 'control', 'role': 'button', 'name': 'Export'}]})
         CS.save_goals(self.session, goals, important, self.root)
         rt = runtime.LocalRuntime(str(self.project), self.root)
         try:

@@ -1893,18 +1893,29 @@ def bart_messages(value: Any) -> List[Dict[str, Any]]:
     a message of that shape is dropped rather than refused, the way a goal
     file with a strange row in it is read past the row.
     """
+    from .agents import presentation as PUBLIC
     out: List[Dict[str, Any]] = []
+    last_user = ""
     for row in value if isinstance(value, list) else []:
         if not isinstance(row, dict):
             continue
         who = str(row.get("who") or "")
         kind = str(row.get("kind") or "")
-        text = str(row.get("text") or "").strip()[:BART_TEXT_LIMIT]
+        raw_text = str(row.get("text") or "").strip()
+        if who == "you": last_user = raw_text
+        text = (PUBLIC.text(raw_text, BART_TEXT_LIMIT, allow_ids=PUBLIC.debug_requested(last_user))
+                if who == "bart" else raw_text[:BART_TEXT_LIMIT])
         if who not in BART_WHO or kind not in BART_KINDS or not text:
             continue
         message: Dict[str, Any] = {
-            "id": str(row.get("id") or "")[:40] or os.urandom(4).hex(),
+            "id": str(row.get("id") or "")[:128] or os.urandom(4).hex(),
             "who": who, "kind": kind, "text": text}
+        for field in ("createdAt", "turnId"):
+            if row.get(field): message[field] = str(row[field])[:128]
+        if row.get("channel") in ("conversation", "lifecycle"):
+            message["channel"] = row["channel"]
+        elif message["id"].startswith("sys-"):
+            message["channel"] = "lifecycle"
         if kind == "proposal":
             message["added"] = bool(row.get("added"))
             if row.get("rejected"):
@@ -2233,6 +2244,8 @@ def append_bart_message(session_id, goal_id, text, root=None, message_id=None):
         message_id = message_id or "sys-" + uuid.uuid4().hex[:12]
         if any(m.get("id") == message_id for m in messages):
             return messages
-        messages.append({"id": message_id, "who": "bart",
-                         "kind": "text", "text": str(text)[:4000]})
+        from .agents.presentation import text as public_text
+        messages.append({"id": message_id, "who": "bart", "channel": "lifecycle",
+                         "createdAt": datetime.now(timezone.utc).isoformat(),
+                         "kind": "text", "text": public_text(text, 4000)})
         return save_bart_chat(session_id, goal_id, messages, root)

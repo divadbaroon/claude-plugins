@@ -3,7 +3,7 @@
    so and is left alone until it comes back. */
 
 import { h } from "../dom.js";
-import { activeSlice, hasOpenTodos, anyWithBuilder, todoHeld, todoPhase, TODO_LABELS, workInFlight } from "../store.js";
+import { activeSlice, hasOpenTodos, anyWithBuilder, todoHeld, todoPhase, TODO_LABELS, workInFlight, lifecycleOf } from "../store.js";
 
 export function renderTodos(state, actions) {
   const slice = activeSlice(state);
@@ -15,7 +15,6 @@ export function renderTodos(state, actions) {
       h("button", {
         type: "button", class: "ghost-btn", onclick: actions.toggleTodosPane,
       }, "Hide todos")),
-    renderActivity(state, slice),
     h("div", { class: "todo-list" },
       slice.todos.map((todo) => renderTodo(todo, actions, state)),
       h("div", { key: "todo-new", class: "todo todo-new" },
@@ -41,7 +40,7 @@ export function renderTodos(state, actions) {
         }, state.buildNote.text),
         h("button", {
           type: "button",
-          class: "build-btn",
+          class: "build-btn is-secondary",
           disabled: !canBuild,
           onclick: actions.buildAll,
         }, building ? "Building…" : "Build all",
@@ -55,7 +54,7 @@ function renderTodo(todo, actions, state) {
   const label = TODO_LABELS[status];
   const classes = ["todo", done && "is-done", held && "is-held",
     status === "failed" && "is-failed"].filter(Boolean).join(" ");
-  return h("div", { key: todo.id, class: classes },
+  return h("div", { key: todo.id, class: "todo-entry" }, h("div", { class: classes },
     h("button", {
       type: "button",
       class: "todo-mark",
@@ -64,31 +63,32 @@ function renderTodo(todo, actions, state) {
       disabled: held || null,
       onclick: () => actions.toggleTodo(todo.id),
     }, done ? "✓" : "–"),
-    h("input", {
-      class: "todo-text",
-      type: "text",
+    h("textarea", {
+      class: "todo-text", rows: "1",
       spellcheck: "false",
       "aria-label": "Todo",
       readonly: held || null,
       value: todo.text,
-      oninput: (event) => actions.editTodo(todo.id, event.target.value),
+      oninput: (event) => actions.editTodo(todo.id, event.target.value.replace(/[\r\n]+/g," ")),
+      onkeydown: event => { if (event.key === "Enter") { event.preventDefault(); event.target.blur(); } },
     }),
     label && h("span", { class: `todo-status is-${status}` }, label),
+    !held && !done && h("button", {type:"button", class:"todo-build", disabled: state.building || workInFlight(state) || null,
+      "aria-label":`Build todo: ${todo.text}`, onclick:()=>actions.buildTodo(todo.id)}, "Build ›"),
     !held && h("button", {
       type: "button",
       class: "todo-remove",
       "aria-label": "Remove todo",
       onclick: () => actions.removeTodo(todo.id),
-    }, "×"));
+    }, "×")), renderActivity(state, todo));
 }
 
-function renderActivity(state, slice) {
-  const phase = slice.todos.map(todo => todoPhase(todo, state)).find(p => ["building", "checking", "fixing"].includes(p));
-  if (!phase) return null;
-  const lines = state.panesFor === state.activeId ? state.panes?.build?.lines || [] : [];
-  // Tool summaries are factual, already bounded by the build recorder. Model
-  // prose, estimates and internal verifier evidence stay in Terminal.
-  const latest = [...lines].reverse().find(line => line.kind === "tool");
-  return h("p", { class: "build-note", role: "status", "aria-label": "Build activity" },
-    `${TODO_LABELS[phase] || phase}${phase === "building" && latest ? " · " + latest.text.slice(0, 160) : ""}`);
+function renderActivity(state, todo) {
+  const phase=todoPhase(todo,state);
+  if (!["building","checking","fixing"].includes(phase)) return null;
+  const lines=state.panesFor===state.activeId ? state.panes?.build?.lines || [] : [];
+  const useful=lines.filter(line=>["tool","verify","error"].includes(line.kind) && (!line.todoIds?.length || line.todoIds.includes(todo.id)) && (!lifecycleOf(state)?.startedAt || Date.parse(line.at)>=Date.parse(lifecycleOf(state).startedAt)));
+  const latest=[...new Set(useful.map(l=>l.text))].slice(-4);
+  return h("div", {class:"todo-activity", role:"status", "aria-label":"Build activity"},
+    h("div",{},TODO_LABELS[phase]), latest.map(text=>h("div",{},text)));
 }

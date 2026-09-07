@@ -9,7 +9,7 @@
    the page reads the goal again unless it already draws that revision. */
 
 import {
-  EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder, workInFlight,
+  EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder, workInFlight, todoHeld, completionHeld,
 } from "./store.js";
 
 const PANES_POLL_MS = 2000;
@@ -33,13 +33,12 @@ export function createActions(store, services) {
         ...(before.added ? { added: true } : {}),
         ...(before.rejected ? { rejected: true } : {}) });
     }
-    return [...messages.values()];
+    return [...messages.values()].sort((a,b)=>(Date.parse(a.createdAt)||0)-(Date.parse(b.createdAt)||0));
   }
-  let seq = 0;
+
   // Stamped per page load: a conversation read back from the server
   // carries the ids it was saved with, and a new message must not take one.
-  const stamp = crypto.randomUUID();
-  const nextId = (prefix) => `${prefix}-${stamp}-${(seq += 1)}`;
+  const nextId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
   const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
   let signInRun = 0;               // the sign-in attempt that is current
   let wanted = "";                 // the goal the address names, if any
@@ -431,7 +430,7 @@ export function createActions(store, services) {
     const slice = sliceOf(state, id);
     const text = slice.draft.trim();
     if (!id || !text || slice.thinking) return;
-    const mine = { id: nextId("m"), who: "you", kind: "text", text };
+    const mine = { id: nextId("m"), who: "you", kind: "text", text, channel:"conversation", createdAt:new Date().toISOString() };
     changeSlice(id, (current) => ({ draft: "", thinking: true, chat: [...current.chat, mine] }));
     keepChat(id);
     let reply;
@@ -452,7 +451,7 @@ export function createActions(store, services) {
       return;
     }
     const answers = reply.replies.map((r) => ({
-      id: nextId("m"), who: "bart", kind: r.kind, text: r.text,
+      id: nextId("m"), who: "bart", kind: r.kind, text: r.text, channel:"conversation", turnId:mine.id, createdAt:new Date().toISOString(),
       ...(r.kind === "proposal" ? { added: false } : {}),
     }));
     changeSlice(id, (current) => ({ thinking: false, chat: [...current.chat, ...answers] }));
@@ -512,7 +511,7 @@ export function createActions(store, services) {
   function toggleTodo(todoId) {
     const id = get().activeId;
     const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo || isWithBuilder(todo)) return;
+    if (!todo || todoHeld(todo, get())) return;
     const done = !todo.done;
     changeSlice(id, (current) => ({
       todos: current.todos.map((t) => (t.id === todoId ? { ...t, done, status: done ? "done" : "" } : t)),
@@ -525,7 +524,7 @@ export function createActions(store, services) {
   function editTodo(todoId, text) {
     const id = get().activeId;
     const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo || isWithBuilder(todo)) return;
+    if (!todo || todoHeld(todo, get())) return;
     changeSlice(id, (current) => ({
       todos: current.todos.map((t) => (t.id === todoId ? { ...t, text } : t)),
     }));
@@ -541,7 +540,7 @@ export function createActions(store, services) {
   function removeTodo(todoId) {
     const id = get().activeId;
     const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo || isWithBuilder(todo)) return;
+    if (!todo || todoHeld(todo, get())) return;
     const key = `${id}/${todoId}`;
     clearTimeout(todoTimers.get(key));
     todoTimers.delete(key);
@@ -577,14 +576,15 @@ export function createActions(store, services) {
   // them from there is the server's to say: it marks them as it takes them,
   // and the page reads the goal again to show it. A build that cannot start
   // says why, under the button.
-  async function buildAll() {
+  async function buildAll(todoId = null) {
     const state = get();
     const id = state.activeId;
     const slice = sliceOf(state, id);
     if (!id || state.building || workInFlight(state) || !hasOpenTodos(slice)) return;
-    set({ building: id, buildNote: null });
+    const rows = todoId ? slice.todos.filter(t => t.id === todoId) : slice.todos;
+    set({ building: id, buildingIds: rows.filter(t=>!t.done).map(t=>t.id), buildNote: null });
     try {
-      await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: slice.todos });
+      await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: rows });
     } catch (error) {
       set({ building: null, buildNote: { text: String((error && error.message) || error), error: true } });
       return;
@@ -618,6 +618,12 @@ export function createActions(store, services) {
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editDraft, sendMessage, acceptProposal, rejectProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
-    buildAll,
+    buildAll: () => buildAll(), buildTodo: id => buildAll(id),
+    async toggleGoalCompletion(id) {
+      const state=get(), goal=id===state.goal?.id ? state.goal : state.subgoals.find(s=>s.id===id);
+      if (!goal || completionHeld(state,id)) return;
+      try { await services.setGoalStatus(id, goal.status==="completed"?"active":"completed"); await refresh(); }
+      catch (error) { set({buildNote:{error:true,text:error.message}}); }
+    },
   };
 }

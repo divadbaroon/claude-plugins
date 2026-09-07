@@ -317,3 +317,31 @@ input, textarea { outline: none; }
 .dataset-preview { overflow-x: auto; max-width: 100%; }
 .dataset-preview table { border-collapse: collapse; font-size: 12px; text-align: left; }
 .dataset-preview th, .dataset-preview td { padding: 6px 12px; border-bottom: 1px solid var(--line, #eee); max-width: 240px; overflow-wrap: anywhere; }
+
+/* Local resizers and naturally wrapping TODOs in the existing layout. */
+.columns.has-todos { grid-template-columns:minmax(0,var(--bart-fr,1fr)) 1px minmax(0,var(--todo-fr,1fr)); }
+.resize-divider { position:relative; touch-action:none; cursor:col-resize; flex:none; width:1px; }
+.resize-divider::after { content:""; position:absolute; inset:0 -6px; z-index:4; }
+.resize-divider:focus-visible { outline:2px solid var(--ink); }
+.resizing, .resizing * { user-select:none!important; cursor:col-resize!important; }
+.resizing iframe { pointer-events:none; }
+.todo { align-items:flex-start; gap:8px; }
+textarea.todo-text { display:block; resize:none; overflow:hidden; overflow-wrap:anywhere; white-space:pre-wrap; height:auto; }
+.todo-mark,.todo-remove,.todo-status,.todo-build { margin-top:9px; }
+.todo-build { flex:none; padding:0; border:0; background:none; color:var(--ink); font:inherit; font-size:12px; cursor:pointer; white-space:nowrap; }
+.todo-build:disabled { opacity:.4; cursor:default; }
+.todo-activity { margin:0 0 12px 22px; padding-top:6px; border-top:1px solid var(--bd); color:var(--fnt); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+.build-btn.is-secondary { background:none; color:var(--fnt); font-size:12px; padding:6px 0; }
+.sub-title { flex:1; min-width:0; border:0; padding:0; background:none; text-align:left; cursor:pointer; font:inherit; overflow-wrap:anywhere; }
+button.sub-mark { flex:none; padding:0; background:none; cursor:pointer; color:var(--ink); font-size:12px; }
+button.sub-mark:disabled { cursor:default; opacity:.4; }
+.goal-complete { white-space:nowrap; margin-left:auto; }
+@media(max-width:700px) {
+ .resize-divider { display:none; }
+ .columns.has-todos { display:flex; flex-direction:column; overflow:auto; }
+ .brainstorm,.todos { flex:1 0 auto; min-height:250px; }
+ .goal-complete { font-size:11px; }
+}
+
+.term-section { font-size:11px; letter-spacing:.12em; color:var(--fnt); margin-bottom:12px; }
+.preview-output { border-top:1px solid var(--bd); margin-top:24px; padding-top:16px; }

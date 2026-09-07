@@ -701,7 +701,9 @@ def note_activity(session_id: str, root: Optional[Path], goal_id: str,
     if lines and lines[-1].get("kind") == kind and lines[-1].get("text") == text:
         return False
     at = _now()
-    lines.append({"at": at, "kind": kind, "text": text})
+    record = load_run(session_id, root, goal_id) or {}
+    lines.append({"at": at, "kind": kind, "text": text,
+                  "todoIds": list(record.get("verification_rows") or record.get("picked") or [])})
     path = _activity_path(session_id, root, goal_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, {"lines": lines[-ACTIVITY_KEEP:]})
@@ -1982,11 +1984,12 @@ def prefer_quick(rows) -> bool:
         return override == "quick"
     if not 1 <= len(rows) <= 3:
         return False
-    risky = re.compile(r"\b(auth\w*|security|credential\w*|secret\w*|migrat\w*|refactor\w*|architecture|delete|destructive|deployment|cross.repo|dependency|dependencies|database|payment\w*)\b", re.I)
+    risky = re.compile(r"\b(auth\w*|security|credential\w*|secret\w*|migrat\w*|refactor\w*|architecture|rewrite|redesign|entire|everything|investigate|explore|research|figure out|delete|destructive|deployment|cross.repo|dependency|dependencies|database|payment\w*)\b", re.I)
     bounded = re.compile(r"\b(dropdown|slider|button|label\w*|layout|render|display|timeline|local dataset|prepared dataset|synthetic dataset|checkbox|input|css|html)\b", re.I)
-    return all(0 < len(str(r.get("text") or "")) <= 500
+    return all(0 < len(str(r.get("text") or "")) <= (300 if len(rows) == 1 else 500)
                and not risky.search(str(r.get("text") or ""))
-               and bounded.search(str(r.get("text") or "")) for r in rows)
+               and not re.fullmatch(r"(?:fix|do|finish|improve|change|build|make) (?:it|this|that)(?: better)?[.!]?", str(r.get("text") or "").strip(), re.I)
+               and (len(rows) == 1 or bounded.search(str(r.get("text") or ""))) for r in rows)
 
 
 def start(session_id: str, root: Optional[Path], goal_id: str,

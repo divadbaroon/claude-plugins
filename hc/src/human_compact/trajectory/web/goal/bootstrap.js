@@ -5,6 +5,7 @@ import { createStore, initialState, activeSlice } from "./store.js";
 import { services } from "./services.js";
 import { createActions } from "./actions.js";
 import { mount } from "./dom.js";
+import { fitLayout } from "./layout.js";
 
 export function startWorkspace(renderPage) {
 const host = document.getElementById("app");
@@ -15,6 +16,7 @@ let feedMark = "";
 
 function draw(state) {
   mount(host, renderPage(state, actions));
+  fitLayout(host);
   document.title = state.goal ? `Engelbart · ${state.goal.title}` : "Engelbart";
   // The feed follows its newest message, and opens on it; a reader who has
   // scrolled up to read is left where they are until one arrives.
@@ -33,6 +35,8 @@ function draw(state) {
   }
 }
 
+new ResizeObserver(() => fitLayout(host)).observe(host);
+window.addEventListener("resize", () => fitLayout(host));
 store.subscribe(draw);
 draw(store.get());
 actions.boot();

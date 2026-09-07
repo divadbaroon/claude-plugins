@@ -1627,6 +1627,21 @@ class RestartCheckTests(BuildRunTests):
         self.assertIsNone(BUILD.restart_in("restart it, I think"))
         self.assertEqual([], BUILD.directives('{"restart": false}'))
 
+    def test_fresh_verifier_preview_does_not_create_a_restart_model_pass(self):
+        self.on()
+        with mock.patch.object(BUILD, "relevant_live_process", return_value=False) as live:
+            def verified(run, ended):
+                live.return_value = True  # Verifier just started the newly built app.
+                return False
+            with mock.patch.object(BUILD, "_after_finish", side_effect=verified), \
+                 mock.patch.object(BUILD.Run, "_check") as check:
+                run = self.build()
+                run.thread.join(10)
+                self.assertFalse(run.thread.is_alive())
+                self.assertFalse(run.had_live_process)
+                check.assert_not_called()
+                self.assertEqual(1, len(self.prompts()))
+
     def test_a_finished_build_is_asked_in_its_own_session_on_the_check_model(self):
         self.on("yes")
         run = self.build()

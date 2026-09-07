@@ -72,7 +72,7 @@ def _verify(session_id, root, goal_id, row_ids, runtime, checks) -> Dict[str, An
     if runtime is not None:
         state = _preview(runtime, session_id)
         from .acceptance import normalize
-        web = any(c.get("kind") in ("control", "text")
+        web = any(c.get("kind") in ("control", "control_value", "text", "layout")
                   for a in criteria.values() for c in (normalize(a) or {}).get("checks", []))
         if web and not state.get("url") and callable(getattr(runtime, "ensure_preview", None)):
             try:

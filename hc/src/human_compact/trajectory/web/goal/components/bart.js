@@ -2,6 +2,7 @@
    are shown. */
 
 import { h } from "../dom.js";
+import { separator } from "../layout.js";
 import { activeSlice, todosShown } from "../store.js";
 import { renderBrainstorm } from "./brainstorm.js";
 import { renderTodos } from "./todos.js";
@@ -12,6 +13,6 @@ export function renderBart(state, actions) {
     h("div", { class: "panel" },
       h("div", { class: withTodos ? "columns has-todos" : "columns" },
         renderBrainstorm(state, actions, withTodos),
-        withTodos && h("div", { key: "divider", class: "divider" }),
+        withTodos && separator("split", "Conversation and Todos width"),
         withTodos && renderTodos(state, actions))));
 }

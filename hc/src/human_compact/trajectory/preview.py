@@ -511,6 +511,8 @@ class Proc:
         self.healthy = False
         self.embeddable = True
         self.probed_at = 0.0
+        self.liveness_at = 0.0
+        self.http_interval = 2.0
         # Whether a page was the point. A run somebody started to see the
         # program's output is doing its job when it prints; a run somebody
         # pressed "Show UI" for and which never serves anything is not
@@ -568,6 +570,10 @@ class Proc:
     def _keep(self, line: str) -> None:
         line = _clean(line)
         if not line:
+            return
+        # Suppress only attributable health traffic and harmless favicon 404s.
+        # Untagged application requests/stdout/stderr remain untouched.
+        if "Engelbart-Preview-Health/1" in line or re.search(r'(?:GET|HEAD) /favicon\.ico(?:\?[^ ]*)? HTTP/[^ ]+"? 404', line):
             return
         self.lines.append(line)
         if not self.url:
@@ -660,20 +666,45 @@ class Proc:
         """Ask the address whether anything is there, and whether the pane
         may embed it. Both are re-checked rather than remembered: a dev
         server that fell over still has its URL in the scrollback."""
-        if not self.url or (not force and time.time() - self.probed_at < 2.0):
+        if self.process is not None and not self.alive():
+            self.healthy = False
             return
-        self.probed_at = time.time()
-        request = urllib.request.Request(self.url, method="GET")
+        if not self.url: return
+        now = time.time()
+        if self.healthy and not force and now-self.probed_at < self.http_interval:
+            if now-self.liveness_at >= 2.0:
+                self.liveness_at = now
+                from urllib.parse import urlparse
+                import socket
+                parsed=urlparse(self.url)
+                try:
+                    with socket.create_connection((parsed.hostname, parsed.port or 80), timeout=.3): pass
+                except OSError:
+                    self.healthy=False
+                    self.http_interval=2.0
+            return
+        if not force and now-self.probed_at < 2.0: return
+        self.probed_at = now
+        request = urllib.request.Request(self.url, method="HEAD", headers={"User-Agent":"Engelbart-Preview-Health/1"})
         try:
             with urllib.request.urlopen(request, timeout=PROBE_TIMEOUT_S) as answer:
                 headers = answer.headers
                 self.healthy = True
         except urllib.error.HTTPError as exc:
             headers, self.healthy = exc.headers, False
+            code=exc.code
             exc.close()
+            if code in (405,501):
+                try:
+                    fallback=urllib.request.Request(self.url,headers={"User-Agent":"Engelbart-Preview-Health/1"})
+                    with urllib.request.urlopen(fallback,timeout=PROBE_TIMEOUT_S) as answer:
+                        headers, self.healthy=answer.headers, True
+                except Exception:
+                    self.healthy=False
         except Exception:                              # noqa: BLE001
             self.healthy, self.embeddable = False, self.embeddable
             return
+        self.http_interval = min(120.0, max(60.0,self.http_interval*2)) if self.healthy else 2.0
         deny = str(headers.get("X-Frame-Options") or "").lower()
         policy = str(headers.get("Content-Security-Policy") or "").lower()
         frames = re.search(r"frame-ancestors([^;]*)", policy)
