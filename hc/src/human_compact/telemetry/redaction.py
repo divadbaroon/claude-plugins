@@ -180,6 +180,16 @@ def redact(value: Any, secrets: Optional[Iterable[str]] = None,
         return {"[unredactable]": str(exc)[:200]}
 
 
+def _error_attribute(error, name):
+    # Some exceptions (notably HTTPError on Python 3.9) delegate missing
+    # attributes to a response stream that may not exist. Telemetry must
+    # still preserve the original error instead of raising another one.
+    try:
+        return getattr(error, name, None)
+    except Exception:
+        return None
+
+
 def sanitize_error(error: Any, secrets: Optional[Iterable[str]] = None,
                    stack: bool = False, env: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
     """The parts of an error the record may hold. The message is redacted
@@ -198,9 +208,9 @@ def sanitize_error(error: Any, secrets: Optional[Iterable[str]] = None,
         message = str(error)
     out: Dict[str, Any] = {"name": name[:80],
                            "message": redact_string(message, known, 500)}
-    status = getattr(error, "status_code", None)
+    status = _error_attribute(error, "status_code")
     if status is None:
-        code = getattr(error, "code", None)
+        code = _error_attribute(error, "code")
         if isinstance(code, int) and not isinstance(code, bool):
             status = code
     if isinstance(error, dict):
@@ -210,12 +220,12 @@ def sanitize_error(error: Any, secrets: Optional[Iterable[str]] = None,
             out["status_code"] = int(status)
         except (TypeError, ValueError):
             out["status_code"] = 0
-    code = getattr(error, "code", None)
+    code = _error_attribute(error, "code")
     if isinstance(error, dict):
         code = error.get("code")
     if isinstance(code, str) and code:
         out["code"] = code[:80]
-    detail = getattr(error, "detail", None)
+    detail = _error_attribute(error, "detail")
     if isinstance(error, dict):
         detail = error.get("detail")
     if detail is not None:

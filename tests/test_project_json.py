@@ -52,6 +52,10 @@ class ProjectFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        # Persistence tests must not launch detached model workers.
+        analyzer = mock.patch.object(ui, "_request_analysis")
+        analyzer.start()
+        self.addCleanup(analyzer.stop)
         self.root = Path(self.tmp.name)
         self.project = self.root / "work" / "myrepo"
         self.project.mkdir(parents=True)

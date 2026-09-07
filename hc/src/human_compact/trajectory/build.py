@@ -1366,13 +1366,15 @@ class Run:
         env.pop("CLAUDECODE", None)
         log_dir = _builds_dir(self.session_id, self.root)
         log_dir.mkdir(parents=True, exist_ok=True)
-        log = open(log_dir / f"{self.goal_id}.log", "a", encoding="utf-8")
         if not resume:
             _open_watch_log(self.session_id, self.root, self.goal_id)
-        self.process = subprocess.Popen(
-            self._command(message, resume, model, effort), cwd=self.cwd,
-            env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=log, text=True, close_fds=True, **detached_popen_kwargs())
+        # Popen inherits its own stderr descriptor; close the parent's copy
+        # even when spawning fails.
+        with open(log_dir / f"{self.goal_id}.log", "a", encoding="utf-8") as log:
+            self.process = subprocess.Popen(
+                self._command(message, resume, model, effort), cwd=self.cwd,
+                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=log, text=True, close_fds=True, **detached_popen_kwargs())
         self.asked = None
         self.spawned_at = time.time()
         self.phase = phase
@@ -1417,8 +1419,9 @@ class Run:
 
     def _read(self) -> None:
         assert self.process and self.process.stdout
+        process = self.process
         try:
-            for line in self.process.stdout:
+            for line in process.stdout:
                 line = line.strip()
                 if not line:
                     continue
@@ -1443,7 +1446,8 @@ class Run:
                 self._fold(_stream_text(event))
                 self._estimate(_stream_thinking(event))
         finally:
-            code = self.process.wait()
+            process.stdout.close()
+            code = process.wait()
             if self.phase == "check":
                 self._finish_check(code)
             else:

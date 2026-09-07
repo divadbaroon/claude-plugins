@@ -21,12 +21,16 @@ PLUGIN_HOOKS = HC_SRC / "human_compact" / "assets" / "plugin" / "hooks"
 VAULT_HOOK_EVENTS = {"SessionStart", "PreCompact", "PostCompact", "SessionEnd"}
 
 
-CHAT_HOOK = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"'
+CHAT_HOOK = ["node", "${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"]
+
+
+def argv(entry):
+    return [entry["command"], *entry.get("args", [])]
 
 
 def script_of(entry):
     """The hook script a command runs, with the quoting and any args off."""
-    command = entry["command"]
+    command = " ".join(argv(entry))
     for script in ("chat-hook.cjs", "vault-hook.cjs"):
         if script in command:
             return script
@@ -120,7 +124,7 @@ class HcOnboardingTests(unittest.TestCase):
         experimental = (PLUGIN_HOOKS / "hooks.experimental.json").read_text()
         hooks = json.loads(default)["hooks"]
         for event in ("SessionStart", "UserPromptSubmit", "PostToolBatch", "Stop"):
-            commands = [h["command"] for group in hooks[event]
+            commands = [script_of(h) for group in hooks[event]
                         for h in group["hooks"]]
             self.assertTrue(any("chat-hook.cjs" in c for c in commands), event)
         # The global layer is a separate, experimental hook set: shipped, but
@@ -165,8 +169,8 @@ class HcOnboardingTests(unittest.TestCase):
                 self.assertEqual(1, len(subagent))
                 # A subagent injection reads cached state and speaks; it needs
                 # neither the ingest nor the agent-run observation.
-                self.assertEqual(f"{CHAT_HOOK} --inject-only",
-                                 subagent[0]["command"])
+                self.assertEqual(CHAT_HOOK + ["--inject-only"],
+                                 argv(subagent[0]))
                 self.assertFalse(subagent[0].get("async"))
                 self.assertEqual(5, subagent[0]["timeout"])
 
@@ -176,8 +180,8 @@ class HcOnboardingTests(unittest.TestCase):
                 # it. Collapsing them would either block Claude or say nothing.
                 self.assertEqual(
                     [(True, CHAT_HOOK),
-                     (False, f"{CHAT_HOOK} --inject-only")],
-                    [(bool(entry.get("async")), entry["command"])
+                     (False, CHAT_HOOK + ["--inject-only"])],
+                    [(bool(entry.get("async")), argv(entry))
                      for entry in batch])
                 self.assertEqual(5, batch[1]["timeout"])
 
@@ -191,7 +195,7 @@ class HcOnboardingTests(unittest.TestCase):
                 entries = [entry for group in hooks["SubagentStop"]
                            for entry in group["hooks"]]
                 self.assertEqual(1, len(entries))
-                self.assertEqual(CHAT_HOOK, entries[0]["command"])
+                self.assertEqual(CHAT_HOOK, argv(entries[0]))
                 # Same shape as Stop: nothing is injected here, so it has no
                 # business sitting on the model's critical path.
                 self.assertTrue(entries[0]["async"])
@@ -201,8 +205,8 @@ class HcOnboardingTests(unittest.TestCase):
                      for entry in group["hooks"]],
                     entries)
 
-    def test_hook_commands_launch_node_with_one_quoted_script_argument(self):
-        # Node is the portable launcher; the plugin path remains one quoted
+    def test_hook_commands_launch_node_with_one_structured_script_argument(self):
+        # Node is the portable launcher; the plugin path remains one structured
         # argument so spaces in an installation directory survive intact.
         for name in ("hooks.json", "hooks.experimental.json"):
             hooks = json.loads((PLUGIN_HOOKS / name).read_text())["hooks"]
@@ -211,8 +215,7 @@ class HcOnboardingTests(unittest.TestCase):
                     if not script_of(entry).endswith("chat-hook.cjs"):
                         continue
                     with self.subTest(name=name, event=event):
-                        self.assertTrue(entry["command"].startswith(CHAT_HOOK),
-                                        entry["command"])
+                        self.assertEqual(CHAT_HOOK, argv(entry)[:2])
 
     def test_the_chat_hook_forwards_its_own_arguments(self):
         script = (HC_SRC / "human_compact" / "assets" / "plugin" / "scripts" /

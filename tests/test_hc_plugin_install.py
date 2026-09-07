@@ -209,16 +209,18 @@ class HcPluginInstallTests(unittest.TestCase):
             self.assertEqual(1, len(expansion))
             self.assertEqual("bart", expansion[0]["matcher"])
             self.assertEqual(1, len(expansion[0]["hooks"]))
-            self.assertIn("chat-hook.cjs", expansion[0]["hooks"][0]["command"])
+            self.assertEqual("node", expansion[0]["hooks"][0]["command"])
+            self.assertEqual(["${CLAUDE_PLUGIN_ROOT}/scripts/chat-hook.cjs"],
+                             expansion[0]["hooks"][0]["args"])
             self.assertEqual(45, expansion[0]["hooks"][0]["timeout"])
 
             for event in self.CHAT_HOOK_EVENTS:
-                commands = [entry["command"]
+                commands = [" ".join([entry["command"], *entry.get("args", [])])
                             for group in installed["hooks"][event]
                             for entry in group["hooks"]]
                 self.assertTrue(
                     any("chat-hook.cjs" in c for c in commands), event)
-            every_command = [entry["command"]
+            every_command = [" ".join([entry["command"], *entry.get("args", [])])
                              for groups in installed["hooks"].values()
                              for group in groups for entry in group["hooks"]]
             self.assertEqual([], [c for c in every_command

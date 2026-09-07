@@ -80,6 +80,9 @@ class ReplaceLaunchTests(unittest.TestCase):
                     child.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     child.kill()
+                    child.wait(timeout=5)
+            if child.stdout:
+                child.stdout.close()
 
     def launch(self, *extra):
         env = os.environ.copy()
