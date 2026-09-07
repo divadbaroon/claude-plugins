@@ -125,6 +125,7 @@ class AlternateBrowser(BrowserCase):
             expect(page.get_by_label('Todo', exact=True).last).to_have_value('Add a useful test')
             page.get_by_role('button', name='Build all').click()
             expect(page.locator('.todo-status').first).to_have_text('Building…')
+            page.wait_for_function('window.engelbart.store.get().building === null')
             self.assertEqual(('chat', subs[0]), starts[0][:2])
             expect(normal.locator('.todo-status').first).to_have_text('Building…')
             page.get_by_role('tab', name='Terminal').click()

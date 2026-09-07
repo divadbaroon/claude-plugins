@@ -89,7 +89,7 @@ function renderBody(state, preview, actions) {
         note);
     case "starting":
     case "running":
-      return output(preview, "Running.", note);
+      return output(preview, preview.recovery_attempted ? "Restarting…" : "Starting…", note);
     case "not_ready":
       return output(preview, "It has been up a while and nothing is serving a page yet.", note);
     case "finished":
@@ -98,6 +98,11 @@ function renderBody(state, preview, actions) {
           ? h("p", { class: "pv-text" }, "It wrote: " + preview.artifacts.join(", "))
           : null);
     case "failed":
+      if (busy || preview.recovery) return body(
+        h("p", { class: "pv-text", role: "status" }, busy || preview.recovery?.status === "diagnosing"
+          ? "Diagnosing why the app did not start…" : preview.recovery?.status === "needs_user" ? "Needs you" : preview.recovery?.status === "repairing" ? "Fixing the startup problem…" : "The app could not start"),
+        !busy && h("p", { class: "pv-note" }, preview.recovery?.reason || preview.recovery?.error || "See Terminal for the process output."),
+        !busy && again(actions, busy));
       return output(preview, exitLine(preview), note, again(actions, busy));
     default:
       return body(h("p", { class: "pv-text" }, preview.reason || ""), note);

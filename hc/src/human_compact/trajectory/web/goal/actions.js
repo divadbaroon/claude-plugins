@@ -144,6 +144,9 @@ export function createActions(store, services) {
     if (run !== panesRun || get().activeId !== id) return;
     set({ panes, panesFor: id, phases: panes.phases || get().phases });
     changeSlice(id, (current) => ({ chat: mergeMessages(current.chat, panes.chat || []) }));
+    if (panes.preview?.status === "failed" && !panes.preview.recovery && !get().previewBusy && !workInFlight(get())) {
+      previewOp({ op: "preview_explain" });
+    }
   }
 
   function watching(state) {
@@ -367,7 +370,7 @@ export function createActions(store, services) {
     set({ previewBusy: true, previewNote: null });
     let answer;
     try {
-      answer = await services.previewOp(op);
+      answer = await services.previewOp({ ...op, goal_id: get().activeId });
     } catch (error) {
       answer = { ok: false, error: String((error && error.message) || error) };
     }
@@ -595,12 +598,20 @@ export function createActions(store, services) {
     showGoal, showGoals, showProjects, openGoal, openProject,
     loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
-    openResource(id) {
+    async openResource(id) {
       const resource = get().project?.resources?.find(r => r.id === id);
       if (!resource) return;
       interaction("artifact.opened", { resourceId: id });
       set({ resourceId: id, resourceUrl: resource.kind === "paper" ? services.projectPaperUrl(id) : "" });
-      showTab(resource.kind === "paper" && resource.status === "ready" ? "paper" : "resource");
+      showTab(resource.kind === "paper" ? "paper" : resource.kind === "dataset" ? "dataset" : "resource");
+      if (resource.kind === "dataset" && resource.status === "ready" && !resource.metadata?.files?.[0]?.sample) {
+        try {
+          const answer = await services.projectDataset(id);
+          if (answer.ok) set(current => ({ ...current, project: { ...current.project,
+            resources: current.project.resources.map(r => r.id === id ? { ...r, metadata: { ...r.metadata,
+              files: [answer.file, ...(r.metadata?.files || []).slice(1)] } } : r) } }));
+        } catch (_) { /* Existing persisted metadata stays visible when the file is unavailable. */ }
+      }
     },
     selectSubgoal, showTab, loadPanes,
     previewConfigure, previewShowUi, previewRun, previewStop, previewForget,

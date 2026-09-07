@@ -261,8 +261,8 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
                   f"{goal['id']} · {title}",
                   "This is a QUICK build: make the smallest correct change"
                   " the rows below ask for. Do not refactor around them, do"
-                  " not run test suites or build steps unless a row asks for"
-                  " one -- the reader checks the result in the live preview."]
+                  " run only targeted checks needed for the rows, not broad suites unless asked for"
+                  " one -- the saved acceptance is verified after this build."]
     else:
         tree = CS._goal_context_text(session_id, goals, important, prompts)
         lines += [tree.rstrip("\n"), "",
@@ -1297,6 +1297,10 @@ class Run:
         # restart check after -- a small change is watched in the preview,
         # not audited.
         self.quick = False
+        self.had_live_process = False
+        self.activity_started = False
+        self.first_edit = False
+        self.last_edit_at = None
         self.acceptance = {}
         self.verification_rows = []
         self.repair_note = ""
@@ -1352,6 +1356,8 @@ class Run:
     def spawn(self, message: str, resume: bool, phase: str = "rows",
               model: str = "", effort: str = "") -> None:
         from .providers import subscription_env
+        if phase == "rows":
+            self.had_live_process = relevant_live_process(self.session_id, self.root, self.cwd)
         # The reader pressed Build on THIS project: that is the folder-trust
         # answer, given here so a headless run in a directory Claude Code
         # has never opened does not stall on a dialog nobody is watching.
@@ -1377,6 +1383,8 @@ class Run:
                 stderr=log, text=True, close_fds=True, **detached_popen_kwargs())
         self.asked = None
         self.spawned_at = time.time()
+        from .agents import trace
+        trace.phase("claude.spawned", quick=self.quick)
         self.phase = phase
         if phase == "check":
             # The rows are done and their clock has stopped (ended_at stays);
@@ -1415,6 +1423,22 @@ class Run:
         self.thread.start()
 
     def _say(self, kind: str, text: str) -> None:
+        from .agents import trace
+        if kind in ("tool", "say") and not self.activity_started:
+            self.activity_started = True
+            trace.phase("build.first_activity")
+        if kind == "tool" and text.startswith(("edited ", "wrote ")):
+            if not self.first_edit:
+                self.first_edit = True
+                trace.phase("build.first_edit")
+            self.last_edit_at = _now()
+            trace.phase("build.edit")
+        if kind == "end":
+            if self.last_edit_at:
+                trace.phase("build.last_edit", at=self.last_edit_at)
+            if self.repair_note:
+                trace.phase("repair.ended")
+            trace.phase("build.process_ended")
         note_activity(self.session_id, self.root, self.goal_id, kind, text)
 
     def _read(self) -> None:
@@ -1731,6 +1755,7 @@ class Run:
             if held:
                 start(self.session_id, self.root, self.goal_id, held)
             elif (ended == "idle" and not self.error and not self.quick
+                  and self.had_live_process
                   and check_enabled(self.session_id, self.root)
                   and _rows_in(self.session_id, self.root, self.goal_id, "done")):
                 # Finished on its own terms, with nothing behind it: the one
@@ -1937,6 +1962,28 @@ def _join(session_id: str, root: Optional[Path], goal_id: str, run: "Run",
     run.record(rows=len(run.picked))
     return {"ok": True, "joined": True, "rows": ids,
             "claude_session_id": run.claude_session}
+
+
+def relevant_live_process(session_id, root, cwd):
+    from . import preview
+    proc = preview.running(cwd)
+    if proc and proc.alive():
+        return True
+    return preview.dev_state(session_id, root, cwd).get("status") in ("running", "starting")
+
+
+def prefer_quick(rows) -> bool:
+    """Conservative automatic lane selection; unknown or risky work stays full."""
+    override = os.environ.get("HC_BUILD_LANE", "auto").lower()
+    if override in ("quick", "full"):
+        return override == "quick"
+    if not 1 <= len(rows) <= 3:
+        return False
+    risky = re.compile(r"\b(auth\w*|security|credential\w*|secret\w*|migrat\w*|refactor\w*|architecture|delete|destructive|deployment|cross.repo|dependency|dependencies|database|payment\w*)\b", re.I)
+    bounded = re.compile(r"\b(dropdown|slider|button|label\w*|layout|render|display|timeline|local dataset|prepared dataset|synthetic dataset|checkbox|input|css|html)\b", re.I)
+    return all(0 < len(str(r.get("text") or "")) <= 500
+               and not risky.search(str(r.get("text") or ""))
+               and bounded.search(str(r.get("text") or "")) for r in rows)
 
 
 def start(session_id: str, root: Optional[Path], goal_id: str,
@@ -2362,7 +2409,7 @@ def reopen(session_id: str, root: Optional[Path], goal_id: str,
     run.picked_chars = sum(len(str(r.get("text") or "")) for r in rows)
     try:
         run.spawn(json.dumps({"id": row_id, "reopened": note, "acceptance": run.acceptance}) if resume
-                  else prompt, resume=resume)
+                  else prompt, resume=resume, effort="high" if (record or {}).get("is_quick") else "")
     except (FileNotFoundError, OSError) as exc:
         # Back to done, with the note still on the record: nothing is lost
         # and the reader can try again.

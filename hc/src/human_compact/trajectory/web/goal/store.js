@@ -123,6 +123,7 @@ export function lifecycleOf(state, subgoalId = state.activeId) {
 export function todoPhase(todo, state, subgoalId = state.activeId) {
   const phase = lifecycleOf(state, subgoalId);
   if (phase?.todoIds.includes(todo.id) && phase.status !== "cancelled") return phase.status;
+  if (state.building === subgoalId && !todo.done && !isWithBuilder(todo)) return "building";
   // A raw build question has not yet been classified as human-dependent.
   return todo.done ? "done" : todo.status === "asking" ? "checking" : todo.status || "";
 }

@@ -67,16 +67,26 @@ def _verify(session_id, root, goal_id, row_ids, runtime, checks) -> Dict[str, An
         return _fail("the run recorded an error: %s" % str(record["error"])[:200], evidence)
     if record.get("exit_code"):
         return _fail("the build process exited %s" % record["exit_code"], evidence)
+    saved = record.get("acceptance") or {}
+    criteria = {rid: saved.get(rid) or rows[rid].get("acceptance") for rid in row_ids}
     if runtime is not None:
         state = _preview(runtime, session_id)
+        from .acceptance import normalize
+        web = any(c.get("kind") in ("control", "text")
+                  for a in criteria.values() for c in (normalize(a) or {}).get("checks", []))
+        if web and not state.get("url") and callable(getattr(runtime, "ensure_preview", None)):
+            try:
+                state = runtime.ensure_preview(session_id)
+            except Exception as exc:
+                evidence["preview_startup"] = {"ok": False, "error": str(exc)[:300]}
+                return _fail("The app could not be started for its check", evidence)
+            evidence["preview_startup"] = state.get("startup", {})
         evidence["preview"] = {k: state.get(k) for k in ("status", "url", "healthy", "exit_code")}
         if state.get("status") in ("failed", "exited") :
             return _fail("the project's run %s after the build (exit %s)" % (
                 state.get("status"), state.get("exit_code")), evidence)
         if state.get("status") == "running" and state.get("healthy") is False:
             return _fail("the project is running but its page does not answer", evidence)
-    saved = record.get("acceptance") or {}
-    criteria = {rid: saved.get(rid) or rows[rid].get("acceptance") for rid in row_ids}
     evidence["acceptance"] = criteria
     if any(criteria.get(rid) for rid in row_ids):
         try:

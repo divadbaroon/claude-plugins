@@ -37,9 +37,10 @@ def inspect_page(url, checks):
             response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
             if response is None or response.status >= 400:
                 return {"passed": False, "reason": "preview returned HTTP " + str(response.status if response else "unknown"), "checks": []}
-            for check in checks:
-                # Each check starts at the same page so steps don't leak state.
-                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            for index, check in enumerate(checks):
+                # Each check starts at the same page so steps do not leak state.
+                if index:
+                    page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 try:
                     for step in check.get("steps", []):
                         control = page.get_by_role(step["role"], name=step["name"], exact=True)
@@ -68,14 +69,16 @@ def verify(runtime, criteria, preview, engine=None):
     criteria = {rid: normalize(c) for rid, c in criteria.items()}
     if not criteria or any(not c for c in criteria.values()):
         return {"passed": False, "reason": "missing acceptance criterion"}
-    checks = [check for c in criteria.values() for check in c["checks"]]
+    checks = list({json.dumps(check, sort_keys=True): check
+                   for c in criteria.values() for check in c["checks"]}.values())
     web = [c for c in checks if c["kind"] in ("control", "text")]
     evidence = {"files": [], "page": None}
     with telemetry.operation("artifact.inspect", "processing"):
         if web or preview.get("url"):
             if not preview.get("url"):
                 return {"passed": False, "reason": "expected web artifact has no running preview"}
-            evidence["page"] = inspect_page(preview["url"], web)
+            with telemetry.operation("browser.verify", "processing"):
+                evidence["page"] = inspect_page(preview["url"], web)
             if not evidence["page"]["passed"]:
                 return dict(evidence, passed=False, reason=evidence["page"]["reason"])
         for check in checks:

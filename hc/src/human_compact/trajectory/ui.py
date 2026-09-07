@@ -586,7 +586,7 @@ def _goal_page_build_phase(session_id, root, subgoal_id):
     No prompts, evidence or internal routing decisions cross this boundary.
     """
     from .agents import events
-    statuses = {"build.started": "building", "verify.started": "checking",
+    statuses = {"todo.build_requested": "building", "build.started": "building", "verify.started": "checking",
                 "verify.passed": "done", "verify.failed": "failed",
                 "build.repair_requested": "fixing", "verify.escalated": "needs_user",
                 "build.question": "checking", "chat.needs_human": "needs_user",
@@ -809,12 +809,15 @@ def _goal_page_write(body, trajdir, chat_scoped):
         goal_id = str(body.get("goal_id") or "")
         orch = AGENTS.for_chat(session_id, root)
         return orch.build_requested(goal_id, ids if isinstance(ids, list) else [],
-                                    quick=bool(body.get("quick")))
+                                    quick=bool(body["quick"]) if "quick" in body else None)
     result = _apply(body, trajdir, chat_scoped)
     if chat_scoped and AGENTS.enabled():
         try:
             session_id, root = _chat_identity(_scope(trajdir))
             AGENTS.note_op(session_id, root, body, result if isinstance(result, dict) else None)
+            if kind in ("add_todo_row", "set_todo_text") and isinstance(result, dict) and result.get("ok"):
+                from .agents import acceptance
+                acceptance.prepare(session_id, root, str(body.get("goal_id") or ""))
         except (OSError, ValueError):
             pass
     return result
@@ -3479,8 +3482,16 @@ def _preview_op_run(op, trajdir, chat_scoped):
         proc = PREVIEW.running(cwd)
         if not proc:
             return {"ok": False, "error": "there is no run to explain"}
-        return PREVIEW.explain_failure(cwd, proc.profile.get("command", ""),
-                                       list(proc.lines), proc.exit_code)
+        result = PREVIEW.recover(root, cwd, session_id=_session_id)
+        if result.get("needs_build") and chat_scoped and AGENTS.enabled():
+            result.pop("needs_build", None)
+            proc.recovery_attempted = True
+            repaired = AGENTS.for_chat(_session_id, root).preview_failed(
+                str(op.get("goal_id") or ""), result.get("reason") or "The app failed to start", list(proc.lines))
+            if repaired.get("ok"):
+                result.update(ok=True, status="repairing", reason="Fixing the startup problem…")
+            proc.recovery = result
+        return result
     return {"ok": False, "error": "unknown preview operation"}
 
 
@@ -5078,6 +5089,16 @@ class H(BaseHTTPRequestHandler):
                     self._send(200, {"ok": False, "error": "no such source"})
                 else:
                     self._send(200, source_body(root, who["cwd"], found))
+            elif self.path.split("?", 1)[0] == "/api/project-dataset":
+                from . import resources as project_resources
+                from urllib.parse import parse_qs, urlsplit
+                try:
+                    sid, root = _chat_identity(self.server.trajdir)
+                    cwd = CS.bound_project(sid, root) or CS.load_manifest(sid, root).get("cwd")
+                    rid = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
+                    self._send(200, {"ok": True, "file": project_resources.dataset_preview(root, cwd, rid)})
+                except (ValueError, OSError, TypeError):
+                    self._send(404, {"ok": False, "error": "No readable project dataset"})
             elif self.path.split("?", 1)[0] == "/api/project-paper":
                 from . import resources as project_resources
                 from urllib.parse import parse_qs, urlsplit

@@ -2,7 +2,6 @@
    row that adds one. */
 
 import { h } from "../dom.js";
-import { renderResources } from "./resources.js";
 
 export function renderBreakdown(state, actions) {
   return h("aside", { class: "rail", "aria-label": "Plan" },
@@ -11,8 +10,7 @@ export function renderBreakdown(state, actions) {
       renderSubgoal(subgoal, subgoal.id === state.activeId, actions)),
     state.status === "ready" && state.goal && (state.addingSubgoal
       ? renderAddInput(state, actions)
-      : renderAddButton(actions)),
-    renderResources(state, actions));
+      : renderAddButton(actions)));
 }
 
 function renderSubgoal(subgoal, active, actions) {
