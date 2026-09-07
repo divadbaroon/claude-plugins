@@ -122,9 +122,9 @@ class AlternateBrowser(BrowserCase):
             expect(page.locator('.from-bart .bubble')).to_have_text('This is the persisted reply.')
             expect(page.get_by_label('Todo', exact=True).last).to_have_value('Add a useful test')
             page.get_by_role('button', name='Build all').click()
-            expect(page.locator('.todo-status').first).to_have_text('Building')
+            expect(page.locator('.todo-status').first).to_have_text('Building…')
             self.assertEqual(('chat', subs[0]), starts[0][:2])
-            expect(normal.locator('.todo-status').first).to_have_text('building…')
+            expect(normal.locator('.todo-status').first).to_have_text('Building…')
             page.get_by_role('tab', name='Terminal').click()
             expect(page.locator('.terminal')).to_contain_text('Building the actual selected rows')
             # External plan writer (the same goals.json Path updates).
@@ -160,8 +160,9 @@ class AlternateBrowser(BrowserCase):
             ):
                 AGENT_EVENTS.record('chat', self.root, AGENT_EVENTS.new_event(kind, 'system', payload, subgoal_id=subs[0]))
                 BUILD.note_activity('chat', self.root, subs[0], 'verify', label + ' activity')
-                expect(page.locator('.execution-status')).to_have_text(label, timeout=7000)
-                expect(page.locator('.todo-status').first).to_have_text(label)
+                display = {'Building': 'Building…', 'Checking': 'Checking…', 'Fixing': 'Fixing…', 'Needs user': 'Needs you'}.get(label, label)
+                expect(page.locator('.execution-status')).to_have_text(display, timeout=7000)
+                expect(page.locator('.todo-status').first).to_have_text(display)
             goals, important = self.goals()
             for row in GM.by_id(goals, subs[0])['todo_items']:
                 row.update(done=True, status='done')

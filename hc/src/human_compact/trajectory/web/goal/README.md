@@ -160,3 +160,31 @@ layout, query selection, and stale-save protection. Model replies and the extern
 build executable are replaced at their existing boundaries; HTTP, files, event
 capture and preview processes are real. Cross-repository installed round-trip and
 platform workflow gates remain required before a merge.
+
+### Lifecycle communication
+
+Both renderers use the shared `todoPhase`/`TODO_LABELS` mapping of the existing
+`panes.build.phase` event projection. Build starts show Building…, verification
+shows Checking…, automatic repair shows Fixing…, confirmed human dependencies
+show Needs you, and successful verification shows Done with a checkmark.
+Unsuccessful execution shows Failed. No time-based progress or layout is added.
+The composer remains usable while background work runs.
+
+A build-protocol question is classified through the existing Chat boundary before
+it can become `chat.needs_human`. Environment questions use local discovery and
+resume the same build. Human answers use the existing Bart endpoint and build
+answer operation; optional model `resolution` distinguishes resume/cancel/wait.
+The `human.answered` event clears the dependency. Saved run row ids and criteria
+are retained when resuming after a server restart.
+
+`agents/communication.py` publishes result-grounded prose for meaningful failure,
+repair, completion, or a human question, with stable per-build message identities.
+It adds no announcement model calls. Repeated identical repair problems remain
+quiet; ordinary starts, checking, and polling do not append conversation entries.
+Technical results fall back to a concise todo-level summary; detailed verifier
+evidence is bounded and written to existing Terminal activity. Applied plan
+changes continue through the existing Plan state and Bart reply contracts.
+
+`tests/test_goal_lifecycle.py` covers classification, resume, cold-run metadata,
+repair deduplication, evidence, and the real loopback page/composer. Model and
+runtime execution boundaries are controlled fixtures, not live-provider tests.

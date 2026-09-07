@@ -2077,6 +2077,11 @@ def answer(session_id: str, root: Optional[Path], goal_id: str,
                   claude_session)
         with _RUNS_GUARD:
             _RUNS[f"{session_id}:{goal_id}"] = run
+    # A server restart must not lose the row scope for re-verification.
+    if not run.picked:
+        run.picked = list((record or {}).get("picked") or [row_id])
+        run.verification_rows = list((record or {}).get("verification_rows") or run.picked)
+        run.acceptance = dict((record or {}).get("acceptance") or {})
     message = json.dumps({"id": row_id, "answer": text})
     # What the reader told the build while it waited on this question -- a
     # row deleted, a note added -- goes ahead of the answer, in the same

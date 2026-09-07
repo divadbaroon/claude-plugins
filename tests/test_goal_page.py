@@ -1564,7 +1564,7 @@ class GoalPageBrowserTests(BrowserCase):
             build.update({"ok": True, "error": ""})
             page.get_by_role("button", name="Build all").click()
             expect(page.locator(".todo-status")).to_have_count(2, timeout=5_000)
-            expect(page.locator(".todo-status").nth(0)).to_have_text("building…")
+            expect(page.locator(".todo-status").nth(0)).to_have_text("Building…")
             expect(page.locator(".build-btn")).to_have_text(re.compile("Building…"))
             expect(page.locator(".build-btn")).to_be_disabled()
             expect(page.locator(".build-note")).to_have_count(0)

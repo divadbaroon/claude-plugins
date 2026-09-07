@@ -2225,11 +2225,14 @@ def render_context_injection(
     return keep(delta if len(delta) < len(full) else full)
 
 
-def append_bart_message(session_id, goal_id, text, root=None):
+def append_bart_message(session_id, goal_id, text, root=None, message_id=None):
     """Append under the same lock as browser saves; stable ids survive stale saves."""
     import uuid
     with session_lock(tree_session(session_id, root), root, wait_s=5):
         messages = load_bart_chats(session_id, root).get(goal_id, [])
-        messages.append({"id": "sys-" + uuid.uuid4().hex[:12], "who": "bart",
+        message_id = message_id or "sys-" + uuid.uuid4().hex[:12]
+        if any(m.get("id") == message_id for m in messages):
+            return messages
+        messages.append({"id": message_id, "who": "bart",
                          "kind": "text", "text": str(text)[:4000]})
         return save_bart_chat(session_id, goal_id, messages, root)
