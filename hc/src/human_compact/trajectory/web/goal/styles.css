@@ -206,7 +206,10 @@ input, textarea { outline: none; }
 .bubble { max-width: 78%; padding: 7px 11px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--bd); font: 14.5px/1.5 var(--font-sans); color: var(--ink); text-wrap: pretty; white-space: pre-line; }
 .from-you .bubble { background: var(--bd); border-color: transparent; }
 .bubble.is-error { color: var(--del); border-color: var(--del); }
-.bubble.is-thinking { color: var(--fnt); letter-spacing: 3px; }
+.bubble.is-thinking { color: var(--fnt); display: inline-flex; gap: 3px; }
+.thinking-dot { display: inline-block; animation: thinking-bounce 1.2s ease-in-out infinite; }
+@keyframes thinking-bounce { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .thinking-dot { animation: none; } }
 .proposal { width: 100%; max-width: 420px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--bd2); display: flex; flex-direction: column; gap: 8px; }
 .proposal-title { font: 500 13px/1.4 var(--font-sans); color: var(--ink); }
 .proposal-row { display: flex; align-items: center; gap: 12px; }
