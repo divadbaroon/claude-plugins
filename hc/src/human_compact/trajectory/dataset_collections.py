@@ -156,20 +156,20 @@ def cancel(root,cwd,rid):
     return {'ok':True}
 
 
-def prepare_manifest(cwd, folder, session):
+def prepare_manifest(cwd, folder, session, files_root=None):
     from . import resources as R
     files, inspected, directories = [], [], set()
     for entry in session['files']:
-        p = secure_file(folder/'files',entry['path'])
+        p = secure_file(files_root or folder/'files',entry['path'])
         if not p.is_file() or p.stat().st_size != entry['size']: raise ValueError('Dataset file is missing or incomplete')
-        details = dict(entry, sha256=session['uploaded'][entry['path']])
+        details = dict(entry, sha256=session.get('uploaded', {}).get(entry['path'], ''))
         parts=entry['path'].split('/')
         directories.update('/'.join(parts[:i]) for i in range(1,len(parts)))
         if p.suffix.lower() in R.UPLOAD_FORMATS:
             if len(inspected)<24:
                 try:
                     info=R.inspect_table(p)
-                    inspected.append(dict(info,path=str(p.relative_to(cwd)),relativePath=entry['path']))
+                    inspected.append(dict(info,path=str(p if files_root else p.relative_to(cwd)),relativePath=entry['path']))
                     details.update(role='table',schema=info['columns'],rowCount=info.get('rowCount'))
                 except Exception as exc:
                     details.update(role='table',inspection='Could not inspect ('+type(exc).__name__+')')
@@ -363,3 +363,51 @@ def cleanup(root,cwd):
             if files.exists(): shutil.rmtree(files)
             session.update(status='failed',error='Import expired; choose the folder again')
             write_json(meta,session)
+
+
+def local_root(value):
+    value = str(value)
+    if not value or len(value)>2000 or any(ord(c)<32 for c in value): raise ValueError('Invalid local dataset path')
+    path = Path(value).expanduser()
+    if not path.is_absolute() or '..' in path.parts or path.is_symlink(): raise ValueError('Use an absolute dataset folder path, not a symlink')
+    path = path.resolve()
+    if not path.is_dir():
+        from .resources import NeedsUser
+        raise NeedsUser('Local dataset folder is missing on this computer. Restore it or supply the folder in Dataset.')
+    if path == Path(path.anchor): raise ValueError('Choose a dataset folder, not a filesystem root')
+    return path
+
+
+def link_local(root, cwd, resource):
+    """Inspect an explicitly supplied folder in place; never copy or upload its bytes."""
+    folder = local_root(resource['source'].get('path', ''))
+    limits = policy(); entries = []; total = 0; seen = set(); visited = 0
+    for parent, dirs, names in os.walk(folder, followlinks=False):
+        visited += 1
+        if visited > limits['maxFiles']: raise ValueError('Dataset folder count exceeds local policy')
+        dirs.sort(); names.sort()
+        for name in dirs + names:
+            p = Path(parent)/name
+            if p.is_symlink(): raise ValueError('Dataset symlinks are not allowed')
+            if not (p.is_dir() or stat.S_ISREG(p.lstat().st_mode)): raise ValueError('Special dataset files are not allowed')
+        for name in names:
+            if name in ('.DS_Store','Thumbs.db'): continue
+            p = Path(parent)/name; rel = relative(p.relative_to(folder).as_posix())
+            if rel.casefold() in seen: raise ValueError('Duplicate normalized dataset path')
+            seen.add(rel.casefold()); size = p.stat().st_size; total += size
+            if size > limits['maxFileBytes'] or total > limits['maxBytes'] or len(entries) >= limits['maxFiles']:
+                raise ValueError('Dataset exceeds configured local policy')
+            entries.append({'path':rel,'size':size,'format':p.suffix.lower().lstrip('.')})
+    metadata_folder = Path(cwd)/'.engelbart-resources'/resource['id']
+    manifest, inspected = prepare_manifest(Path(cwd), metadata_folder, {'files':entries,'name':resource['name'],'totalBytes':total}, files_root=folder)
+    write_json(metadata_folder/'manifest.json', manifest)
+    selected=[]
+    for info in inspected[:2]:
+        if len(json.dumps(selected+[info],ensure_ascii=False))<21000: selected.append(info)
+    if not selected: raise ValueError('No bounded dataset preview could be prepared')
+    summary={k:v for k,v in manifest.items() if k not in ('files','directories')}
+    summary.update(files=manifest['files'][:64],previewTruncated=len(entries)>64)
+    return {'status':'ready','error':'','source':dict(resource['source'],path=str(folder)),
+            'manifest':summary,'metadata':{'files':selected},
+            'access':{'localPath':str(folder),'linked':True,'manifestPath':str((metadata_folder/'manifest.json').relative_to(cwd)),
+                      'primaryFiles':[i['path'] for i in selected]}}

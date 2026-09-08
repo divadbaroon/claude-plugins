@@ -100,6 +100,36 @@ class CollectionTests(unittest.TestCase):
         uploaded=self.ingest(files,'User download')
         self.assertTrue(any(x['source'].get('repo')=='org/research-repo' for x in uploaded['provenance']['replaces']))
 
+    def test_local_path_links_in_place_and_survives_reload_without_download(self):
+        folder=self.root/'external dataset';(folder/'nested').mkdir(parents=True)
+        (folder/'nested'/'metrics.csv').write_text('metric,label\n1,yes\n')
+        (folder/'README.md').write_text('dataset notes')
+        raw={'id':'local-data','kind':'dataset','name':'Local data','status':'selected','source':{'provider':'local_path','type':'local_folder','path':str(folder)}}
+        def denied(*args): raise AssertionError('Local dataset must not download')
+        R.prepare(self.root,self.cwd,[raw],fetch=denied)
+        project=PS.load_project(self.root,self.cwd);r=next(x for x in project['resources'] if x['id']=='local-data')
+        self.assertEqual('ready',r['status'],r);self.assertEqual('local-data',project['activeDatasetId'])
+        self.assertEqual(str(folder.resolve()),r['access']['localPath']);self.assertEqual(2,r['manifest']['fileCount'])
+        self.assertFalse((self.cwd/'.engelbart-resources'/'local-data'/'files').exists())
+        self.assertTrue(R.cached_ready(self.cwd,r));self.assertIn('metrics.csv',R.context(self.root,self.cwd))
+        self.assertTrue(R.dataset_rows(self.root,self.cwd)['rows'])
+        R.prepare(self.root,self.cwd,[raw],fetch=denied)
+        self.assertTrue(R.cached_ready(self.cwd,PS.load_project(self.root,self.cwd)['resources'][0]))
+        (folder/'nested'/'metrics.csv').unlink()
+        self.assertFalse(R.cached_ready(self.cwd,r))
+
+    def test_missing_and_symlink_local_folder_preserve_prior_dataset(self):
+        active=self.ingest({'prior.csv':b'a,b\n1,2\n'})
+        raw={'id':'missing-local','kind':'dataset','name':'Local','source':{'provider':'local_path','path':str(self.root/'missing')}}
+        R.prepare(self.root,self.cwd,[raw]);p=PS.load_project(self.root,self.cwd)
+        self.assertEqual(active['id'],p['activeDatasetId']);self.assertEqual('needs_user',p['resources'][-1]['status'])
+        folder=self.root/'linked';folder.mkdir()
+        try: (folder/'escape.csv').symlink_to(self.cwd/'elsewhere.csv')
+        except OSError: self.skipTest('symlinks unavailable')
+        raw['source']['path']=str(folder)
+        R.prepare(self.root,self.cwd,[raw]);p=PS.load_project(self.root,self.cwd)
+        self.assertEqual(active['id'],p['activeDatasetId']);self.assertEqual('failed',p['resources'][-1]['status'])
+
 import test_dataset_upload as upload_fixtures
 from test_goal_page import server_for, BrowserCase
 class CollectionBrowserTests(BrowserCase):
@@ -166,3 +196,4 @@ class CollectionBrowserTests(BrowserCase):
                         r=next(r for r in project['resources'] if r['id']==project['activeDatasetId'])
                         self.assertTrue((cwd/r['access']['localPath']/'nested'/'events.csv').exists())
                     finally: browser.close()
+
