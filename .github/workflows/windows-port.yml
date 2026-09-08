@@ -137,7 +137,7 @@ jobs:
         shell: powershell
         run: |
           $PSVersionTable.PSVersion
-          Get-Command Get-FileHash
+          (Get-Command Get-FileHash).Name
           npm run test:e2e:round-trip
       - uses: actions/upload-artifact@v4
         if: always()

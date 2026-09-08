@@ -21,7 +21,9 @@ SimulatedMachine.prototype.installWithArgs = async function(args) {
   const version=await run(binary,['install','--dry-run'],this.env,this.workspace);
   if(version.code || !version.stdout.includes('engelbart-cli '+process.env.EXPECTED_VERSION) || !version.stdout.includes('Verified bundled backend '+process.env.EXPECTED_VERSION)) throw Error(JSON.stringify(version));
   const python=path.join(manifest.runtime,'Scripts','python.exe');
+  console.log('Published binary and embedded HC verified:',process.env.EXPECTED_VERSION);
   const checks=await run(python,[process.env.ENGELBART_INSTALLED_CHECK],this.env,this.workspace);
+  console.log('Installed Windows check result:',JSON.stringify(checks));
   if(checks.code) throw Error(`Installed Windows checks failed: ${JSON.stringify(checks)}`);
   console.log('Published Windows artifact:',version.stdout.trim(),checks.stdout.trim());
   return result;
