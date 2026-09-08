@@ -47,6 +47,7 @@ jobs:
         env:
           PYTHONPATH: hc/src:tests
           ENGELBART_TELEMETRY_FORWARD: "0"
+          ENGELBART_REQUIRE_BROWSER_TESTS: "1"
 
   npm-installer:
     strategy:

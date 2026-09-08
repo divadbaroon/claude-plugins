@@ -141,6 +141,12 @@ class StarterTests(AgentCase):
         with self.assertRaises(ValueError):R.dataset_rows(self.root,cwd)
 
     def test_real_preview_starts_uses_actual_data_and_checks_requested_ui(self):
+        import importlib.util
+        import os
+        if importlib.util.find_spec('playwright') is None:
+            if os.environ.get('ENGELBART_REQUIRE_BROWSER_TESTS') == '1':
+                self.fail('The dedicated browser gate requires Playwright')
+            self.skipTest('Playwright runs in the dedicated browser gate')
         cwd=self.empty();S.prepare(self.root,cwd,SMALL)
         self.upload(cwd,'data.csv',b'student_id,action\na,edit\nb,run\n')
         # Deterministic builder fixture edits ONE app file, reusing the loader

@@ -90,6 +90,12 @@ class ReadinessTests(AgentCase):
         self.assertEqual([],seen)
 
     def test_blank_and_crashed_pages_fail_even_if_http_is_healthy(self):
+        import importlib.util
+        import os
+        if importlib.util.find_spec('playwright') is None:
+            if os.environ.get('ENGELBART_REQUIRE_BROWSER_TESTS') == '1':
+                self.fail('The dedicated browser gate requires Playwright')
+            self.skipTest('Playwright runs in the dedicated browser gate')
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*a): pass
             def do_GET(self):
