@@ -395,7 +395,7 @@ def prepare(root, cwd, supplied, fetch=download):
             PS.save_project(root,cwd,{'resources':records,**({'activeDatasetId':record['id']} if record['kind']=='dataset' and record['status']=='ready' else {})})
     existing = PS.load_project(root, cwd).get('resources') or []
     result = list(existing)
-    limit = max(1, int(os.environ.get('HC_RESOURCE_MAX_BYTES', MAX_BYTES)))
+    limit = max(1, int(os.environ.get('HC_RESOURCE_MAX_BYTES', DC.policy()['maxFileBytes'])))
     for raw in normalize(supplied):
         index = next((i for i, r in enumerate(result) if r['id'] == raw['id']), None)
         previous = result[index] if index is not None else None

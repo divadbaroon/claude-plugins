@@ -57,6 +57,18 @@ class CollectionTests(unittest.TestCase):
         D.put(self.root,self.cwd,s['id'],'large.csv',stream,size)
         r=D.finish(self.root,self.cwd,s['id']);self.assertEqual('ready',r['status'],r)
         self.assertGreater(stream.calls,800);self.assertEqual(size,r['manifest']['totalBytes'])
+    def test_configured_policy_unicode_and_bounded_json(self):
+        r=self.ingest({'nested/測定.csv':b'metric\n1\n'})
+        self.assertEqual('nested/測定.csv',r['manifest']['files'][0]['path'])
+        for env, files in [({'HC_DATASET_MAX_BYTES':'3'},[{'path':'a.csv','size':4}]),
+                           ({'HC_DATASET_MAX_FILE_BYTES':'3'},[{'path':'a.csv','size':4}]),
+                           ({'HC_DATASET_MAX_FILES':'1'},[{'path':'a.csv','size':1},{'path':'b.csv','size':1}])]:
+            with mock.patch.dict(os.environ,env), self.assertRaisesRegex(ValueError,'policy'):
+                D.begin(self.root,self.cwd,'over limit',files)
+        sample=D.json_sample(io.StringIO('['+','.join('{"metric":1}' for _ in range(200000))+']'))
+        self.assertEqual(10,len(sample))
+        self.assertEqual(r['id'],PS.load_project(self.root,self.cwd)['activeDatasetId'])
+
     def test_remote_folder_acquisition_and_needs_user_replacement(self):
         files={'metrics.csv':b'metric\n1\n','nested/labels.csv':b'label\nyes\n'}
         source={'provider':'github','type':'github','repo':'org/research-repo','ref':'main','commit':'a'*40,'rootPath':'dataset','url':'https://github.com/org/research-repo/tree/main/dataset'}
@@ -72,10 +84,10 @@ class CollectionTests(unittest.TestCase):
         uploaded=self.ingest(files,'User download')
         self.assertTrue(any(x['source'].get('repo')=='org/research-repo' for x in uploaded['provenance']['replaces']))
 
-from test_dataset_upload import DatasetUploadBrowserTests
+import test_dataset_upload as upload_fixtures
 from test_goal_page import server_for, BrowserCase
 class CollectionBrowserTests(BrowserCase):
-    project=DatasetUploadBrowserTests.project
+    project=upload_fixtures.DatasetUploadBrowserTests.project
     # Only collection scenarios here; the inherited single-file suite is run separately.
     def test_choose_folder_and_drag_entry_tree_in_three_engines(self):
         cwd=self.project();folder=cwd/'TutorTrace';(folder/'nested').mkdir(parents=True)

@@ -42,6 +42,7 @@ def location(cwd, rid):
 
 
 def secure_file(folder, name):
+    if folder.is_symlink(): raise ValueError('Dataset symlinks are not allowed')
     target = folder
     for segment in relative(name).split('/'):
         target = target / segment
