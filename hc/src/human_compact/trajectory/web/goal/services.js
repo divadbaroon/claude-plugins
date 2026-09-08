@@ -71,12 +71,39 @@ async function op(operation) {
   return answer;
 }
 
+async function datasetImport(body) {
+  const response=await fetch('/api/project-dataset/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const answer=await response.json();
+  if(!response.ok) throw new Error(answer.error || 'Dataset import failed');
+  return answer;
+}
+
 export const services = {
   projectPaperUrl,
   loadModels() { return get("/api/models"); },
   saveModels(settings) { return post("/api/op", {op:"set_build_settings", ...settings}); },
   loadApiCredits() { return get("/api/claude-account?fresh=1"); },
   switchApiCredits(use) { return post("/api/op", {op:"claude_account", use}); },
+  async uploadCollection(entries, progress) {
+    const root = entries[0]?.path.split('/')[0];
+    const folder = entries.every(e => e.path.startsWith(root+'/'));
+    const files = entries.map(e=>({...e,path:folder ? e.path.slice(root.length+1) : e.path}));
+    const started = await datasetImport( {action:'begin',folder,name:folder ? root : files.length===1 ? files[0].file.name : 'Dataset',files:files.map(e=>({path:e.path,size:e.file.size}))});
+    if(!started.id) throw new Error(started.error || 'Could not start dataset import');
+    try {
+      for(let i=0;i<files.length;i++) {
+        progress(`Uploading ${i+1} of ${files.length} files…`);
+        const e=files[i];
+        const response=await fetch('/api/project-dataset/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-HC-Name':encodeURIComponent(e.path),'X-HC-Import':started.id},body:e.file});
+        const answer=await response.json();if(!answer.ok)throw new Error(answer.error || 'File transfer failed');
+      }
+      progress(`${(started.totalBytes/1024/1024).toFixed(1)} MB dataset · Preparing incrementally…`);
+      return await datasetImport({action:'finish',id:started.id});
+    } catch(error) {
+      await datasetImport({action:'cancel',id:started.id}).catch(()=>{});
+      throw error;
+    }
+  },
   uploadPaper(file, onInspecting) { return services.uploadDataset(file, onInspecting, "paper"); },
   uploadDataset(file, onInspecting, kind = "dataset") {
     return new Promise((resolve, reject) => {

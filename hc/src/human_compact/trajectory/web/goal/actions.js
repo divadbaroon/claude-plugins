@@ -719,19 +719,18 @@ export function createActions(store, services) {
         set({paperUpload:answer.ok ? null : {error:true,text:answer.error || "Could not read this PDF."}});
       } catch (error) { set({paperUpload:{error:true,text:"Could not upload this PDF. Try again."}}); }
     },
+    datasetUploadError(error) { set({datasetUpload:{error:true,text:error.message || "Could not read the folder. Use Choose folder."}}); },
     async uploadDataset(file) {
       if (!file || get().datasetUpload?.busy) return;
-      if (!/\.(csv|tsv|parquet|xlsx|json|jsonl|ndjson)$/i.test(file.name)) {
-        set({datasetUpload:{error:true,text:"Upload a CSV, TSV, Parquet, XLSX or JSON file."}});return;
-      }
-      if (!file.size || file.size > 50 * 1024 * 1024) {
-        set({datasetUpload:{error:true,text:file.size ? "This file is too large to inspect locally." : "The file is empty."}});return;
-      }
+      const entries=Array.isArray(file) ? file : [{file,path:file.name}];
+      if(!entries.length) return;
       set({datasetUpload:{busy:true,text:"Uploading…"}});
       try {
-        const answer = await services.uploadDataset(file, () => set({datasetUpload:{busy:true,text:"Inspecting…"}}));
+        const answer = await services.uploadCollection(entries, text => set({datasetUpload:{busy:true,text}}));
         await refresh();
-        if (answer.resource && get().project?.resources?.some(r => r.id === answer.resource.id)) {
+        // A change-feed refresh can supersede the awaited refresh before it
+        // has drawn. Keep the committed selection for that pending response.
+        if (answer.ok && answer.resource) {
           set({resourceId:answer.resource.id,resourceUrl:""});showTab("dataset");
           interaction("artifact.opened",{resourceId:answer.resource.id});
         }

@@ -1,4 +1,5 @@
 /* Shared resource rendering. State and operations belong to the existing workspace. */
+import { selectedFiles, droppedFiles } from "../dataset-files.js";
 import { h } from "../dom.js";
 
 const STATUS = { ready: "Ready", acquiring: "Acquiring…", needs_user: "Needs you", failed: "Failed", selected: "Selected", discovered: "Discovered" };
@@ -25,11 +26,14 @@ export function renderResourcePane(state, actions) {
   const busy = progress?.busy;
   const upload = file => kind === "paper" ? actions.uploadPaper(file) : actions.uploadDataset(file);
   return h("section", {class: `resource-detail resource-${kind}`, "aria-label":"Resource details", role:"tabpanel",
-    ondragover:event=>event.preventDefault(), ondrop:event=>{event.preventDefault();if (!busy) upload(event.dataTransfer?.files?.[0]);}},
+    ondragover:event=>event.preventDefault(), ondrop:event=>{event.preventDefault();if(busy)return;if(kind==='paper') upload(event.dataTransfer?.files?.[0]);else droppedFiles(event.dataTransfer).then(upload).catch(actions.datasetUploadError);}},
     h("div", {class:"resource-header"}, h("h3", {}, title),
-      h("label", {class:"ghost-btn dataset-upload-button"}, `Upload ${kind}`,
+      h("label", {class:"ghost-btn dataset-upload-button"}, kind === "paper" ? "Upload paper" : "Choose file",
         h("input", {type:"file", "aria-label":`Upload ${kind}`, accept:kind === "paper" ? ".pdf" : ".csv,.tsv,.parquet,.xlsx,.json,.jsonl,.ndjson",
-          disabled:busy || null, onchange:event=>{upload(event.target.files?.[0]);event.target.value="";}}))),
+          disabled:busy || null, onchange:event=>{upload(event.target.files?.[0]);event.target.value="";}})),
+      kind === "dataset" && h("label", {class:"ghost-btn dataset-upload-button"}, "Choose folder",
+        h("input", {type:"file",webkitdirectory:true,multiple:true,"aria-label":"Choose dataset folder",disabled:busy || null,
+          onchange:event=>{upload(selectedFiles(event.target.files));event.target.value="";}}))),
     progress && h("p", {role:progress.error ? "alert" : "status"}, progress.text),
     kind === "paper" && resource?.status === "ready" && h("div", {class:"paper-view-controls", role:"group", "aria-label":"Paper format"},
       [["pdf", "Original PDF"], ["lines", "Numbered text"]].map(([view, name]) => h("button", {
@@ -39,9 +43,12 @@ export function renderResourcePane(state, actions) {
     kind === "paper" ? (resource?.status === "ready"
       ? h("iframe", {key:resource.id,class:"paper-frame",title:resource.name,src:state.resourceUrl}) : null)
       : h("div", {},
-        resource?.status === "ready" ? renderSample(resource.metadata?.files?.[0] || {})
+        resource?.status === "ready" ? h("div", {},
+          resource.manifest && h("p", {}, `${resource.manifest.folderCount || 0} folders · ${resource.manifest.fileCount} files · ${((resource.manifest.totalBytes || 0)/1024/1024).toFixed(1)} MB`),
+          resource.manifest && h("ul", {}, (resource.manifest.files || []).filter(f=>f.role==='table').slice(0,12).map(f=>h("li",{},f.path))),
+          renderSample(resource.metadata?.files?.[0] || {}))
           : resource?.status === "acquiring" ? h("p", {role:"status"}, "Preparing dataset…")
-          : !progress?.error && h("p", {}, "Upload a dataset to view it here."),
+          : !progress?.error && h("p", {}, resource?.error || "Add dataset — Drop a file or folder here."),
         fallback && h("p", {class:"resource-provenance"},
           `${fallback.kind === "synthetic_fallback" ? "Synthetic stand-in" : "Fallback"} for ${fallback.title}. ${fallback.reason || fallback.access?.reason || ""}`)));
 }
