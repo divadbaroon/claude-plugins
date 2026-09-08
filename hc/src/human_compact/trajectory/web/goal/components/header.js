@@ -7,6 +7,9 @@ import { h, svg } from "../dom.js";
 import { renderExpertise } from "./expertise.js";
 
 const ICONS = {
+  api: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="8" cy="9" r="4"/><path d="m11 12 9 9m-3-3 3-3m-6 0 3-3"/></svg>`,
   person: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.2 3.6-7 8-7s8 2.8 8 7"/></svg>`,
@@ -64,6 +67,7 @@ function renderAccount(state, actions) {
     }, h("span", { class: "account-dot", "aria-hidden": "true" })),
     state.accountOpen && h("div", { class: "account-menu", role: "menu", "aria-label": "Account" },
       renderAccountRows(state, actions),
+      renderApi(state, actions),
       h("hr", { class: "menu-rule" }),
       renderExpertise(state, actions)));
 }
@@ -138,4 +142,33 @@ function renderSignIn(state, actions) {
       type: "button", role: "menuitem", class: "menu-row is-action", onclick: actions.startSignIn,
     }, icon("signIn"), h("span", { class: "menu-label" }, "Sign in")),
   ];
+}
+
+function renderApi(state, actions) {
+  const credits = state.apiCredits;
+  const known = typeof credits?.budget_usd === "number" && typeof credits?.spend_usd === "number";
+  const money = n => new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(n);
+  const blocked = state.apiBusy || state.apiLoading || !credits?.ok || credits?.foreign_helper;
+  return h("div", {class:"api-control", "data-api":""},
+    h("button", {type:"button",role:"menuitem",class:"menu-row is-action api-toggle", "aria-controls":"api-credits", "aria-expanded":state.apiOpen ? "true":"false", onclick:actions.toggleApi}, icon("api"), h("span", {class:"menu-label"}, "API")),
+    state.apiOpen && h("div", {id:"api-credits",class:"api-menu",role:"group","aria-label":"API and credits"},
+      h("div", {class:"api-heading"}, h("span",{class:"section-label"},"API"),
+        h("button",{type:"button",class:"menu-cancel",disabled:state.apiLoading || state.apiBusy || null,onclick:actions.loadApiCredits},"Refresh")),
+      state.apiLoading && h("p",{role:"status"},"Checking credits…"),
+      h("button", {type:"button",class:"api-choice", "aria-pressed":credits?.using === "engelbart" ? "true":"false",
+        disabled:blocked || !credits?.available || credits?.credit_status === "exhausted" || null,
+        onclick:()=>actions.switchApiCredits("engelbart")},
+        h("span",{},"Engelbart"), credits?.using === "engelbart" && h("span",{class:"menu-sub"},"Active")),
+      h("p",{class:"api-balance"},known ? `${money(Math.max(0,credits.budget_usd-credits.spend_usd))} left of ${money(credits.budget_usd)}`
+        : credits?.available ? "Balance unavailable" : credits ? "Connect your Engelbart account to use its credit." : ""),
+      known && h("p",{class:"menu-hint"},"Account balance · shared across sessions"),
+      h("button", {type:"button",class:"api-choice", "aria-pressed":credits?.using === "own" ? "true":"false",
+        disabled:blocked || null, onclick:()=>actions.switchApiCredits("own")},
+        h("span",{},"My Claude"), credits?.using === "own" && h("span",{class:"menu-sub"},"Active")),
+      h("p",{class:"menu-hint"},"Uses your Claude login. Balance is managed by Anthropic."),
+      h("p",{class:"menu-hint"},"Applies to new work on this machine. Running Claude sessions keep their current credit source."),
+      credits?.env_pinned && h("p",{class:"menu-hint"},"Reopen this workspace to use your Claude login."),
+      credits?.foreign_helper && h("p",{role:"status"},"Another credential helper is configured; switching is unavailable."),
+      state.apiBusy && h("p",{role:"status"},"Switching…"),
+      state.apiError && h("p",{role:"alert"},state.apiError)));
 }

@@ -206,6 +206,30 @@ def _xlsx(path):
         book.close()
 
 
+def _prepare_paper(cwd, folder, path, r):
+    from pypdf import PdfReader
+    pdf = PdfReader(path)
+    if pdf.is_encrypted:
+        raise NeedsUser('The paper is encrypted')
+    chunks = []
+    remaining = 2 * 1024 * 1024
+    for page in pdf.pages[:300]:
+        text = (page.extract_text() or '')[:remaining]
+        chunks.append(text)
+        remaining -= len(text)
+        if remaining <= 0:
+            break
+    text = '\n'.join(chunks)
+    if not text.strip():
+        raise ValueError('PDF has no extractable text; OCR is not supported yet')
+    parsed = folder / 'paper.txt'
+    parsed.write_text(text, encoding='utf-8')
+    r['metadata'].update(pageCount=len(pdf.pages), title=r['name'], size=path.stat().st_size,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        authors=str((pdf.metadata or {}).get('/Author') or r['metadata'].get('authors') or '')[:500])
+    r['access'] = {'pdf': str(path.relative_to(cwd)), 'text': str(parsed.relative_to(cwd))}
+
+
 def inspect_table(path):
     suffix = path.suffix.lower()
     count, sheet = None, None
@@ -389,27 +413,7 @@ def prepare(root, cwd, supplied, fetch=download):
             if r['kind'] == 'paper':
                 path = folder / 'paper.pdf'
                 fetch(url, path, min(limit, 20 * 1024 * 1024))
-                from pypdf import PdfReader
-                pdf = PdfReader(path)
-                if pdf.is_encrypted:
-                    raise NeedsUser('The paper is encrypted')
-                chunks = []
-                remaining = 2 * 1024 * 1024
-                for page in pdf.pages[:300]:
-                    text = (page.extract_text() or '')[:remaining]
-                    chunks.append(text)
-                    remaining -= len(text)
-                    if remaining <= 0:
-                        break
-                text = '\n'.join(chunks)
-                if not text.strip():
-                    raise ValueError('PDF has no extractable text; OCR is not supported yet')
-                parsed = folder / 'paper.txt'
-                parsed.write_text(text, encoding='utf-8')
-                r['metadata'].update(pageCount=len(pdf.pages), title=r['name'], size=path.stat().st_size,
-                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                    authors=str((pdf.metadata or {}).get('/Author') or r['metadata'].get('authors') or '')[:500])
-                r['access'] = {'pdf': str(path.relative_to(cwd)), 'text': str(parsed.relative_to(cwd))}
+                _prepare_paper(cwd, folder, path, r)
             elif r['kind'] == 'dataset':
                 inline = source.get('inlineCsv')
                 suffix = '.csv' if inline is not None else Path(urllib.parse.urlsplit(url).path).suffix.lower()
@@ -514,7 +518,7 @@ def dataset_preview(root, cwd, rid):
     raise FileNotFoundError("No ready project dataset")
 
 
-UPLOAD_FORMATS = {'.csv', '.tsv', '.parquet', '.xlsx'}
+UPLOAD_FORMATS = {'.csv', '.tsv', '.parquet', '.xlsx', '.json', '.jsonl', '.ndjson'}
 
 
 def upload_limit():
@@ -522,19 +526,25 @@ def upload_limit():
 
 
 def upload_dataset(root, cwd, filename, stream, size):
+    return upload_resource(root, cwd, filename, stream, size, "dataset")
+
+def upload_resource(root, cwd, filename, stream, size, kind):
     """Store and inspect one raw upload through the existing resource contract.
 
-    The previous active dataset remains active until inspection succeeds. Each
-    immutable upload has a unique resource ID; original bytes and historical
-    fallback records remain available, with one durable active-dataset pointer.
+    Prior resources remain available until inspection succeeds. Dataset uploads
+    update the active-dataset pointer; paper uploads become the first paper in
+    the resource list. Original bytes and replacement provenance are retained.
     """
     if (not filename or len(filename) > 200 or filename in ('.', '..')
             or any(c in filename for c in ('/', '\\')) or any(ord(c) < 32 for c in filename)):
         raise ValueError('Use a filename without folders or control characters')
     suffix = Path(filename).suffix.lower()
-    if suffix not in UPLOAD_FORMATS:
-        raise ValueError('Upload a CSV, TSV, Parquet or XLSX file')
-    if size <= 0 or size > upload_limit():
+    if kind not in ("dataset", "paper"):
+        raise ValueError("Unsupported resource kind")
+    if suffix not in ({".pdf"} if kind == "paper" else UPLOAD_FORMATS):
+        raise ValueError('Upload a PDF file' if kind == 'paper' else 'Upload a CSV, TSV, Parquet, XLSX or JSON file')
+    limit = min(upload_limit(), 20 * 1024 * 1024) if kind == 'paper' else upload_limit()
+    if size <= 0 or size > limit:
         raise ValueError('This file is empty or too large to inspect locally')
     cwd = Path(cwd).resolve()
     if not cwd.is_dir():
@@ -543,7 +553,7 @@ def upload_dataset(root, cwd, filename, stream, size):
     # Cross-process lock on resource mutations, using the existing lock primitive.
     lock_id = 'resources-' + hashlib.sha256(str(cwd).encode()).hexdigest()[:24]
     rid = 'upload-' + uuid.uuid4().hex
-    r = dict(id=rid, kind='dataset', name=filename, status='acquiring', error='',
+    r = dict(id=rid, kind=kind, name=filename, status='acquiring', error='',
              source={'kind': 'upload', 'originalFilename': filename}, access={},
              metadata={'preparationPhase': 'uploading'}, provenance={'providedBy': 'user', 'uploadedAt': time.time()})
     def persist(activate=False):
@@ -552,7 +562,7 @@ def upload_dataset(root, cwd, filename, stream, size):
             records = project.get('resources') or []
             if not any(x['id'] == rid for x in records) and len(records) >= 12:
                 raise ValueError('The project resource history is full; this upload was not added')
-            if activate:
+            if activate and kind == 'dataset':
                 previous = project.get('activeDatasetId')
                 replaced = [x for x in records if x['kind'] == 'dataset' and x['id'] != rid
                             and (x['id'] == previous if previous else x['status'] == 'ready')]
@@ -560,7 +570,10 @@ def upload_dataset(root, cwd, filename, stream, size):
                     'fallbackOf': x.get('provenance', {}).get('fallbackOf')} for x in replaced[:6]]
             records = [r if x['id'] == rid else x for x in records]
             if not any(x['id'] == rid for x in records): records.append(r)
-            PS.save_project(root, cwd, {'resources': records, **({'activeDatasetId': rid} if activate else {})})
+            if activate and kind == 'paper':
+                r['provenance']['replaces'] = [{'id': x['id'], 'name': x['name']} for x in records if x['kind'] == 'paper' and x['id'] != rid][:6]
+                records = [r] + [x for x in records if x['id'] != rid]
+            PS.save_project(root, cwd, {'resources': records, **({'activeDatasetId': rid} if activate and kind == 'dataset' else {})})
     persist()
     try:
         folder = safe_path(cwd, '.engelbart-resources/' + rid)
@@ -581,16 +594,23 @@ def upload_dataset(root, cwd, filename, stream, size):
         r['metadata'].update(preparationPhase='inspecting', sha256=digest.hexdigest(), originalFormat=suffix[1:])
         r['access'] = {'localPath': str(folder.relative_to(cwd)), 'originalFile': str(path.relative_to(cwd))}
         persist()
-        inspected = dict(inspect_table(path), path=str(path.relative_to(cwd)))
-        r['metadata'].update(files=[inspected], artifactStamps={inspected['path']: artifact_stamp(path)})
+        if kind == 'paper':
+            _prepare_paper(cwd, folder, path, r)
+            r['access']['originalFile'] = str(path.relative_to(cwd))
+            r['metadata']['artifactStamps'] = {r['access'][key]: artifact_stamp(safe_path(cwd, r['access'][key])) for key in ('pdf', 'text')}
+        else:
+            inspected = dict(inspect_table(path), path=str(path.relative_to(cwd)))
+            r['metadata'].update(files=[inspected], artifactStamps={inspected['path']: artifact_stamp(path)})
+            r['metadata'].pop('preparationPhase', None)
+            r['access']['primaryFiles'] = [inspected['path']]
         r['metadata'].pop('preparationPhase', None)
-        r['access']['primaryFiles'] = [inspected['path']]
         r['status'] = 'ready'
         persist(activate=True)
     except Exception as exc:
         r['status'] = 'failed'
         r['metadata'].pop('preparationPhase', None)
-        r['error'] = ('Could not read this spreadsheet.' if suffix == '.xlsx' else
+        r['error'] = ('Could not read this PDF. Try a PDF with selectable text.' if kind == 'paper' else
+                      'Could not read this spreadsheet.' if suffix == '.xlsx' else
                       'No readable tabular data was found. Check the file and upload it again.')
         # Only the exception class is retained for diagnosis, never cells/tokens/stack traces.
         r['metadata']['inspectionError'] = type(exc).__name__

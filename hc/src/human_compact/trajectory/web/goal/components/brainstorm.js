@@ -6,13 +6,16 @@ import { activeSlice } from "../store.js";
 
 export function renderBrainstorm(state, actions, withTodos) {
   const slice = activeSlice(state);
-  const ready = slice.draft.trim().length > 0 && !slice.thinking;
+  const ready = slice.draft.trim().length > 0 && !slice.thinking && !slice.clearing;
   return h("div", { class: "brainstorm" },
     h("div", { class: "section-head" },
       h("span", { class: "section-label" }, "Conversation"),
+      h("div", {class:"conversation-actions"},
       !withTodos && h("button", {
         type: "button", class: "ghost-btn", onclick: actions.toggleTodosPane,
-      }, "Show todos")),
+      }, "Show todos"),
+      h("button", {type:"button", class:"conversation-clear section-label", "aria-label":"Clear conversation",
+        disabled: slice.thinking || slice.clearing || !slice.chat.length || null, onclick:actions.clearChat}, "Clear"))),
     h("div", { class: "feed", "data-feed": "", role: "log" },
       h("div", { key: `feed:${state.activeId}`, class: "feed-inner" },
         slice.chat.filter(message=>message.kind!=="proposal" || message.added || !slice.todos.some(t=>equivalent(t.text)===equivalent(message.text))).map((message) => renderMessage(message, actions)),

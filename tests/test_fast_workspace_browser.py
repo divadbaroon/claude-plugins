@@ -55,7 +55,7 @@ class ProductionWorkspaceTests(BrowserCase):
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
             self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Dataset'])
 
-    def test_live_factual_activity_and_lifecycle_outside_terminal(self):
+    def test_lifecycle_stays_visible_but_logs_stay_in_terminal(self):
         subs = self.prepare([])
         goals, important = self.goals()
         rows = GM.by_id(goals, subs[0])['todo_items']
@@ -65,12 +65,14 @@ class ProductionWorkspaceTests(BrowserCase):
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
             emit('build.started')
             BUILD.note_activity('chat', self.root, subs[0], 'tool', 'edited index.html')
-            self.expect(page.get_by_label('Build activity').first).to_contain_text('edited index.html')
+            self.expect(page.locator('.todo-status').first).to_have_text('Building…')
+            self.expect(page.locator('.todos')).not_to_contain_text('edited index.html')
             BUILD.note_activity('chat', self.root, subs[0], 'tool', 'edited server.js')
-            self.expect(page.get_by_label('Build activity').first).to_contain_text('edited server.js')
+            self.expect(page.get_by_label('Build activity')).to_have_count(0)
             for kind, label in [('verify.started', 'Checking'), ('build.repair_requested', 'Fixing'), ('verify.started', 'Checking')]:
                 emit(kind)
-                self.expect(page.get_by_label('Build activity').first).to_contain_text(label)
+                self.expect(page.locator('.todo-status').first).to_contain_text(label)
+                self.expect(page.get_by_label('Build activity')).to_have_count(0)
             for r in rows: r.update(status='done', done=True)
             CS.save_goals('chat', goals, important, self.root)
             emit('verify.passed')

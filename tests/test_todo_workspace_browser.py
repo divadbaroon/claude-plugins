@@ -55,7 +55,7 @@ class TodoWorkspaceBrowserTests(BrowserCase):
             page.set_viewport_size({'width':600,'height':900});self.expect(plan).not_to_be_visible();self.expect(split).not_to_be_visible()
             self.assertEqual([],errors)
 
-    def test_second_todo_build_is_scoped_and_activity_is_inline(self):
+    def test_second_todo_build_keeps_logs_in_terminal(self):
         started=[]
         def start(session,root,goal,ids,quick=False):
             started.append(list(ids))
@@ -74,11 +74,52 @@ class TodoWorkspaceBrowserTests(BrowserCase):
             page.wait_for_function("window.engelbart.store.get().building === null")
             self.assertEqual([[self.rows[1]['id']]],started)
             BUILD.note_activity('chat',self.root,self.subs[0],'tool','edited app.js')
-            self.expect(second.get_by_label('Build activity')).to_contain_text('edited app.js')
+            self.expect(page.get_by_label('Build activity')).to_have_count(0)
+            self.expect(page.locator('.todos')).not_to_contain_text('edited app.js')
+            self.expect(page.get_by_role('button',name='Build all',exact=True)).to_be_visible()
+            self.expect(page.locator('.todos .todo-activity')).to_have_count(0)
             self.expect(first.get_by_label('Build activity')).to_have_count(0)
             for kind,label in [('verify.started','Checking…'),('build.repair_requested','Fixing…'),('verify.started','Checking…')]:
                 self.emit(kind,[self.rows[1]['id']]);self.expect(second.locator('.todo-status')).to_have_text(label)
-            self.emit('verify.passed',[self.rows[1]['id']]);self.expect(second.locator('.todo-status')).to_have_text('Done');self.expect(second.get_by_label('Build activity')).to_have_count(0)
+            self.emit('verify.passed',[self.rows[1]['id']]);self.expect(second.locator('.todo-status')).to_have_text('Done');self.expect(page.get_by_label('Build activity')).to_have_count(0)
+            page.get_by_role('tab',name='Terminal',exact=True).click()
+            self.expect(page.get_by_role('tabpanel')).to_contain_text('edited app.js')
+            self.assertEqual([],errors)
+
+    def test_build_all_label_tracks_explicit_request_and_all_row_scope(self):
+        with mock.patch.object(BUILD, 'start', return_value={'ok': True}), server_for(self.chat) as url, self.page_on(url) as (page, errors):
+            button = page.locator('.todos-actions .build-btn')
+            self.expect(button).to_contain_text('Build all')
+            button.click()
+            self.expect(button).to_contain_text('Building…')
+            page.reload()
+            self.expect(button).to_contain_text('Building…')
+            self.emit('verify.started', [row['id'] for row in self.rows])
+            self.expect(button).to_contain_text('Building…')
+            self.emit('verify.passed', [row['id'] for row in self.rows])
+            self.expect(button).to_contain_text('Build all')
+            self.assertEqual([], errors)
+
+    def test_double_click_plan_title_renames_persistently_without_completion(self):
+        original=self.rows_title()
+        with server_for(self.chat) as url,self.page_on(url) as (page,errors):
+            title=page.get_by_role('button',name=original,exact=True)
+            title.click()
+            self.expect(page.get_by_role('textbox',name='Rename subgoal')).to_have_count(0)
+            title.dblclick()
+            field=page.get_by_role('textbox',name='Rename subgoal')
+            self.expect(field).to_be_focused()
+            field.fill('Inspect one real session');field.press('Enter')
+            self.expect(page.get_by_role('button',name='Inspect one real session',exact=True)).to_be_visible()
+            page.reload()
+            title=page.get_by_role('button',name='Inspect one real session',exact=True)
+            self.expect(title).to_be_visible()
+            self.expect(page.get_by_role('button',name='Complete subgoal: Inspect one real session')).to_have_attribute('aria-pressed','false')
+            title.dblclick();field.fill('Discard this title');field.press('Escape')
+            self.expect(title).to_be_visible()
+            title.dblclick();field.fill('Compare one session')
+            page.get_by_role('tab',name='Terminal',exact=True).click()
+            self.expect(page.get_by_role('button',name='Compare one session',exact=True)).to_be_visible()
             self.assertEqual([],errors)
 
     def test_subgoal_completion_icons_selection_guard_and_reload(self):

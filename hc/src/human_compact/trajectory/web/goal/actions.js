@@ -56,6 +56,34 @@ export function createActions(store, services) {
     set((state) => withSlice(state, id, change));
   }
 
+  let apiCreditRun = 0;
+  async function loadApiCredits() {
+    const run = ++apiCreditRun;
+    set({apiLoading:true, apiError:""});
+    try {
+      const credits = await services.loadApiCredits();
+      if (run === apiCreditRun) set({apiCredits:credits, apiError:credits.ok ? "" : credits.error || "Could not read credits."});
+    } catch (error) {
+      if (run === apiCreditRun) set({apiError:"Could not refresh credits. Try again."});
+    } finally { if (run === apiCreditRun) set({apiLoading:false}); }
+  }
+  function toggleApi() {
+    const open = !get().apiOpen;
+    set({apiOpen:open});
+    if (open) loadApiCredits();
+  }
+  async function switchApiCredits(use) {
+    if (get().apiBusy) return;
+    ++apiCreditRun;
+    set({apiBusy:true, apiLoading:false, apiError:""});
+    try {
+      const result = await services.switchApiCredits(use);
+      if (!result.ok) set({apiError:result.error || "The credit source could not be changed."});
+      else set({apiCredits:result});
+    } catch (error) { set({apiError:"The credit source could not be changed. Try again."}); }
+    finally { set({apiBusy:false}); }
+  }
+
   async function loadAccount() {
     try {
       set({ account: await services.loadAccount() });
@@ -76,7 +104,8 @@ export function createActions(store, services) {
       const slice = { ...EMPTY_SLICE, ...incoming };
       const held = state.slices[id];
       if (held) {
-        slice.chat = mergeMessages(held.chat, slice.chat || []);
+        slice.chat = held.clearing ? held.chat : mergeMessages(held.chat, slice.chat || []);
+        slice.clearing = held.clearing;
         slice.thinking = held.thinking;
         slice.draft = held.draft;
         slice.newTodo = held.newTodo;
@@ -128,6 +157,7 @@ export function createActions(store, services) {
   // subgoal's build log. Read again on every refresh, on a switch of
   // subgoal or tab, and on a slow poll while something is being watched --
   // a build out, a process running, or a pane other than Bart's open.
+  const previewAutoAttempts = new Set();
   let panesRun = 0;
   async function loadPanes() {
     const id = get().activeId;
@@ -142,7 +172,16 @@ export function createActions(store, services) {
     }
     if (run !== panesRun || get().activeId !== id) return;
     set({ panes, panesFor: id, phases: panes.phases || get().phases });
-    changeSlice(id, (current) => ({ chat: mergeMessages(current.chat, panes.chat || []) }));
+    changeSlice(id, (current) => ({ chat: current.clearing ? current.chat : mergeMessages(current.chat, panes.chat || []) }));
+    const preview = panes.preview;
+    if (preview?.cwd && preview.autostart !== false && ["unconfigured", "ready", "stale"].includes(preview.status)
+        && !get().previewBusy && !workInFlight(get()) && !get().building) {
+      const key = JSON.stringify([preview.cwd, preview.detected_at, preview.stale, panes.build?.phase?.startedAt]);
+      if (!previewAutoAttempts.has(key)) {
+        previewAutoAttempts.add(key);
+        previewOp({op:"preview_show_ui", auto:true});
+      }
+    }
     if (panes.preview?.status === "failed" && !panes.preview.recovery && !get().previewBusy && !workInFlight(get())) {
       previewOp({ op: "preview_explain" });
     }
@@ -266,7 +305,7 @@ export function createActions(store, services) {
   }
 
   function closeAccount() {
-    if (get().accountOpen) set({ accountOpen: false });
+    if (get().accountOpen) set({ accountOpen: false, apiOpen:false });
   }
 
   // The menu stays open through both: what the CLI answered is shown there.
@@ -374,7 +413,7 @@ export function createActions(store, services) {
       answer = { ok: false, error: String((error && error.message) || error) };
     }
     const said = answer && !answer.ok ? (answer.reason || answer.error) : "";
-    set({ previewBusy: false, previewNote: said ? { text: said } : null });
+    set({ previewBusy: false, previewNote: said && !op.auto ? { text: said } : null });
     await loadPanes();
   }
   const previewConfigure = () => previewOp({ op: "preview_configure" });
@@ -382,6 +421,25 @@ export function createActions(store, services) {
   const previewRun = (profileId) => previewOp({ op: "preview_start", profile_id: profileId || "" });
   const previewStop = () => previewOp({ op: "preview_stop" });
   const previewForget = () => previewOp({ op: "preview_forget" });
+
+  function beginRenameSubgoal(id) {
+    const subgoal = get().subgoals.find(sub => sub.id === id);
+    if (subgoal) set({renamingSubgoal:{id, title:subgoal.title, original:subgoal.title}});
+  }
+  async function commitRenameSubgoal() {
+    const edit = get().renamingSubgoal;
+    if (!edit || edit.saving) return;
+    const title = edit.title.trim();
+    if (!title || title === edit.original) { set({renamingSubgoal:null}); return; }
+    set({renamingSubgoal:{...edit,saving:true,error:""}});
+    try {
+      await services.renameSubgoal(edit.id, title);
+      set(state=>({...state,renamingSubgoal:null,subgoals:state.subgoals.map(sub=>sub.id === edit.id ? {...sub,title} : sub)}));
+      await refresh();
+    } catch (error) {
+      set({renamingSubgoal:{...edit,error:"Could not rename this subgoal. Try again."}});
+    }
+  }
 
   function beginAddSubgoal() {
     set({ addingSubgoal: true, subgoalDraft: "" });
@@ -429,7 +487,7 @@ export function createActions(store, services) {
     const id = state.activeId;
     const slice = sliceOf(state, id);
     const text = slice.draft.trim();
-    if (!id || !text || slice.thinking) return;
+    if (!id || !text || slice.thinking || slice.clearing) return;
     const mine = { id: nextId("m"), who: "you", kind: "text", text, channel:"conversation", createdAt:new Date().toISOString() };
     changeSlice(id, (current) => ({ draft: "", thinking: true, chat: [...current.chat, mine] }));
     keepChat(id);
@@ -460,9 +518,29 @@ export function createActions(store, services) {
   }
 
   // Save through the shared merge boundary: other open pages may also write.
+  const chatSaves = new Map();
   function keepChat(id) {
     interaction("chat.saved", { subgoalId: id });
-    persist(services.saveChat({ subgoalId: id, messages: sliceOf(get(), id).chat }));
+    const pending = services.saveChat({ subgoalId: id, messages: sliceOf(get(), id).chat });
+    chatSaves.set(id, pending);
+    persist(pending);
+  }
+
+  async function clearChat() {
+    const id = get().activeId;
+    const slice = sliceOf(get(), id);
+    if (!id || slice.thinking || slice.clearing || !slice.chat.length) return;
+    changeSlice(id, {clearing:true});
+    try {
+      await chatSaves.get(id)?.catch(() => {});
+      const answer = await services.saveChat({subgoalId:id, messages:slice.chat, clear:true});
+      loadRun += 1; panesRun += 1;
+      changeSlice(id, {chat:answer.messages || [], clearing:false});
+      interaction("chat.saved", {subgoalId:id, cleared:true});
+    } catch (error) {
+      changeSlice(id, {clearing:false});
+      console.error("engelbart: the conversation could not be cleared", error);
+    }
   }
 
   // A row laid on the list once: a refresh that arrived first may have
@@ -582,7 +660,7 @@ export function createActions(store, services) {
     const slice = sliceOf(state, id);
     if (!id || state.building || workInFlight(state) || !hasOpenTodos(slice)) return;
     const rows = todoId ? slice.todos.filter(t => t.id === todoId) : slice.todos;
-    set({ building: id, buildingIds: rows.filter(t=>!t.done).map(t=>t.id), buildNote: null });
+    set({ building: id, buildAllFor: todoId ? null : id, buildingIds: rows.filter(t=>!t.done).map(t=>t.id), buildNote: null });
     try {
       await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: rows });
     } catch (error) {
@@ -594,14 +672,31 @@ export function createActions(store, services) {
   }
 
   return {
+    toggleApi, closeApi: () => set({apiOpen:false}), loadApiCredits, switchApiCredits,
     interaction, boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
     showGoal, showGoals, showProjects, openGoal, openProject,
     loadReader, setLevel,
     editGoalDraft, commitCreateGoal,
+    async uploadPaper(file) {
+      if (!file || get().paperUpload?.busy) return;
+      if (!/\.pdf$/i.test(file.name) || !file.size || file.size > 20 * 1024 * 1024) {
+        set({paperUpload:{error:true,text:"Choose a PDF up to 20 MB."}}); return;
+      }
+      set({paperUpload:{busy:true,text:"Uploading…"}});
+      try {
+        const answer = await services.uploadPaper(file, () => set({paperUpload:{busy:true,text:"Reading PDF…"}}));
+        await refresh();
+        if (answer.ok) {
+          set({resourceId:answer.resource.id,resourceUrl:services.projectPaperUrl(answer.resource.id)});
+          showTab("paper"); interaction("artifact.opened", {resourceId:answer.resource.id});
+        }
+        set({paperUpload:answer.ok ? null : {error:true,text:answer.error || "Could not read this PDF."}});
+      } catch (error) { set({paperUpload:{error:true,text:"Could not upload this PDF. Try again."}}); }
+    },
     async uploadDataset(file) {
       if (!file || get().datasetUpload?.busy) return;
-      if (!/\.(csv|tsv|parquet|xlsx)$/i.test(file.name)) {
-        set({datasetUpload:{error:true,text:"Upload a CSV, TSV, Parquet or XLSX file."}});return;
+      if (!/\.(csv|tsv|parquet|xlsx|json|jsonl|ndjson)$/i.test(file.name)) {
+        set({datasetUpload:{error:true,text:"Upload a CSV, TSV, Parquet, XLSX or JSON file."}});return;
       }
       if (!file.size || file.size > 50 * 1024 * 1024) {
         set({datasetUpload:{error:true,text:file.size ? "This file is too large to inspect locally." : "The file is empty."}});return;
@@ -632,8 +727,11 @@ export function createActions(store, services) {
         } catch (_) { /* Existing persisted metadata stays visible when the file is unavailable. */ }
       }
     },
-    selectSubgoal, showTab, loadPanes,
+    clearChat, selectSubgoal, showTab, loadPanes,
     previewConfigure, previewShowUi, previewRun, previewStop, previewForget,
+    beginRenameSubgoal, commitRenameSubgoal,
+    editSubgoalTitle: title => set({renamingSubgoal:{...get().renamingSubgoal,title}}),
+    cancelRenameSubgoal: () => set({renamingSubgoal:null}),
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editDraft, sendMessage, acceptProposal, rejectProposal,
     toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
