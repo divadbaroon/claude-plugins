@@ -91,3 +91,52 @@ jobs:
       - name: install --dry-run
         run: .\dist\engelbart-windows-x64.exe install --dry-run
         working-directory: engelbart
+
+  published-windows-installer:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: claude-plugins
+      - uses: actions/checkout@v4
+        with:
+          repository: Mathetic-PBC/berkeley-research
+          ref: main
+          path: berkeley-research
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: npm ci
+        working-directory: berkeley-research
+      - run: npx playwright install chromium
+        working-directory: berkeley-research
+      - name: Download the public Windows installer and select the released artifact
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:RUNNER_TEMP 'engelbart-public-install.ps1'
+          Invoke-WebRequest https://berkeley.mathetic.com/engelbart/install.ps1 -OutFile $script
+          "ENGELBART_INSTALL_SCRIPT=$script" >> $env:GITHUB_ENV
+          "CLAUDE_PLUGINS_DIR=$env:GITHUB_WORKSPACE\claude-plugins" >> $env:GITHUB_ENV
+          "BERKELEY_ROOT=$env:GITHUB_WORKSPACE\berkeley-research" >> $env:GITHUB_ENV
+          "ENGELBART_RELEASE_HOOK=$env:GITHUB_WORKSPACE\claude-plugins\engelbart\test\release\windows-installer.cjs" >> $env:GITHUB_ENV
+          "ENGELBART_INSTALLED_CHECK=$env:GITHUB_WORKSPACE\claude-plugins\engelbart\test\release\windows-installed.py" >> $env:GITHUB_ENV
+          "EXPECTED_VERSION=0.19.33" >> $env:GITHUB_ENV
+      - name: Retain native handoff assertions and replace only the installer entry point
+        working-directory: berkeley-research
+        shell: pwsh
+        run: |
+          $file = 'e2e/browser-cli-browser.spec.js'
+          $original = Get-Content -Raw $file
+          Set-Content -Encoding utf8 $file ('require(process.env.ENGELBART_RELEASE_HOOK);' + "`n" + $original)
+      - name: Published exe install, real hooks, production browser, and Preview
+        working-directory: berkeley-research
+        run: npm run test:e2e:round-trip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: published-windows-browser-report
+          path: berkeley-research/playwright-report/
