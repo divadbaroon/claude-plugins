@@ -13,15 +13,18 @@ function run(command,args,env,cwd) {
 }
 SimulatedMachine.prototype.installWithArgs = async function(args) {
   this.env.ENGELBART_INSTALL_DIR=path.join(this.root,'released-bin');
-  const result=await run('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File',process.env.ENGELBART_INSTALL_SCRIPT,...args],this.env,this.workspace);
+  const candidate=process.env.ENGELBART_CANDIDATE_BINARY;
+  const result=candidate
+    ? await run(candidate,['install',...args],this.env,this.workspace)
+    : await run('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File',process.env.ENGELBART_INSTALL_SCRIPT,...args],this.env,this.workspace);
   if(result.code!==0) throw Error(`Published installer failed: ${JSON.stringify(result)}`);
   const manifest=JSON.parse(fs.readFileSync(path.join(this.managed,'install.json'),'utf8'));
   this.env.HC_EXECUTABLE=path.join(manifest.runtime,'Scripts','hc.exe');
-  const binary=path.join(this.env.ENGELBART_INSTALL_DIR,'engelbart.exe');
+  const binary=candidate || path.join(this.env.ENGELBART_INSTALL_DIR,'engelbart.exe');
   const version=await run(binary,['install','--dry-run'],this.env,this.workspace);
   if(version.code || !version.stdout.includes('engelbart-cli '+process.env.EXPECTED_VERSION) || !version.stdout.includes('Verified bundled backend '+process.env.EXPECTED_VERSION)) throw Error(JSON.stringify(version));
   const python=path.join(manifest.runtime,'Scripts','python.exe');
-  console.log('Published binary and embedded HC verified:',process.env.EXPECTED_VERSION);
+  console.log('Native binary and embedded HC verified:',process.env.EXPECTED_VERSION);
   const checks=await run(python,[process.env.ENGELBART_INSTALLED_CHECK],this.env,this.workspace);
   console.log('Installed Windows check result:',JSON.stringify(checks));
   if(checks.code) throw Error(`Installed Windows checks failed: ${JSON.stringify(checks)}`);

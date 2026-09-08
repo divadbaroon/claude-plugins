@@ -92,7 +92,7 @@ jobs:
         run: .\dist\engelbart-windows-x64.exe install --dry-run
         working-directory: engelbart
 
-  published-windows-installer:
+  installed-windows-preview:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -114,6 +114,17 @@ jobs:
         working-directory: berkeley-research
       - run: npx playwright install chromium
         working-directory: berkeley-research
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Build candidate executable with the committed vendored wheel
+        shell: bash
+        working-directory: claude-plugins/engelbart
+        run: scripts/build-binary.sh windows-x64
+      - name: Select candidate installed artifact
+        shell: pwsh
+        run: |
+          "ENGELBART_CANDIDATE_BINARY=$env:GITHUB_WORKSPACE\claude-plugins\engelbart\dist\engelbart-windows-x64.exe" >> $env:GITHUB_ENV
       - name: Download the public Windows installer and select the released artifact
         shell: pwsh
         run: |
@@ -132,7 +143,7 @@ jobs:
           $file = 'e2e/browser-cli-browser.spec.js'
           $original = Get-Content -Raw $file
           Set-Content -Encoding utf8 $file ('require(process.env.ENGELBART_RELEASE_HOOK);' + "`n" + $original)
-      - name: Published exe install, real hooks, production browser, and Preview
+      - name: Candidate exe install, real hooks, production browser, and Preview
         working-directory: berkeley-research
         shell: powershell
         run: |

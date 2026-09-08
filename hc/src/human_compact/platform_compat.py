@@ -98,8 +98,13 @@ def kill_process_tree(pid: int, *, force: bool = False) -> None:
         args = ["taskkill", "/PID", str(pid), "/T"]
         if force:
             args.append("/F")
-        subprocess.run(args, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, check=False)
+        result = subprocess.run(args, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, check=False)
+        # Detached console servers cannot always accept a graceful taskkill.
+        # Retry only this owned tree, and only when termination was refused.
+        if result.returncode and not force:
+            subprocess.run([*args, "/F"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, check=False)
         return
     sig = signal.SIGKILL if force else signal.SIGTERM
     try:

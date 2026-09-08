@@ -55,7 +55,7 @@ def _prepare(root, cwd, rows):
             return False
         if any(p.name not in allowed for p in where.iterdir()):
             return False
-        files = {name: (ASSETS / name).read_text() for name in ('index.html', 'app.js', 'styles.css', 'ui.js')}
+        files = {name: (ASSETS / name).read_text(encoding='utf-8') for name in ('index.html', 'app.js', 'styles.css', 'ui.js')}
         # Uses the already installed HC runtime and its dataset dependencies.
         files['app.py'] = "from pathlib import Path\nfrom human_compact.trajectory.starter import serve\n\nif __name__ == '__main__':\n    serve(Path(__file__).parent)\n"
         files['Procfile'] = 'web: python app.py\n'
@@ -69,13 +69,13 @@ def _prepare(root, cwd, rows):
         except OSError:
             # Only remove the exact files this failed preparation just wrote.
             for name in created:
-                if (where / name).read_text() == files[name]:
+                if (where / name).read_text(encoding='utf-8') == files[name]:
                     (where / name).unlink()
             return False
         ignore = where / '.gitignore'
-        previous = ignore.read_text() if ignore.exists() else ''
+        previous = ignore.read_text(encoding='utf-8') if ignore.exists() else ''
         if '/' + MARKER not in previous.splitlines():
-            ignore.write_text(previous + ('\n' if previous and not previous.endswith('\n') else '') + '/' + MARKER + '\n')
+            ignore.write_text(previous + ('\n' if previous and not previous.endswith('\n') else '') + '/' + MARKER + '\n', encoding='utf-8')
         preview.configure(root, str(where), detect_only=True)
         return True
 
@@ -124,8 +124,8 @@ def runtime_command(cwd):
     """
     where = Path(cwd)
     try:
-        if ((where / 'Procfile').read_text().strip() == 'web: python app.py'
-                and json.loads((where / MARKER).read_text()).get('version') == 1):
+        if ((where / 'Procfile').read_text(encoding='utf-8').strip() == 'web: python app.py'
+                and json.loads((where / MARKER).read_text(encoding='utf-8')).get('version') == 1):
             return shlex.quote(sys.executable) + ' app.py'
     except (OSError, ValueError, AttributeError):
         pass
@@ -175,7 +175,7 @@ def handler(root, cwd):
 
 def serve(cwd):
     where = Path(cwd).resolve()
-    config = json.loads((where / MARKER).read_text()) if (where / MARKER).is_file() else {}
+    config = json.loads((where / MARKER).read_text(encoding='utf-8')) if (where / MARKER).is_file() else {}
     root = Path(config['root']) if config.get('root') else None
     with ThreadingHTTPServer(('127.0.0.1', 0), handler(root, where)) as server:
         print(f'http://127.0.0.1:{server.server_port}', flush=True)
