@@ -69,6 +69,22 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(10,len(sample))
         self.assertEqual(r['id'],PS.load_project(self.root,self.cwd)['activeDatasetId'])
 
+    def test_hosted_upload_is_acquired_and_signed_urls_are_not_persisted(self):
+        payload={'id':'hosted-dataset','kind':'dataset','name':'Uploaded with paper','status':'selected',
+                 'source':{'provider':'supabase','type':'upload','uploadId':'test-import'},
+                 'manifest':{'fileCount':1,'files':[{'path':'nested/metrics.csv','size':4,'downloadUrl':'https://storage.example/file?token=private-token'}]},
+                 'provenance':{'selectedBy':'paper-step'}}
+        calls=[]
+        def fetch(url,path,limit):
+            calls.append(url);path.write_bytes(b'a\n1\n')
+        resource=R.prepare(self.root,self.cwd,[payload],fetch=fetch)[0]
+        self.assertEqual('ready',resource['status'],resource)
+        self.assertEqual('hosted-dataset',PS.load_project(self.root,self.cwd)['activeDatasetId'])
+        self.assertEqual(b'a\n1\n',(self.cwd/resource['access']['localPath']/'nested/metrics.csv').read_bytes())
+        self.assertNotIn('private-token',json.dumps(PS.load_project(self.root,self.cwd)))
+        R.prepare(self.root,self.cwd,[payload],fetch=fetch)
+        self.assertEqual(1,len(calls))
+
     def test_remote_folder_acquisition_and_needs_user_replacement(self):
         files={'metrics.csv':b'metric\n1\n','nested/labels.csv':b'label\nyes\n'}
         source={'provider':'github','type':'github','repo':'org/research-repo','ref':'main','commit':'a'*40,'rootPath':'dataset','url':'https://github.com/org/research-repo/tree/main/dataset'}

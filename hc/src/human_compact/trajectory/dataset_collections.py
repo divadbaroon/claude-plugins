@@ -256,7 +256,7 @@ def acquire(root,cwd,resource,fetch):
     files=manifest.get('files') or []
     if manifest.get('truncated') or len(files)!=manifest.get('fileCount'):
         raise R.NeedsUser('Needs local folder: remote manifest is incomplete')
-    if source.get('provider') not in ('github','anonymous_github'):
+    if source.get('provider') not in ('github','anonymous_github','supabase'):
         raise R.NeedsUser('Needs local folder: this provider has no collection downloader')
     root_path=source.get('rootPath') or ''
     if root_path: relative(root_path)
@@ -264,7 +264,7 @@ def acquire(root,cwd,resource,fetch):
     if source['provider']=='github':
         if not re.fullmatch(r'[\w.-]+/[\w.-]+',repo) or not re.fullmatch(r'[a-fA-F0-9]{40}',source.get('commit','')):
             raise R.NeedsUser('Needs local folder: GitHub revision is not pinned')
-    elif not re.fullmatch(r'[\w.-]+',repo): raise ValueError('Invalid anonymous repository identifier')
+    elif source['provider']=='anonymous_github' and not re.fullmatch(r'[\w.-]+',repo): raise ValueError('Invalid anonymous repository identifier')
     if any(type(f.get('size')) is not int for f in files): raise R.NeedsUser('Needs local folder: provider did not supply bounded file sizes')
     started=begin(root,cwd,resource['name'],files,source); rid=started['id']
     folder,_=read_session(cwd,rid)
@@ -272,7 +272,10 @@ def acquire(root,cwd,resource,fetch):
         for file in files:
             path=relative(file['path']); full='/'.join(filter(None,[root_path,path]))
             if source['provider']=='github': url=f"https://raw.githubusercontent.com/{repo}/{source['commit']}/{quote(full,safe='/')}"
-            else: url=f"https://anonymous.4open.science/api/repo/{quote(repo,safe='')}/file/{quote(full,safe='/')}"
+            elif source['provider']=='anonymous_github': url=f"https://anonymous.4open.science/api/repo/{quote(repo,safe='')}/file/{quote(full,safe='/')}"
+            else:
+                url=file.get('downloadUrl') or ''
+                if not url: raise R.NeedsUser('Dataset download link expired or is missing; retry setup or upload the folder locally')
             temp=folder/'remote.part'
             fetch(url,temp,min(file['size'] or 1,policy()['maxFileBytes']))
             if temp.stat().st_size!=file['size']: raise ValueError('Remote collection file size changed')

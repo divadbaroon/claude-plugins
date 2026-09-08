@@ -97,7 +97,7 @@ class PublicRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def download(url, dest, limit):
+def download(url, dest, limit, timeout=45):
     public_url(url)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), PublicRedirect(), HTTPHandler(), HTTPSHandler())
     request = urllib.request.Request(url, headers={'User-Agent': 'Engelbart-resource/1'})
@@ -122,7 +122,7 @@ def download(url, dest, limit):
                 size += len(chunk)
                 if size > limit:
                     raise NeedsUser('Download exceeds the automatic size limit')
-                if time.monotonic() - started > 45:
+                if time.monotonic() - started > timeout:
                     raise ValueError('Download exceeded the preparation time limit')
                 f.write(chunk)
     return size
@@ -404,6 +404,7 @@ def prepare(root, cwd, supplied, fetch=download):
         r = dict(raw, source=persistent_reference(raw['source']),
                  metadata=persistent_reference(raw['metadata']),
                  provenance=persistent_reference({**(previous or {}).get('provenance', {}), **raw['provenance']}),
+                 manifest=persistent_reference(raw.get('manifest', {})),
                  access={}, status='acquiring', error='')
         # New unresolved discovery is not a request to acquire. An existing
         # failed/blocked record supplied again is an explicit retry, using the
@@ -434,7 +435,8 @@ def prepare(root, cwd, supplied, fetch=download):
                 _prepare_paper(cwd, folder, path, r)
             elif r['kind'] == 'dataset' and raw.get('manifest') and source.get('provider'):
                 from . import dataset_collections as DC
-                r.update(DC.acquire(root,cwd,dict(r,manifest=raw['manifest']),fetch))
+                collection_fetch = (lambda url, path, cap: download(url, path, cap, timeout=1800)) if fetch is download else fetch
+                r.update(DC.acquire(root,cwd,dict(r,manifest=raw['manifest']),collection_fetch))
             elif r['kind'] == 'dataset':
                 inline = source.get('inlineCsv')
                 suffix = '.csv' if inline is not None else Path(urllib.parse.urlsplit(url).path).suffix.lower()

@@ -24,3 +24,7 @@ GitHub and Anonymous GitHub handoffs use the same collection shape. Local acquis
 Build/context reads the local full manifest within an 8 MiB metadata budget, chooses at most four likely relevant table references using current project terms, and includes a reason. This is an explicit heuristic, not a claim of scientific relevance. The full directory and manifest remain available to the builder to refine the subset. Raw dataset contents and the complete manifest are never dumped into normal model context.
 
 Release requires the updated installed wheel (0.20.0). Publish the installed client before deploying hosted collection handoffs. No database migration is required.
+
+Hosted Paper-step attachments (0.20.1)
+------------------------------------
+The hosted uploader carries private uploaded collections through the same resources payload. Supabase file URLs are signed only at authenticated claim time. The importer downloads each listed file into the existing staging session and makes the completed dataset active automatically. Signed URLs are removed before writing project metadata. A failed or expired download preserves the current dataset and asks for retry/local supply. Hosted copies remain private in the separate dataset bucket; the Paper bucket and 20 MiB PDF policy are unchanged.
