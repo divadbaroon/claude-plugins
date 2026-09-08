@@ -35,9 +35,18 @@ app.replaceChildren(selectControl('Student',['a','b'],show),timeline);show('a');
             rows=json.load(response)['rows'];assert rows[1]['action']=='run',rows
         checked=artifacts.inspect_page(state['url'],[
             {'kind':'control','role':'combobox','name':'Student'},
-            {'kind':'text','text':'run','steps':[{'action':'select','role':'combobox','name':'Student','value':'b'}]},
+            {'kind':'text','text':'a — edit'},
         ])
         assert checked['passed'],checked
+        from playwright.sync_api import sync_playwright, expect
+        with sync_playwright() as playwright:
+            browser=playwright.chromium.launch(headless=True,executable_path=artifacts.browser_executable())
+            try:
+                page=browser.new_page();page.goto(state['url'])
+                page.get_by_role('combobox',name='Student').select_option('b')
+                expect(page.get_by_text('b — run',exact=True)).to_be_visible()
+            finally:
+                browser.close()
         print(json.dumps({'installedVersion':importlib.metadata.version('human-compact'),'starter':True,'pathWithSpaces':True,'dataset':True,'browserCheck':True}))
     finally:
-        preview.stop(root,str(project))
+        preview.stop(str(project),root=root)
