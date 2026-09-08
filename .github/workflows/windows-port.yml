@@ -134,7 +134,11 @@ jobs:
           Set-Content -Encoding utf8 $file ('require(process.env.ENGELBART_RELEASE_HOOK);' + "`n" + $original)
       - name: Published exe install, real hooks, production browser, and Preview
         working-directory: berkeley-research
-        run: npm run test:e2e:round-trip
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          Get-Command Get-FileHash
+          npm run test:e2e:round-trip
       - uses: actions/upload-artifact@v4
         if: always()
         with:
