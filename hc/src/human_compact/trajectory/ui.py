@@ -5694,7 +5694,7 @@ class H(BaseHTTPRequestHandler):
             self._send(415, {'ok': False, 'error': 'A dataset file is required'})
             return
         limit = min(R.upload_limit(), 20 * 1024 * 1024) if kind == 'paper' else R.upload_limit()
-        if size <= 0 or size > limit:
+        if size < 0 or (size == 0 and not self.headers.get('X-HC-Import')) or size > limit:
             self._send(413 if size > limit else 400,
                        {'ok': False, 'error': 'This file is too large to inspect locally.' if size > 0 else 'The file is empty.'})
             return
@@ -5710,6 +5710,11 @@ class H(BaseHTTPRequestHandler):
             before = self.connection.gettimeout()
             try:
                 self.connection.settimeout(15)
+                if kind == 'dataset' and self.headers.get('X-HC-Import'):
+                    from . import dataset_collections as DC
+                    answer = DC.put(root,cwd,self.headers['X-HC-Import'],filename,self.rfile,size)
+                    self._send(200,answer)
+                    return
                 resource = R.upload_resource(root, cwd, filename, self.rfile, size, kind)
             finally:
                 self.connection.settimeout(before)
@@ -5830,6 +5835,26 @@ class H(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
             self._note_request(body)
+            if self.path == "/api/project-dataset/import":
+                if not self.server.chat_scoped or getattr(self.server, 'shared_project', None):
+                    self._send(400, {'ok':False,'error':'Open a local project before importing a dataset'}); return
+                from . import dataset_collections as DC
+                try:
+                    sid,root=_chat_identity(self.server.trajdir)
+                    cwd=CS.bound_project(sid,root) or CS.load_manifest(sid,root).get('cwd')
+                    if not cwd: raise ValueError('Open a local project first')
+                    action=body.get('action')
+                    if action=='begin': answer=DC.begin(root,cwd,body.get('name'),body.get('files'),{'type':'local_folder' if body.get('folder') else 'local_file'})
+                    elif action=='status': answer=DC.status(cwd,body.get('id',''))
+                    elif action=='cancel': answer=DC.cancel(root,cwd,body.get('id',''))
+                    elif action=='finish':
+                        resource=DC.finish(root,cwd,body.get('id',''))
+                        answer={'ok':resource['status']=='ready','resource':resource,'error':resource['error']}
+                    else: raise ValueError('Unknown dataset import action')
+                    self._send(200,answer)
+                except (ValueError,OSError,KeyError,TypeError) as exc:
+                    self._send(400,{'ok':False,'error':str(exc)[:200] if isinstance(exc,ValueError) else 'Could not prepare this dataset import'})
+                return
             if self.path == "/api/account/sign-in":
                 # Behind the JSON media-type check on purpose: a page
                 # from another origin cannot start one.
