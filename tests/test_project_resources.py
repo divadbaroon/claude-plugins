@@ -34,6 +34,22 @@ class ResourceTests(unittest.TestCase):
     def prepare(self, record, data):
         def fetcher(url, path, limit): path.write_bytes(data)
         return R.prepare(self.root, self.cwd, [record], fetch=fetcher)[-1]
+    def test_numbered_paper_text_is_escaped_and_uses_only_persisted_safe_path(self):
+        record = self.prepare(resource('paper'), pdf_bytes())
+        text_path = self.cwd / record['access']['text']
+        text_path.write_text('First line\n<script>alert(1)</script>\nLast line', encoding='utf-8')
+        rendered = R.paper_lines_html(self.root, self.cwd, record['id']).decode()
+        self.assertIn('id="L3"', rendered)
+        self.assertIn('&lt;script&gt;', rendered)
+        self.assertNotIn('<script>', rendered)
+        self.assertIn('Content-Security-Policy', rendered)
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            R.paper_lines_html(self.root, self.cwd, '../../etc/passwd')
+        record['access']['text'] = '../outside.txt'
+        PS.save_project(self.root, self.cwd, {'resources': [record]})
+        with self.assertRaises(ValueError):
+            R.paper_lines_html(self.root, self.cwd, record['id'])
+
     def test_csv_ready_and_no_redownload_and_context(self):
         r = self.prepare(resource(), b'timestamp,student_id\n1,s1\n2,s2\n')
         self.assertEqual('ready', r['status']); self.assertEqual(2, r['metadata']['files'][0]['rowCount'])
@@ -149,6 +165,24 @@ class ResourceBrowserTests(BrowserCase):
             page.get_by_role('tab', name='Paper', exact=True).click()
             self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src', '/api/project-paper?id=paper-one')
             self.assertEqual(pdf_bytes(), fetch(url+'/api/project-paper?id=paper-one')[2])
+            page.get_by_role('button', name='Numbered text', exact=True).click()
+            self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src', '/api/project-paper?id=paper-one&view=lines')
+            frame = page.frame_locator('iframe.paper-frame')
+            self.expect(frame.get_by_label('Numbered paper text', exact=True)).to_contain_text('Research materials handoff')
+            self.expect(frame.get_by_label('Line 1', exact=True)).to_have_text('1')
+            self.expect(frame.get_by_label('Line 2', exact=True)).to_have_text('2')
+            if self.route == '/':
+                page.screenshot(path='/tmp/engelbart-paper-numbered.png')
+            page.get_by_role('tab', name='Bart', exact=True).click()
+            hide = page.get_by_role('button', name='Hide todos', exact=True)
+            if self.route == '/':
+                self.expect(hide).to_be_visible()
+                self.assertEqual('12px', hide.evaluate('(el) => getComputedStyle(el).fontSize'))
+            page.get_by_role('tab', name='Paper', exact=True).click()
+            self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src', '/api/project-paper?id=paper-one&view=lines')
+            page.get_by_role('button', name='Original PDF', exact=True).click()
+            self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src', '/api/project-paper?id=paper-one')
+            self.assertEqual(404, fetch(url+'/api/project-paper?id=../../etc/passwd&view=lines')[0])
             self.assertEqual(404, fetch(url+'/api/project-paper?id=../../etc/passwd')[0])
             self.assertEqual(404, fetch(url+'/api/project-dataset?id=../../etc/passwd')[0])
             self.assertEqual(200, fetch(url+'/api/project-dataset?id=dataset-one')[0])

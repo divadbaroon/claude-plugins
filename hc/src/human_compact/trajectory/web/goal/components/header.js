@@ -7,6 +7,7 @@ import { h, svg } from "../dom.js";
 import { renderExpertise } from "./expertise.js";
 
 const ICONS = {
+  models: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/></svg>`,
   api: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <circle cx="8" cy="9" r="4"/><path d="m11 12 9 9m-3-3 3-3m-6 0 3-3"/></svg>`,
@@ -68,6 +69,7 @@ function renderAccount(state, actions) {
     state.accountOpen && h("div", { class: "account-menu", role: "menu", "aria-label": "Account" },
       renderAccountRows(state, actions),
       renderApi(state, actions),
+      renderModels(state, actions),
       h("hr", { class: "menu-rule" }),
       renderExpertise(state, actions)));
 }
@@ -171,4 +173,24 @@ function renderApi(state, actions) {
       credits?.foreign_helper && h("p",{role:"status"},"Another credential helper is configured; switching is unavailable."),
       state.apiBusy && h("p",{role:"status"},"Switching…"),
       state.apiError && h("p",{role:"alert"},state.apiError)));
+}
+
+function renderModels(state, actions) {
+  const settings = state.modelOptions?.settings || {};
+  const options = [...new Set(["opus","sonnet","haiku", ...(state.modelOptions?.aliases || []),
+    ...(state.modelOptions?.models || []), settings.interface_model, settings.model].filter(Boolean))];
+  const row = (role, label, value) => h("label", {class:"model-choice"},
+    h("span", {}, label), h("select", {"aria-label":label + " model",value,
+      disabled:state.modelsBusy || !state.modelOptions || null,
+      onchange:event=>actions.chooseModel(role,event.target.value)},
+      options.map(model=>h("option",{value:model,selected:model === value || null},
+        ["opus","sonnet","haiku"].includes(model) ? model[0].toUpperCase()+model.slice(1) : model))));
+  return h("div", {},
+    h("button", {type:"button",role:"menuitem",class:"menu-row is-action", "aria-expanded":String(Boolean(state.modelsOpen)),onclick:actions.toggleModels},
+      icon("models"),h("span",{class:"menu-label"},"Models")),
+    state.modelsOpen && h("div",{class:"api-menu",role:"group","aria-label":"Model settings"},
+      row("interface","Engelbart",settings.interface_model || "opus"),
+      row("preview","Live Preview",settings.model || "sonnet"),
+      state.modelsBusy && h("p",{role:"status"},"Saving/loading models…"),
+      state.modelsError && h("p",{role:"alert"},state.modelsError)));
 }

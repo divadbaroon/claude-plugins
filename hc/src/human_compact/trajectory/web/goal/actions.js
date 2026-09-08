@@ -56,6 +56,29 @@ export function createActions(store, services) {
     set((state) => withSlice(state, id, change));
   }
 
+  async function toggleModels() {
+    const open = !get().modelsOpen;
+    set({modelsOpen:open});
+    if (!open) return;
+    set({modelsBusy:true, modelsError:""});
+    try {
+      const result = await services.loadModels();
+      if (!result.ok) throw new Error();
+      set({modelOptions:result});
+    } catch (_) { set({modelsError:"Could not load models. Try again."}); }
+    finally { set({modelsBusy:false}); }
+  }
+  async function chooseModel(role, model) {
+    if (get().modelsBusy) return;
+    set({modelsBusy:true, modelsError:""});
+    try {
+      const result = await services.saveModels(role === "interface" ? {interface_model:model} : {model,quick_model:model});
+      if (!result.ok) throw new Error();
+      set({modelOptions:{...get().modelOptions,settings:result.settings}});
+    } catch (_) { set({modelsError:"Could not save the model. Try again."}); }
+    finally { set({modelsBusy:false}); }
+  }
+
   let apiCreditRun = 0;
   async function loadApiCredits() {
     const run = ++apiCreditRun;
@@ -305,7 +328,7 @@ export function createActions(store, services) {
   }
 
   function closeAccount() {
-    if (get().accountOpen) set({ accountOpen: false, apiOpen:false });
+    if (get().accountOpen) set({ accountOpen: false, apiOpen:false, modelsOpen:false });
   }
 
   // The menu stays open through both: what the CLI answered is shown there.
@@ -668,10 +691,13 @@ export function createActions(store, services) {
       return;
     }
     await refresh();
+    await loadPanes(); // Receive the persisted preview gate before removing the click guard.
     set({ building: null });
   }
 
   return {
+    setProjectDetailsOpen: open => { if (get().projectDetailsOpen !== open) set({projectDetailsOpen:open}); },
+    toggleModels, chooseModel,
     toggleApi, closeApi: () => set({apiOpen:false}), loadApiCredits, switchApiCredits,
     interaction, boot, refresh, toggleAccount, closeAccount, signOut, startSignIn, cancelSignIn,
     showGoal, showGoals, showProjects, openGoal, openProject,
@@ -687,7 +713,7 @@ export function createActions(store, services) {
         const answer = await services.uploadPaper(file, () => set({paperUpload:{busy:true,text:"Reading PDF…"}}));
         await refresh();
         if (answer.ok) {
-          set({resourceId:answer.resource.id,resourceUrl:services.projectPaperUrl(answer.resource.id)});
+          set({resourceId:answer.resource.id,resourceUrl:services.projectPaperUrl(answer.resource.id, get().paperView)});
           showTab("paper"); interaction("artifact.opened", {resourceId:answer.resource.id});
         }
         set({paperUpload:answer.ok ? null : {error:true,text:answer.error || "Could not read this PDF."}});
@@ -712,11 +738,17 @@ export function createActions(store, services) {
         set({datasetUpload:answer.ok ? null : {error:true,text:answer.error || "No readable tabular data was found."}});
       } catch (error) { set({datasetUpload:{error:true,text:error.message}}); }
     },
+    setPaperView(view) {
+      if (!["pdf", "lines"].includes(view)) return;
+      const id = get().resourceId;
+      if (!id) return;
+      set({paperView: view, resourceUrl: services.projectPaperUrl(id, view)});
+    },
     async openResource(id) {
       const resource = get().project?.resources?.find(r => r.id === id);
       if (!resource) return;
       interaction("artifact.opened", { resourceId: id });
-      set({ resourceId: id, resourceUrl: resource.kind === "paper" ? services.projectPaperUrl(id) : "" });
+      set({ resourceId: id, resourceUrl: resource.kind === "paper" ? services.projectPaperUrl(id, get().paperView) : "" });
       showTab(resource.kind === "paper" ? "paper" : resource.kind === "dataset" ? "dataset" : "resource");
       if (resource.kind === "dataset" && resource.status === "ready" && !resource.metadata?.files?.[0]?.sample) {
         try {

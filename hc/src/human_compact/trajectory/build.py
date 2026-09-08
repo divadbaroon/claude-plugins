@@ -300,6 +300,14 @@ def compose_prompt(session_id: str, goals: Dict[str, Any],
     # workspace is for -- goal, row, change, run, observation -- and its
     # last three links were being left to the session to guess at.
     lines += execution_lines(session_id, root, goal, rows)
+    if quick:
+        from . import starter
+        lines.append(starter.brief(_cwd_for(session_id, root, goals, goal['id'])))
+    if _web_acceptance({str(i): row.get("acceptance") for i, row in enumerate(rows)}):
+        lines += ["", "Make the requested runnable behavior work first. Avoid optional polish or"
+                  " documentation outside these rows. The workspace starts Preview and verifies"
+                  " the saved acceptance after this turn; run checks needed to implement/debug"
+                  " the change, without duplicating that final acceptance pass."]
     # Screenshots pasted into the rows going out: each "[attachment #N]" a
     # row cites, resolved to the file it names, so the session can open it.
     shots = GM.render_attachments(rows).rstrip("\n")
@@ -651,6 +659,57 @@ def _save_run(session_id: str, root: Optional[Path], record: Dict[str, Any]) -> 
     path = _run_path(session_id, root, record["goal_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(path, record)
+
+
+_PREVIEW_GATE_LOCK = threading.RLock()
+
+
+def _web_acceptance(criteria):
+    from .agents.acceptance import normalize, WEB_KINDS
+    return any(check["kind"] in WEB_KINDS for value in criteria.values()
+               for check in (normalize(value) or {}).get("checks", []))
+
+
+def preview_readiness(session_id, root, cwd):
+    """Project-wide display permission, including inactive subgoals.
+
+    A saved successful gate never overrides another live writer. Old run
+    records without this field keep their existing compatibility behavior.
+    """
+    records = []
+    for path in _builds_dir(session_id, root).glob("*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(record, dict) or not record.get("cwd") or Path(record["cwd"]).resolve() != Path(cwd).resolve():
+                continue
+            gate = record.get("preview_readiness")
+            if isinstance(gate, dict):
+                records.append((record, gate))
+        except (OSError, ValueError):
+            continue
+    if not records:
+        return None
+    if any(r.get("status") in ("running", "retrying", "redirecting") and r.get("phase") != "check"
+           for r, _g in records):
+        return {"status": "preparing"}
+    _record, gate = max(records, key=lambda pair: pair[1].get("created_at", ""))
+    status = gate.get("status", "preparing")
+    if status == "preparing" and _record.get("status") in ("failed", "cancelled", "waiting"):
+        status = "held"
+    return {"status": status}
+
+
+def set_preview_readiness(session_id, root, goal_id, token, status):
+    """A late verifier cannot publish the result of a replaced build."""
+    if not token:
+        return
+    with _PREVIEW_GATE_LOCK:
+        record = load_run(session_id, root, goal_id) or {}
+        gate = record.get("preview_readiness") or {}
+        if gate.get("token") != token:
+            return
+        record["preview_readiness"] = dict(gate, status=status)
+        _save_run(session_id, root, record)
 
 
 # ------------------------------------------------------ what the run is doing
@@ -1314,7 +1373,7 @@ class Run:
         self.telemetry_root = self.telemetry_context.run(telemetry.current)
 
     def record(self, **extra) -> Dict[str, Any]:
-        with self._record_lock:
+        with _PREVIEW_GATE_LOCK, self._record_lock:
             rec = load_run(self.session_id, self.root, self.goal_id) or {}
             rec.update({
                 "goal_id": self.goal_id,
@@ -1351,7 +1410,9 @@ class Run:
         # word where they chose nothing (HC_BUILD_MODEL, HC_BUILD_EFFORT) --
         # unless the caller names its own, as the restart check does.
         chosen = load_settings(self.session_id, self.root)
-        model = model or chosen.get("model") or os.environ.get("HC_BUILD_MODEL", "")
+        from .setup_chat import setup_model
+        model = setup_model(self.root, family=(model or chosen.get("model")
+                            or os.environ.get("HC_BUILD_MODEL") or "sonnet"))
         if model:
             command += ["--model", model]
         effort = effort or chosen.get("effort") or os.environ.get("HC_BUILD_EFFORT", "")
@@ -1371,6 +1432,13 @@ class Run:
         from .providers import subscription_env
         if phase == "rows":
             self.had_live_process = relevant_live_process(self.session_id, self.root, self.cwd)
+            # Hide the mutable project BEFORE the writer is spawned. Persist
+            # this across reloads, repairs, cancelled builds and server exits.
+            if (_web_acceptance(self.acceptance) or self.had_live_process
+                    or preview_readiness(self.session_id, self.root, self.cwd)):
+                import uuid
+                self.record(preview_readiness={"token": uuid.uuid4().hex,
+                            "created_at": _now(), "status": "preparing"})
         # The reader pressed Build on THIS project: that is the folder-trust
         # answer, given here so a headless run in a directory Claude Code
         # has never opened does not stall on a dialog nobody is watching.
@@ -2040,6 +2108,9 @@ def start(session_id: str, root: Optional[Path], goal_id: str,
         if not ids:
             return {"ok": False, "error": "those TODOs are not on this goal"}
         rows = picked_with_children(items, ids)
+        if quick:
+            from . import starter
+            starter.prepare(root, _cwd_for(session_id, root, goals, goal_id), rows)
         first = "queued" if mode() == "session" else "building"
         for row in items:
             if row["id"] in ids:
@@ -2847,7 +2918,7 @@ def _settings_path(session_id: str, root: Optional[Path]) -> Path:
 
 SETTINGS_DEFAULTS: Dict[str, Any] = {
     # What a build runs on; "" is the CLI's own default.
-    "model": "", "effort": "",
+    "model": "", "effort": "", "interface_model": "",
     # Whether a finished build is followed by the restart check, and what
     # that check runs on; "" is CHECK_MODEL / CHECK_EFFORT.
     "check": True, "check_model": "", "check_effort": "",
@@ -2859,7 +2930,7 @@ def _clean_settings(value: Any) -> Dict[str, Any]:
     out: Dict[str, Any] = dict(SETTINGS_DEFAULTS)
     if not isinstance(value, dict):
         return out
-    for key in ("model", "check_model", "quick_model"):
+    for key in ("model", "check_model", "quick_model", "interface_model"):
         model = str(value.get(key) or "").strip()
         if _MODEL_ID.match(model):
             out[key] = model
@@ -2890,7 +2961,7 @@ def save_settings(session_id: str, root: Optional[Path],
     if not isinstance(patch, dict):
         return {"ok": False, "error": "nothing to set"}
     current = load_settings(session_id, root)
-    for key in ("model", "check_model", "quick_model"):
+    for key in ("model", "check_model", "quick_model", "interface_model"):
         if key in patch:
             model = str(patch.get(key) or "").strip()
             if model and not _MODEL_ID.match(model):

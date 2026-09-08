@@ -86,7 +86,7 @@ def checks_cover(criterion):
 
 def derive(rows, context, root=None, engine=None):
     engine = engine or providers.make(os.environ.get("HC_CHAT_PROVIDER", "claude"),
-        "synthesize", setup_chat.setup_model(root), timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
+        "synthesize", setup_chat.workspace_model(root, "preview"), timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
     prompt = '''Derive the minimal observable acceptance criterion for each TODO.
 Return JSON {"criteria": {"todo-id": {"criterion":"observable outcome", "checks":[]}}}.
 Checks must establish EVERY requested property, not just labels or page health.
@@ -172,6 +172,8 @@ def prepare(session_id, root, goal_id):
         _pending.add(key)
     def work():
         try:
+            from .. import starter
+            starter.prepare_session(session_id, root, goal_id)
             from . import context
             goals, _ = CS.load_goals(session_id, root)
             goal = GM.by_id(goals, goal_id) or {}

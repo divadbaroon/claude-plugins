@@ -7,6 +7,10 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const mobile = () => matchMedia("(max-width: 700px)").matches;
 function persist() { try { localStorage.setItem(key, JSON.stringify(saved)); } catch (_) {} }
 export function fitLayout(host = document) {
+  // Measuring an auto-growing textarea temporarily collapses its height.
+  // Keep that intermediate layout from clamping the reader's scroll offset.
+  const todos = host.querySelector(".todos");
+  const scrollTop = todos?.scrollTop;
   const body = host.querySelector(".body"), cols = host.querySelector(".columns.has-todos");
   if (body) {
     const width = clamp(Number(saved.plan) || 340, 180, Math.max(180, Math.min(520, body.clientWidth - 480)));
@@ -24,6 +28,7 @@ export function fitLayout(host = document) {
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
   }
+  if (todos) todos.scrollTop = scrollTop;
 }
 export function separator(kind, label) {
   const change = (event, delta) => {

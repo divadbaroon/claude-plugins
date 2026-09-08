@@ -55,15 +55,19 @@ export function renderGoals(state, actions) {
   const name = state.project && state.project.name;
   const plan = state.project && state.project.plan;
   const count = `${rows.length} ${rows.length === 1 ? "goal" : "goals"}`;
-  return h("section", { key: "view-goals", class: "home", "aria-label": "Goals" },
+  return h("section", { key: "view-goals", class: "home goals-overview", "aria-label": "Goals" },
     h("div", { class: "home-head" },
       h("h2", { class: "home-title" }, name ? `Goals of ${name}` : "Goals"),
       h("span", { class: "home-count" }, count)),
-    plan && h("p", { class: "home-sub", title: plan }, plan),
+    plan && h("p", { class: "home-sub" }, String(state.project.objective || plan).split(/\n\s*\n/)[0]),
     !rows.length
       ? h("p", { class: "home-empty" }, "No goal yet.")
       : h("div", { class: "home-grid" },
-        rows.map((row) => renderGoalCard(row, state.goal && row.id === state.goal.id, actions))));
+        rows.map((row) => renderGoalCard(row, state.goal && row.id === state.goal.id, actions))),
+    plan && h("details", {class:"project-brief", open:state.projectDetailsOpen || null,
+      ontoggle:event=>actions.setProjectDetailsOpen(event.currentTarget.open)},
+      h("summary", {}, "Project details"),
+      h("div", {class:"project-brief-text"}, plan)));
 }
 
 function renderGoalCard(row, open, actions) {

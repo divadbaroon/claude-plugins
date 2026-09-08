@@ -3579,6 +3579,10 @@ def _preview_state(trajdir, chat_scoped, goal_id="", todo_id=""):
     if todo_id:
         intent = PREVIEW.intent_of(root, cwd, todo_id)
     out = PREVIEW.state(root, cwd, intent, session_id=_session_id)
+    from . import build as BUILD
+    readiness = BUILD.preview_readiness(_session_id, root, cwd)
+    if readiness:
+        out = dict(out, readiness=readiness)
     out["goal_id"] = goal_id
     out["todo_id"] = todo_id
     return out
@@ -3773,7 +3777,7 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
         answer = PREVIEW.intent_for(goal_id, str(op.get("__goal__") or ""),
                                     str(op.get("__text__") or ""),
                                     PREVIEW._primary(
-                                        PREVIEW.read_config(root, goal_id)))
+                                        PREVIEW.read_config(root, goal_id)), root=root)
         if answer.get("ok"):
             PREVIEW.save_intent(root, goal_id, op.get("todo_id") or "",
                                 str(op.get("__text__") or ""), answer)
@@ -3852,7 +3856,7 @@ def _apply_dispatch(op, trajdir=None, chat_scoped=None):
             session_id, root,
             {k: op.get(k) for k in ("model", "effort", "check",
                                     "check_model", "check_effort",
-                                    "quick_model", "quick_effort") if k in op})
+                                    "quick_model", "quick_effort", "interface_model") if k in op})
     return BUILD.answer(session_id, root, goal_id,
                         str(op.get("id") or ""), str(op.get("answer") or ""))
 
@@ -4597,7 +4601,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 for gid in ids:
                     phase = _goal_page_build_phase(sid, root, gid) or {}
                     piece = GM.by_id(goals, gid) or {}
-                    if phase.get("status") in ("building", "checking", "fixing", "needs_user") or any(r.get("status") in ("queued", "building", "asking") for r in piece.get("todo_items", [])):
+                    if phase.get("status") in ("building", "checking", "fixing") or any(r.get("status") in ("queued", "building", "asking") for r in piece.get("todo_items", [])):
                         return {"ok": False, "error": "Finish or resolve the active work before changing completion."}
             g["status"] = GM.norm_status(op["status"])
         elif kind == "set_priority" and g and op.get("priority") in ("urgent", "high", "normal"):
@@ -5141,8 +5145,12 @@ class H(BaseHTTPRequestHandler):
                     sid, root = _chat_identity(self.server.trajdir)
                     cwd = CS.bound_project(sid, root) or CS.load_manifest(sid, root).get("cwd")
                     rid = parse_qs(urlsplit(self.path).query).get("id", [""])[0]
-                    path = project_resources.paper_file(root, cwd, rid)
-                    self._send(200, path.read_bytes(), "application/pdf")
+                    view = parse_qs(urlsplit(self.path).query).get("view", ["pdf"])[0]
+                    if view == "lines":
+                        self._send(200, project_resources.paper_lines_html(root, cwd, rid), "text/html; charset=utf-8")
+                    else:
+                        path = project_resources.paper_file(root, cwd, rid)
+                        self._send(200, path.read_bytes(), "application/pdf")
                 except (ValueError, OSError, TypeError):
                     self._send(404, b"No ready project paper", "text/plain")
             elif self.path.split("?", 1)[0] == "/api/paper-pdf":

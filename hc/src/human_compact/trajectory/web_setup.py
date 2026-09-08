@@ -137,6 +137,15 @@ def materialize(payload: Dict[str, Any], root: Optional[Path] = None,
         result = {"ok": True, "cwd": project['cwd'], "name": project['name'],
                   "tree_session": existing.get('tree_session', ''), "bound": bound, "reused": True}
     resources.prepare(root, result["cwd"], payload.get("resources") or [])
+    # Cheap preparation precedes the first Build click. Existing apps and
+    # explicit framework choices are left intact; this makes no model call.
+    from . import starter, chat_state as CS
+    session = result.get("tree_session")
+    if session:
+        goals, _ = CS.load_goals(session, root)
+        first = next((g for g in goals.get("goals", []) if g.get("parent_goal_id") and g.get("todo_items")), None)
+        if first:
+            starter.prepare_session(session, root, first["id"])
     reader = payload.get("reader")
     if isinstance(reader, dict) and reader:
         from . import reader as READER

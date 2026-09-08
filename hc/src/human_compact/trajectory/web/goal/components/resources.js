@@ -31,6 +31,11 @@ export function renderResourcePane(state, actions) {
         h("input", {type:"file", "aria-label":`Upload ${kind}`, accept:kind === "paper" ? ".pdf" : ".csv,.tsv,.parquet,.xlsx,.json,.jsonl,.ndjson",
           disabled:busy || null, onchange:event=>{upload(event.target.files?.[0]);event.target.value="";}}))),
     progress && h("p", {role:progress.error ? "alert" : "status"}, progress.text),
+    kind === "paper" && resource?.status === "ready" && h("div", {class:"paper-view-controls", role:"group", "aria-label":"Paper format"},
+      [["pdf", "Original PDF"], ["lines", "Numbered text"]].map(([view, name]) => h("button", {
+        type:"button", class:"ghost-btn", "aria-pressed":(state.paperView || "pdf") === view ? "true" : "false",
+        onclick:()=>actions.setPaperView(view),
+      }, name))),
     kind === "paper" ? (resource?.status === "ready"
       ? h("iframe", {key:resource.id,class:"paper-frame",title:resource.name,src:state.resourceUrl}) : null)
       : h("div", {},

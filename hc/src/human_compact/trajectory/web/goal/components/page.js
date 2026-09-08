@@ -16,7 +16,7 @@ import { renderProjects, renderGoals } from "./home.js";
 
 export function renderPage(state, actions) {
   const empty = state.status === "ready" && state.empty;
-  return h("div", { class: "app" },
+  return h("div", { class: "app workspace-standard" },
     renderHeader(state, actions),
     state.view === "projects" ? renderProjects(state, actions)
     : state.view === "goals" ? renderGoals(state, actions)

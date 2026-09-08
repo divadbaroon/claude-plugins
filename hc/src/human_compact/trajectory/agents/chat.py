@@ -104,7 +104,7 @@ def ask(transcript, context: str = "", focus=(), known=(), discovered: str = "",
     try:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
-            SC.setup_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
+            SC.workspace_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
         with trace.span("model.call", agent="chat", model=getattr(engine, "model", "")):
             raw = engine.generate_json(
                 "\n".join(compose(transcript, context, focus, known, discovered)) + "\n")

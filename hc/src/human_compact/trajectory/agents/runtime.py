@@ -217,9 +217,12 @@ class LocalRuntime(Runtime):
         from .. import build
         return build.reopen(session_id, root, goal_id, row_id, note, verify_rows=rows)
 
-    def verify_artifact(self, criteria, preview):
+    def verify_artifact_ready(self, criteria, preview, on_ready):
+        return self.verify_artifact(criteria, preview, on_ready=on_ready)
+
+    def verify_artifact(self, criteria, preview, on_ready=None):
         from . import artifacts
-        return artifacts.verify(self, criteria, preview)
+        return artifacts.verify(self, criteria, preview, on_ready=on_ready)
 
 
 def make(kind: Optional[str] = None, cwd: str = "", root: Optional[Path] = None) -> Runtime:

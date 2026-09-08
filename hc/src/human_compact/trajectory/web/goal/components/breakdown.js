@@ -20,6 +20,7 @@ function renderSubgoal(subgoal, active, actions, state) {
   return h("div", {key:subgoal.id, class:active?"sub is-active":"sub", "aria-current":active?"true":null},
     h("button",{type:"button",class:"sub-mark", "aria-label":`${done?"Reopen":"Complete"} subgoal: ${subgoal.title}`,
       "aria-pressed":String(done),disabled:completionHeld(state,subgoal.id)||null,
+      title:completionHeld(state,subgoal.id) ? "Wait for the current work to finish" : done ? "Reopen subgoal" : "Mark subgoal complete",
       onclick:()=>actions.toggleGoalCompletion(subgoal.id)},done?"✓":""),
     edit ? h("div", {class:"sub-rename"},
       h("input", {key:"sub-rename-input",class:"sub-input",type:"text",maxlength:120,

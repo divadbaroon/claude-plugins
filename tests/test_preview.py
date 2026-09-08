@@ -583,7 +583,8 @@ class ServerTests(unittest.TestCase):
     def test_the_intent_op_reads_the_row_and_keeps_the_answer(self):
         calls = []
 
-        def fake(cwd, goal_title, todo_text, profile, engine=None):
+        def fake(cwd, goal_title, todo_text, profile, engine=None, root=None):
+            self.assertEqual(self.root.resolve(), root.resolve())
             calls.append(todo_text)
             return {"ok": True, "entrypoint": "/goals",
                     "scenario": ["Open a goal"], "expected": "It persists"}

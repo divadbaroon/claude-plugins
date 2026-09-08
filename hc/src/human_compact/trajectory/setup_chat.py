@@ -114,8 +114,8 @@ WRITTEN = (FREE, PARA)              # kinds the reader types into
 SETUP_MODEL = "sonnet"
 
 
-def setup_model(root=None) -> str:
-    """Which sonnet to ask for, on whichever account this install runs on.
+def setup_model(root=None, family=None) -> str:
+    """Resolve a model family on whichever account this install runs on.
 
     A reader Engelbart connected is billed against the key we issued them,
     and their settings pin `enforceAvailableModels` to the list that key is
@@ -128,6 +128,7 @@ def setup_model(root=None) -> str:
     record under ``~/.human-compact`` and starts setup with the issued key in
     its environment; this reads only that record's optional model names.
     """
+    family = family or SETUP_MODEL
     try:
         managed = Path(os.environ.get("HUMAN_COMPACT_HOME")
                        or Path.home() / ".human-compact")
@@ -135,18 +136,27 @@ def setup_model(root=None) -> str:
         claude = value.get("claude") if isinstance(value, dict) else {}
         models = claude.get("models") if isinstance(claude, dict) else []
     except (OSError, ValueError):
-        return SETUP_MODEL
+        return family
     # `.get` answers None for a key that is absent, and a record written by a
     # CLI that had nothing to say about models is the ordinary case, not the
     # broken one. Iterating that None crashed setup for every reader whose
     # account did not name its models -- and the crash surfaced as a bare
     # TypeError, which is how it went unread for so long.
     if not isinstance(models, list):
-        return SETUP_MODEL
+        return family
     for name in models:
-        if isinstance(name, str) and SETUP_MODEL in name:
+        if isinstance(name, str) and family in name:
             return name
-    return SETUP_MODEL
+    return family
+
+
+def workspace_model(root=None, role="interface") -> str:
+    """Reuse the vault-wide model settings for Bart or its built artifact."""
+    from . import build
+    chosen = build.load_settings("workspace", root)
+    model = (chosen.get("interface_model") or "opus") if role == "interface" else (
+        chosen.get("model") or os.environ.get("HC_BUILD_MODEL") or "sonnet")
+    return setup_model(root, family=model)
 
 
 # --- the prompt --------------------------------------------------------------

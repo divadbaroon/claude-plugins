@@ -38,6 +38,17 @@ function renderBody(state, preview, actions) {
   if (!preview) return body(h("p", { class: "pv-text" }, "Reading the project…"));
   if (!preview.ok) return body(h("p", { class: "pv-text" }, preview.error || "There is no project to run here."));
 
+  // Build edits the same files the live server reads. Unmount the frame
+  // until the server's saved acceptance gate permits this replacement.
+  // The optimistic click guard closes the gap before the first server poll.
+  const writing = state.building || Object.values(state.phases || {}).some(
+    phase => ["building", "fixing"].includes(phase?.status));
+  if (writing || (preview.readiness && preview.readiness.status !== "ready")) {
+    return body(h("p", { class: "pv-text", role: "status" },
+      preview.readiness?.status === "held" ? "Preview is not ready yet." : "Preparing preview…"),
+      h("p", { class: "pv-note" }, "The updated app will appear once its checks pass."));
+  }
+
   const note = state.previewNote && h("p", { class: "pv-note", role: "status" }, state.previewNote.text);
   const busy = state.previewBusy;
 

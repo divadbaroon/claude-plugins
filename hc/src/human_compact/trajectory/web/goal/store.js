@@ -25,6 +25,7 @@ export function initialState() {
   return {
     status: "loading",      // "loading" | "ready" | "failed"
     goal: null,             // { id, title, status }
+    paperView: "pdf",       // original PDF or stable extracted text lines
     datasetUpload: null,    // local transfer/inspection state, never the durable dataset
     project: null,          // the project the workspace is in: { name, objective, plan }, or null
     view: "goal",           // "goal" | "goals" (this project's goals) | "projects" (every project)
@@ -138,6 +139,6 @@ export function todoHeld(todo, state) {
 
 export function completionHeld(state, id) {
   const ids = id === state.goal?.id ? [id, ...state.subgoals.map(s=>s.id)] : [id];
-  return ids.some(sid => state.building === sid || ["building","checking","fixing","needs_user"].includes(lifecycleOf(state,sid)?.status)
+  return ids.some(sid => state.building === sid || ["building","checking","fixing"].includes(lifecycleOf(state,sid)?.status)
     || (state.slices[sid]?.todos || []).some(isWithBuilder));
 }

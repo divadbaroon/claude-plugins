@@ -28,12 +28,25 @@ def verify(session_id: str, root: Optional[Path], goal_id: str,
            row_ids: Sequence[str], runtime=None,
            checks: Sequence[Check] = ()) -> Dict[str, Any]:
     with trace.span("verifier.agent", goal=goal_id, rows=len(list(row_ids))) as span:
-        verdict = _verify(session_id, root, goal_id, list(row_ids), runtime, checks)
+        record = BUILD.load_run(session_id, root, goal_id) or {}
+        token = (record.get("preview_readiness") or {}).get("token")
+        def ready():
+            BUILD.set_preview_readiness(session_id, root, goal_id, token, "ready")
+            trace.phase("preview.ready_to_show")
+        try:
+            verdict = _verify(session_id, root, goal_id, list(row_ids), runtime, checks, ready)
+        except Exception:
+            BUILD.set_preview_readiness(session_id, root, goal_id, token, "held")
+            raise
+        BUILD.set_preview_readiness(session_id, root, goal_id, token,
+                                    "ready" if verdict["passed"] and
+                                    (verdict.get("evidence", {}).get("artifact", {}).get("page") or {}).get("passed")
+                                    else "held")
         span["attrs"]["passed"] = verdict["passed"]
         return verdict
 
 
-def _verify(session_id, root, goal_id, row_ids, runtime, checks) -> Dict[str, Any]:
+def _verify(session_id, root, goal_id, row_ids, runtime, checks, on_ready=None) -> Dict[str, Any]:
     evidence: Dict[str, Any] = {}
     if not row_ids:
         return _fail("the run contains no rows to verify", evidence)
@@ -90,7 +103,11 @@ def _verify(session_id, root, goal_id, row_ids, runtime, checks) -> Dict[str, An
     evidence["acceptance"] = criteria
     if any(criteria.get(rid) for rid in row_ids):
         try:
-            artifact = runtime.verify_artifact(criteria, evidence.get("preview") or {})
+            inspect_ready = getattr(runtime, "verify_artifact_ready", None)
+            if callable(inspect_ready) and on_ready:
+                artifact = inspect_ready(criteria, evidence.get("preview") or {}, on_ready)
+            else:
+                artifact = runtime.verify_artifact(criteria, evidence.get("preview") or {})
         except Exception as exc:
             artifact = {"passed": False, "reason": "artifact inspection unavailable: " + str(exc)[:160]}
         evidence["artifact"] = artifact

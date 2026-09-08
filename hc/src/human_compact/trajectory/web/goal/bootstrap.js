@@ -15,8 +15,13 @@ const actions = createActions(store, services);
 let feedMark = "";
 
 function draw(state) {
+  // DOM morphing removes measured inline heights before fitLayout restores
+  // them. Preserve scrolling across the entire update, not just measurement.
+  const todos = host.querySelector(".todos");
+  const scrollTop = todos?.scrollTop;
   mount(host, renderPage(state, actions));
   fitLayout(host);
+  if (todos && todos === host.querySelector(".todos")) todos.scrollTop = scrollTop;
   document.title = state.goal ? `Engelbart · ${state.goal.title}` : "Engelbart";
   // The feed follows its newest message, and opens on it; a reader who has
   // scrolled up to read is left where they are until one arrives.
