@@ -111,6 +111,27 @@ class CollectionBrowserTests(BrowserCase):
                         }''')
                         self.assertIn('Choose folder',fallback['message'])
                         self.assertEqual('single.csv',fallback['path'])
+                        race=page.evaluate('''async () => {
+                          const {createActions}=await import('/goal/actions.js');
+                          const {initialState}=await import('/goal/store.js');
+                          const old={id:'old',kind:'dataset'}, ready={id:'new',kind:'dataset',status:'ready'};
+                          let state={...initialState(),resourceId:'old',project:{resources:[old],activeDatasetId:'old'}};
+                          const pending=[];
+                          const actions=createActions({get:()=>state,set:patch=>{state=typeof patch==='function'?patch(state):{...state,...patch};}}, {
+                            uploadCollection:async()=>({ok:true,resource:ready}),
+                            loadGoal:()=>new Promise(resolve=>pending.push(resolve)),
+                          });
+                          const uploaded=actions.uploadDataset(new File(['a\\n1\\n'],'new.csv'));
+                          await Promise.resolve();
+                          const feed=actions.refresh();
+                          pending[0]({project:state.project});
+                          await uploaded;
+                          const selectedWhilePending=state.resourceId;
+                          pending[1]({project:{resources:[old,ready],activeDatasetId:'new'}});
+                          await feed;
+                          return {selectedWhilePending,selected:state.resourceId,active:state.project.activeDatasetId};
+                        }''')
+                        self.assertEqual({'selectedWhilePending':'new','selected':'new','active':'new'},race)
                         page.get_by_label('Choose dataset folder',exact=True).set_input_files(str(folder))
                         self.expect(page.get_by_role('heading',name='TutorTrace',exact=True)).to_be_visible()
                         self.expect(page.get_by_label('Resource details')).to_contain_text('3 files')

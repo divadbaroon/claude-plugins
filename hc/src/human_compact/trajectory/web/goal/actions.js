@@ -728,7 +728,9 @@ export function createActions(store, services) {
       try {
         const answer = await services.uploadCollection(entries, text => set({datasetUpload:{busy:true,text}}));
         await refresh();
-        if (answer.ok && answer.resource && get().project?.resources?.some(r => r.id === answer.resource.id)) {
+        // A change-feed refresh can supersede the awaited refresh before it
+        // has drawn. Keep the committed selection for that pending response.
+        if (answer.ok && answer.resource) {
           set({resourceId:answer.resource.id,resourceUrl:""});showTab("dataset");
           interaction("artifact.opened",{resourceId:answer.resource.id});
         }
