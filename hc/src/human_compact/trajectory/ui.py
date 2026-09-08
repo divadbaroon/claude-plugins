@@ -86,7 +86,7 @@ GOAL_OPS = frozenset({
 # narrower surface than the workspace it replaced, and the door it writes
 # through is the same width; anything else is refused by name.
 GOAL_PAGE_OPS = frozenset({
-    "add_goal", "set_notes", "add_todo_row", "set_todo_text",
+    "add_goal", "rename_goal", "set_notes", "add_todo_row", "set_todo_text",
     "set_todo_done", "remove_todo_row", "build_todos", "set_status",
 })
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
@@ -682,7 +682,7 @@ def _bart_chats(trajdir, chat_scoped):
         return {}
 
 
-def _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages):
+def _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages, clear=False):
     """The page's conversation on one subgoal, written down whole. Under
     the state lock like every write, and pruned to the tree as it stands:
     a conversation about a piece that is gone goes with the piece."""
@@ -700,18 +700,18 @@ def _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages):
     keep = {g.get("id") for g in goals.get("goals") or []
             if isinstance(g, dict) and g.get("id")}
     session_id, root = _chat_identity(trajdir)
-    kept = CS.save_bart_chat(session_id, piece["id"], messages, root, keep=keep, merge=bool(messages))
+    kept = CS.save_bart_chat(session_id, piece["id"], messages, root, keep=keep, merge=bool(messages), clear=clear)
     return {"ok": True, "messages": kept}
 
 
-def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages):
+def _save_bart_chat(trajdir, chat_scoped, subgoal_id, messages, clear=False):
     with TELEMETRY.operation(
             "bart-chat.save", "storage", reads=["goals"], writes=["bart-chat"],
             attributes={"engelbart.bart.subgoal": str(subgoal_id or "")[:80],
                         "engelbart.bart.messages": (len(messages)
                                                     if isinstance(messages, list)
                                                     else None)}) as op:
-        answer = _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages)
+        answer = _save_bart_chat_write(trajdir, chat_scoped, subgoal_id, messages, clear=clear)
         if isinstance(answer, dict) and answer.get("ok") is False:
             op.fail(RequestRefused(answer.get("error")))
         return answer
@@ -5627,7 +5627,7 @@ class H(BaseHTTPRequestHandler):
                 answer = _save_bart_chat(self.server.trajdir,
                                          self.server.chat_scoped,
                                          body.get("subgoal_id"),
-                                         body.get("messages"))
+                                         body.get("messages"), clear=body.get("clear") is True)
             except (OSError, ValueError, RuntimeError) as exc:
                 answer = {"ok": False, "error": str(exc)[:200]}
         self._send(200, answer)
@@ -5669,7 +5669,7 @@ class H(BaseHTTPRequestHandler):
         self._send(200, {"ok": True, "path": str(path),
                          "name": name or path.name})
 
-    def _take_dataset(self):
+    def _take_dataset(self, kind="dataset"):
         """Raw file upload on the existing local-only resource boundary."""
         from . import resources as R
         from urllib.parse import unquote
@@ -5685,8 +5685,9 @@ class H(BaseHTTPRequestHandler):
         if len(types) != 1 or types[0].split(';')[0] != 'application/octet-stream':
             self._send(415, {'ok': False, 'error': 'A dataset file is required'})
             return
-        if size <= 0 or size > R.upload_limit():
-            self._send(413 if size > R.upload_limit() else 400,
+        limit = min(R.upload_limit(), 20 * 1024 * 1024) if kind == 'paper' else R.upload_limit()
+        if size <= 0 or size > limit:
+            self._send(413 if size > limit else 400,
                        {'ok': False, 'error': 'This file is too large to inspect locally.' if size > 0 else 'The file is empty.'})
             return
         if self.headers.get_all('Transfer-Encoding') or len(self.headers.get_all('X-HC-Name', [])) != 1:
@@ -5701,7 +5702,7 @@ class H(BaseHTTPRequestHandler):
             before = self.connection.gettimeout()
             try:
                 self.connection.settimeout(15)
-                resource = R.upload_dataset(root, cwd, filename, self.rfile, size)
+                resource = R.upload_resource(root, cwd, filename, self.rfile, size, kind)
             finally:
                 self.connection.settimeout(before)
             self._send(200, {'ok': resource['status'] == 'ready', 'resource': resource, 'error': resource['error']})
@@ -5786,6 +5787,9 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
+            if self.path == "/api/project-paper/upload":
+                self._take_dataset("paper")
+                return
             if self.path == "/api/project-dataset/upload":
                 self._take_dataset()
                 return

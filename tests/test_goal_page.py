@@ -709,8 +709,7 @@ class GoalDataRouteTests(ChatCase):
     def test_the_door_is_as_wide_as_the_page(self):
         goal, subgoals = seed_design(self.chat)
         with server_for(self.chat) as url:
-            for body in ({"op": "rename_goal", "goal_id": goal, "title": "x"},
-                         {"op": "set_status", "goal_id": goal, "status": "archived"},
+            for body in ({"op": "set_status", "goal_id": goal, "status": "archived"},
                          {"op": "import_goals", "goals": []},
                          {"op": "purge_goal", "goal_id": goal},
                          {"op": ""}, {"op": 7}):
@@ -1732,16 +1731,9 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".terminal")).to_contain_text("no build has run on this subgoal yet")
             expect(page.locator(".terminal")).not_to_contain_text("started on 2 rows")
 
-            # The Live preview: nothing was run by opening it. One click works
-            # the project out, the next shows its page, in a frame, with the
-            # address beside the tabs; Stop ends it and says so.
+            # Opening the workspace starts its safe repository-derived profile.
+            # Opening Preview reveals that same running page; Stop still owns it.
             page.get_by_role("tab", name="Live preview").click()
-            expect(page.locator(".preview")).to_contain_text("Nothing is set up to run yet")
-            self.assertIsNone(PV.running(project))
-            page.get_by_role("button", name="Find how to run it").click()
-            expect(page.locator(".pv-cmd")).to_contain_text("serve.py", timeout=10_000)
-            self.assertIsNone(PV.running(project))
-            page.get_by_role("button", name="Show UI").click()
             frame = page.locator(".preview-frame")
             expect(frame).to_be_visible(timeout=20_000)
             expect(frame).to_have_attribute("src", re.compile(f"127\\.0\\.0\\.1:{port}"))

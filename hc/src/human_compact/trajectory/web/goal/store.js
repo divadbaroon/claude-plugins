@@ -42,6 +42,7 @@ export function initialState() {
     slices: {},             // subgoal id -> slice
     addingSubgoal: false,
     subgoalDraft: "",
+    buildAllFor: null,      // explicit Build all request; individual builds clear it
     building: null,         // the subgoal id whose Build all is out, else null
     buildNote: null,        // what the builder answered when it would not start: { text, error }
     panes: null,            // what getPanes answered for panesFor: { preview, build }

@@ -35,6 +35,29 @@ class DatasetUploadTests(unittest.TestCase):
             self.assertEqual(10,len(preview['sample']))
             self.assertLess(len(json.dumps(preview)),14000)
 
+    def test_json_original_and_bounds(self):
+        data=json.dumps([{'student':'<script>data only</script>', 'event':'edit'}]*100).encode()
+        r=self.assert_ready('records.json',data)
+        self.assertEqual(100,r['metadata']['files'][0]['rowCount'])
+        self.assertEqual(10,len(r['metadata']['files'][0]['sample']))
+        self.assertEqual('failed',self.upload('bad.json',b'{broken')['status'])
+
+    def test_paper_upload_preserves_pdf_text_and_prior_resource(self):
+        original=resource('paper');original['status']='failed'
+        PS.save_project(self.root,self.cwd,{'resources':[original]})
+        data=fixtures.pdf_bytes()
+        r=R.upload_resource(self.root,self.cwd,'my-paper.pdf',io.BytesIO(data),len(data),'paper')
+        self.assertEqual('ready',r['status'],r)
+        self.assertEqual(data,R.paper_file(self.root,self.cwd,r['id']).read_bytes())
+        self.assertTrue((self.cwd/r['access']['text']).read_text().strip())
+        self.assertTrue(R.cached_ready(self.cwd,r))
+        self.assertEqual(r['id'],PS.load_project(self.root,self.cwd)['resources'][0]['id'])
+        self.assertEqual(original['id'],r['provenance']['replaces'][0]['id'])
+        bad=R.upload_resource(self.root,self.cwd,'bad.pdf',io.BytesIO(b'not pdf'),7,'paper')
+        self.assertEqual('failed',bad['status'])
+        with self.assertRaises(ValueError):
+            R.upload_resource(self.root,self.cwd,'../bad.pdf',io.BytesIO(data),len(data),'paper')
+
     def test_parquet_and_workbook_preserved(self):
         import pyarrow as pa
         import pyarrow.parquet as pq
@@ -104,10 +127,11 @@ class DatasetUploadBrowserTests(BrowserCase):
             self.expect(page.get_by_text('Synthetic stand-in for IDETrace',exact=True)).to_be_visible()
             page.get_by_label('Upload dataset',exact=True).set_input_files({'name':'real.csv','mimeType':'text/csv','buffer':b'student_id,event\ns1,<script>bad()</script>\ns2,run\n'})
             self.expect(page.get_by_role('heading',name='real.csv',exact=True)).to_be_visible()
-            self.expect(page.get_by_label('Resource details')).to_contain_text('Ready · Active')
+            self.expect(page.get_by_label('Resource details')).not_to_contain_text('Local:')
+            self.expect(page.get_by_label('Resource details')).not_to_contain_text('Ready · Active')
             self.expect(page.locator('.dataset-preview')).to_contain_text('<script>bad()</script>')
             self.assertEqual(0,page.locator('.dataset-preview script').count())
-            self.expect(page.get_by_label('Resource details')).to_contain_text('synthetic stand-in for IDETrace')
+            self.assertIn('synthetic_fallback', str(PS.load_project(self.root,cwd)['resources']))
             project=PS.load_project(self.root,cwd);active=next(r for r in project['resources'] if r['id']==project['activeDatasetId'])
             context='\n'.join(BUILD.project_lines('chat',self.root))
             self.assertIn(active['access']['originalFile'],context)
@@ -117,6 +141,24 @@ class DatasetUploadBrowserTests(BrowserCase):
             page.get_by_label('Upload dataset',exact=True).set_input_files({'name':'bad.xlsx','mimeType':'application/octet-stream','buffer':b'broken'})
             self.expect(page.get_by_role('alert')).to_contain_text('Could not read this spreadsheet.')
             self.assertEqual(active['id'],PS.load_project(self.root,cwd)['activeDatasetId'])
+            self.assertEqual([],errors)
+
+    def test_failed_paper_has_clean_upload_and_real_replacement_survives_reload(self):
+        cwd=self.project()
+        paper=resource('paper');paper.update(status='failed',error='Resource could not be downloaded or read (ValueError)')
+        PS.save_project(self.root,cwd,{'resources':[paper]})
+        with server_for(self.chat) as url,self.page_on(url) as (page,errors):
+            page.get_by_role('tab',name='Paper',exact=True).click()
+            self.expect(page.get_by_label('Resource details')).not_to_contain_text('ValueError')
+            self.expect(page.get_by_label('Resource details')).not_to_contain_text('Local:')
+            page.get_by_label('Upload paper',exact=True).set_input_files({'name':'actual.pdf','mimeType':'application/pdf','buffer':fixtures.pdf_bytes()})
+            self.expect(page.locator('iframe.paper-frame')).to_be_visible()
+            src=page.locator('iframe.paper-frame').get_attribute('src')
+            self.assertTrue(src.startswith('/api/project-paper?id=upload-'))
+            self.assertEqual(fixtures.pdf_bytes(),page.request.get(url.rstrip('/')+src).body())
+            self.expect(page.get_by_label('Upload paper',exact=True)).to_be_attached()
+            page.reload();page.get_by_role('tab',name='Paper',exact=True).click()
+            self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src',src)
             self.assertEqual([],errors)
 
     def test_project_without_resource_has_upload_surface(self):
@@ -135,7 +177,7 @@ class DatasetUploadBrowserTests(BrowserCase):
         path=Path(cwd)/'data.parquet';pq.write_table(pa.table({'student_id':['real-142'],'event':['edit']}),path)
         workbook=Workbook();sheet=workbook.active;sheet.append(['student_id','event']);sheet.append(['real-142','edit'])
         out=io.BytesIO();workbook.save(out);workbook.close()
-        files=[('data.tsv',b'student_id\tevent\nreal-142\tedit\n'),('data.parquet',path.read_bytes()),('data.xlsx',out.getvalue())]
+        files=[('data.json',b'[{"student_id":"real-142","event":"edit"}]'),('data.tsv',b'student_id\tevent\nreal-142\tedit\n'),('data.parquet',path.read_bytes()),('data.xlsx',out.getvalue())]
         with server_for(self.chat) as url,self.page_on(url) as (page,errors):
             page.get_by_role('tab',name='Dataset',exact=True).click()
             for name,data in files:
@@ -145,7 +187,7 @@ class DatasetUploadBrowserTests(BrowserCase):
                 project=PS.load_project(self.root,cwd)
                 r=next(r for r in project['resources'] if r['id']==project['activeDatasetId'])
                 self.assertEqual(data,(Path(cwd)/r['access']['originalFile']).read_bytes())
-            page.locator('.dataset-upload').evaluate("el=>{const transfer=new DataTransfer();transfer.items.add(new File(['student_id,event\\nreal-999,run\\n'],'drop.csv',{type:'text/csv'}));el.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:transfer}));}")
+            page.locator('.resource-dataset').evaluate("el=>{const transfer=new DataTransfer();transfer.items.add(new File(['student_id,event\\nreal-999,run\\n'],'drop.csv',{type:'text/csv'}));el.dispatchEvent(new DragEvent('drop',{bubbles:true,dataTransfer:transfer}));}")
             self.expect(page.get_by_role('heading',name='drop.csv',exact=True)).to_be_visible()
             self.expect(page.locator('.dataset-preview')).to_contain_text('real-999')
             self.assertEqual([],errors)

@@ -176,9 +176,7 @@ class AlternateBrowser(BrowserCase):
             for label in ('Building', 'Checking', 'Fixing', 'Needs user', 'Failed'):
                 expect(page.locator('.terminal')).to_contain_text(label + ' activity')
             page.get_by_role('tab', name='Live preview').click()
-            expect(page.get_by_role('button', name='Find how to run it')).to_be_visible()
-            page.get_by_role('button', name='Find how to run it').click()
-            page.get_by_role('button', name='Show UI', exact=True).click()
+            # The shared workspace autostart has already launched the safe profile.
             frame = page.locator('.preview-frame')
             expect(frame).to_be_visible(timeout=20000)
             expect(frame.content_frame.get_by_role('heading', name='the app')).to_be_visible()

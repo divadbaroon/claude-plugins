@@ -652,7 +652,6 @@ class Orchestrator:
                 "context": json.dumps(CTX.assemble(self.session_id, self.root, outcome)),
                 "background": True} if passed else {})})
         if passed:
-            topic = COMM.subject(self.session_id, self.root, goal_id, rows, (verdict or {}).get("evidence"))
             said = ""
             if isinstance(followed, dict) and followed.get("ok"):
                 texts = [COMM.plain(r.get("text")) for r in followed.get("replies", []) if r.get("kind") == "text"]
@@ -661,7 +660,8 @@ class Orchestrator:
                 if not said:
                     said = " ".join(COMM.plain(r.get("text")) for r in followed.get("replies", [])
                                     if r.get("kind") == "text").strip()
-            COMM.publish(self.session_id, self.root, goal_id, "done", said or COMM.summary("done", topic))
+            if isinstance(followed, dict) and followed.get("route") == "brainstorm" and said:
+                COMM.publish(self.session_id, self.root, goal_id, "question", said, problem=said)
         return followed if followed is not None else {"ok": True, "route": "verify",
                                                      "passed": passed, "reason": reason}
 

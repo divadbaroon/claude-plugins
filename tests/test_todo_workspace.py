@@ -62,7 +62,7 @@ class TodoContracts(AgentCase):
     def test_lifecycle_channel_and_long_ids_survive_stale_saves(self):
         ident='m-'+('a'*60)
         CS.save_bart_chat(self.session,PIECE,[{'id':ident,'who':'you','kind':'text','text':'hello','createdAt':'2026-09-07T00:00:00Z'}],self.root)
-        C.publish(self.session,self.root,PIECE,'repair','The check found a problem. I am fixing it.')
+        C.publish(self.session,self.root,PIECE,'question','Which format do you want?')
         before=CS.load_bart_chats(self.session,self.root)[PIECE]
         self.assertEqual(ident,before[0]['id']);self.assertEqual('lifecycle',before[1]['channel'])
         for _ in range(3): CS.save_bart_chat(self.session,PIECE,before[:1],self.root,merge=True)

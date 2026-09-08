@@ -16,12 +16,26 @@ export function renderBreakdown(state, actions) {
 
 function renderSubgoal(subgoal, active, actions, state) {
   const done=subgoal.status==="completed";
+  const edit = state.renamingSubgoal?.id === subgoal.id ? state.renamingSubgoal : null;
   return h("div", {key:subgoal.id, class:active?"sub is-active":"sub", "aria-current":active?"true":null},
     h("button",{type:"button",class:"sub-mark", "aria-label":`${done?"Reopen":"Complete"} subgoal: ${subgoal.title}`,
       "aria-pressed":String(done),disabled:completionHeld(state,subgoal.id)||null,
       onclick:()=>actions.toggleGoalCompletion(subgoal.id)},done?"✓":""),
-    h("button",{type:"button",class:"sub-title", "aria-current":active?"true":null,
-      onclick:()=>actions.selectSubgoal(subgoal.id)},subgoal.title));
+    edit ? h("div", {class:"sub-rename"},
+      h("input", {key:"sub-rename-input",class:"sub-input",type:"text",maxlength:120,
+        "aria-label":"Rename subgoal",value:edit.title,readonly:edit.saving || null,
+        oninput:event=>actions.editSubgoalTitle(event.target.value),
+        onblur:actions.commitRenameSubgoal,
+        onkeydown:event=>{
+          if(event.key === "Enter") { event.preventDefault();actions.commitRenameSubgoal(); }
+          if(event.key === "Escape") { event.preventDefault();actions.cancelRenameSubgoal(); }
+        }}),
+      edit.error && h("span", {role:"alert",class:"menu-note"},edit.error))
+    : h("button",{type:"button",class:"sub-title", "aria-current":active?"true":null,
+      title:"Double-click to rename",
+      onclick:()=>actions.selectSubgoal(subgoal.id),
+      ondblclick:()=>actions.beginRenameSubgoal(subgoal.id),
+      onkeydown:event=>{ if(event.key === "F2") {event.preventDefault();actions.beginRenameSubgoal(subgoal.id);} }},subgoal.title));
 }
 
 function renderAddButton(actions) {

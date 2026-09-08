@@ -24,6 +24,10 @@ function draw(state) {
   const mark = feed ? `${state.activeId}:${activeSlice(state).chat.length}` : "";
   if (feed && mark !== feedMark) feed.scrollTop = feed.scrollHeight;
   feedMark = mark;
+  if (state.renamingSubgoal) {
+    const input = host.querySelector('[data-key="sub-rename-input"]');
+    if (input && document.activeElement !== input) { input.focus(); input.select(); }
+  }
   if (state.addingSubgoal) {
     const input = host.querySelector('[data-key="sub-add-input"]');
     if (input && document.activeElement !== input) input.focus();
@@ -46,9 +50,10 @@ actions.boot();
 // inside the menu.
 document.addEventListener("click", (event) => {
   if (!event.target.closest("[data-account]")) actions.closeAccount();
+  if (!event.target.closest("[data-api]")) actions.closeApi();
 }, true);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") actions.closeAccount();
+  if (event.key === "Escape") { actions.closeAccount(); actions.closeApi(); }
 });
 
 // For the console and the tests; nothing on the page reads it.

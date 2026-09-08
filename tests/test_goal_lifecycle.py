@@ -20,7 +20,7 @@ class CommunicationTests(AgentCase):
         row.update(status='asking', question='Use time since edit or successful run?')
         CS.save_goals(self.session, goals, important, self.root)
 
-    def test_repair_is_meaningful_once_and_detailed_evidence_stays_in_terminal(self):
+    def test_runs_stay_out_of_bart_and_evidence_stays_in_terminal(self):
         evidence = {'acceptance': {ROWS[0]: {'criterion': 'Changing the threshold updates highlighted moments'}},
                     'artifact': {'locator': '#threshold', 'http': 200, 'observed': 'saved result unchanged'}}
         verify = Recorder({'passed': False, 'reason': 'the saved result does not update when the threshold changes', 'evidence': evidence},
@@ -31,19 +31,24 @@ class CommunicationTests(AgentCase):
         self.assertEqual([], self.messages())
         orch.build_finished(PIECE, 'idle', ROWS)
         self.assertEqual('fixing', self.phase()['status'])
-        self.assertEqual(1, len(self.messages()))
-        self.assertIn('saved result does not update', self.messages()[0]['text'])
+        self.assertEqual([], self.messages())
         orch.build_finished(PIECE, 'idle', ROWS)
-        self.assertEqual(1, len(self.messages()))
+        self.assertEqual([], self.messages())
         orch.build_finished(PIECE, 'idle', ROWS)
         self.assertEqual('done', self.phase()['status'])
-        self.assertEqual(2, len(self.messages()))
-        self.assertIn('Changing the threshold', self.messages()[-1]['text'])
+        self.assertEqual([], self.messages())
         self.assertNotIn('locator', str(self.messages()))
         self.assertNotIn('#threshold', str(BUILD.load_activity(self.session, self.root, PIECE)))
         self.assertIn('#threshold', str(EV.read(self.session, self.root, types=['verify.failed'])))
         COMM.publish(self.session, self.root, PIECE, 'done', 'Duplicate poll')
-        self.assertEqual(2, len(self.messages()))
+        self.assertEqual([], self.messages())
+
+    def test_routine_run_notifications_are_not_saved_but_questions_are(self):
+        for kind in ('done', 'repair', 'failed'):
+            COMM.publish(self.session, self.root, PIECE, kind, 'Background run update')
+        self.assertEqual([], self.messages())
+        COMM.publish(self.session, self.root, PIECE, 'question', 'Which format do you want?')
+        self.assertEqual(['Which format do you want?'], [m['text'] for m in self.messages()])
 
     def test_human_build_question_is_delivered_once_and_answer_resumes(self):
         self.question_row()
@@ -154,10 +159,8 @@ class CommunicationTests(AgentCase):
                                                   'evidence': {'expected': 'Export', 'found': False}}))
         orch.build_requested(PIECE, ROWS)
         orch.build_finished(PIECE, 'idle', ROWS)
-        text = self.messages()[0]['text']
-        self.assertIn('Write the file', text)
-        for token in ('Playwright', 'locator', 'HTTP', '200'):
-            self.assertNotIn(token, text)
+        self.assertEqual([], self.messages())
+        self.assertIn('verification failed', str(BUILD.load_activity(self.session, self.root, PIECE)))
 
 
 class LifecycleBrowserTests(BrowserCase):

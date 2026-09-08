@@ -3,11 +3,13 @@
    so and is left alone until it comes back. */
 
 import { h } from "../dom.js";
-import { activeSlice, hasOpenTodos, anyWithBuilder, todoHeld, todoPhase, TODO_LABELS, workInFlight, lifecycleOf } from "../store.js";
+import { activeSlice, hasOpenTodos, todoHeld, todoPhase, TODO_LABELS, workInFlight } from "../store.js";
 
 export function renderTodos(state, actions) {
   const slice = activeSlice(state);
-  const building = state.building === state.activeId || anyWithBuilder(slice);
+  const open = slice.todos.filter(todo => todoPhase(todo, state) !== "done");
+  const busy = todo => ["building", "checking", "fixing"].includes(todoPhase(todo, state));
+  const building = open.some(busy) && (state.buildAllFor === state.activeId || open.every(busy));
   const canBuild = hasOpenTodos(slice) && !state.building && !workInFlight(state);
   return h("div", { key: "todos", class: "todos" },
     h("div", { class: "section-head" },
@@ -80,15 +82,5 @@ function renderTodo(todo, actions, state) {
       class: "todo-remove",
       "aria-label": "Remove todo",
       onclick: () => actions.removeTodo(todo.id),
-    }, "×")), renderActivity(state, todo));
-}
-
-function renderActivity(state, todo) {
-  const phase=todoPhase(todo,state);
-  if (!["building","checking","fixing"].includes(phase)) return null;
-  const lines=state.panesFor===state.activeId ? state.panes?.build?.lines || [] : [];
-  const useful=lines.filter(line=>["tool","verify","error"].includes(line.kind) && (!line.todoIds?.length || line.todoIds.includes(todo.id)) && (!lifecycleOf(state)?.startedAt || Date.parse(line.at)>=Date.parse(lifecycleOf(state).startedAt)));
-  const latest=[...new Set(useful.map(l=>l.text))].slice(-4);
-  return h("div", {class:"todo-activity", role:"status", "aria-label":"Build activity"},
-    h("div",{},TODO_LABELS[phase]), latest.map(text=>h("div",{},text)));
+    }, "×")));
 }

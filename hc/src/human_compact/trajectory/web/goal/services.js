@@ -73,18 +73,21 @@ async function op(operation) {
 
 export const services = {
   projectPaperUrl,
-  uploadDataset(file, onInspecting) {
+  loadApiCredits() { return get("/api/claude-account?fresh=1"); },
+  switchApiCredits(use) { return post("/api/op", {op:"claude_account", use}); },
+  uploadPaper(file, onInspecting) { return services.uploadDataset(file, onInspecting, "paper"); },
+  uploadDataset(file, onInspecting, kind = "dataset") {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/project-dataset/upload");
+      xhr.open("POST", `/api/project-${kind}/upload`);
       xhr.setRequestHeader("Content-Type", "application/octet-stream");
       xhr.setRequestHeader("X-HC-Name", encodeURIComponent(file.name));
       xhr.upload.onload = () => onInspecting?.();
       xhr.onload = () => {
         try { resolve(JSON.parse(xhr.responseText)); }
-        catch (_) { reject(new Error("The dataset could not be uploaded. Try again.")); }
+        catch (_) { reject(new Error(`The ${kind} could not be uploaded. Try again.`)); }
       };
-      xhr.onerror = () => reject(new Error("The dataset could not be uploaded. Check that Engelbart is running."));
+      xhr.onerror = () => reject(new Error(`The ${kind} could not be uploaded. Check that Engelbart is running.`));
       xhr.send(file);
     });
   },
@@ -186,6 +189,8 @@ export const services = {
   },
 
   /** A new subgoal under the goal; answers with the record as stored. */
+  renameSubgoal(id, title) { return op({op:"rename_goal", goal_id:id, title}); },
+
   async addSubgoal({ goalId, title }) {
     const answer = await op({ op: "add_goal", title, parent_goal_id: goalId });
     return { id: answer.id, title, goalId, revision: answer.revision };
@@ -213,8 +218,8 @@ export const services = {
   /** One subgoal's conversation, written down whole -- after a message
       sent, a reply landed, a proposal taken -- so a reload draws what was
       on screen. Answers with the messages as kept. */
-  async saveChat({ subgoalId, messages }) {
-    const answer = await post("/api/goal-page/chat", { subgoal_id: subgoalId, messages });
+  async saveChat({ subgoalId, messages, clear = false }) {
+    const answer = await post("/api/goal-page/chat", { subgoal_id: subgoalId, messages, clear });
     if (!answer.ok) throw new Error(answer.error || "the conversation could not be saved");
     return { subgoalId, messages: answer.messages || [] };
   },

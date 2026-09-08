@@ -1957,6 +1957,7 @@ def save_bart_chat(
     keep: Optional[Any] = None,
     wait_s: float = 5.0,
     merge: bool = False,
+    clear: bool = False,
 ) -> List[Dict[str, Any]]:
     """Save a subgoal's conversation; optionally merge stable message ids.
 
@@ -1977,6 +1978,13 @@ def save_bart_chat(
         if keep is not None:
             rows = {k: v for k, v in rows.items() if k in set(keep)}
         existing = (rows.get(str(goal_id)) or {}).get("messages") or []
+        cleared = list((rows.get(str(goal_id)) or {}).get("cleared_ids") or [])
+        if clear:
+            cleared = list(dict.fromkeys(cleared + [m["id"] for m in bart_messages(existing)] + [m["id"] for m in wanted]))
+            wanted, existing = [], []
+        blocked = set(cleared)
+        wanted = [m for m in wanted if m["id"] not in blocked]
+        existing = [m for m in bart_messages(existing) if m["id"] not in blocked]
         if merge:
             combined = {m["id"]: m for m in bart_messages(existing)}
             for message in wanted:
@@ -1992,8 +2000,8 @@ def save_bart_chat(
         wanted += [m for m in bart_messages(existing)
                    if str(m.get("id") or "").startswith("sys-") and m.get("id") not in ids]
         wanted = wanted[-BART_CHAT_LIMIT:]
-        if wanted:
-            rows[str(goal_id)] = {"messages": wanted, "updated_at": _now_ms()}
+        if wanted or cleared:
+            rows[str(goal_id)] = {"messages": wanted, "updated_at": _now_ms(), "cleared_ids": cleared}
         else:
             rows.pop(str(goal_id), None)
         _atomic_json(p.bart, {"version": 1, "chats": rows})

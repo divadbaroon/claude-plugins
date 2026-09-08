@@ -44,6 +44,9 @@ def summary(kind, topic, reason=''):
 
 def publish(session, root, goal, kind, text, problem=''):
     """Stable identity per build and meaningful problem; repeated checks stay quiet."""
+    # Routine run updates belong to TODO activity and Terminal, not conversation.
+    if kind in {"done", "repair", "failed"}:
+        return None
     starts = EV.read(session, root, types=['todo.build_requested'], subgoal_id=goal, limit=1)
     cycle = starts[-1]['id'] if starts else (BUILD.load_run(session, root, goal) or {}).get('claude_session_id', 'current')
     key = hashlib.sha256(json.dumps([goal, cycle, kind, problem], ensure_ascii=False).encode()).hexdigest()[:24]
