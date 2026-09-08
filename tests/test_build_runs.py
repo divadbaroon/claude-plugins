@@ -1473,7 +1473,7 @@ class BuildSettingsTests(BuildRunTests):
         trajdir = chat_state.paths(self.session, self.root).session_dir
         out = ui._apply({"op": "set_build_settings", "model": "claude-opus-5",
                          "effort": "high"}, trajdir, True)
-        self.assertEqual({"model": "claude-opus-5", "effort": "high",
+        self.assertEqual({"model": "claude-opus-5", "effort": "high", "interface_model": "",
                           "quick_model": "", "quick_effort": "",
                           "check": True, "check_model": "", "check_effort": ""},
                          out["settings"])
@@ -1483,13 +1483,14 @@ class BuildSettingsTests(BuildRunTests):
         self.assertEqual(str((self.bin / "claude").resolve()), cmd[0])
         self.assertEqual("claude-opus-5", cmd[cmd.index("--model") + 1])
         self.assertEqual("high", cmd[cmd.index("--effort") + 1])
-        # One key at a time; nothing chosen is the CLI's own default.
+        # One key at a time; nothing chosen uses the workspace's Sonnet default.
         out = ui._apply({"op": "set_build_settings", "effort": ""}, trajdir, True)
         self.assertEqual(("claude-opus-5", ""),
                          (out["settings"]["model"], out["settings"]["effort"]))
         self.assertNotIn("--effort", run._command("hi", resume=False))
         ui._apply({"op": "set_build_settings", "model": ""}, trajdir, True)
-        self.assertNotIn("--model", run._command("hi", resume=False))
+        cmd = run._command("hi", resume=False)
+        self.assertEqual("sonnet", cmd[cmd.index("--model") + 1])
         # The shell's word stands where nothing is chosen.
         os.environ["HC_BUILD_MODEL"] = "sonnet"
         os.environ["HC_BUILD_EFFORT"] = "low"

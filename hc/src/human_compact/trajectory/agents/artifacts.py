@@ -61,6 +61,8 @@ def inspect_page(url, checks):
         browser = p.chromium.launch(**kwargs)
         try:
             page = browser.new_page()
+            page_errors = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)[:500]))
             page.set_default_timeout(4000)
             response = page.goto(url, wait_until="domcontentloaded", timeout=15000)
             if response is None or response.status >= 400:
@@ -102,6 +104,11 @@ def inspect_page(url, checks):
                     results.append({"expected": check, "passed": True, "observed": observed})
                 except Exception as exc:
                     results.append({"expected": check, "passed": False, "observed": str(exc)[:500]})
+            # HTTP 200 and matching labels do not make a crashed/blank UI ready.
+            visible_content = page.locator("body").evaluate("el => Boolean(el.innerText.trim() || el.querySelector('input,textarea,select,button,canvas,svg,img,video'))")
+            if page_errors or not visible_content:
+                return {"passed": False, "reason": "the page has a runtime error" if page_errors else "the page is blank",
+                        "checks": results, "errors": page_errors[:5]}
             return {"passed": all(r["passed"] for r in results), "url": page.url,
                     "status": response.status, "title": page.title(),
                     "text": page.locator("body").inner_text()[:10000],
@@ -113,7 +120,7 @@ def inspect_page(url, checks):
             browser.close()
 
 
-def verify(runtime, criteria, preview, engine=None):
+def verify(runtime, criteria, preview, engine=None, on_ready=None):
     from .acceptance import normalize, WEB_KINDS, checks_cover
     criteria = {rid: normalize(c) for rid, c in criteria.items()}
     if not criteria or any(not c for c in criteria.values()):
@@ -157,11 +164,15 @@ def verify(runtime, criteria, preview, engine=None):
             if not passed:
                 return dict(evidence, passed=False, reason="file does not satisfy acceptance: " + check["path"])
         if all(checks_cover(c) for c in criteria.values()):
+            # The same browser/file pass establishes readiness; no second
+            # browser, model call, or weaker parallel acceptance contract.
+            if web and on_ready:
+                on_ready()
             return dict(evidence, passed=True, reason="observable acceptance checks passed")
         # Prose contracts need judgment grounded in artifacts, never only build claims.
         evidence["directory"] = runtime.discover("Inspect artifacts for acceptance")[:10000]
         engine = engine or providers.make(os.environ.get("HC_CHAT_PROVIDER", "claude"),
-            "synthesize", setup_chat.setup_model(runtime.root), timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
+            "synthesize", setup_chat.workspace_model(runtime.root, "preview"), timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
         with telemetry.purpose("verifier"):
             raw = engine.generate_json('''Verify each acceptance criterion against ONLY the actual
 artifact evidence supplied. Missing evidence fails; a healthy wrong page fails.

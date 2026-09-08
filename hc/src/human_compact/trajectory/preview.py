@@ -374,8 +374,9 @@ def _other_profiles(where: Path) -> List[Dict[str, Any]]:
     for line in procfile.splitlines():
         match = re.match(r"^web\s*:\s*(.+)$", line.strip())
         if match:
+            from . import starter
             out.append(_profile("procfile-web", "Web process", "web",
-                                match.group(1).strip(),
+                                starter.runtime_command(where) or match.group(1).strip(),
                                 "Runs the web process the Procfile names.",
                                 True, 14))
             break
@@ -861,6 +862,12 @@ def show_ui(root: Optional[Path], cwd, session_id: str = "",
     where = _resolved(cwd)
     config = read_config(root, where)
     profile = ui_profile(config)
+    from . import starter
+    current_command = starter.runtime_command(where)
+    if current_command and profile and profile.get("id") == "procfile-web" and profile.get("command") != current_command:
+        configure(root, where, detect_only=True)
+        config = read_config(root, where)
+        profile = ui_profile(config)
     if auto:
         if config.get("autostart") is False:
             return {"ok": False, "auto": True,
@@ -1189,7 +1196,7 @@ def configure(root: Optional[Path], cwd, engine=None,
             return {"ok": False, "not_configured": True,
                     "error": "nothing in this project's own files names a"
                              " way to run it"}
-        asked = _ask_model(where, engine)
+        asked = _ask_model(where, engine, root)
         if not asked.get("ok"):
             return asked
         profiles, source = asked["profiles"], "model"
@@ -1259,15 +1266,16 @@ def verify_running(root: Optional[Path], cwd) -> bool:
 
 # --- the two questions worth a model -----------------------------------------
 
-def _engine(stage: str, timeout: int, engine=None):
+def _engine(stage: str, timeout: int, engine=None, root=None):
     from . import providers as PROVIDERS
+    from .setup_chat import workspace_model
     if engine is not None:
         return engine
     return PROVIDERS.make(os.environ.get("HC_CHAT_PROVIDER", "claude"),
-                          stage, None, timeout=timeout)
+                          stage, workspace_model(root, "preview"), timeout=timeout)
 
 
-def _ask_model(cwd, engine=None) -> Dict[str, Any]:
+def _ask_model(cwd, engine=None, root=None) -> Dict[str, Any]:
     """The one call the detector cannot answer: a project whose own files say
     nothing about how it runs."""
     from . import providers as PROVIDERS
@@ -1289,7 +1297,7 @@ def _ask_model(cwd, engine=None) -> Dict[str, Any]:
         " a port. If nothing in this project can be run, answer"
         ' {"command": ""}.')
     try:
-        model = _engine("synthesize", EXPLAIN_TIMEOUT_S, engine)
+        model = _engine("synthesize", EXPLAIN_TIMEOUT_S, engine, root)
         raw = (model.generate_searching(prompt, where=str(cwd))
                if hasattr(model, "generate_searching")
                else model.generate_json(prompt))
@@ -1321,7 +1329,7 @@ def _loose_json(raw) -> Dict[str, Any]:
 
 
 def explain_failure(cwd, command: str, lines: List[str], exit_code,
-                    engine=None) -> Dict[str, Any]:
+                    engine=None, root=None) -> Dict[str, Any]:
     """What to do about a run that stopped. The error is the evidence, so
     this is asked after the fact rather than guessed before it."""
     from . import providers as PROVIDERS
@@ -1336,7 +1344,7 @@ def explain_failure(cwd, command: str, lines: List[str], exit_code,
         '{"reason": "one sentence", "command": "the next command, or empty",'
         ' "why": "one sentence on why that command"}')
     try:
-        model = _engine("synthesize", EXPLAIN_TIMEOUT_S, engine)
+        model = _engine("synthesize", EXPLAIN_TIMEOUT_S, engine, root)
         raw = model.generate_json(prompt)
     except PROVIDERS.ProviderError as exc:
         return {"ok": False, "error": " ".join(str(exc).split())[:200]}
@@ -1363,7 +1371,7 @@ def recover(root, cwd, session_id="", engine=None):
     if getattr(proc, "recovery", None):
         return proc.recovery
     proc.recovery = {"ok": False, "status": "diagnosing", "reason": "Diagnosing why the app did not start…"}
-    diagnosis = explain_failure(cwd, proc.profile.get("command", ""), list(proc.lines), proc.exit_code, engine)
+    diagnosis = explain_failure(cwd, proc.profile.get("command", ""), list(proc.lines), proc.exit_code, engine, root=root)
     result = dict(diagnosis, status="failed")
     if diagnosis.get("ok"):
         configure(root, cwd, detect_only=True)
@@ -1388,7 +1396,7 @@ def recover(root, cwd, session_id="", engine=None):
 
 
 def intent_for(cwd, goal_title: str, todo_text: str, profile: Dict[str, Any],
-               engine=None) -> Dict[str, Any]:
+               engine=None, root=None) -> Dict[str, Any]:
     """What to look at in the preview, for the row being worked on.
 
     The configurator knows how the project runs. This knows what is worth
@@ -1411,7 +1419,7 @@ def intent_for(cwd, goal_title: str, todo_text: str, profile: Dict[str, Any],
         " something you can see by using the program, answer"
         ' {"scenario": [], "expected": ""}.')
     try:
-        model = _engine("synthesize", INTENT_TIMEOUT_S, engine)
+        model = _engine("synthesize", INTENT_TIMEOUT_S, engine, root)
         raw = model.generate_json(prompt)
     except PROVIDERS.ProviderError as exc:
         return {"ok": False, "error": " ".join(str(exc).split())[:200]}

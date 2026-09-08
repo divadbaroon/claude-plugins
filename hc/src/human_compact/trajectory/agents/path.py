@@ -27,7 +27,7 @@ an entire plan when one changed step suffices. Empty changes means keep_plan.
 def plan(transcript, context="", focus=(), known=(), root=None, engine=None):
     try:
         engine = engine or providers.make(os.environ.get("HC_CHAT_PROVIDER", "claude"),
-            "synthesize", setup_chat.setup_model(root), timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
+            "synthesize", setup_chat.workspace_model(root), timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
         with telemetry.purpose("path"):
             raw = engine.generate_json(PROMPT + "\n" + str(context) + "\n" +
                 "\n".join(list(focus) + list(known)) + "\n" + json.dumps(transcript))

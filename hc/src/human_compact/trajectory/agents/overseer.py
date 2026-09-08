@@ -122,7 +122,7 @@ def _model(event, state, engine=None, root=None):
     from .. import providers, setup_chat
     from ... import telemetry
     engine = engine or providers.make(os.environ.get("HC_CHAT_PROVIDER", "claude"),
-                                       "synthesize", setup_chat.setup_model(root),
+                                       "synthesize", setup_chat.workspace_model(root),
                                        timeout=setup_chat.SETUP_TIMEOUT_SECONDS)
     with telemetry.purpose("overseer"):
         return engine.generate_json(PROMPT + "\n" + json.dumps(

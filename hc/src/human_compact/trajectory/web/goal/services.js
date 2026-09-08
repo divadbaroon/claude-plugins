@@ -73,6 +73,8 @@ async function op(operation) {
 
 export const services = {
   projectPaperUrl,
+  loadModels() { return get("/api/models"); },
+  saveModels(settings) { return post("/api/op", {op:"set_build_settings", ...settings}); },
   loadApiCredits() { return get("/api/claude-account?fresh=1"); },
   switchApiCredits(use) { return post("/api/op", {op:"claude_account", use}); },
   uploadPaper(file, onInspecting) { return services.uploadDataset(file, onInspecting, "paper"); },
@@ -298,6 +300,6 @@ export const services = {
   },
 };
 
-export function projectPaperUrl(id) {
-  return `/api/project-paper?id=${encodeURIComponent(id)}`;
+export function projectPaperUrl(id, view = "pdf") {
+  return `/api/project-paper?id=${encodeURIComponent(id)}${view === "lines" ? "&view=lines" : ""}`;
 }

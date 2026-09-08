@@ -1666,7 +1666,12 @@ class GoalPageBrowserTests(BrowserCase):
             # each with its why, the chosen one open with its pieces counted.
             page.locator(".project-name").click()
             expect(page.get_by_role("heading", name="Goals of Signed uploads")).to_be_visible()
-            expect(page.locator(".home-sub")).to_have_text("Move uploads off the API server.\nSign, then PUT.")
+            expect(page.locator(".home-sub")).to_have_text("Move uploads off the API server.")
+            expect(page.locator(".project-brief-text")).not_to_be_visible()
+            page.get_by_text("Project details", exact=True).click()
+            expect(page.locator(".project-brief-text")).to_have_text("Move uploads off the API server.\nSign, then PUT.")
+            page.evaluate("window.engelbart.actions.refresh()")
+            expect(page.locator(".project-brief-text")).to_be_visible()
             cards = page.locator(".home .card")
             expect(cards.locator(".card-name")).to_have_text(
                 ["Direct-to-storage uploads", "Resumable uploads", "Upload quotas"])

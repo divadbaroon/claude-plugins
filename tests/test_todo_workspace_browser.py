@@ -20,6 +20,55 @@ class TodoWorkspaceBrowserTests(BrowserCase):
     def emit(self,kind,ids=None,sub=None):
         EV.record('chat',self.root,EV.new_event(kind,'system',{'rows':ids or [r['id'] for r in self.rows]},subgoal_id=sub or self.subs[0]))
 
+    def test_subtle_build_estimate_is_scoped_and_never_promises_done(self):
+        with server_for(self.chat) as url,self.page_on(url) as (page,errors):
+            self.expect(page.locator('.todo-build')).to_have_count(2)
+            fixture = {'ok':True,'preview':None,'build':{'lines':[],'run':None},'phases':{},'chat':[]}
+            page.route('**/api/goal-page/panes?*',lambda route:route.fulfill(json=fixture))
+            page.evaluate('window.engelbart.actions.loadPanes()')
+            def timing(status='building', eta=125, elapsed=55, running=True, panes_for=None):
+                fixture['phases']={self.subs[0]:{'status':status,'todoIds':[self.rows[1]['id']]}}
+                fixture['build']['run']={'running':running,'status':'running','eta_s':eta,'elapsed_s':elapsed}
+                page.evaluate('window.engelbart.actions.loadPanes()')
+                if panes_for:
+                    page.evaluate('(id)=>window.engelbart.store.set({panesFor:id})',panes_for)
+            timing()
+            first=page.locator('.todo-entry').first
+            second=page.locator('.todo-entry').nth(1)
+            self.expect(first.locator('.todo-timing')).to_have_count(0)
+            self.expect(second.locator('.todo-timing')).to_have_text('~3 min left · then checks')
+            self.assertEqual('11px',second.locator('.todo-timing').evaluate('(el)=>getComputedStyle(el).fontSize'))
+            timing(eta=25);self.expect(second.locator('.todo-timing')).to_have_text('under a minute left · then checks')
+            timing(eta=0,elapsed=185);self.expect(second.locator('.todo-timing')).to_have_text('3 min elapsed')
+            timing(eta=None,elapsed=75);self.expect(second.locator('.todo-timing')).to_have_text('1 min elapsed')
+            timing(status='fixing');self.expect(second.locator('.todo-timing')).to_be_visible()
+            for phase in ('checking','done','failed','needs_user'):
+                timing(status=phase);self.expect(page.locator('.todo-timing')).to_have_count(0)
+            timing(running=False);self.expect(page.locator('.todo-timing')).to_have_count(0)
+            timing(panes_for=self.subs[1]);self.expect(page.locator('.todo-timing')).to_have_count(0)
+            self.assertEqual([],errors)
+
+    def test_todos_keep_scroll_position_through_polling_and_layout_updates(self):
+        goals,important=self.goals()
+        rows=GM.by_id(goals,self.subs[0])['todo_items']
+        for index in range(4):
+            rows.append({'id':f'scroll-{index}','text':('Keep this long research instruction fully readable while background build updates arrive. '*35)+str(index),'done':False})
+        CS.save_goals('chat',goals,important,self.root)
+        with server_for(self.chat) as url,self.page_on(url) as (page,errors):
+            self.expect(page.locator('textarea.todo-text')).to_have_count(6)
+            page.evaluate('window.engelbart.actions.loadPanes()')
+            panel=page.locator('.todos')
+            panel.evaluate('(el)=>{el.scrollTop=el.scrollHeight-el.clientHeight-50}')
+            before=panel.evaluate('(el)=>el.scrollTop')
+            self.assertGreater(before,1000, panel.evaluate("el=>({height:el.clientHeight,scroll:el.scrollHeight,fields:[...el.querySelectorAll('textarea')].map(e=>[e.value.length,e.clientHeight,e.style.height])})"))
+            for _ in range(4):
+                page.evaluate('window.engelbart.actions.loadPanes()')
+                self.assertAlmostEqual(before,panel.evaluate('(el)=>el.scrollTop'),delta=2)
+            # Resizing still fits wrapped text without jumping to the beginning.
+            page.evaluate("import('/goal/layout.js').then(m=>m.fitLayout(document.getElementById('app')))")
+            self.assertAlmostEqual(before,panel.evaluate('(el)=>el.scrollTop'),delta=2)
+            self.assertEqual([],errors)
+
     def test_long_todo_wraps_editable_and_held_without_overflow(self):
         text='Create a window with two empty text boxes side by side, label the left Therapist Instruction and the right Generated Software. '+('verylongpathsegment'*20)
         with server_for(self.chat) as url,self.page_on(url) as (page,errors):
@@ -147,10 +196,16 @@ class TodoWorkspaceBrowserTests(BrowserCase):
             page.reload();self.expect(reopen).to_be_visible()
             reopen.click();self.expect(complete).to_be_visible()
             page.reload();self.expect(complete).to_have_attribute('aria-pressed','false')
-            for kind in ['build.started','verify.started','build.repair_requested','chat.needs_human']:
+            for kind in ['build.started','verify.started','build.repair_requested']:
                 self.emit(kind);self.expect(complete).to_be_disabled()
                 answer=post_json(url+'/api/goal-page/op',{'op':'set_status','goal_id':self.subs[0],'status':'completed'},{'Origin':url})
                 self.assertFalse(answer['ok'])
+            # A paused request is a human decision, not a running build.
+            self.emit('chat.needs_human')
+            self.expect(complete).to_be_enabled()
+            complete.click();self.expect(reopen).to_be_visible()
+            page.reload();self.expect(reopen).to_be_visible()
+            reopen.click();self.expect(complete).to_be_visible()
             self.assertEqual([],errors)
 
     def test_completed_top_goal_has_no_header_completion_control(self):

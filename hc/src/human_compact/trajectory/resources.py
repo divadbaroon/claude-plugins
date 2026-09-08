@@ -1,6 +1,7 @@
 """Durable project resources. Remote and file content is data, never instructions."""
 import csv
 import hashlib
+import html
 import http.client
 import ipaddress
 import json
@@ -503,6 +504,43 @@ def paper_file(root, cwd, rid):
     raise FileNotFoundError('No ready project paper')
 
 
+def paper_lines_html(root, cwd, rid):
+    """Serve only the persisted paper's bounded extracted text, never client paths.
+
+    Numbers identify extraction lines, independent of viewport wrapping, not PDF
+    typesetting lines. The original PDF remains the authoritative layout.
+    """
+    paper_file(root, cwd, rid)  # Same ready-paper boundary as the PDF endpoint.
+    resource = next(r for r in PS.load_project(root, cwd).get('resources', [])
+                    if r.get('id') == rid and r.get('kind') == 'paper')
+    path = safe_path(cwd, resource['access'].get('text', ''))
+    if not path.is_file() or path.suffix != '.txt':
+        raise FileNotFoundError('No extracted paper text')
+    with path.open(encoding='utf-8') as stream:
+        text = stream.read(2 * 1024 * 1024)
+    lines = text.splitlines()
+    truncated = len(lines) > 30000
+    lines = lines[:30000]
+    rows = ''.join(f'<div class="line" id="L{i}"><a aria-label="Line {i}" href="#L{i}">{i}</a>'
+                   f'<span>{html.escape(line) or "&#160;"}</span></div>'
+                   for i, line in enumerate(lines, 1))
+    return ('<!doctype html><html lang="en"><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">'
+            '<title>Numbered paper text</title><style>'
+            'body{margin:0;padding:24px;color:#292929;background:#fff;font:15px/1.7 system-ui,sans-serif}'
+            'p{font-size:12px;color:#737373;margin:0 0 20px}'
+            '.line{display:grid;grid-template-columns:4em minmax(0,1fr);max-width:960px;margin:auto}'
+            '.line a{text-align:right;padding-right:18px;color:#999;text-decoration:none;font-size:12px;'
+            'font-variant-numeric:tabular-nums;user-select:none;border-right:1px solid #eee}'
+            '.line span{padding-left:18px;white-space:pre-wrap;overflow-wrap:anywhere}'
+            '.line:target{background:#fff5cf}</style>'
+            '<p>Extracted text · line numbers stay fixed as text wraps. See Original PDF for page layout.</p>'
+            '<main aria-label="Numbered paper text">' + rows + '</main>'
+            + ('<p>Showing the first 30,000 extracted lines. Use Original PDF to read the rest.</p>' if truncated else '')
+            + '</html>').encode('utf-8')
+
+
 def dataset_preview(root, cwd, rid):
     """Bounded inspection of the first persisted primary file; no client path."""
     for r in PS.load_project(root, cwd).get("resources") or []:
@@ -616,3 +654,117 @@ def upload_resource(root, cwd, filename, stream, size, kind):
         r['metadata']['inspectionError'] = type(exc).__name__
         persist()
     return r
+
+
+def _table_rows(path):
+    """Stream actual records for a bounded application page, preserving values."""
+    suffix = path.suffix.lower()
+    if suffix in ('.csv', '.tsv'):
+        with path.open(encoding='utf-8-sig', newline='') as f:
+            yield from csv.DictReader(f, delimiter='\t' if suffix == '.tsv' else ',', strict=True)
+    elif suffix in ('.jsonl', '.ndjson'):
+        with path.open(encoding='utf-8') as f:
+            while True:
+                line = f.readline(65537)
+                if not line:
+                    break
+                if len(line) > 65536:
+                    raise ValueError('Dataset record exceeds the page limit')
+                yield json.loads(line)
+    elif suffix == '.json':
+        if path.stat().st_size > 2 * 1024 * 1024:
+            raise ValueError('Large JSON requires JSONL')
+        with path.open(encoding='utf-8') as f:
+            rows = json.load(f)
+        if not isinstance(rows, list):
+            raise ValueError('Expected an array of records')
+        yield from rows
+    elif suffix == '.parquet':
+        import pyarrow.parquet as pq
+        with pq.ParquetFile(path) as f:
+            if any(f.metadata.row_group(i).total_byte_size > 100 * 1024 * 1024 for i in range(f.metadata.num_row_groups)):
+                raise ValueError('Parquet row group exceeds the inspection limit')
+            for batch in f.iter_batches(batch_size=1):
+                yield from batch.to_pylist()
+    elif suffix == '.xlsx':
+        import openpyxl
+        with zipfile.ZipFile(path) as z:
+            if sum(info.file_size for info in z.infolist()) > MAX_BYTES * 4:
+                raise ValueError('Spreadsheet exceeds the extraction limit')
+        workbook = openpyxl.load_workbook(path, read_only=True, data_only=True, keep_links=False)
+        try:
+            for sheet in workbook:
+                rows = sheet.iter_rows(values_only=True)
+                names = next(rows, ())
+                if not names or not any(n is not None for n in names):
+                    continue
+                for row in rows:
+                    yield {str(n): v for n, v in zip(names, row) if n is not None}
+                break
+        finally:
+            workbook.close()
+    else:
+        raise ValueError('No readable tabular data')
+
+
+def dataset_rows(root, cwd, offset=0, limit=200):
+    """Read a page from the current active resource, never a caller's file path.
+
+    Bounded by rows, scan distance, individual record size and response bytes.
+    Large analyses should use the resource's local path in project code.
+    """
+    from contextlib import closing
+    from itertools import islice
+    if not 0 <= offset <= 10000 or not 1 <= limit <= 200:
+        raise ValueError('Dataset page exceeds the supported bounds')
+    project = PS.load_project(root, cwd)
+    datasets = [r for r in project.get('resources', []) if r.get('kind') == 'dataset']
+    active = project.get('activeDatasetId')
+    if active:
+        datasets = [r for r in datasets if r.get('id') == active]
+    else:
+        datasets = [r for r in datasets if r.get('status') == 'ready']
+    # Never silently choose an arbitrary alternative or a stale fallback.
+    if len(datasets) != 1 or datasets[0].get('status') != 'ready':
+        raise ValueError('No unambiguous ready active dataset')
+    resource = datasets[0]
+    primary = resource.get('access', {}).get('primaryFiles') or []
+    if not primary:
+        raise ValueError('Dataset has no prepared data file')
+    path = safe_path(cwd, primary[0])
+    if not path.is_file() or path.stat().st_size > MAX_BYTES:
+        raise ValueError('Dataset file is missing or too large')
+    rows, size, scanned, more = [], 0, 0, False
+    with closing(_table_rows(path)) as iterator:
+        for index, row in enumerate(islice(iterator, offset + limit + 1)):
+            if not isinstance(row, dict):
+                raise ValueError('Expected tabular records')
+            # No strings are interpreted as code and no values are silently
+            # truncated: oversized records fail with an explicit limit.
+            import math
+            def json_value(value):
+                if isinstance(value, float) and not math.isfinite(value):
+                    return str(value)  # JSON has no NaN/infinity number; retain an explicit representation.
+                if isinstance(value, dict):
+                    return {str(k): json_value(v) for k, v in value.items()}
+                if isinstance(value, (list, tuple)):
+                    return [json_value(v) for v in value]
+                return value
+            row = json.loads(json.dumps(json_value(row), default=str, allow_nan=False))
+            amount = len(json.dumps(row, ensure_ascii=False).encode())
+            if amount > 65536:
+                raise ValueError('Dataset record exceeds the page limit')
+            scanned += amount
+            if scanned > 8 * 1024 * 1024:
+                raise ValueError('Dataset scan exceeds the application page limit; use local analysis')
+            if index < offset:
+                continue
+            if len(rows) == limit or size + amount > 512000:
+                more = True
+                break
+            rows.append(row)
+            size += amount
+    local_analysis = more and offset + len(rows) > 10000
+    return {'resource': {k: resource.get(k) for k in ('id', 'name', 'provenance')},
+            'rows': rows, 'offset': offset, 'hasMore': more, 'requiresLocalAnalysis': local_analysis,
+            'nextOffset': offset + len(rows) if more and not local_analysis else None}

@@ -15,7 +15,7 @@ export function renderTodos(state, actions) {
     h("div", { class: "section-head" },
       h("span", { class: "section-label" }, "Todos"),
       h("button", {
-        type: "button", class: "ghost-btn", onclick: actions.toggleTodosPane,
+        type: "button", class: "ghost-btn hide-todos-btn", onclick: actions.toggleTodosPane,
       }, "Hide todos")),
     h("div", { class: "todo-list" },
       slice.todos.map((todo) => renderTodo(todo, actions, state)),
@@ -54,6 +54,7 @@ function renderTodo(todo, actions, state) {
   const status = todoPhase(todo, state);
   const done = status === "done";
   const label = TODO_LABELS[status];
+  const timing = buildTiming(state, status);
   const classes = ["todo", done && "is-done", held && "is-held",
     status === "failed" && "is-failed"].filter(Boolean).join(" ");
   return h("div", { key: todo.id, class: "todo-entry" }, h("div", { class: classes },
@@ -82,5 +83,25 @@ function renderTodo(todo, actions, state) {
       class: "todo-remove",
       "aria-label": "Remove todo",
       onclick: () => actions.removeTodo(todo.id),
-    }, "×")));
+    }, "×")), timing && h("div", {class:"todo-timing", title:timing.title}, timing.text));
+}
+
+// Reuse the server's clock/estimate. It covers this run, not verification or
+// future repairs; never count down to a promised completion or invent a total.
+function buildTiming(state, status) {
+  if (state.panesFor !== state.activeId || !["building", "fixing"].includes(status)) return null;
+  const run = state.panes?.build?.run;
+  if (!run?.running || run.status === "checking") return null;
+  const eta = run.eta_s;
+  if (typeof eta === "number" && Number.isFinite(eta) && eta > 0) {
+    const remaining = eta < 60 ? "under a minute" : `~${Math.ceil(eta / 60)} min`;
+    return {text: `${remaining} left · then checks`,
+      title: "Approximate time for the current build, shared across its selected todos. Checks and any further fixes can take longer."};
+  }
+  const elapsed = run.elapsed_s;
+  if (typeof elapsed !== "number" || !Number.isFinite(elapsed) || elapsed < 5) return null;
+  const duration = elapsed < 60 ? "under a minute" : `${Math.floor(elapsed / 60)} min`;
+  return {text: `${duration} elapsed`, title: eta === 0
+    ? "This build is taking longer than estimated. Checks still follow."
+    : "Time spent on this build so far. A remaining-time estimate is not available yet."};
 }

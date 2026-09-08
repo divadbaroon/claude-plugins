@@ -283,7 +283,7 @@ def _project_context(root, cwd, raw, engine=None) -> str:
     try:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
-            SC.setup_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
+            SC.workspace_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
         with TELEMETRY.purpose("condense"):
             got = engine.generate_json(
                 "\n".join(CONDENSE) + "\n\n" + raw + "\n")
@@ -463,7 +463,7 @@ def ask(transcript, context="", engine=None, root=None,
     try:
         engine = engine or PROVIDERS.make(
             os.environ.get("HC_CHAT_PROVIDER", "claude"), "synthesize",
-            SC.setup_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
+            SC.workspace_model(root), timeout=SC.SETUP_TIMEOUT_SECONDS)
         with TELEMETRY.purpose("brainstorm"):
             raw = engine.generate_json(
                 "\n".join(compose(transcript, context, extra)) + "\n")

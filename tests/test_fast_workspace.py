@@ -104,6 +104,13 @@ class FastWorkspaceTests(AgentCase):
             self.assertFalse(spawn.call_args.kwargs['resume'])
         build._RUNS.pop(f'{self.session}:{PIECE}', None)
 
+    def test_saved_preview_model_reaches_quick_builder(self):
+        build.save_settings(self.session, self.root, {"model":"opus", "quick_model":"opus"})
+        with mock.patch.dict(os.environ, {'HC_BUILD_MODE':'headless'}), mock.patch.object(build.Run,'spawn') as spawn:
+            self.assertTrue(build.start(self.session,self.root,PIECE,list(ROWS),quick=True)['ok'])
+            self.assertEqual('opus',spawn.call_args.kwargs['model'])
+        build._RUNS.pop(f'{self.session}:{PIECE}', None)
+
     def test_real_detected_preview_is_started_verified_and_left_running(self):
         try:
             import playwright.sync_api
