@@ -73,3 +73,18 @@ def test_replace_process_runs_and_exits_with_child_status():
     )
     result = subprocess.run([sys.executable, "-c", prog])
     assert result.returncode == 7
+
+
+@pytest.mark.parametrize("returncode,force,expected_calls", [(0, False, 1), (1, False, 2), (1, True, 1)])
+def test_windows_tree_stop_escalates_only_after_refusal(monkeypatch, returncode, force, expected_calls):
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, returncode)
+    monkeypatch.setattr(pc, "IS_WINDOWS", True)
+    monkeypatch.setattr(pc.subprocess, "run", run)
+    pc.kill_process_tree(12345, force=force)
+    assert len(calls) == expected_calls
+    assert calls[0] == ["taskkill", "/PID", "12345", "/T"] + (["/F"] if force else [])
+    if expected_calls == 2:
+        assert calls[1] == ["taskkill", "/PID", "12345", "/T", "/F"]

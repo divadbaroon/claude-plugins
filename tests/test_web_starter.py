@@ -31,6 +31,18 @@ class StarterTests(AgentCase):
         self.assertEqual('user edit',(cwd/'app.js').read_text())
         self.assertFalse((cwd/'package.json').exists())
 
+    def test_starter_assets_remain_utf8_on_a_windows_codepage(self):
+        cwd = self.empty()
+        original = Path.read_text
+        def windows_read(path, encoding=None, errors=None):
+            return original(path, encoding=encoding or 'cp1252', errors=errors)
+        with mock.patch.object(Path, 'read_text', windows_read):
+            self.assertTrue(S.prepare(self.root, cwd, SMALL))
+        for name in ('index.html', 'app.js', 'styles.css', 'ui.js'):
+            self.assertEqual((S.ASSETS/name).read_text(encoding='utf-8'),
+                             (cwd/name).read_text(encoding='utf-8'))
+        self.assertIn('—', (cwd/'ui.js').read_text(encoding='utf-8'))
+
     def test_existing_code_explicit_framework_risky_and_disabled_are_untouched(self):
         cwd=self.empty();(cwd/'index.html').write_text('existing')
         self.assertFalse(S.prepare(self.root,cwd,SMALL))

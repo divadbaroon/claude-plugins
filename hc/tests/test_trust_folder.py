@@ -13,6 +13,7 @@ from human_compact.trajectory.build import _trust_folder
 @pytest.fixture()
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     return tmp_path
 
 
