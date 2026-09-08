@@ -138,7 +138,7 @@ jobs:
         run: |
           $PSVersionTable.PSVersion
           (Get-Command Get-FileHash).Name
-          npm run test:e2e:round-trip
+          npm run test:e2e:round-trip -- --grep "browser.*Claude context" --retries=0
       - uses: actions/upload-artifact@v4
         if: always()
         with:

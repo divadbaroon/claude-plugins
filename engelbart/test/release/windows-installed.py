@@ -37,6 +37,7 @@ app.replaceChildren(selectControl('Student',['a','b'],show),timeline);show('a');
             {'kind':'control','role':'combobox','name':'Student'},
             {'kind':'text','text':'a — edit'},
         ])
+        print('ARTIFACT_EVIDENCE '+json.dumps(checked,ensure_ascii=True),flush=True)
         assert checked['passed'],checked
         from playwright.sync_api import sync_playwright, expect
         with sync_playwright() as playwright:
@@ -49,4 +50,19 @@ app.replaceChildren(selectControl('Student',['a','b'],show),timeline);show('a');
                 browser.close()
         print(json.dumps({'installedVersion':importlib.metadata.version('human-compact'),'starter':True,'pathWithSpaces':True,'dataset':True,'browserCheck':True}))
     finally:
+        proc=preview.running(str(project))
         preview.stop(str(project),root=root)
+        stopped=True
+        if proc and proc.process:
+            import subprocess
+            try:proc.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                stopped=False
+                # Clean up only this fixture's process tree, after recording
+                # failure of the real Stop operation. Never turn it into a pass.
+                from human_compact.platform_compat import kill_process_tree
+                kill_process_tree(proc.process.pid,force=True)
+                proc.process.wait(timeout=10)
+            proc.thread.join(timeout=5)
+        print('STOP_EVIDENCE '+json.dumps({'stoppedNormally':stopped}),flush=True)
+        assert stopped,'Preview Stop did not terminate the process within 5 seconds'
