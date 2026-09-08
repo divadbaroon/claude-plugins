@@ -101,6 +101,16 @@ class CollectionBrowserTests(BrowserCase):
                     try:
                         page=browser.new_page();page.goto(url)
                         page.get_by_role('tab',name='Dataset',exact=True).click()
+                        fallback=page.evaluate('''async () => {
+                          const {droppedFiles}=await import('/goal/dataset-files.js');
+                          let message='';
+                          try { await droppedFiles({items:[{kind:'file'}],files:[]}); }
+                          catch(error) { message=error.message; }
+                          const one=await droppedFiles({files:[new File(['a\\n1\\n'],'single.csv')]});
+                          return {message,path:one[0].path};
+                        }''')
+                        self.assertIn('Choose folder',fallback['message'])
+                        self.assertEqual('single.csv',fallback['path'])
                         page.get_by_label('Choose dataset folder',exact=True).set_input_files(str(folder))
                         self.expect(page.get_by_role('heading',name='TutorTrace',exact=True)).to_be_visible()
                         self.expect(page.get_by_label('Resource details')).to_contain_text('3 files')
