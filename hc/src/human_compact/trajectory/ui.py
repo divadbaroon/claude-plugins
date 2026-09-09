@@ -525,7 +525,7 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
         "project": _goal_page_project(trajdir, chat_scoped),
         "phases": _goal_page_phases(trajdir, chat_scoped),
         "notificationScope": {"session": _chat_identity(trajdir)[0] if chat_scoped else "vault",
-                              "project": str((_goal_page_project(trajdir, chat_scoped) or {}).get("cwd") or "")},
+                              "project": str((_goal_page_project(trajdir, chat_scoped) or {}).get("cwd") or _scope(trajdir).resolve())},
         "revision": _resource_revision(_goal_revision(goals, important), trajdir, chat_scoped),
     }
 
