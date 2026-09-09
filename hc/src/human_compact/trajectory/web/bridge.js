@@ -16425,7 +16425,9 @@
     // context card's Paper row reads through one), so the rule is by slot,
     // not by view: an overview slot only while the overview is up, any
     // other slot only while it is not.
-    if (brainstormShown() || homeShown()) {
+    // A dock belongs to the Goals column; only the full brainstorm page
+    // replaces the center pane. Keeping the dock open must not hide its UI.
+    if ((brainstormShown() && !bsDocked()) || homeShown()) {
       previewHideFrame();
       return;
     }
@@ -18606,7 +18608,7 @@
     // Docs is a page of the overview box, so being "on" it means the box
     // is up and turned to that page; any other page of the box reads as
     // Overview.
-    var on = brainstormShown() ? "brainstorm"
+    var on = brainstormShown() && !bsDocked() ? "brainstorm"
       : !overviewShown() ? "goals"
       : overviewPage() === "docs" ? "docs" : "overview";
     var kids = tabs.children || [];
