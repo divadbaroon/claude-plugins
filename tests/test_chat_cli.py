@@ -930,6 +930,20 @@ class ProjectOwnsItsServerTests(unittest.TestCase):
             self.assertEqual("http://127.0.0.1:9/", self._open(self.other))
         spawned.Popen.assert_not_called()
 
+    def test_runtime_migration_keeps_a_build_in_the_shared_tree_store(self):
+        running = {"session_id": self.other, "pid": os.getpid(),
+                   "url": "http://127.0.0.1:9/", "started_at": time.time() + 60,
+                   "package_path": "/old/install"}
+        PS.set_server_record(self.root, self.home, running)
+        builds = CS.paths(CS.tree_session(self.og, self.root), self.root).session_dir / "builds"
+        builds.mkdir()
+        (builds / "g1.json").write_text(json.dumps({"status":"running", "pid":os.getpid()}))
+        with (mock.patch.object(cli, "_healthy_chat_server", return_value=True) as healthy,
+              mock.patch.object(cli, "_stop_chat_server") as stopped):
+            self.assertEqual(running["url"], self._open(self.og))
+        healthy.assert_any_call(mock.ANY, self.other)
+        stopped.assert_not_called()
+
     def test_a_project_with_nothing_running_starts_one_and_records_it(self):
         def stood_up(*a, **k):
             PS.set_server_record(self.root, self.home, {

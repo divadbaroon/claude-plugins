@@ -67,11 +67,23 @@ function renderAccount(state, actions) {
       onclick: actions.toggleAccount,
     }, h("span", { class: "account-dot", "aria-hidden": "true" })),
     state.accountOpen && h("div", { class: "account-menu", role: "menu", "aria-label": "Account" },
-      renderAccountRows(state, actions),
-      renderApi(state, actions),
-      renderModels(state, actions),
-      h("hr", { class: "menu-rule" }),
-      renderExpertise(state, actions)));
+      renderSettingsContent(state, actions)));
+}
+
+export function renderSettingsContent(state, actions) {
+  return [
+    h("label", {class:"model-choice"}, h("span", {}, "Interface"),
+      h("select", {"aria-label":"Interface", value:state.interfaceMode || "goal",
+        disabled:state.interfaceBusy || null,
+        onchange:event => actions.switchInterface(event.target.value)},
+        h("option", {value:"goal", selected:state.interfaceMode !== "legacy" || null}, "New workspace"),
+        h("option", {value:"legacy", selected:state.interfaceMode === "legacy" || null}, "Legacy workspace"))),
+    state.interfaceError && h("p", {role:"alert"}, state.interfaceError),
+    h("p", {class:"menu-hint"}, "Remembered when you open Bart, across projects and restarts."),
+    h("hr", {class:"menu-rule"}),
+    renderAccountRows(state, actions), renderApi(state, actions), renderModels(state, actions),
+    h("hr", {class:"menu-rule"}), renderExpertise(state, actions),
+  ];
 }
 
 function icon(name) {

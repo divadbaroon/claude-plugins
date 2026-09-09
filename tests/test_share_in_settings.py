@@ -78,11 +78,40 @@ def fetch_js(supabase=None, share=None, shares=None, record=None,
 @unittest.skipUnless(NODE, "node is required for bridge.js tests")
 class ShareInSettingsTests(BridgeTestCase):
 
+    def test_credit_alert_opens_the_credit_controls_even_with_shared_settings_open(self):
+        for already_open in (False, True):
+            with self.subTest(already_open=already_open):
+                got = json.loads(self.run_js(
+                    PRELUDE + fetch_js()
+                    + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
+                    + ("P.gear.open();" if already_open else "")
+                    + "localStorage.setItem('hc-alerts-log-v1', JSON.stringify([{"
+                      "id:'credit-test',kind:'credit_exhausted',at:Date.now(),"
+                      "read:false,goalId:'',goalTitle:'',rowIds:[]}]));"
+                      "P.alerts.changedElsewhere(); P.alerts.go('credit-test');"
+                      "var panel=P.gear.panel();"
+                      "var api=panel.querySelector('[data-hc-tab=\"api\"]');"
+                      "JSON.stringify([!!panel.querySelector('iframe'), !!api,"
+                      "api && api.getAttribute('data-hc-on') !== null]);"))
+                self.assertEqual([False, True, True], got)
+
+    def test_default_settings_use_the_shared_page_and_legacy_options_stay_reachable(self):
+        got = json.loads(self.run_js(
+            PRELUDE + fetch_js()
+            + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
+            + "P.gear.open(); var panel=P.gear.panel();"
+            + "var frame=panel.querySelector('iframe');"
+            + "var answer=[frame.src,frame.title,deepText(panel)];"
+            + "JSON.stringify(answer);"))
+        self.assertEqual('/settings?interface=legacy', got[0])
+        self.assertEqual('Workspace settings', got[1])
+        self.assertIn('Legacy workspace options', got[2])
+
     def panel(self, tail, state=None, **fetch):
         return json.loads(self.run_js(
             PRELUDE + fetch_js(**fetch)
             + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(state or chat_state())
-            + "P.gear.open();"
+            + "P.gear.open(true);"
             + "var panel = P.gear.panel();"
             + "later(function () { " + tail + " });"))
 
@@ -178,7 +207,7 @@ class SettingsTabTests(BridgeTestCase):
         return json.loads(self.run_js(
             PRELUDE + fetch_js(**fetch)
             + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
-            + "P.gear.open();"
+            + "P.gear.open(true);"
             + "var panel = P.gear.panel();"
             + "var tabs = []; (function walk(n) { (n.children || []).forEach(function (c) {"
             + "  if (c.getAttribute('data-hc-settings-tab') !== null) tabs.push(c);"
@@ -236,7 +265,7 @@ class SettingsTabTests(BridgeTestCase):
         return json.loads(self.run_js(
             PRELUDE + fetch_js(record=record)
             + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
-            + "P.gear.open(); P.gear.tab('data');"
+            + "P.gear.open(true); P.gear.tab('data');"
             + "var panel = P.gear.panel();"
             + "var copied = [];"
             + "navigator.clipboard = { writeText: function (t) { copied.push(t);"
@@ -316,7 +345,7 @@ class SettingsTabTests(BridgeTestCase):
 
     def test_the_tab_it_was_left_on_is_the_tab_it_comes_back_to(self):
         got = self.panel(
-            "click(tabs[3]); P.gear.close(); P.gear.open();"
+            "click(tabs[3]); P.gear.close(); P.gear.open(true);"
             "var back = P.gear.panel();"
             "var on = []; (function walk(n) { (n.children || []).forEach(function (c) {"
             "  if (c.getAttribute('data-hc-settings-tab') !== null"
@@ -353,7 +382,7 @@ class ExpertiseTabTests(BridgeTestCase):
         return json.loads(self.run_js(
             PRELUDE + fetch_js(**fetch)
             + "P.acceptState(%s); P.renderProjectChip();" % json.dumps(chat_state())
-            + "P.gear.open(); P.gear.tab('expertise');"
+            + "P.gear.open(true); P.gear.tab('expertise');"
             + "var panel = P.gear.panel();"
             + "var at = function (name) {"
             + "  return panel.querySelector('[data-hc-reader-' + name + ']'); };"

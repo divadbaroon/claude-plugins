@@ -20,6 +20,18 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createActions(store, services) {
   const { get, set } = store;
+  async function switchInterface(value) {
+    if (get().interfaceBusy) return;
+    set({interfaceBusy: true, interfaceError: ""});
+    try {
+      const answer = await services.saveInterface(value);
+      if (!answer.ok) throw new Error(answer.error || "Could not save the interface choice");
+      // The settings page may be embedded by the legacy workspace.
+      window.top.location.assign(answer.url);
+    } catch (error) {
+      set({interfaceBusy: false, interfaceError: error.message});
+    }
+  }
   function interaction(type, payload = {}) {
     if (services.recordInteraction) {
       services.recordInteraction({ type, payload, subgoalId: get().activeId || "" }).catch(() => {});
@@ -696,6 +708,7 @@ export function createActions(store, services) {
   }
 
   return {
+    switchInterface, loadAccount,
     setProjectDetailsOpen: open => { if (get().projectDetailsOpen !== open) set({projectDetailsOpen:open}); },
     toggleModels, chooseModel,
     toggleApi, closeApi: () => set({apiOpen:false}), loadApiCredits, switchApiCredits,

@@ -346,6 +346,25 @@ def _root_of(trajdir):
         return None
 
 
+def interface_preference(trajdir):
+    """Machine preference, shared by workspaces and independent of ports."""
+    where = READER.path(_root_of(trajdir)).with_name("interface.json")
+    try:
+        value = json.loads(where.read_text(encoding="utf-8"))
+        return "legacy" if value.get("interface") == "legacy" else "goal"
+    except (OSError, ValueError, AttributeError):
+        return "goal"
+
+
+def save_interface(trajdir, value):
+    if value not in ("goal", "legacy"):
+        raise ValueError("Choose goal or legacy")
+    where = READER.path(_root_of(trajdir)).with_name("interface.json")
+    SIO.atomic_write_json(where, {"interface": value}, root=where.parent)
+    return {"ok": True, "interface": value,
+            "url": "/legacy" if value == "legacy" else "/workspace"}
+
+
 @contextmanager
 def _state_access(trajdir, chat_scoped):
     """Share chat_state's cross-process lock with ingestion and analysis."""
@@ -5017,11 +5036,16 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
+            route = self.path.split("?", 1)[0]
+            if route in ("/", "/index.html") and interface_preference(self.server.trajdir) == "legacy":
+                # /bart always opens the root; resolve the reader's choice
+                # here so restarts, ports and new projects agree.
+                self.path = "/legacy" + self.path[len(route):]
             # Before the scope logic: whether this build exposes the route at
             # all is a question that comes ahead of which vault it would read.
             if _experimental_route(self.path) and not _experimental_enabled():
                 self._send(200, {"ok": False, "error": EXPERIMENTAL_ERROR})
-            elif self.path.split("?", 1)[0] in ("/", "/index.html"):
+            elif self.path.split("?", 1)[0] in ("/", "/index.html", "/workspace", "/settings"):
                 # The goal page: what /bart opens. The query is the page's
                 # own, not this handler's: the setup page's bypass comes back
                 # here with ?quick=1 on it, and a workspace that 404'd on its
@@ -5030,6 +5054,8 @@ class H(BaseHTTPRequestHandler):
                 if page is None:
                     self._send(404, {"error": "not found"})
                 else:
+                    if route == "/settings":
+                        page = (page[0].replace(b'/goal/app.js', b'/goal/settings-page.js'), page[1])
                     self._send(200, page[0], page[1])
             elif self.path.split("?", 1)[0] in ("/test", "/test/"):
                 page = goal_page_asset("test/index.html")
@@ -5451,6 +5477,7 @@ class H(BaseHTTPRequestHandler):
                     "ok": True,
                     "scope": "chat" if self.server.chat_scoped else "global",
                     "version": _version(),
+                    "package_path": str(Path(__file__).resolve().parents[1]),
                     "session_id": (self.server.trajdir.name
                                    if self.server.chat_scoped else None),
                 })
@@ -5835,6 +5862,16 @@ class H(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
             self._note_request(body)
+            if self.path == "/api/interface":
+                try:
+                    if not isinstance(body, dict):
+                        raise ValueError("Expected an interface choice")
+                    self._send(200, save_interface(self.server.trajdir, body.get("interface")))
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                except OSError:
+                    self._send(500, {"ok": False, "error": "Could not save the interface choice"})
+                return
             if self.path == "/api/project-dataset/import":
                 if not self.server.chat_scoped or getattr(self.server, 'shared_project', None):
                     self._send(400, {'ok':False,'error':'Open a local project before importing a dataset'}); return

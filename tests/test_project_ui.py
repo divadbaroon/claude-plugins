@@ -880,7 +880,7 @@ class PanelPlacementTests(BridgeTestCase):
             "var gear = gslot.querySelector('.hc-gear');"
             "gear.getBoundingClientRect = function () { return rect; };"
             "document.documentElement.clientWidth = 1000;"
-            "P.gear.open();"
+            "P.gear.open(true);"
             "JSON.stringify([css('--hc-settings-top'), css('--hc-settings-right')]);")
         self.assertEqual(["36px", "750px"], got)
 
@@ -952,7 +952,7 @@ class ThemeTests(BridgeTestCase):
 
     def test_the_panels_outside_the_app_are_repainted_with_it(self):
         got = self.theme(
-            "P.openOverview(); P.gear.open();"
+            "P.openOverview(); P.gear.open(true);"
             "var over = document.querySelector('.hc-overview');"
             "var panel = P.gear.panel();"
             "over.style.props = {}; panel.style.props = {};"

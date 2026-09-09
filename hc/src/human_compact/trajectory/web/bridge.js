@@ -2872,7 +2872,8 @@
     // The credit card's whole point is the switch and the meter, and both
     // live on the API key tab: clicking it goes there.
     if (entry.kind === "credit_exhausted") {
-      openSettingsPanel();
+      closeSettingsPanel();
+      openSettingsPanel(true);
       setSettingsTab("api");
       settingsClaudeLoad();
       return true;
@@ -8606,6 +8607,10 @@
     close.textContent = "×";
     head.appendChild(close);
     box.appendChild(head);
+    var shared = document.createElement("button");
+    shared.textContent = "Back to shared settings";
+    shared.onclick = function () { closeSettingsPanel(); openSettingsPanel(); };
+    box.appendChild(shared);
     // Four sections in one column was a scroll, and the two that matter --
     // the account and what is shared from it -- were below the fold under
     // a banner timeout. One tab at a time, the account first because
@@ -9625,11 +9630,38 @@
     return true;
   }
 
-  function openSettingsPanel() {
+  function openSettingsPanel(legacyOptions) {
     if (settingsPanelShown()) return settingsPanelBox;
     ensureAlertStyles();
     bindAlerts();
     placeSettingsPanel();
+    if (!legacyOptions) {
+      settingsPanelBox = document.createElement("div");
+      settingsPanelBox.className = "hc-settings-panel";
+      settingsPanelBox.setAttribute("role", "dialog");
+      settingsPanelBox.setAttribute("aria-label", "Settings");
+      var head = document.createElement("div");
+      head.className = "hc-settings-head";
+      head.textContent = "Settings";
+      var close = document.createElement("button");
+      close.textContent = "×";
+      close.setAttribute("aria-label", "Close settings");
+      close.onclick = closeSettingsPanel;
+      head.appendChild(close);
+      settingsPanelBox.appendChild(head);
+      var frame = document.createElement("iframe");
+      frame.title = "Workspace settings";
+      frame.src = "/settings?interface=legacy";
+      frame.style.cssText = "border:0;width:100%;height:min(65vh,600px);background:white";
+      settingsPanelBox.appendChild(frame);
+      var options = document.createElement("button");
+      options.textContent = "Legacy workspace options";
+      options.onclick = function () { closeSettingsPanel(); openSettingsPanel(true); };
+      settingsPanelBox.appendChild(options);
+      (document.body || document.documentElement).appendChild(settingsPanelBox);
+      renderGear();
+      return settingsPanelBox;
+    }
     settingsPanelBox = settingsPanelNode();
     (document.body || document.documentElement).appendChild(settingsPanelBox);
     ensureProjectStyles();

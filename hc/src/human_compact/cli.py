@@ -1406,6 +1406,34 @@ def _package_code_stamp():
     return newest
 
 
+def _package_path():
+    return str(Path(__file__).resolve().parent)
+
+
+def _record_runtime(record):
+    """Read old registries through their loopback health endpoint."""
+    if record.get("package_path"):
+        return record
+    import http.client
+    import json
+    from urllib.parse import urlparse
+    parsed = urlparse(str(record.get("url") or ""))
+    if parsed.scheme != "http" or parsed.hostname != "127.0.0.1":
+        return {}
+    connection = None
+    try:
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=0.5)
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        value = json.loads(response.read())
+        return value if response.status == 200 and isinstance(value, dict) else {}
+    except (OSError, ValueError, http.client.HTTPException):
+        return {}
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _server_outran_its_code(record):
     """Whether the server in `record` started before the code it serves.
 
@@ -1418,6 +1446,16 @@ def _server_outran_its_code(record):
     """
     if not isinstance(record, dict):
         return False
+    runtime = _record_runtime(record)
+    if runtime.get("package_path"):
+        if runtime["package_path"] != _package_path():
+            return True
+    elif runtime.get("version"):
+        # Releases before package identities can still be distinguished by
+        # the version their live server reports, regardless of wheel mtimes.
+        from .trajectory.ui import _version
+        if runtime["version"] != _version():
+            return True
     try:
         started = float(record.get("started_at") or 0.0)
     except (TypeError, ValueError):
@@ -1655,6 +1693,7 @@ def chat_serve_main(argv=None):
             "pid": os.getpid(),
             "url": url,
             "started_at": time.time(),
+            "package_path": _package_path(),
         }
         _write_server_registry(p.session_dir, record)
         # And on the project, which is what every other chat of it reads:
@@ -1924,11 +1963,13 @@ def chat_ui_main(argv=None):
         # reuse: otherwise the reader is handed back the same old server that
         # just told them to restart it, and every control added since keeps
         # failing with no way out.
-        # Staleness first: it is a handful of stat calls, and the health probe
-        # below is a request the common path should only pay for once.
+        # Old registries need a live version probe; new ones carry their
+        # package identity and can be checked alongside file timestamps.
+        running = str((record or {}).get("session_id") or serve)
         if (_server_outran_its_code(record)
-                and _healthy_chat_server(record, serve)):
-            if _chat_server_is_building(sp.session_dir):
+                and _healthy_chat_server(record, running)):
+            if (_chat_server_is_building(sp.session_dir)
+                    or (running != serve and _chat_server_is_building(CS.paths(running).session_dir))):
                 note = ("kept the running workspace: a build is in flight."
                         " Reopen it when the build lands to pick up the"
                         " newer code.")

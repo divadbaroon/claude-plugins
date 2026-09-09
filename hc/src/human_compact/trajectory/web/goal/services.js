@@ -79,6 +79,7 @@ async function datasetImport(body) {
 }
 
 export const services = {
+  saveInterface: (value) => post("/api/interface", {interface: value}),
   projectPaperUrl,
   loadModels() { return get("/api/models"); },
   saveModels(settings) { return post("/api/op", {op:"set_build_settings", ...settings}); },
