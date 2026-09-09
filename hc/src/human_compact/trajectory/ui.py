@@ -5844,7 +5844,25 @@ class H(BaseHTTPRequestHandler):
                     cwd=CS.bound_project(sid,root) or CS.load_manifest(sid,root).get('cwd')
                     if not cwd: raise ValueError('Open a local project first')
                     action=body.get('action')
-                    if action=='begin': answer=DC.begin(root,cwd,body.get('name'),body.get('files'),{'type':'local_folder' if body.get('folder') else 'local_file'})
+                    if action=='pick_local':
+                        # Native dialog, outside project state locks. Browser cannot supply the chosen path.
+                        picked=pick_directory()
+                        if not picked.get('ok') or picked.get('cancelled'):
+                            self._send(200,picked); return
+                        from . import resources as R
+                        import hashlib
+                        rid='dataset-local-'+hashlib.sha256(picked['cwd'].encode('utf-8')).hexdigest()[:20]
+                        raw={'id':rid,'kind':'dataset','name':picked['name'],'status':'selected',
+                             'source':{'type':'local_folder','provider':'local_path','path':picked['cwd']},
+                             'provenance':{'providedBy':'user','selectedBy':'native-picker'}}
+                        result=R.prepare(root,cwd,[raw])
+                        resource=next(r for r in result if r['id']==rid)
+                        if resource['status']=='ready':
+                            with DC.lock(root,cwd):
+                                from . import project_store as dataset_project_store
+                                dataset_project_store.save_project(root,cwd,{'activeDatasetId':rid})
+                        answer={'ok':resource['status']=='ready','resource':resource,'error':resource['error']}
+                    elif action=='begin': answer=DC.begin(root,cwd,body.get('name'),body.get('files'),{'type':'local_folder' if body.get('folder') else 'local_file'})
                     elif action=='status': answer=DC.status(cwd,body.get('id',''))
                     elif action=='cancel': answer=DC.cancel(root,cwd,body.get('id',''))
                     elif action=='finish':

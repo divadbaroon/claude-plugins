@@ -31,6 +31,7 @@ export function renderResourcePane(state, actions) {
       h("label", {class:"ghost-btn dataset-upload-button"}, kind === "paper" ? "Upload paper" : "Choose file",
         h("input", {type:"file", "aria-label":`Upload ${kind}`, accept:kind === "paper" ? ".pdf" : ".csv,.tsv,.parquet,.xlsx,.json,.jsonl,.ndjson",
           disabled:busy || null, onchange:event=>{upload(event.target.files?.[0]);event.target.value="";}})),
+      kind === "dataset" && h("button", {type:"button",class:"ghost-btn",disabled:busy || null,onclick:()=>actions.chooseLocalDataset()}, "Choose local folder"),
       kind === "dataset" && h("label", {class:"ghost-btn dataset-upload-button"}, "Choose folder",
         h("input", {type:"file",webkitdirectory:true,multiple:true,"aria-label":"Choose dataset folder",disabled:busy || null,
           onchange:event=>{upload(selectedFiles(event.target.files));event.target.value="";}}))),

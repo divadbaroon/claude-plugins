@@ -720,6 +720,17 @@ export function createActions(store, services) {
       } catch (error) { set({paperUpload:{error:true,text:"Could not upload this PDF. Try again."}}); }
     },
     datasetUploadError(error) { set({datasetUpload:{error:true,text:error.message || "Could not read the folder. Use Choose folder."}}); },
+    async chooseLocalDataset() {
+      if (get().datasetUpload?.busy) return;
+      set({datasetUpload:{busy:true,text:"Choose a local dataset folder in the dialog…"}});
+      try {
+        const answer=await services.chooseLocalDataset();
+        if (answer.cancelled) {set({datasetUpload:null});return;}
+        await refresh();
+        if (answer.ok && answer.resource) {set({resourceId:answer.resource.id,resourceUrl:""});showTab("dataset");}
+        set({datasetUpload:answer.ok ? null : {error:true,text:answer.error || "Could not prepare the selected folder."}});
+      } catch(error) {set({datasetUpload:{error:true,text:error.message}});}
+    },
     async uploadDataset(file) {
       if (!file || get().datasetUpload?.busy) return;
       const entries=Array.isArray(file) ? file : [{file,path:file.name}];

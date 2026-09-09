@@ -32,3 +32,9 @@ The hosted uploader carries private uploaded collections through the same resour
 ## Linked local folders (0.20.2)
 
 The hosted Paper step can carry a `local_path` provider with a user-entered absolute or `~/` folder path. The installed runtime resolves it on this computer and inspects it in place, without copying files or uploading bytes. Metadata is stored in project resource storage; the data remains in the original folder. It uses the same bounded collection manifest, Dataset pane, active dataset and Build subset context. Keep the folder at its original path. Missing paths become needs_user; invalid paths, symlinks and special files fail without replacing the previous active dataset. Normal local ingestion size/count policies still apply.
+
+## Native folder picker (0.20.3)
+
+Dataset's **Choose local folder** opens the existing operating-system directory dialog through the authenticated local UI and prepares its result using the in-place collection importer. The browser does not send an arbitrary selected path in this operation. The existing Choose folder/upload controls still copy files into local workspace storage. Canceling the native dialog preserves the active dataset.
+
+Hosted onboarding can queue a `local_picker` source without typing a path. The dialog opens when the installed runtime first prepares that project (not while viewing the hosted Paper page, which precedes installation). Successful preparation saves a `local_path` source and is cached; cancellation/unavailable dialogs produce needs_user with a retry button in Dataset. No native dialog implementation is replaced: macOS AppleScript, Windows FolderBrowserDialog, and Linux Zenity/KDialog remain the existing adapters. No new localhost/CORS bridge is exposed.
