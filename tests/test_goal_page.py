@@ -1440,9 +1440,9 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".notes-input")).to_have_count(0)
             subs.nth(1).click()
             expect(subs.nth(1)).to_have_class(active)
-            # No todos yet, so the pane is folded away behind its button.
-            expect(page.get_by_role("button", name="Show todos")).to_be_visible()
-            expect(page.locator(".todo-list")).to_have_count(0)
+            # The editor stays visible even before the first todo is written.
+            expect(page.get_by_role("button", name="Hide todos")).to_be_visible()
+            expect(page.locator(".todo-list")).to_have_count(1)
 
             # Bart's row for the first message comes back as a proposal,
             # and Add puts it on the list -- and in todos.json.
@@ -1534,7 +1534,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(subs).to_have_count(4)
             expect(subs.nth(3)).to_have_class(active)
             expect(subs.nth(3)).to_have_text("Export the dataset to parquet")
-            expect(page.locator(".todo-list")).to_have_count(0)
+            expect(page.locator(".todo-list")).to_have_count(1)
             self.assertIn(("Export the dataset to parquet", goal),
                           [(g["title"], g.get("parent_goal_id")) for g in self.goals()[0]["goals"]])
             # Escape drops an empty one.
@@ -1781,7 +1781,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(menu.get_by_role("menuitem", name="Sign out")).to_have_count(0)
             # Under a rule, the reader's level: nothing set yet, so the
             # slider stands at the start and the stops are all open.
-            expect(menu.locator(".menu-rule")).to_have_count(1)
+            expect(menu.locator(".menu-rule")).to_have_count(2)
             expect(menu.locator(".menu-cap")).to_have_text("Expertise")
             expect(menu.locator(".slider-name")).to_have_text("Not set")
             stops = menu.get_by_role("radio")

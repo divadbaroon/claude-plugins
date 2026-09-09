@@ -5,8 +5,10 @@
 
 import { h, svg } from "../dom.js";
 import { renderExpertise } from "./expertise.js";
+import { notificationHref } from "../notifications.js";
 
 const ICONS = {
+  bell: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg>`,
   models: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4m6-4v4M9 18v4m6-4v4M2 9h4m-4 6h4m12-6h4m-4 6h4"/></svg>`,
   api: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -44,7 +46,35 @@ export function renderHeader(state, actions) {
           type: "button", class: "crumb-btn", title: "The goal",
           "aria-current": here === "goal" ? "page" : null, onclick: actions.showGoal,
         }, state.goal.title))),
-    renderAccount(state, actions));
+    h("div", {class:"header-actions"}, renderNotifications(state, actions), renderAccount(state, actions)));
+}
+
+function renderNotifications(state, actions) {
+  const items = state.notificationItems || [];
+  const unread = items.filter(item=>!item.read).length;
+  const open = Boolean(state.notificationsOpen);
+  return h("div", {class:"notifications", "data-notifications":""},
+    h("button", {type:"button", class:"notification-toggle", title:"Notifications",
+      "aria-label":unread ? `Notifications, ${unread} unread` : "Notifications",
+      "aria-haspopup":"dialog", "aria-expanded":String(open), "aria-controls":"build-notifications",
+      onclick:actions.toggleNotifications}, icon("bell"),
+      unread > 0 && h("span", {class:"notification-count", "aria-hidden":"true"}, unread > 99 ? "99+" : unread)),
+    h("span", {class:"visually-hidden", role:"status", "aria-live":"polite", "aria-atomic":"true"},
+      unread ? `${unread} unread build ${unread === 1 ? "notification" : "notifications"}` : ""),
+    open && h("section", {id:"build-notifications", class:"notification-menu", role:"dialog", "aria-label":"Build notifications"},
+      h("div", {class:"notification-heading"}, h("h2", {}, "Notifications"),
+        unread > 0 && h("button", {type:"button", class:"menu-cancel", onclick:actions.markNotificationsRead}, "Mark all read"),
+        h("button", {type:"button", class:"notification-close", "aria-label":"Close notifications", onclick:actions.closeNotifications}, "×")),
+      items.length ? h("ul", {class:"notification-list"}, items.map(item=>h("li", {key:item.id},
+        h("a", {class:`notification-item${item.read ? "" : " is-unread"}`, href:notificationHref(item),
+          onclick:event=>{
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            if (actions.openNotification) {event.preventDefault(); actions.openNotification(item.id);}
+          }},
+        h("span", {class:"notification-title"}, `${item.todoCount} ${item.todoCount === 1 ? "todo" : "todos"} completed`),
+        h("span", {class:"notification-path"}, `${item.goalTitle} / ${item.subgoalTitle}`),
+        h("span", {class:"notification-detail"}, "Build verified")))))
+        : h("p", {class:"notification-empty"}, "Completed builds will appear here.")));
 }
 
 function accountLabel(account) {
@@ -76,7 +106,7 @@ export function renderSettingsContent(state, actions) {
       h("select", {"aria-label":"Interface", value:state.interfaceMode || "goal",
         disabled:state.interfaceBusy || null,
         onchange:event => actions.switchInterface(event.target.value)},
-        h("option", {value:"goal", selected:state.interfaceMode !== "legacy" || null}, "New workspace"),
+        h("option", {value:"goal", selected:state.interfaceMode !== "legacy" || null}, "Standard"),
         h("option", {value:"legacy", selected:state.interfaceMode === "legacy" || null}, "Legacy workspace"))),
     state.interfaceError && h("p", {role:"alert"}, state.interfaceError),
     h("p", {class:"menu-hint"}, "Remembered when you open Bart, across projects and restarts."),

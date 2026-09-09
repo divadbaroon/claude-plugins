@@ -6,7 +6,7 @@
    that subgoal's slice, so switching subgoals is a change of activeId and
    nothing else. */
 
-export const TABS = ["bart", "preview", "terminal"];
+export const TABS = ["bart", "notes", "preview", "terminal"];
 
 // The builder holds a row from the moment it is picked until it comes
 // back; a row that failed is the reader's again, to reword or to clear.
@@ -18,7 +18,9 @@ export const EMPTY_SLICE = Object.freeze({
   draft: "",         // the message being typed to Bart
   newTodo: "",       // the todo being typed
   todos: [],         // [{ id, text, done, status }] -- status as the server keeps it
-  todosShown: null,  // null until the reader chooses: shown iff there are todos
+  todosShown: true,
+  selectedTodos: [],
+  notes: "",
 });
 
 export function initialState() {
@@ -95,7 +97,7 @@ export function withSlice(state, id, change) {
 }
 
 export function todosShown(slice) {
-  return slice.todosShown === null ? slice.todos.length > 0 : slice.todosShown;
+  return slice.todosShown !== false;
 }
 
 export function isWithBuilder(todo) {
@@ -104,7 +106,7 @@ export function isWithBuilder(todo) {
 
 /* The rows the reader can still hand over: not done, not already out. */
 export function openTodos(slice) {
-  return slice.todos.filter((todo) => !todo.done && !isWithBuilder(todo));
+  return slice.todos.filter((todo) => todo.text.trim() && !todo.done && !isWithBuilder(todo));
 }
 
 export function hasOpenTodos(slice) {

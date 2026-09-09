@@ -72,6 +72,7 @@ OP_EVENTS = {
     "add_goal": GOAL_ADDED,
     "set_notes": NOTES_EDITED,
     "add_todo_row": TODO_ADDED,
+    "insert_todo_row": TODO_ADDED,
     "set_todo_text": TODO_TEXT_EDITED,
     "set_todo_done": TODO_DONE_TOGGLED,
     "remove_todo_row": TODO_REMOVED,

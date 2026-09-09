@@ -41,7 +41,7 @@ WRITE_OPS = frozenset({
     "add_todo", "set_understanding", "resolve_check", "set_document",
     "set_paper",
     # The goal page's todo list, one row at a time.
-    "add_todo_row", "set_todo_text", "set_todo_done", "remove_todo_row",
+    "add_todo_row", "insert_todo_row", "set_todo_depth", "set_todo_text", "set_todo_done", "remove_todo_row",
     # The tree's shape, and what hangs off it.
     "add_goal", "attach_prompt", "detach_prompt", "generate_prompt",
     # Which chats the project is built from.

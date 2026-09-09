@@ -388,19 +388,23 @@ class TodoAlertTests(BridgeTestCase):
         "    if (c.getAttribute('data-hc-alert-set') !== null) out.push(c);"
         "    walk(c); }); })(root); return out; };")
 
-    def test_the_gear_settings_controls_write_the_settings(self):
+    def test_the_gear_opens_the_shared_workspace_settings(self):
+        out = self.alerts(
+            "var G = window.__hcPromptUI.gear; G.open();"
+            "var frame = G.panel().querySelector('iframe');"
+            "[frame.src, frame.title];")
+        self.assertEqual(['/settings?interface=legacy', 'Workspace settings'], out)
+
+    def test_legacy_options_still_save_notification_preferences(self):
         out = self.alerts(
             self.SETTINGS_INPUTS +
             "var G = window.__hcPromptUI.gear; G.open();"
+            "G.panel().children[G.panel().children.length - 1].onclick();"
             "var inputs = inputsIn(G.panel());"
-            "var before = inputs.map(function (i) { return [i.getAttribute('data-hc-alert-set'), i.checked, i.value]; });"
             "inputs[0].checked = false; fire('change', inputs[0]);"
             "inputs[1].value = '20'; fire('change', inputs[1]);"
-            "[before, A.settings(),"
-            " inputs.map(function (i) { return [i.checked, i.value]; })];")
-        self.assertEqual([[["banners", True, ""], ["seconds", None, "6"]],
-                          {"banners": False, "seconds": 20},
-                          [[False, ""], [None, "20"]]], out)
+            "A.settings();")
+        self.assertEqual({'banners': False, 'seconds': 20}, out)
 
     def test_the_center_carries_no_settings_controls(self):
         out = self.alerts(
@@ -424,7 +428,7 @@ class TodoAlertTests(BridgeTestCase):
             "var gear = gslot.querySelector('.hc-gear');"
             "fire('click', gear);"
             "var up = [G.panel() !== null, gear.getAttribute('data-hc-gear-open'),"
-            "          G.panel().querySelector('.hc-settings-sec-head').textContent];"
+            "          G.panel().querySelector('iframe').title];"
             "fire('click', bell());"
             "var swapped = [G.panel() !== null, A.center() !== null];"
             "fire('click', gear);"
@@ -432,7 +436,7 @@ class TodoAlertTests(BridgeTestCase):
             "fire('click', document.body);"
             "[before, up, swapped, back, [G.panel() !== null, gear.getAttribute('data-hc-gear-open')]];")
         self.assertEqual([[False, None],
-                          [True, "", "Notifications"],
+                          [True, "", "Workspace settings"],
                           [False, True],
                           [True, False],
                           [False, None]], out)

@@ -10,6 +10,7 @@ import { renderBreakdown } from "./breakdown.js";
 import { renderResourcePane } from "./resources.js";
 import { renderTabs } from "./tabs.js";
 import { renderBart } from "./bart.js";
+import { renderNotes } from "./notes.js";
 import { renderPreview } from "./preview.js";
 import { renderTerminal } from "./terminal.js";
 import { renderProjects, renderGoals } from "./home.js";
@@ -32,6 +33,7 @@ export function renderPage(state, actions) {
 }
 
 function renderPane(state, actions) {
+  if(state.tab==="notes")return state.activeId ? renderNotes(state,actions) : renderFirstSubgoal(state,actions);
   if (state.tab === "paper" || state.tab === "dataset" || state.tab === "resource") return renderResourcePane(state, actions);
   if (state.tab === "preview") return renderPreview(state, actions);
   if (state.tab === "terminal") return renderTerminal(state);

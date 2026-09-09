@@ -46,7 +46,7 @@
   --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, 'Source Code Pro', SFMono-Regular, Menlo, monospace;
   --text-microcap: 500 9px/1 var(--font-sans);
-  --track-microcap: 1.6px;
+  --track-microcap: 0;
   --text-btn: 500 13px/1 var(--font-sans);
 
   --radius-sm: 8px;
@@ -112,7 +112,7 @@ input, textarea { outline: none; }
 .card-text { flex: 1 1 auto; font: 13px/1.5 var(--font-sans); color: #000; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .card-text.is-empty { font-style: italic; }
 .card-where { font: 11px/1.4 var(--font-mono); color: #000; overflow-wrap: anywhere; }
-.card-facts { display: flex; flex-wrap: wrap; gap: 12px; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: #000; }
+.card-facts { display: flex; flex-wrap: wrap; gap: 12px; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: none; color: #000; }
 /* The circle is taller than the brand line; the header stays the design's height. */
 .account { position: relative; margin: -5px 8px -5px auto; flex: none; display: flex; }
 .account-btn { display: flex; padding: 0; border: 0; background: transparent; border-radius: var(--radius-round); cursor: pointer; }
@@ -141,7 +141,7 @@ input, textarea { outline: none; }
 /* the reader's level, under a rule: the web setup's bar slider */
 .menu-rule { margin: 6px 4px; border: 0; border-top: 1px solid var(--bd); }
 .menu-expertise { display: flex; flex-direction: column; gap: 12px; padding: 6px 10px 10px; user-select: none; }
-.menu-cap { font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: var(--fnt); }
+.menu-cap { font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: none; color: var(--fnt); }
 .slider-name { font: 500 15px/1.3 var(--font-sans); color: var(--acc); }
 .slider-desc { margin-top: 3px; font: 12.5px/1.5 var(--font-sans); color: var(--mut); text-wrap: pretty; }
 .slider-track { position: relative; height: 48px; touch-action: none; cursor: grab; }
@@ -163,7 +163,7 @@ input, textarea { outline: none; }
 
 /* the plan rail */
 .rail { flex: none; width: var(--rail-width); padding: 24px; display: flex; flex-direction: column; gap: 6px; overflow: auto; }
-.rail-label, .section-label { font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: var(--fnt); }
+.rail-label, .section-label { font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: none; color: var(--fnt); }
 .rail-label { padding: 0 0 8px 12px; }
 .sub { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-radius: var(--radius-sm); background: transparent; text-align: left; cursor: pointer; transition: background var(--dur-fast); }
 .sub:hover, .sub.is-active, .sub.is-editing { background: var(--hov); }
@@ -202,7 +202,7 @@ input, textarea { outline: none; }
 .feed-inner { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
 .msg { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
 .msg.from-you { align-items: flex-end; }
-.msg-who { font: 500 9px/1 var(--font-sans); letter-spacing: 1.4px; text-transform: uppercase; color: var(--fnt); }
+.msg-who { font: 500 9px/1 var(--font-sans); letter-spacing: 0; text-transform: none; color: var(--fnt); }
 .bubble { max-width: 78%; padding: 7px 11px; border-radius: var(--radius-md); background: var(--panel); border: 1px solid var(--bd); font: 14.5px/1.5 var(--font-sans); color: var(--ink); text-wrap: pretty; white-space: pre-line; }
 .from-you .bubble { background: var(--bd); border-color: transparent; }
 .bubble.is-error { color: var(--del); border-color: var(--del); }
@@ -248,7 +248,7 @@ input, textarea { outline: none; }
 /* A row the builder holds is read, not edited; what it says sits beside it. */
 .todo.is-held .todo-text { color: var(--fnt); }
 .todo.is-held .todo-mark { color: var(--bd2); cursor: default; }
-.todo-status { flex: none; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: uppercase; color: var(--fnt); }
+.todo-status { flex: none; font: var(--text-microcap); letter-spacing: var(--track-microcap); text-transform: none; color: var(--fnt); }
 .todo-status.is-failed { color: var(--del); }
 .build-note { margin-right: auto; align-self: center; font: 12px/1.5 var(--font-sans); color: var(--fnt); }
 .build-note.is-error { color: var(--del); }
@@ -341,7 +341,7 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
  .brainstorm,.todos { flex:1 0 auto; min-height:250px; }
 }
 
-.term-section { font-size:11px; letter-spacing:.12em; color:var(--fnt); margin-bottom:12px; }
+.term-section { font-size:11px; letter-spacing:0; color:var(--fnt); margin-bottom:12px; }
 .preview-output { border-top:1px solid var(--bd); margin-top:24px; padding-top:16px; }
 
 .dataset-upload { padding:12px 0; margin-bottom:12px; border-bottom:1px solid var(--bd); color:var(--fnt); font-size:12px; }
@@ -388,7 +388,7 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 .model-choice select { min-width:0; max-width:180px; font:inherit; color:inherit; background:var(--paper,#fff); border:1px solid var(--line,#ddd); border-radius:5px; padding:5px; }
 
 /* Production workspace: familiar application chrome, readable labels, quiet surfaces. */
-.workspace-standard { --text-microcap:600 11px/1.3 var(--font-sans); --track-microcap:.035em; font-size:14px; }
+.workspace-standard { --text-microcap:600 11px/1.3 var(--font-sans); --track-microcap:0; font-size:14px; }
 .workspace-standard .header { min-height:60px; align-items:center; padding:14px 24px; }
 .workspace-standard .brand { font-size:16px; font-weight:650; }
 .workspace-standard .project-name, .workspace-standard .goal-title { font-size:14px; }
@@ -414,7 +414,7 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 .workspace-standard .feed { padding:8px 20px 20px; }
 .workspace-standard .feed-inner { gap:20px; }
 .workspace-standard .msg { gap:7px; }
-.workspace-standard .msg-who { font-size:10px; letter-spacing:.04em; color:var(--mut); }
+.workspace-standard .msg-who { font-size:12px; letter-spacing:0; color:var(--mut); }
 .workspace-standard .bubble { max-width:92%; padding:11px 14px; font-size:14px; line-height:1.65; border-radius:10px; overflow-wrap:anywhere; }
 .workspace-standard .from-bart .bubble { background:var(--panel2); border-color:transparent; }
 .workspace-standard .from-you .bubble { background:var(--hov); }
@@ -425,12 +425,12 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 .workspace-standard .send { width:30px; height:30px; }
 .workspace-standard .conversation-clear { padding:4px 0 4px 12px; font-weight:500; }
 .workspace-standard .todo-list { padding:0 20px 16px; }
-.workspace-standard .todo-entry { padding:10px 0; border-bottom:1px solid var(--bd); }
+.workspace-standard .todo-entry { padding:10px 0; border:0; border-radius:7px; }
 .workspace-standard .todo { gap:10px; }
-.workspace-standard .todo-text { font-size:14px; line-height:1.55; }
+.workspace-standard .todo-text { font-size:15px; line-height:1.6; }
 .workspace-standard .todo-build { font-size:12px; padding:4px 8px; margin-top:4px; border:1px solid var(--bd); border-radius:6px; background:var(--panel); }
 .workspace-standard .todo-build:hover:not(:disabled) { border-color:var(--bd2); }
-.workspace-standard .todo-status { font-size:10px; letter-spacing:.02em; line-height:1.5; }
+.workspace-standard .todo-status { font-size:11px; letter-spacing:0; line-height:1.5; }
 .workspace-standard .todo-new-input { font-style:normal; }
 .workspace-standard .todos-actions { padding-top:16px; }
 .workspace-standard .build-btn.is-secondary { color:var(--mut); padding:7px 10px; border:1px solid var(--bd); background:var(--panel); }
@@ -472,7 +472,7 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 .workspace-standard .goals-overview .card::after { content:"→"; position:absolute; right:24px; top:24px; color:var(--mut); font-size:20px; }
 .workspace-standard .goals-overview .card-name { font-size:17px; font-weight:600; }
 .workspace-standard .goals-overview .card-text { max-width:78ch; font-size:14px; line-height:1.6; color:var(--mut); -webkit-line-clamp:2; }
-.workspace-standard .goals-overview .card-facts { color:var(--mut); font-size:11px; letter-spacing:.02em; gap:16px; }
+.workspace-standard .goals-overview .card-facts { color:var(--mut); font-size:12px; letter-spacing:0; gap:16px; }
 .workspace-standard .project-brief { margin-top:32px; border-top:1px solid var(--bd); padding-top:20px; color:var(--mut); }
 .workspace-standard .project-brief summary { cursor:pointer; font-size:13px; font-weight:500; width:fit-content; }
 .workspace-standard .project-brief summary:focus-visible { outline:2px solid var(--acc); outline-offset:4px; }
@@ -495,3 +495,107 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 .paper-view-controls button[aria-pressed="true"] { background: var(--ink); color: var(--panel); }
 
 .todo-timing { margin: 2px 0 6px 28px; color: var(--muted, #888); font-size: 11px; line-height: 1.4; font-weight: 400; }
+
+/* Standard keeps spacious, light surfaces and sentence-case labels. */
+.workspace-standard .menu-cap, .workspace-standard .rail-label { font-size:12px; }
+.workspace-standard .header-actions { display:flex; align-items:center; gap:18px; margin-left:auto; flex:none; }
+.workspace-standard .header-actions .account { margin:0; }
+.workspace-standard .todos { animation:none; }
+.workspace-standard .todo-entry.is-picked { background:var(--accbg); }
+.workspace-standard .todos-actions { align-items:center; gap:12px; flex-wrap:wrap; padding-top:24px; }
+.workspace-standard .copy-todos { margin-left:0; margin-right:auto; font-size:12px; background:transparent; }
+.workspace-standard .build-btn { min-height:42px; min-width:110px; justify-content:center; padding:12px 20px; font-size:14px; font-weight:600; background:var(--acc); color:var(--onacc); }
+.workspace-standard .save-error { flex:1 0 100%; color:var(--del); font-size:13px; }
+.workspace-standard .save-error button { margin-left:10px; }
+.workspace-standard .todo-question { margin:4px 0 8px 24px; padding:12px 14px; background:var(--panel); border-radius:8px; font-size:14px; line-height:1.6; }
+.workspace-standard .todo-question p { margin:0 0 10px; white-space:pre-wrap; }
+.workspace-standard .todo-answer-row { display:flex; align-items:flex-end; gap:10px; }
+.workspace-standard .todo-answer-row textarea { flex:1; min-width:0; resize:vertical; padding:9px 10px; min-height:40px; border:1px solid var(--bd); border-radius:6px; background:var(--panel2); color:var(--ink); font:inherit; line-height:1.5; }
+.workspace-standard .todo-answer-row textarea:focus { border-color:var(--acc); }
+.workspace-standard .todo-answer-row button { flex:none; margin:0; min-height:40px; font-size:13px; }
+.workspace-standard .todo-question [role="alert"] { margin:10px 0 0; color:var(--del); }
+.workspace-standard .notes-pane { padding:20px 24px; background:var(--panel2); border:1px solid var(--bd); border-radius:10px; }
+.workspace-standard .notes-heading { display:flex; align-items:baseline; gap:16px; }
+.workspace-standard .notes-heading h2 { margin:0; font-size:17px; font-weight:600; }
+.workspace-standard .notes-heading [role="status"] { margin-left:auto; color:var(--mut); font-size:12px; }
+.workspace-standard .notes-editor { flex:1; width:100%; min-height:240px; resize:none; margin-top:20px; padding:0; border:0; background:transparent; color:var(--ink); font:16px/1.75 var(--font-sans); }
+
+/* Markdown shares the chat's typography; code alone uses a fixed-width face. */
+.chat-markdown { white-space:normal; min-width:0; }
+.chat-markdown p { margin:0 0 .75em; }
+.chat-markdown > :last-child, .chat-markdown li > :last-child { margin-bottom:0; }
+.chat-markdown strong { font-weight:650; }
+.chat-markdown a { color:var(--acc); text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
+.chat-markdown a:focus-visible { outline:2px solid var(--acc); outline-offset:3px; }
+.chat-markdown code { padding:1px 4px; border-radius:4px; background:var(--hov); font:.92em/1.6 var(--font-mono); white-space:pre-wrap; }
+.chat-markdown pre { margin:12px 0; padding:12px 14px; border-radius:7px; background:var(--hov); overflow:auto; max-width:100%; }
+.chat-markdown pre code { padding:0; white-space:pre; background:transparent; }
+.chat-markdown ul, .chat-markdown ol { margin:.5em 0 .85em; padding-left:1.5em; }
+.chat-markdown li { margin:.25em 0; }
+.chat-markdown li > p { margin:0; }
+.chat-markdown blockquote { margin:12px 0; padding-left:14px; border-left:3px solid var(--bd2); color:var(--mut); }
+.chat-markdown h3, .chat-markdown h4, .chat-markdown h5, .chat-markdown h6 { margin:1em 0 .4em; font-size:1.05em; line-height:1.5; font-weight:650; }
+.chat-markdown > :first-child { margin-top:0; }
+
+/* The projects overview stops growing columns on wide screens. */
+.workspace-standard .projects-overview { width:100%; max-width:1280px; margin:0 auto; padding:44px 32px; }
+.workspace-standard .projects-overview .home-title { font-size:26px; font-weight:600; }
+.workspace-standard .projects-overview .home-sub { font-size:15px; margin:12px 0 28px; }
+.workspace-standard .projects-overview .home-grid { grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px; }
+.workspace-standard .projects-overview .card { padding:24px; min-height:215px; gap:16px; }
+.workspace-standard .projects-overview .card-name { font-size:17px; line-height:1.4; overflow-wrap:anywhere; }
+.workspace-standard .projects-overview .card-text { font-size:14px; line-height:1.65; color:var(--mut); -webkit-line-clamp:3; }
+.workspace-standard .projects-overview .card-where { margin-top:auto; font:12px/1.5 var(--font-sans); color:var(--fnt); display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+.workspace-standard .projects-overview .card-facts { font-size:12px; line-height:1.5; color:var(--mut); gap:8px 16px; }
+.workspace-standard .card-here { color:var(--acc); }
+
+/* The empty dataset pane offers its real upload controls in the center. */
+.resource-upload-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:10px; }
+.resource-upload-actions .ghost-btn { margin:0; white-space:nowrap; }
+.resource-upload-actions .dataset-upload-button:has(input:disabled) { opacity:.5; cursor:progress; }
+.workspace-standard .resource-dataset.is-empty { flex:1; display:flex; align-items:center; justify-content:center; min-height:390px; padding:36px 20px; background:var(--panel2); border-radius:10px; }
+.dataset-empty-card { width:min(540px,100%); padding:38px 30px; text-align:center; background:var(--panel); border:1px solid var(--bd); border-radius:14px; box-shadow:0 12px 32px #00000008; }
+.dataset-empty-icon { display:inline-flex; align-items:center; justify-content:center; width:44px; height:44px; margin-bottom:14px; background:var(--panel2); border:1px solid var(--bd); border-radius:10px; font-size:26px; line-height:1; color:var(--acc); }
+.dataset-empty-card h2 { margin:0; font-size:23px; font-weight:600; }
+.dataset-empty-card p { color:var(--mut); font-size:14px; line-height:1.6; }
+.dataset-empty-card .resource-upload-actions { justify-content:center; margin-top:24px; }
+.dataset-empty-card .dataset-upload-button:first-child { flex:1 0 100%; padding:14px 22px; background:var(--acc); color:var(--onacc); border-color:var(--acc); font-size:15px; }
+.dataset-empty-card .dataset-drop-hint { margin-top:20px; color:var(--fnt); font-size:13px; }
+.dataset-empty-card [role="alert"] { color:var(--del); }
+
+/* A persistent inbox, with no browser-notification permission prompt. */
+.notifications { position:relative; }
+.notification-toggle { position:relative; display:flex; align-items:center; justify-content:center; width:34px; height:34px; border:0; border-radius:8px; padding:6px; background:transparent; cursor:pointer; }
+.notification-toggle:hover, .notification-toggle[aria-expanded="true"] { background:var(--hov); }
+.notification-toggle .menu-icon { width:21px; height:21px; }
+.notification-count { position:absolute; top:-4px; right:-5px; min-width:17px; height:17px; padding:0 4px; display:flex; align-items:center; justify-content:center; border-radius:10px; background:var(--acc); color:var(--onacc); font-size:10px; line-height:1; font-weight:650; }
+.notification-menu { position:absolute; right:0; top:calc(100% + 12px); z-index:20; width:min(370px,calc(100vw - 32px)); padding:8px; border:1px solid var(--bd); border-radius:12px; background:var(--panel); box-shadow:0 12px 36px #00000014; }
+.notification-heading { display:flex; align-items:center; gap:12px; padding:8px 8px 12px; }
+.notification-heading h2 { flex:1; margin:0; font-size:15px; font-weight:600; }
+.notification-heading .menu-cancel { font-size:12px; white-space:nowrap; }
+.notification-close { border:0; border-radius:4px; padding:0 3px; background:transparent; font-size:20px; cursor:pointer; }
+.notification-list { list-style:none; margin:0; padding:0; max-height:min(420px,65vh); overflow:auto; }
+.notification-item { display:flex; flex-direction:column; gap:5px; padding:14px 12px; border-radius:8px; color:var(--ink); text-decoration:none; font-size:14px; line-height:1.5; }
+.notification-item:hover { background:var(--hov); }
+.notification-item.is-unread { background:var(--panel2); }
+.notification-item.is-unread .notification-title::before { content:""; display:inline-block; width:6px; height:6px; margin:0 7px 2px 0; border-radius:50%; background:var(--acc); }
+.notification-title { font-weight:600; }
+.notification-path { color:var(--mut); overflow-wrap:anywhere; }
+.notification-detail { color:var(--fnt); font-size:12px; }
+.notification-empty { margin:12px 8px 18px; color:var(--mut); font-size:14px; }
+.visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+@media(max-width:1000px) {
+ .workspace-standard .projects-overview .home-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+ .resource-header { flex-wrap:wrap; }
+}
+@media(max-width:650px) {
+ .workspace-standard .projects-overview { padding:28px 18px; }
+ .workspace-standard .projects-overview .home-grid { grid-template-columns:minmax(0,1fr); }
+ .workspace-standard .projects-overview .card { min-height:185px; }
+ .workspace-standard .header-actions { gap:8px; }
+ .notification-menu { position:fixed; top:70px; right:16px; }
+ .dataset-empty-card { padding:28px 20px; }
+ .workspace-standard .notes-pane { padding:18px 16px; }
+ .workspace-standard .todo-question { margin-left:0; }
+}
+@media(prefers-reduced-motion:reduce) { .account-menu { animation:none; } }
