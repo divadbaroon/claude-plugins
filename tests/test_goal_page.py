@@ -626,9 +626,10 @@ class GoalDataRouteTests(ChatCase):
                              [[t["text"] for t in slices[title]["todos"]]
                               for title in ("Signing route", "Client PUTs", "Retire the proxy")])
             self.assertEqual({"name": "Signed uploads",
+                              "cwd": str(Path(CS.bound_project(chat.name, self.root)).resolve()),
                               "objective": "Move uploads off the API server.",
                               "plan": "Move uploads off the API server.\nSign, then PUT."},
-                             answer["project"])
+                             {**answer["project"], "cwd": str(Path(answer["project"]["cwd"]).resolve())})
             # The directions not taken are kept, out of the way: the
             # address could still name one.
             self.assertEqual([("Direct-to-storage uploads", "the API is the bottleneck", 3),
@@ -1661,7 +1662,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(cards.first.locator(".card-name")).to_have_text("Signed uploads")
             expect(cards.first).to_have_class(re.compile(r"\bis-here\b"))
             expect(cards.first.locator(".card-text")).to_have_text("Move uploads off the API server.")
-            expect(cards.first.locator(".card-facts")).to_contain_text("this workspace")
+            expect(cards.first.locator(".card-facts")).to_contain_text("This workspace")
             # The project's name is its goals: the three directions offered,
             # each with its why, the chosen one open with its pieces counted.
             page.locator(".project-name").click()
