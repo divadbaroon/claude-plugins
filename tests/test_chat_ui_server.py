@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -41,9 +42,21 @@ def goal(goal_id, title, prompt_ids=None):
     }
 
 
-def open_prompt_tab(page):
-    """The rail opens on TODOs; the assembled prompt is the other tab."""
-    page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+def open_compatibility_prompt_pane(page):
+    """Exercise the retained prompt renderer, not the permanent navigation.
+
+    c133a24 restored the three legacy tabs and deliberately kept the internal
+    prompt handler/renderer. Dispatch through that handler to retain browser
+    coverage of generated context and clipboard output. The inspector test
+    separately proves Prompt is absent from the visible tab set.
+    """
+    page.evaluate("""() => {
+        const control = document.createElement('button');
+        control.setAttribute('data-hc-rail-tab', 'prompt');
+        document.querySelector('.hc-rail-tabs').appendChild(control);
+        control.click();
+        control.remove();
+    }""")
     page.wait_for_selector(".hc-rail-copy", state="visible", timeout=10_000)
 
 
@@ -636,7 +649,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("real goal 2", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("real goal 2", exact=True).first.click()
-                open_prompt_tab(page)
+                open_compatibility_prompt_pane(page)
                 expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
                 copy = page.get_by_text("Copy prompt", exact=True)
                 expect(copy).to_be_visible()
@@ -684,7 +697,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.get_by_text("brand new goal", exact=True).first
                        ).to_be_visible(timeout=10_000)
                 page.get_by_text("brand new goal", exact=True).first.click()
-                open_prompt_tab(page)
+                open_compatibility_prompt_pane(page)
                 expect(page.locator(".hc-rail-ctx-body")).to_be_visible()
                 # What the tab prints is what Copy takes. Read the copy.
                 context = page.context
@@ -1176,9 +1189,9 @@ class ChatUiServerTests(unittest.TestCase):
                     timeout=10_000
                 )
                 # One pane needs no tab to name it: the whole bar between the
-                # title and the preview is off the paint. The assembled
-                # prompt did not go away with the tab that used to hold it --
-                # it is on screen the whole time now, in its own rail.
+                # title and the preview is off the paint. The restored legacy
+                # rail keeps TODOs, Notes and Understanding visible; Prompt
+                # remains an internal pane without a permanent tab.
                 #
                 # The tab bar is named by a template patch, so "the bar is
                 # hidden" is also true of a page where the patch missed and
@@ -1189,7 +1202,7 @@ class ChatUiServerTests(unittest.TestCase):
                 for tab in ("PREVIEW", "PROMPT", "AGENT", "REVIEW"):
                     expect(page.get_by_text(tab, exact=True)).to_be_hidden()
                 expect(page.locator(".hc-rail-tabs").get_by_text(
-                    "Prompt", exact=True)).to_be_visible()
+                    "Prompt", exact=True)).to_have_count(0)
                 expect(page.locator(".hc-rail-tabs").get_by_text(
                     "TODOs", exact=True)).to_be_visible()
 
@@ -1214,15 +1227,14 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator('[placeholder^="Write in markdown"]')
                        ).to_be_hidden()
                 self.open_notes(page)
-                # The writing is a tab of the rail now, between the rows it
-                # is about and the prompt it is copied into.
+                # Notes stays in the rail next to the rows it is about.
                 expect(page.locator('.hc-rail-right [placeholder^="Write in '
                                     'markdown"]')).to_be_visible()
                 expect(page.locator(".hc-rail-right").get_by_text(
                     "RELATED PROMPTS", exact=True)).to_be_visible()
                 tabs = page.locator(".hc-rail-tabs > *")
                 self.assertEqual(
-                    ["TODOs", "Notes", "Prompt", "Understanding"],
+                    ["TODOs", "Notes", "Understanding"],
                     tabs.all_inner_texts())
                 for gone in ("WHERE THIS SITS", "OBJECTIVE", "CODE CONTEXT",
                              "DOCUMENT CONTEXT", "DECISIONS", "ALREADY BUILT",
@@ -1425,7 +1437,7 @@ class ChatUiServerTests(unittest.TestCase):
                     )
                     page = browser.new_page(
                         viewport={"width": 1400, "height": 900})
-                    page.goto(second, wait_until="domcontentloaded")
+                    page.goto(second + "/legacy", wait_until="domcontentloaded")
                     self.open_notes(page)
                     expect(page.locator(self.EDITOR)).to_be_visible(
                         timeout=10_000)
@@ -1593,7 +1605,7 @@ class ChatUiServerTests(unittest.TestCase):
             time.sleep(0.1)
         return links
 
-    def test_the_prompt_rail_is_the_prompt_and_a_real_copy(self):
+    def test_the_compatibility_prompt_rail_is_the_prompt_and_a_real_copy(self):
         """The prompt is a column of the rail, and the document is beside it.
 
         Both are the rail's now -- the document one tab over from the prompt
@@ -1641,7 +1653,7 @@ class ChatUiServerTests(unittest.TestCase):
                 expect(page.locator(self.EDITOR)).to_have_count(1)
                 expect(rail.locator(self.EDITOR)).to_have_count(1)
 
-                open_prompt_tab(page)
+                open_compatibility_prompt_pane(page)
                 # The rail's tabs take turns: reading the prompt puts the
                 # editor away. The middle is not one of the two -- it is
                 # the run preview, and it stays whichever tab is open.
@@ -1680,7 +1692,7 @@ class ChatUiServerTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def test_the_prompt_is_assembled_from_the_document_and_copied(self):
+    def test_the_compatibility_prompt_is_assembled_from_the_document_and_copied(self):
         """It is assembled, not authored, and reading it changes nothing.
 
         The tab was a box to type in with the assembled prompt printed above
@@ -1719,7 +1731,7 @@ class ChatUiServerTests(unittest.TestCase):
                 self.open_notes(page)
                 expect(page.locator(self.EDITOR)).to_be_visible(timeout=10_000)
 
-                open_prompt_tab(page)
+                open_compatibility_prompt_pane(page)
                 # No box to type in, and the objective from the document is
                 # in what the tab prints.
                 expect(page.locator("textarea.hc-rail-code")).to_have_count(0)
@@ -3314,7 +3326,8 @@ class ProjectsHomeBrowserTests(unittest.TestCase):
         self.home, self.other = PS._resolved(home), PS._resolved(other)
 
     def open(self, page, url):
-        page.goto(url + "/legacy")
+        parts = urllib.parse.urlsplit(url)
+        page.goto(urllib.parse.urlunsplit(parts._replace(path="/legacy")))
         page.wait_for_selector(".hc", timeout=15000)
 
     def _page(self, pw):
