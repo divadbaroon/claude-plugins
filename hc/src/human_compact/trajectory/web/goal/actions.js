@@ -720,6 +720,7 @@ export function createActions(store, services) {
       showGoal();selectSubgoal(item.subgoalId);notifications.closeNotifications();
     },
     editNotes, copyTodos, answerTodo,
+    clearTodoSelection:()=>changeSlice(get().activeId,{selectedTodos:[]}),
     editAnswer:(todoId,text)=>changeSlice(get().activeId,c=>({answers:{...c.answers,[todoId]:text}})),
     retryNotes:()=>noteSaves.get(get().activeId)?.save().catch(()=>{}),
     switchInterface, loadAccount,

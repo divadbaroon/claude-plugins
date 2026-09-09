@@ -126,7 +126,8 @@ export function createTodoEditor({get, set, changeSlice, services, refresh, inva
 
   function toggleSelection(todoId) {
     const id=get().activeId, slice=sliceOf(get(),id);
-    const ids=todoId?[todoId]:slice.todos.filter(r=>r.text.trim()&&!r.done&&!todoHeld(r,get())).map(r=>r.id);
+    if(!todoId){changeSlice(id,{selectedTodos:slice.todos.map(r=>r.id)});return;}
+    const ids=[todoId];
     const selected=new Set(slice.selectedTodos || []), all=ids.every(r=>selected.has(r));
     ids.forEach(r=>all?selected.delete(r):selected.add(r));
     changeSlice(id,{selectedTodos:[...selected]});
@@ -136,6 +137,7 @@ export function createTodoEditor({get, set, changeSlice, services, refresh, inva
     if(event.isComposing)return;
     const mod=event.metaKey||event.ctrlKey, input=event.target;
     if(mod&&event.key.toLowerCase()==="a") {event.preventDefault();toggleSelection();return;}
+    if(event.key==="Escape"){changeSlice(get().activeId,{selectedTodos:[]});return;}
     if(mod&&event.key==="/") {event.preventDefault();toggleSelection(todoId);return;}
     if(event.key==="Tab") {event.preventDefault();indentTodo(todoId,event.shiftKey?-1:1);return;}
     if(event.key==="Enter"&&!mod&&!event.shiftKey) {event.preventDefault();splitTodo(todoId,input.selectionStart,input.selectionEnd);return;}
@@ -193,6 +195,7 @@ export function copyTodoText(state) {
     lines.push(`${"  ".repeat(todo.depth||0)}- [${status==="done"?"x":" "}] ${todo.text} — ${label.replace(/…$/,"")}`);
     if(todo.question)lines.push(`${"  ".repeat((todo.depth||0)+1)}Question: ${todo.question}`);
   }
+  if(slice.newTodo?.trim())lines.push(`- [ ] ${slice.newTodo.trim()} — Todo`);
   if(slice.notes?.trim()) lines.push("","## Notes","",slice.notes.trim());
   return lines.join("\n")+"\n";
 }

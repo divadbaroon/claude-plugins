@@ -11,7 +11,7 @@ export function renderTodos(state, actions) {
   const busy = todo => ["building", "checking", "fixing"].includes(todoPhase(todo, state));
   const building = open.some(busy) && (state.buildAllFor === state.activeId || open.every(busy));
   const canBuild = (hasOpenTodos(slice) || slice.newTodo?.trim()) && !state.building && !workInFlight(state);
-  const selected=slice.selectedTodos?.length || 0;
+  const selected=slice.todos.filter(todo=>slice.selectedTodos?.includes(todo.id) && todo.text.trim() && !todo.done && !todoHeld(todo,state)).length;
   return h("div", { key: "todos", class: "todos", onkeydown:event=>{
     if((event.metaKey||event.ctrlKey)&&event.key==="Enter") {event.preventDefault();actions.buildAll();}
   } },
@@ -36,6 +36,7 @@ export function renderTodos(state, actions) {
           onkeydown: (event) => {
             if(event.isComposing)return;
             if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==="a"){event.preventDefault();actions.toggleTodoSelection();return;}
+            if(event.key==="Escape"){actions.clearTodoSelection();return;}
             if(event.metaKey||event.ctrlKey)return;
             if(event.key==="ArrowUp" && event.target.selectionStart===0){const inputs=event.target.closest('.todo-list').querySelectorAll('textarea.todo-text');const last=inputs[inputs.length-1];if(last){event.preventDefault();last.focus();last.setSelectionRange(last.value.length,last.value.length);}return;}
             if (event.key !== "Enter") return;
@@ -88,7 +89,7 @@ function renderTodo(todo, actions, state) {
       onkeydown: event => actions.todoKey(event,todo.id),
     }),
     label && h("span", { class: `todo-status is-${status}` }, label),
-    !held && !done && h("button", {type:"button", class:"todo-build", disabled: state.building || workInFlight(state) || null,
+    !held && !done && h("button", {type:"button", class:"todo-build", disabled: !todo.text.trim() || state.building || workInFlight(state) || null,
       "aria-label":`Build todo: ${todo.text}`, onclick:()=>actions.buildTodo(todo.id)}, "Build"),
     !held && h("button", {
       type: "button",
