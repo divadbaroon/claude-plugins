@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from human_compact.trajectory import chat_state  # noqa: E402
 from human_compact.trajectory import goals as GM  # noqa: E402
 from human_compact.trajectory import ui  # noqa: E402
 
-from test_chat_ui_server import browser_executable  # noqa: E402
+from test_chat_ui_server import browser_executable, open_compatibility_prompt_pane  # noqa: E402
 
 
 def tokens_in(text):
@@ -40,8 +41,15 @@ import json, sys, os, time
 args = sys.argv[1:]
 if "--output-format" not in args:
     # providers.ClaudeCLI: the prompt arrives on stdin, plain text goes out
-    sys.stdin.read()
-    print("Implement the router carefully; run the tests after each change.")
+    request = sys.stdin.read()
+    if "Classify this paused build question" in request:
+        # This fixture exercises a human answer. File-location questions
+        # are now correctly resolved by local discovery instead of pausing.
+        print(json.dumps({"say": "", "todos": [], "needs": {
+            "kind": "human_preference",
+            "question": "Which router do you prefer: src/a.ts or src/b.ts?"}}))
+    else:
+        print("Implement the router carefully; run the tests after each change.")
     sys.exit(0)
 prompt = args[args.index("-p") + 1]
 resume = "--resume" in args
@@ -76,7 +84,7 @@ if not resume:
         for i in ids:
             say('{"id": "%s", "state": "DONE"}' % i)
         end()
-    say('{"id": "%s", "question": "Which router file: src/a.ts or src/b.ts?"}' % ids[0])
+    say('{"id": "%s", "question": "Which router do you prefer: src/a.ts or src/b.ts?"}' % ids[0])
     for other in ids[1:]:
         say('{"id": "%s", "state": "DONE"}' % other)
 else:
@@ -451,7 +459,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 expect(page.locator(".hc-todo-status").nth(1)).to_have_text("done")
                 thread = page.locator(".hc-todo-ask")
                 expect(thread).to_be_visible()
-                expect(thread).to_contain_text("Which router file: src/a.ts or src/b.ts?")
+                expect(thread).to_contain_text("Which router do you prefer: src/a.ts or src/b.ts?")
                 page.locator(".hc-todo-answer").click()
                 page.keyboard.type("src/a.ts")
                 page.keyboard.press("Enter")
@@ -746,7 +754,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.locator(".hc-todo-line").first.click()
                 page.keyboard.type("ship it")
                 page.wait_for_timeout(1500)
-                page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+                open_compatibility_prompt_pane(page)
                 body = page.locator(".hc-rail-ctx-body")
                 expect(body).to_contain_text("# Current goals for this Claude chat",
                                              timeout=15000)
@@ -779,7 +787,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 page.keyboard.type("Add the route")
                 page.wait_for_timeout(1500)
                 corner = page.locator(".hc-todo-cost").first
-                page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+                open_compatibility_prompt_pane(page)
                 note = page.locator(".hc-rail-ctx-note")
                 expect(note).to_contain_text("tok", timeout=15000)
                 self.assertGreater(tokens_in(note.inner_text()), 0)
@@ -799,7 +807,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
             try:
                 page.goto(url + "/legacy", wait_until="domcontentloaded")
                 page.wait_for_selector(".hc-rail-tabs", timeout=15000)
-                page.locator(".hc-rail-tabs").get_by_text("Prompt", exact=True).click()
+                open_compatibility_prompt_pane(page)
                 body = page.locator(".hc-rail-ctx-body")
                 expect(body).to_contain_text("# How to work", timeout=15000)
                 expect(page.locator("textarea.hc-rail-code")).to_have_count(0)
@@ -935,7 +943,8 @@ class TodoPanelBrowserTests(unittest.TestCase):
                                  "the tab row must not grow a second line")
                 self.assertEqual(round(before["y"]), round(after["y"]))
                 # Every tab is still on that one line, and none of them wrapped.
-                for name in ("TODOs", "Notes", "Prompt", "Understanding"):
+                expect(tabs.locator(".hc-rail-tab")).to_have_text(["TODOs", "Notes", "Understanding"])
+                for name in ("TODOs", "Notes", "Understanding"):
                     box = tabs.get_by_text(name, exact=True).bounding_box()
                     self.assertLess(box["height"], after["height"] + 1, name)
                 expect(page.locator(".hc-rail-select")).to_have_count(0)
@@ -1003,10 +1012,14 @@ class TodoPanelBrowserTests(unittest.TestCase):
         # gets one.
         from playwright.sync_api import expect, sync_playwright
         os.environ["HC_BUILD_RESTART_CHECK"] = "1"
+        os.environ["HC_BUILD_LANE"] = "full"
         os.environ["STUB_HOLD"] = "1"
         os.environ["STUB_RESTART"] = "yes"
         os.environ["STUB_CHECK_HOLD"] = "4"
-        with server_for(self.trajdir) as url, sync_playwright() as pw:
+        # Restart checks apply only to full builds with a running process
+        # whose loaded code can become stale. Model that prerequisite here.
+        with mock.patch.object(BUILD, "relevant_live_process", return_value=True), \
+                server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
             try:
                 page.goto(url + "/legacy", wait_until="domcontentloaded")
@@ -1079,9 +1092,8 @@ class TodoPanelBrowserTests(unittest.TestCase):
 
     def test_the_understanding_tab_keeps_a_scenario_and_its_questions(self):
         # The rail's middle tab: what this goal's work is for, and what the
-        # reader wants answered about it. Both are kept on the goal and both
-        # open every build of its rows -- which is what the Prompt tab, one
-        # click away, is checked for here.
+        # reader wants answered about it. Both are kept on the goal and
+        # included in the retained internal prompt renderer checked here.
         from playwright.sync_api import expect, sync_playwright
         with server_for(self.trajdir) as url, sync_playwright() as pw:
             browser, page = self.open(pw)
@@ -1123,8 +1135,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                                   "Where do invites live?"],
                                  [q["text"] for q in held["questions"]])
                 # What a build of this goal's rows would open on.
-                page.locator(".hc-rail-tabs").get_by_text(
-                    "Prompt", exact=True).click()
+                open_compatibility_prompt_pane(page)
                 body = page.locator(".hc-rail-ctx-body")
                 expect(body).to_contain_text("# The scenario this goal is for",
                                              timeout=15000)
@@ -1305,8 +1316,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 self.assertEqual(
                     2, len(self.understanding()["questions"][0]["thread"]))
                 # What a build of this goal's rows would open on.
-                page.locator(".hc-rail-tabs").get_by_text(
-                    "Prompt", exact=True).click()
+                open_compatibility_prompt_pane(page)
                 expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
                     "the later one wins", timeout=15000)
             finally:
@@ -1535,8 +1545,7 @@ class TodoPanelBrowserTests(unittest.TestCase):
                 self.assertEqual(
                     "Two people edit one goal tree from two machines at once.",
                     self.understanding()["scenario"])
-                page.locator(".hc-rail-tabs").get_by_text(
-                    "Prompt", exact=True).click()
+                open_compatibility_prompt_pane(page)
                 expect(page.locator(".hc-rail-ctx-body")).to_contain_text(
                     str(path), timeout=15000)
             finally:
@@ -1652,7 +1661,7 @@ class SessionBuildBrowserTests(TodoPanelBrowserTests):
                 # Claude asks, in the transcript; the rail shows it.
                 goals, _ = chat_state.load_goals(self.session, self.root)
                 row_id = GM.by_id(goals, "g1")["todo_items"][0]["id"]
-                self.say('{"id": "%s", "question": "Which router file?"}' % row_id)
+                self.say('{"id": "%s", "question": "Which router do you prefer: src/a.ts or src/b.ts?"}' % row_id)
                 BUILD.scan_transcript(self.session, self.root, str(self.transcript))
                 expect(page.locator(".hc-todo-status").first).to_have_text("needs you", timeout=10_000)
                 page.locator(".hc-todo-answer").click()
