@@ -12,8 +12,10 @@ import os
 import stat
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 from pathlib import Path
 
@@ -377,6 +379,32 @@ class BuildRunTests(unittest.TestCase):
 class ReopenTests(BuildRunTests):
     """A row came back done and the reader disagrees."""
 
+    @contextmanager
+    def paused_verification(self):
+        from human_compact.trajectory.agents import verifier
+        entered, release = threading.Event(), threading.Event()
+        original = verifier.verify
+        verdicts = []
+        first = [True]
+
+        def verify(*args, **kwargs):
+            if not first[0]:
+                return original(*args, **kwargs)
+            first[0] = False
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release the first verifier")
+            result = original(*args, **kwargs)
+            verdicts.append(result)
+            return result
+
+        with mock.patch.object(verifier, "verify", verify):
+            try:
+                yield entered, release, verdicts
+            finally:
+                release.set()
+                self._drain_runs()
+
     def history(self, row_id="taaaa0001"):
         goals, _ = chat_state.load_goals(self.session, self.root)
         row = next(r for r in GM.by_id(goals, "g1")["todo_items"]
@@ -419,6 +447,80 @@ class ReopenTests(BuildRunTests):
         # The goal it belongs to is working again, not finished.
         goals, _ = chat_state.load_goals(self.session, self.root)
         self.assertEqual("in_progress", GM.by_id(goals, "g1")["status"])
+
+    def test_manual_reopen_waits_for_the_previous_verdict(self):
+        with self.paused_verification() as (entered, release, verdicts):
+            self.finish()
+            self.assertTrue(entered.wait(5))
+            requested, finished = threading.Event(), threading.Event()
+            results, errors = [], []
+
+            def reopen():
+                requested.set()
+                try:
+                    results.append(BUILD.reopen(self.session, self.root, "g1",
+                                               "taaaa0001", "truncation remains"))
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    finished.set()
+
+            worker = threading.Thread(target=reopen)
+            worker.start()
+            self.assertTrue(requested.wait(2))
+            try:
+                self.assertFalse(finished.wait(.1), "the old verifier still owns the row")
+                self.assertEqual([], self.history())
+                self.assertEqual("done", self.rows()["taaaa0001"][0])
+            finally:
+                release.set()
+                worker.join(8)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual([], errors)
+            self.assertTrue(results[0]["ok"], results)
+            self.assertTrue(verdicts[0]["passed"], verdicts)
+            self.assertTrue(self.wait_for(lambda: self.rows()["taaaa0001"][0] == "done"))
+            self._drain_runs()
+            self.assertEqual([{"state": "done", "note": "truncation remains"}], self.history())
+            self.assertEqual(2, len(self.log.read_text().splitlines()))
+
+    def test_reopen_timeout_leaves_the_finished_row_and_history_unchanged(self):
+        with self.paused_verification() as (entered, _release, _verdicts):
+            self.finish()
+            self.assertTrue(entered.wait(5))
+            with mock.patch.object(BUILD, "STAND_DOWN_S", 0):
+                result = BUILD.reopen(self.session, self.root, "g1",
+                                      "taaaa0001", "truncation remains")
+            self.assertFalse(result["ok"], result)
+            self.assertIn("still finishing", result["error"])
+            self.assertEqual([], self.history())
+            self.assertEqual("done", self.rows()["taaaa0001"][0])
+            self.assertEqual(1, len(self.log.read_text().splitlines()))
+
+    def test_a_verifier_can_repair_from_its_own_reader_thread(self):
+        from human_compact.trajectory.agents import verifier
+        original = verifier.verify
+        checked = threading.Event()
+        verdicts = []
+
+        def verify(*args, **kwargs):
+            result = original(*args, **kwargs)
+            verdicts.append(result)
+            if len(verdicts) == 1:
+                return {**result, "passed": False, "reason": "fixture requests one repair"}
+            checked.set()
+            return result
+
+        with mock.patch.object(verifier, "verify", verify):
+            self.finish()
+            self.assertTrue(checked.wait(5), "automatic repair must not join its own reader")
+            self._drain_runs()
+            self.assertTrue(verdicts[-1]["passed"], verdicts)
+            self.assertEqual(1, len(self.history()))
+            self.assertIn("fixture requests one repair", self.history()[0]["note"])
+            calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+            self.assertEqual(2, len(calls))
+            self.assertIn("--resume", calls[1]["args"])
 
     def test_a_row_not_finished_and_a_note_that_is_blank_are_both_refused(self):
         blank = BUILD.reopen(self.session, self.root, "g1", "taaaa0001", "   ")

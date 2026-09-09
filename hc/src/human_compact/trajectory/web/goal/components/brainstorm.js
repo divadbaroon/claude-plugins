@@ -3,6 +3,7 @@
 
 import { h } from "../dom.js";
 import { activeSlice } from "../store.js";
+import { renderMarkdown } from "../markdown.js";
 
 export function renderBrainstorm(state, actions, withTodos) {
   const slice = activeSlice(state);
@@ -26,7 +27,7 @@ export function renderBrainstorm(state, actions, withTodos) {
           key: `draft:${state.activeId}`,
           class: "composer-input",
           type: "text",
-          placeholder: slice.thinking ? "Bart is thinking…" : "message Bart…",
+          placeholder: slice.thinking ? "Bart is thinking…" : "Message Bart…",
           spellcheck: "false",
           "aria-label": "Message Bart",
           value: slice.draft,
@@ -57,16 +58,16 @@ function renderMessage(message, actions) {
     "data-turn":message.turnId || null,
     class: message.who === "you" ? "msg from-you" : "msg from-bart",
   },
-  h("span", { class: "msg-who" }, message.channel==="lifecycle" || message.id.startsWith("sys-") ? "bart · work update" : message.who),
+  h("span", { class: "msg-who" }, message.channel==="lifecycle" || message.id.startsWith("sys-") ? "Bart · work update" : message.who === "bart" ? "Bart" : message.who === "you" ? "You" : message.who),
   message.kind === "proposal"
     ? renderProposal(message, actions)
-    : h("div", { class: message.kind === "error" ? "bubble is-error" : "bubble" }, message.text));
+    : h("div", { class: message.kind === "error" ? "bubble is-error" : "bubble" }, renderMarkdown(message.text)));
 }
 
 // Bart's turn, while the model is still writing it.
 function renderThinking() {
   return h("div", { key: "thinking", class: "msg from-bart is-thinking" },
-    h("span", { class: "msg-who" }, "bart"),
+    h("span", { class: "msg-who" }, "Bart"),
     h("div", { class: "bubble is-thinking", role: "status", "aria-label": "Bart is thinking" },
       [0, 1, 2].map(i => h("span", { class: "thinking-dot", "aria-hidden": "true", style: `animation-delay: ${i * 150}ms` }, "•"))));
 }

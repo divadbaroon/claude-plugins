@@ -1,0 +1,45 @@
+/* A cutout of the real legacy rail, with its editor and event handlers intact. */
+html, body { margin: 0; overflow: hidden; }
+body { visibility: hidden; }
+[data-hc-launch] .hc-rail-right {
+  visibility: visible; position: fixed !important;
+  inset: 54px 0 40px !important; width: min(620px, 100%) !important;
+  height: auto !important; margin: 0 auto; display: flex !important;
+  border: 0 !important; padding: 0 !important; background: var(--bg);
+}
+[data-hc-launch] .hc-rail-right::before { display: none; }
+[data-hc-launch] .hc-rail-head { padding: 15px 18px; border: 0; }
+[data-hc-launch] .hc-rail-tabs { gap: 20px; }
+[data-hc-launch] .hc-rail-tab { font-size: 13px; }
+[data-hc-launch] .hc-todos-top { padding: 10px 18px 6px; }
+[data-hc-launch] .hc-todos-list { padding-left: 16px; padding-right: 16px; }
+[data-hc-launch] .hc-todos-actions { padding: 16px 18px; }
+[data-hc-launch] .hc-todo-quick,
+[data-hc-launch] .hc-todo-watch,
+[data-hc-launch] .hc-todo-price,
+[data-hc-launch] .hc-todo-tokens,
+[data-hc-launch] .hc-notes-head,
+[data-hc-launch] .hc-notes-prompts,
+[data-hc-launch] .hc-understand-go,
+[data-hc-launch] .hc-understand-foot { display: none !important; }
+[data-hc-launch] .hc-todo-build {
+  text-transform: none; letter-spacing: 0; font-size: 13px;
+  padding: 10px 24px; border-radius: 6px;
+}
+.hc-todo-ownmenu { visibility: visible; }
+.rail-demo-head, .rail-demo-foot {
+  visibility: visible; position: fixed; left: 0; right: 0;
+  width: min(620px, 100%); margin: auto; box-sizing: border-box;
+  font: 12px system-ui, sans-serif; color: var(--mut, #aaa);
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 0 18px; z-index: 100;
+}
+.rail-demo-head { top: 0; height: 54px; }
+.rail-demo-head strong { font-weight: 500; color: var(--ink, #eee); }
+.rail-demo-head a { color: inherit; text-decoration: none; }
+.rail-demo-head a:hover { text-decoration: underline; }
+.rail-demo-foot { bottom: 0; min-height: 40px; font-size: 11px; }
+@media (max-width: 480px) {
+  .rail-demo-foot { font-size: 10px; }
+  [data-hc-launch] .hc-rail-tabs { gap: 12px; }
+}

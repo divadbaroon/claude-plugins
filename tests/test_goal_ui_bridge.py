@@ -5307,6 +5307,13 @@ def _contrast(fg, bg):
 class LaunchSkinTests(BridgeTestCase):
     """The three-column skin: one root attribute, and only in a chat."""
 
+    def test_legacy_keeps_the_original_goal_tree_without_todo_accordion_or_guides(self):
+        source = self.patched_bundle('out;', scope='chat')
+        self.assertIn('class="hc-tree-legacy" ref="{{ treeRef }}"', source)
+        self.assertNotIn('class="hc-tree-old"', source)
+        self.assertNotIn('class="hc-tree"', source)
+        self.assertNotIn('background-image:{{ row.guide }}', source)
+
     def test_the_tabs_are_the_headers_second_row_and_read_as_the_counts_do(self):
         # One header of two rows (--hc-row each) under one rule: the brand
         # and the project on the first, the view tabs and the filter counts
@@ -5542,13 +5549,9 @@ class LaunchSkinTests(BridgeTestCase):
             "  function (k) { return props[k] || ''; };"
             + tail)
 
-    def test_the_goals_panel_opens_wide_and_the_prompt_rail_away(self):
-        # The goals panel holds three indented levels, so it has a width of
-        # its own rather than a quarter of the window. The prompt rail is not
-        # part of this layout: its toggle brings it back, and the TODO rows
-        # the tree writes go through it either way.
+    def test_both_rails_open_by_default(self):
         self.assertEqual(
-            {"left": 455, "right": 360, "hideLeft": False, "hideRight": True},
+            {"left": 455, "right": 360, "hideLeft": False, "hideRight": False},
             self.layout("window.__hcPromptUI.railLayout();"))
 
     def test_a_dragged_width_is_clamped_kept_and_drawn(self):
@@ -5562,7 +5565,7 @@ class LaunchSkinTests(BridgeTestCase):
             " JSON.parse(localStorage.getItem('hc-launch-layout-v2'))];")
         self.assertEqual([380, 320, 720, 360, "320px", "360px",
                           {"left": 320, "right": 360,
-                           "hideLeft": False, "hideRight": True}], out)
+                           "hideLeft": False, "hideRight": False}], out)
 
     def test_a_drag_writes_the_variable_and_leaves_the_store_for_the_end(self):
         # The pointer reports faster than the screen redraws, and a store
@@ -5609,10 +5612,15 @@ class LaunchSkinTests(BridgeTestCase):
             "[slot.children.length,"
             " slot.children.map(function (b) {"
             "   return [b.getAttribute('data-hc-panel'), b.className]; })];")
-        # The prompt rail starts away, so its toggle starts unlit; the goals
-        # panel was lit until setRailHidden put it out.
-        self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel"]]],
+        self.assertEqual([2, [["left", "hc-panel"], ["right", "hc-panel hc-panel-on"]]],
                          out)
+
+    def test_the_right_rail_toggle_is_named_and_keyboard_accessible(self):
+        out = self.layout(
+            "var slot=document.createElement('span');slot.className='hc-panels';app.appendChild(slot);"
+            "window.__hcPromptUI.renderPanelToggles();var b=slot.children[1];"
+            "[b.tagName.toLowerCase(),b.getAttribute('aria-label'),b.getAttribute('aria-pressed')];")
+        self.assertEqual(['button', 'Todos, Notes and Understanding', 'true'], out)
 
     def test_the_injection_card_says_only_what_the_state_proves(self):
         # A chat nobody has opened the workspace for has been told nothing,
@@ -5979,7 +5987,7 @@ class TreeTodoTests(BridgeTestCase):
     be overwritten by the store on the artifact's next save.
     """
 
-    def source(self, scope="chat"):
+    def source(self, scope="global"):
         return self.patched_bundle("out = out;", scope=scope)
 
     def test_the_row_builder_emits_a_goal_s_own_rows_under_it(self):
@@ -6008,11 +6016,9 @@ class TreeTodoTests(BridgeTestCase):
         self.assertIn("rows.filter(r => !r.isAdd && !r.isTodo)", src)
         self.assertNotIn("rows.filter(r => !r.isAdd).map(r => r.id)", src)
 
-    def test_both_scopes_get_the_rows(self):
-        # The anchor names the row title, which the launch shell renames in
-        # chat scope and leaves alone everywhere else.
-        for scope in ("chat", None):
-            self.assertIn("__todo_", self.source(scope), scope)
+    def test_only_the_global_vault_embeds_todo_rows(self):
+        self.assertTrue('__todo_' in self.source('global'))
+        self.assertFalse('__todo_' in self.source('chat'))
 
     def test_progress_counts_only_a_goal_that_has_work_under_it(self):
         # "0 / 0" on a goal nobody has written a row for is noise; the count
@@ -6045,7 +6051,7 @@ class TreeTodoRunTests(BridgeTestCase):
                       {"id": "tc", "text": "Ship the fix", "depth": 0,
                        "status": "building", "question": ""}]}]}]
 
-    def rows(self, tree=None):
+    def rows(self, tree=None, scope="global"):
         return self.patched_bundle(
             # Just the builder's definition. Everything after it -- the
             # path-mode grouping the launch shell injects -- calls walk
@@ -6069,7 +6075,27 @@ class TreeTodoRunTests(BridgeTestCase):
             "          owner: r.owner || '', state: r.state || '',"
             "          check: r.check || '', add: !!r.isAdd,"
             "          todo: !!r.isTodo, pad: r.pad}; });"
-            % json.dumps(tree or self.TREE), scope="chat")
+            % json.dumps(tree or self.TREE), scope=scope)
+
+    def test_legacy_chat_tree_has_goals_and_subgoals_but_no_todo_rows_or_adders(self):
+        rows = self.rows(scope='chat')
+        self.assertEqual(['g1', 'g11'], [r['id'] for r in rows if not r['add']])
+        self.assertFalse(any(r['todo'] or r['id'].startswith('__addtodo_') for r in rows))
+
+    def test_legacy_phase_metadata_does_not_hide_ordinary_goals_or_children(self):
+        fixture = [{'id': 'plain', 'title': 'Plain', 'children': []},
+                   {'id': 'phased', 'title': 'Phased', 'phase': 'implement',
+                    'children': [{'id': 'child', 'title': 'Child', 'children': []}]}]
+        got = self.patched_bundle(
+            "var start=out.indexOf('const anx = this.state.an;');"
+            "var body=out.slice(start,out.indexOf('this._rowIds =',start));"
+            "var draw=new Function('goals','rows','walk','selId','editId',body);"
+            "var rows=[];var walk=function(ns){ns.forEach(function(n){"
+            "rows.push({id:n.id});walk(n.children||[]);});};"
+            "draw.call({state:{}},%s,rows,walk,'child',null);"
+            "out=rows.filter(function(r){return !r.isAdd;}).map(function(r){return r.id;});"
+            % json.dumps(fixture), scope='chat')
+        self.assertEqual(['plain', 'phased', 'child'], got)
 
     def test_the_builder_runs_and_puts_the_work_under_its_goal(self):
         out = self.rows()

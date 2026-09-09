@@ -9,14 +9,14 @@ export function renderProjects(state, actions) {
   const rows = state.projects;
   const here = state.projectsHere;
   const count = rows ? `${rows.length} ${rows.length === 1 ? "project" : "projects"}` : "";
-  return h("section", { key: "view-projects", class: "home", "aria-label": "Projects" },
+  return h("section", { key: "view-projects", class: "home projects-overview", "aria-label": "Projects" },
     h("div", { class: "home-head" },
       h("h2", { class: "home-title" }, "Projects"),
       h("span", { class: "home-count" }, count)),
     h("p", { class: "home-sub" },
-      "Every project this vault knows. Goals belong to a project, and each project has a workspace of its own."),
+      "Choose a project to open its workspace."),
     !rows
-      ? h("p", { class: "home-empty" }, "looking…")
+      ? h("p", { class: "home-empty" }, "Loading projects…")
       : !rows.length
         ? h("p", { class: "home-empty" }, "No project yet.")
         : h("div", { class: "home-grid" },
@@ -42,12 +42,12 @@ function renderProjectCard(row, here, state, actions) {
     onclick: () => actions.openProject(row.cwd),
   },
   h("span", { class: "card-name" }, row.name || row.cwd),
-  h("span", { class: why ? "card-text" : "card-text is-empty" }, why || "no purpose written yet"),
+  why && h("span", { class: "card-text" }, why),
   h("span", { class: "card-where" }, row.cwd),
   h("span", { class: "card-facts" },
     h("span", null, `${goals} ${goals === 1 ? "goal" : "goals"}`),
     h("span", null, `${chats} ${chats === 1 ? "chat" : "chats"}`),
-    here && h("span", { class: "card-here" }, "this workspace")));
+    here && h("span", { class: "card-here" }, "This workspace")));
 }
 
 export function renderGoals(state, actions) {

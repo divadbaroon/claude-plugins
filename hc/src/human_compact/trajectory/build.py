@@ -2439,16 +2439,22 @@ def reopen(session_id: str, root: Optional[Path], goal_id: str,
     if not note:
         return {"ok": False, "error": "say what went wrong first"}
     live = _run_for(session_id, root, goal_id)
-    if live and live.alive():
-        if live.phase != "check":
+    if live:
+        if live.alive() and live.phase != "check":
             return {"ok": False, "error": "the build is still running"}
-        # Only the restart check is out, and it is about code the reader is
-        # sending back: it is ended, and the reopen has the session.
-        live.stop()
-        if live.thread is not None:
-            live.thread.join(timeout=10)
-        if live.alive():
-            return {"ok": False, "error": "the build is still running"}
+        # Process exit precedes verification on the reader thread. A manual
+        # reopen must wait for that verdict, or the old verifier can mistake
+        # the reopened row's "building" state for a failure of its own run.
+        # A verifier's automatic repair already runs on that reader: joining
+        # itself would deadlock. It owns the completed verdict and can proceed.
+        if live.thread is not threading.current_thread():
+            try:
+                _stand_down(live)
+            except RuntimeError:
+                return {"ok": False, "error": "the previous build is still finishing; try again shortly"}
+            if (live.alive() or (live.thread is not None and live.thread.is_alive())
+                    or _run_for(session_id, root, goal_id) is not live):
+                return {"ok": False, "error": "the previous build is still finishing; try again shortly"}
     session_mode = mode() == "session"
     with CS.session_lock(session_id, root, wait_s=5):
         goals, important = CS.load_goals(session_id, root)

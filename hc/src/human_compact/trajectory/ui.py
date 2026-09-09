@@ -80,7 +80,7 @@ GOAL_OPS = frozenset({
     "add_todo", "set_understanding", "resolve_check", "set_document",
     "set_paper",
     # The goal page's todo list: one row at a time, on the goal's own list.
-    "add_todo_row", "set_todo_text", "set_todo_done", "remove_todo_row",
+    "add_todo_row", "insert_todo_row", "set_todo_depth", "set_todo_text", "set_todo_done", "remove_todo_row",
 })
 # What the goal page may send through /api/goal-page/op. The page is a
 # narrower surface than the workspace it replaced, and the door it writes
@@ -88,6 +88,7 @@ GOAL_OPS = frozenset({
 GOAL_PAGE_OPS = frozenset({
     "add_goal", "rename_goal", "set_notes", "add_todo_row", "set_todo_text",
     "set_todo_done", "remove_todo_row", "build_todos", "set_status",
+    "insert_todo_row", "set_todo_depth",
 })
 EXPERIMENTAL_ERROR = "experimental in this release; set HC_EXPERIMENTAL=1"
 
@@ -346,6 +347,25 @@ def _root_of(trajdir):
         return None
 
 
+def interface_preference(trajdir):
+    """Machine preference, shared by workspaces and independent of ports."""
+    where = READER.path(_root_of(trajdir)).with_name("interface.json")
+    try:
+        value = json.loads(where.read_text(encoding="utf-8"))
+        return "legacy" if value.get("interface") == "legacy" else "goal"
+    except (OSError, ValueError, AttributeError):
+        return "goal"
+
+
+def save_interface(trajdir, value):
+    if value not in ("goal", "legacy"):
+        raise ValueError("Choose goal or legacy")
+    where = READER.path(_root_of(trajdir)).with_name("interface.json")
+    SIO.atomic_write_json(where, {"interface": value}, root=where.parent)
+    return {"ok": True, "interface": value,
+            "url": "/legacy" if value == "legacy" else "/workspace"}
+
+
 @contextmanager
 def _state_access(trajdir, chat_scoped):
     """Share chat_state's cross-process lock with ingestion and analysis."""
@@ -412,7 +432,9 @@ def _todo_row(row):
     return {"id": str(row.get("id") or ""),
             "text": str(row.get("text") or ""),
             "done": status == "done",
-            "status": status}
+            "status": status,
+            "depth": int(row.get("depth") or 0),
+            "question": str(row.get("question") or "")}
 
 
 def _goal_card(goal, children):
@@ -502,6 +524,8 @@ def _goal_page_payload(trajdir, chat_scoped, wanted=""):
                   for g in tops],
         "project": _goal_page_project(trajdir, chat_scoped),
         "phases": _goal_page_phases(trajdir, chat_scoped),
+        "notificationScope": {"session": _chat_identity(trajdir)[0] if chat_scoped else "vault",
+                              "project": str((_goal_page_project(trajdir, chat_scoped) or {}).get("cwd") or _scope(trajdir).resolve())},
         "revision": _resource_revision(_goal_revision(goals, important), trajdir, chat_scoped),
     }
 
@@ -627,7 +651,7 @@ def _goal_page_build_phase(session_id, root, subgoal_id):
         if event["type"] == "build.started" and payload.get("repair"):
             status = "fixing"
         phase = {"status": status, "todoIds": rows, "at": event.get("timestamp", ""), "startedAt": started_at,
-                 "reason": str(payload.get("reason") or payload.get("error") or "")[:600]}
+                 "reason": str(payload.get("question") or payload.get("reason") or payload.get("error") or "")[:600]}
     return phase
 
 
@@ -637,8 +661,22 @@ def _goal_page_phases(trajdir, chat_scoped):
         return {}
     sid, root = _chat_identity(_scope(trajdir))
     goals, _ = CS.load_goals(sid, root)
-    return {g["id"]: _goal_page_build_phase(sid, root, g["id"])
-            for g in goals.get("goals", []) if g.get("parent_goal_id")}
+    by_id = {g["id"]: g for g in goals.get("goals", [])}
+    phases = {}
+    for goal in by_id.values():
+        if not goal.get("parent_goal_id"):
+            continue
+        phase = _goal_page_build_phase(sid, root, goal["id"])
+        if phase:
+            parent = goal
+            seen = set()
+            while parent.get("parent_goal_id") in by_id and parent["id"] not in seen:
+                seen.add(parent["id"])
+                parent = by_id[parent["parent_goal_id"]]
+            phase = dict(phase, goalId=parent["id"], goalTitle=parent.get("title", ""),
+                         subgoalTitle=goal.get("title", ""))
+        phases[goal["id"]] = phase
+    return phases
 
 
 def _goal_page_panes(trajdir, chat_scoped, subgoal_id):
@@ -795,7 +833,7 @@ def _goal_page_project(trajdir, chat_scoped):
     plan = str(record.get("description") or "").strip() or objective
     if not (name or plan):
         return None
-    return {"name": name, "objective": objective, "plan": plan, **({"resources": record["resources"]} if record.get("resources") else {}), **({"activeDatasetId": record["activeDatasetId"]} if record.get("activeDatasetId") else {})}
+    return {"name": name, "cwd": home, "objective": objective, "plan": plan, **({"resources": record["resources"]} if record.get("resources") else {}), **({"activeDatasetId": record["activeDatasetId"]} if record.get("activeDatasetId") else {})}
 
 
 def _resource_revision(revision, trajdir, chat_scoped):
@@ -836,7 +874,7 @@ def _goal_page_write(body, trajdir, chat_scoped):
         try:
             session_id, root = _chat_identity(_scope(trajdir))
             AGENTS.note_op(session_id, root, body, result if isinstance(result, dict) else None)
-            if kind in ("add_todo_row", "set_todo_text") and isinstance(result, dict) and result.get("ok"):
+            if kind in ("add_todo_row", "insert_todo_row", "set_todo_text") and isinstance(result, dict) and result.get("ok"):
                 from .agents import acceptance
                 acceptance.prepare(session_id, root, str(body.get("goal_id") or ""))
         except (OSError, ValueError):
@@ -4746,7 +4784,7 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                 if prompt_id not in removed:
                     removed.append(prompt_id)
             g["updated_at"] = GM._now()
-        elif kind in ("add_todo_row", "set_todo_text", "set_todo_done",
+        elif kind in ("add_todo_row", "insert_todo_row", "set_todo_depth", "set_todo_text", "set_todo_done",
                       "remove_todo_row"):
             # The goal page's todo list, one row at a time. The rows live on
             # the goal's own list (todo_items), where the build reads them.
@@ -4757,7 +4795,26 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                         "error": "goal not found in this workspace"}
             rows = GM.normalize_todo_items(g.get("todo_items"))
             g["todo_items"] = rows
-            if kind == "add_todo_row":
+            if kind == "insert_todo_row":
+                # A line is visible before the network round trip. Its identity
+                # remains stable through retries, typing and other writers.
+                row_id = str(op.get("id") or "")
+                if not GM._TODO_ID.fullmatch(row_id):
+                    return {"ok": False, "error": "invalid todo identity"}
+                row = next((r for r in rows if r["id"] == row_id), None)
+                if row is None:
+                    after = op.get("after_id")
+                    index = len(rows)
+                    if after is not None:
+                        index = next((i + 1 for i, r in enumerate(rows) if r["id"] == after), -1) if after else 0
+                        if index < 0:
+                            return {"ok": False, "error": "the preceding todo was removed; retry in its new position"}
+                    row = {"id": row_id, "text": str(op.get("text") or "")[:16000],
+                           "depth": max(0, min(8, int(op.get("depth") or 0))),
+                           "status": "", "question": ""}
+                    rows.insert(index, row)
+                answer = {"ok": True, "row": _todo_row(row)}
+            elif kind == "add_todo_row":
                 text = str(op.get("text") or "").strip()
                 if not text:
                     return {"ok": False, "error": "write the todo first"}
@@ -4785,7 +4842,10 @@ def _apply_locked(op, trajdir=None, chat_scoped=None):
                             "error": "that row is with the builder"}
                 if kind == "set_todo_text":
                     row.pop("acceptance", None)
-                    row["text"] = str(op.get("text") or "")[:400]
+                    row["text"] = str(op.get("text") or "")[:16000]
+                    answer = {"ok": True, "row": _todo_row(row)}
+                elif kind == "set_todo_depth":
+                    row["depth"] = max(0, min(8, int(op.get("depth") or 0)))
                     answer = {"ok": True, "row": _todo_row(row)}
                 elif kind == "set_todo_done":
                     row["status"] = "done" if op.get("done") else ""
@@ -5017,11 +5077,16 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
+            route = self.path.split("?", 1)[0]
+            if route in ("/", "/index.html") and interface_preference(self.server.trajdir) == "legacy":
+                # /bart always opens the root; resolve the reader's choice
+                # here so restarts, ports and new projects agree.
+                self.path = "/legacy" + self.path[len(route):]
             # Before the scope logic: whether this build exposes the route at
             # all is a question that comes ahead of which vault it would read.
             if _experimental_route(self.path) and not _experimental_enabled():
                 self._send(200, {"ok": False, "error": EXPERIMENTAL_ERROR})
-            elif self.path.split("?", 1)[0] in ("/", "/index.html"):
+            elif self.path.split("?", 1)[0] in ("/", "/index.html", "/workspace", "/settings"):
                 # The goal page: what /bart opens. The query is the page's
                 # own, not this handler's: the setup page's bypass comes back
                 # here with ?quick=1 on it, and a workspace that 404'd on its
@@ -5030,6 +5095,8 @@ class H(BaseHTTPRequestHandler):
                 if page is None:
                     self._send(404, {"error": "not found"})
                 else:
+                    if route == "/settings":
+                        page = (page[0].replace(b'/goal/app.js', b'/goal/settings-page.js'), page[1])
                     self._send(200, page[0], page[1])
             elif self.path.split("?", 1)[0] in ("/test", "/test/"):
                 page = goal_page_asset("test/index.html")
@@ -5451,6 +5518,7 @@ class H(BaseHTTPRequestHandler):
                     "ok": True,
                     "scope": "chat" if self.server.chat_scoped else "global",
                     "version": _version(),
+                    "package_path": str(Path(__file__).resolve().parents[1]),
                     "session_id": (self.server.trajdir.name
                                    if self.server.chat_scoped else None),
                 })
@@ -5835,6 +5903,16 @@ class H(BaseHTTPRequestHandler):
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
             self._note_request(body)
+            if self.path == "/api/interface":
+                try:
+                    if not isinstance(body, dict):
+                        raise ValueError("Expected an interface choice")
+                    self._send(200, save_interface(self.server.trajdir, body.get("interface")))
+                except ValueError as exc:
+                    self._send(400, {"ok": False, "error": str(exc)})
+                except OSError:
+                    self._send(500, {"ok": False, "error": "Could not save the interface choice"})
+                return
             if self.path == "/api/project-dataset/import":
                 if not self.server.chat_scoped or getattr(self.server, 'shared_project', None):
                     self._send(400, {'ok':False,'error':'Open a local project before importing a dataset'}); return

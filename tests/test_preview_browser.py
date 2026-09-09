@@ -1,7 +1,7 @@
 """The middle pane, through the browser that draws it.
 
-What is asserted here is what a reader sees: a project nobody has explained
-offers to work itself out, one that needs an install says which command and
+What is asserted here is what a reader sees: an unrecognized project waits
+for an artifact without a model call, one that needs an install says which command and
 why, and a program that prints has its output in the middle while it runs.
 The pairing of surface and status is tested in test_preview.py; this is about
 the cards being on screen and the buttons doing what they say.
@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,10 @@ class PreviewBrowserTests(unittest.TestCase):
         self.project = Path(self.tmp.name) / "project"
         self.project.mkdir(parents=True)
         self.addCleanup(self.quiet)
+        model = mock.patch.object(PV, "_ask_model", side_effect=AssertionError(
+            "A declared run command must not call a model"))
+        self.model = model.start()
+        self.addCleanup(model.stop)
 
     def quiet(self):
         proc = PV.running(self.project)
@@ -89,21 +94,20 @@ class PreviewBrowserTests(unittest.TestCase):
             page.wait_for_timeout(300)
         return False
 
-    def test_a_project_it_cannot_read_offers_to_work_itself_out(self):
+    def test_an_unrecognized_project_waits_for_an_artifact_without_a_model_call(self):
         from playwright.sync_api import expect, sync_playwright
-        self.write("main.py", "print('hello')\n")
+        # main.py is recognized automatically. This entrypoint is unknown to
+        # the detector; the current empty pane offers no model-fallback button.
+        self.write("custom_task.py", "print('hello')\n")
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                card = page.locator(".hc-preview-mount .hc-pv-card")
-                expect(card).to_contain_text("I do not know how to run this")
-                page.get_by_text("Find how to run it", exact=True).click()
-                self.assertTrue(self.wait_for(page, "ready"))
-                # What it found, in the reader's words as well as the shell's.
-                expect(page.locator(".hc-pv-cmd-text")).to_have_text(
-                    "python main.py")
-                expect(page.locator(".hc-pv-why")).to_contain_text(
-                    "Runs main.py and shows what it prints")
+                empty = page.locator(".hc-preview-mount .hc-pv-empty")
+                expect(empty).to_contain_text("NO ARTIFACT YET")
+                expect(empty).to_contain_text("Builds and previews will appear here.")
+                expect(page.get_by_text("Find how to run it", exact=True)).to_have_count(0)
+                self.model.assert_not_called()
+                self.assertIsNone(PV.running(self.project))
             finally:
                 browser.close()
 
@@ -113,7 +117,6 @@ class PreviewBrowserTests(unittest.TestCase):
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                page.get_by_text("Find how to run it", exact=True).click()
                 self.assertTrue(self.wait_for(page, "ready"))
                 page.wait_for_timeout(2_500)
                 # A pane that ran the project because a page was opened is a
@@ -129,7 +132,6 @@ class PreviewBrowserTests(unittest.TestCase):
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                page.get_by_text("Find how to run it", exact=True).click()
                 self.assertTrue(self.wait_for(page, "needs_user_action"))
                 card = page.locator(".hc-pv-card")
                 expect(card).to_contain_text("dependencies are not installed")
@@ -152,7 +154,6 @@ class PreviewBrowserTests(unittest.TestCase):
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                page.get_by_text("Find how to run it", exact=True).click()
                 self.assertTrue(self.wait_for(page, "ready"))
                 page.get_by_text("Run", exact=True).first.click()
                 expect(page.locator(".hc-pv-term-body")).to_contain_text(
@@ -204,7 +205,6 @@ class PreviewBrowserTests(unittest.TestCase):
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                page.get_by_text("Find how to run it", exact=True).click()
                 self.assertTrue(self.wait_for(page, "ready"))
                 # Run is still offered -- the project does run, it just does
                 # not serve -- and the promise of a page is not made.
@@ -218,33 +218,40 @@ class PreviewBrowserTests(unittest.TestCase):
 
     def test_show_ui_brings_the_page_up_and_embeds_it(self):
         from playwright.sync_api import expect, sync_playwright
-        port = 8993
         self.write("index.html", "<h1>the app</h1>")
         self.write("main.py",
                    "import http.server, socketserver\n"
-                   f"srv = socketserver.TCPServer(('127.0.0.1', {port}),"
+                   "srv = socketserver.TCPServer(('127.0.0.1', 0),"
                    " http.server.SimpleHTTPRequestHandler)\n"
-                   f"print('http://127.0.0.1:{port}/')\n"
+                   "print('http://127.0.0.1:%s/' % srv.server_address[1])\n"
                    "srv.serve_forever()\n")
+        # This case covers the explicit button after a reader has disabled
+        # autostart. Default automatic startup is covered by the next test.
+        PV.configure(self.root, self.project)
+        config = PV.read_config(self.root, self.project)
+        config["autostart"] = False
+        PV.write_config(self.root, self.project, config)
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                page.get_by_text("Find how to run it", exact=True).click()
                 self.assertTrue(self.wait_for(page, "ready"))
                 page.get_by_text("Show UI", exact=True).click()
                 self.assertTrue(self.wait_for(page, "running"))
-                expect(page.locator(".hc-pv-url")).to_contain_text(
-                    f"127.0.0.1:{port}")
                 # The page itself, in a frame that lives outside the
                 # artifact's subtree so a re-render cannot reload it.
                 frame = page.locator(".hc-pv-frame")
-                expect(frame).to_be_visible()
+                expect(frame).to_be_visible(timeout=15_000)
+                expect(frame).to_have_attribute("src", PV.running(self.project).url)
+                expect(page.frame_locator(".hc-pv-frame").get_by_role(
+                    "heading", name="the app", exact=True)).to_be_visible()
                 self.assertGreater(
                     page.evaluate("() => document.querySelector"
                                   "('.hc-pv-frame').getBoundingClientRect()"
                                   ".height"), 300)
-                page.get_by_text("Stop", exact=True).click()
-                self.assertTrue(self.wait_for(page, "finished"))
+                # Running web previews omit the former URL/Stop bar. The
+                # fixture stops its process in quiet(); the CLI case above
+                # still exercises its actual visible Stop control.
+                expect(page.locator(".hc-preview-mount .hc-pv-bar")).to_have_count(0)
             finally:
                 browser.close()
 
@@ -255,31 +262,33 @@ class PreviewBrowserTests(unittest.TestCase):
         overview and brainstorm panels, and the slot keeps its rectangle
         while those panels are up -- so switching views has to take the
         frame off the paint itself, and give it back with the click that
-        returns to Goals.
+        returns to Goals, including the docked brainstorm in that column.
         """
         from playwright.sync_api import expect, sync_playwright
-        port = 8994
         self.write("index.html", "<h1>the app</h1>")
         self.write("main.py",
                    "import http.server, socketserver\n"
-                   f"srv = socketserver.TCPServer(('127.0.0.1', {port}),"
+                   "srv = socketserver.TCPServer(('127.0.0.1', 0),"
                    " http.server.SimpleHTTPRequestHandler)\n"
-                   f"print('http://127.0.0.1:{port}/')\n"
+                   "print('http://127.0.0.1:%s/' % srv.server_address[1])\n"
                    "srv.serve_forever()\n")
         with server_for(self.workspace()) as url, sync_playwright() as pw:
             browser, page = self.open(pw, url)
             try:
-                page.get_by_text("Find how to run it", exact=True).click()
-                self.assertTrue(self.wait_for(page, "ready"))
-                page.get_by_text("Show UI", exact=True).click()
+                # A repository-declared web server starts automatically.
                 self.assertTrue(self.wait_for(page, "running"))
                 frame = page.locator(".hc-pv-frame")
                 expect(frame).to_be_visible()
-                for other in ("overview", "brainstorm"):
+                src = frame.get_attribute("src")
+                for other in ("overview", "brainstorm", "docs"):
                     page.locator(f'[data-hc-viewtab="{other}"]').click()
                     expect(frame).to_be_hidden()
-                    page.locator('[data-hc-viewtab="goals"]').click()
+                    goals = page.locator('[data-hc-viewtab="goals"]')
+                    goals.click()
+                    expect(goals).to_have_attribute("data-hc-on", "")
+                    expect(page.locator("html")).to_have_attribute("data-hc-bs-dock", "")
                     expect(frame).to_be_visible()
+                    expect(frame).to_have_attribute("src", src)
             finally:
                 browser.close()
 

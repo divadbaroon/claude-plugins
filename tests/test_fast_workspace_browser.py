@@ -24,7 +24,7 @@ class ProductionWorkspaceTests(BrowserCase):
     def test_conditional_tabs_in_exact_order_and_no_resource_rail(self):
         self.prepare(['paper', 'dataset'])
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
+            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Notes', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
             self.expect(page.get_by_label('Plan').get_by_text('Resources', exact=True)).to_have_count(0)
             page.get_by_role('tab', name='Dataset', exact=True).click()
             details = page.get_by_label('Resource details')
@@ -37,23 +37,23 @@ class ProductionWorkspaceTests(BrowserCase):
             page.get_by_role('tab', name='Paper', exact=True).click()
             self.expect(page.locator('iframe.paper-frame')).to_have_attribute('src', '/api/project-paper?id=paper-one')
             page.reload()
-            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
+            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Notes', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
             self.assertEqual([], errors)
 
     def test_no_resources_has_only_normal_tabs(self):
         seed_design(self.chat)
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal'])
+            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Notes', 'Live preview', 'Terminal'])
 
     def test_paper_only(self):
         self.prepare(['paper'])
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
+            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Notes', 'Live preview', 'Terminal', 'Paper', 'Dataset'])
 
     def test_dataset_only(self):
         self.prepare(['dataset'])
         with server_for(self.chat) as url, self.page_on(url) as (page, errors):
-            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Live preview', 'Terminal', 'Dataset'])
+            self.expect(page.get_by_role('tab')).to_have_text(['Bart', 'Notes', 'Live preview', 'Terminal', 'Dataset'])
 
     def test_lifecycle_stays_visible_but_logs_stay_in_terminal(self):
         subs = self.prepare([])

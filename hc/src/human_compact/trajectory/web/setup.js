@@ -254,7 +254,7 @@
   function drawBypass() {
     if (!st.newProject || st.screen === "done") return;
     var out = el("button", "bypass", "Skip — just name it");
-    on(out, "click", function () { window.location.href = "/?quick=1"; });
+    on(out, "click", function () { window.location.href = "/legacy?quick=1"; });
     app.appendChild(out);
   }
 

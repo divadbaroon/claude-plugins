@@ -626,9 +626,10 @@ class GoalDataRouteTests(ChatCase):
                              [[t["text"] for t in slices[title]["todos"]]
                               for title in ("Signing route", "Client PUTs", "Retire the proxy")])
             self.assertEqual({"name": "Signed uploads",
+                              "cwd": str(Path(CS.bound_project(chat.name, self.root)).resolve()),
                               "objective": "Move uploads off the API server.",
                               "plan": "Move uploads off the API server.\nSign, then PUT."},
-                             answer["project"])
+                             {**answer["project"], "cwd": str(Path(answer["project"]["cwd"]).resolve())})
             # The directions not taken are kept, out of the way: the
             # address could still name one.
             self.assertEqual([("Direct-to-storage uploads", "the API is the bottleneck", 3),
@@ -1325,6 +1326,52 @@ class GoalPageModuleTests(unittest.TestCase):
     def modules(self):
         return sorted(GOAL_DIR.rglob("*.js"))
 
+    def test_create_goal_keeps_edit_intent_when_the_change_feed_wins(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        # Declare browser .js modules without version-specific Node flags.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        modules = Path(temporary.name) / "goal"
+        shutil.copytree(GOAL_DIR, modules)
+        (modules / "package.json").write_text('{"type":"module"}')
+        source = (
+            f"import {{createActions}} from {json.dumps((modules / 'actions.js').as_uri())};\n"
+            f"import {{createStore,initialState}} from {json.dumps((modules / 'store.js').as_uri())};\n"
+            """
+import assert from 'node:assert/strict';
+globalThis.window = {addEventListener: () => {}};
+const reads = [];
+const store = createStore({...initialState(), status:'ready', empty:true,
+                           goalDraft:'A new goal'});
+const actions = createActions(store, {
+  createGoal: async () => ({id:'g1'}),
+  loadGoal: () => new Promise(resolve => reads.push(resolve)),
+});
+const creation = actions.commitCreateGoal();
+await Promise.resolve();
+assert.equal(reads.length, 1);
+const feed = actions.refresh();
+assert.equal(reads.length, 2);
+const loaded = {goal:{id:'g1', title:'A new goal'}, subgoals:[], slices:{}, revision:1};
+// The write's own read finishes first but has been superseded by the feed.
+reads[0](loaded);
+await creation;
+assert.equal(store.get().goal, null);
+// The newer answer must retain the requested first-subgoal editing mode.
+reads[1](loaded);
+await feed;
+assert.equal(store.get().goal.id, 'g1');
+assert.equal(store.get().addingSubgoal, true);
+assert.equal(store.get().subgoalDraft, '');
+""")
+        run = subprocess.run(
+            [node, "--input-type=module", "-"],
+            input=source, text=True, capture_output=True, timeout=20,
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+
     def test_every_import_names_a_file_that_exists(self):
         for module in self.modules():
             specifiers = self.IMPORT.findall(module.read_text(encoding="utf-8"))
@@ -1440,9 +1487,9 @@ class GoalPageBrowserTests(BrowserCase):
             expect(page.locator(".notes-input")).to_have_count(0)
             subs.nth(1).click()
             expect(subs.nth(1)).to_have_class(active)
-            # No todos yet, so the pane is folded away behind its button.
-            expect(page.get_by_role("button", name="Show todos")).to_be_visible()
-            expect(page.locator(".todo-list")).to_have_count(0)
+            # The editor stays visible even before the first todo is written.
+            expect(page.get_by_role("button", name="Hide todos")).to_be_visible()
+            expect(page.locator(".todo-list")).to_have_count(1)
 
             # Bart's row for the first message comes back as a proposal,
             # and Add puts it on the list -- and in todos.json.
@@ -1534,7 +1581,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(subs).to_have_count(4)
             expect(subs.nth(3)).to_have_class(active)
             expect(subs.nth(3)).to_have_text("Export the dataset to parquet")
-            expect(page.locator(".todo-list")).to_have_count(0)
+            expect(page.locator(".todo-list")).to_have_count(1)
             self.assertIn(("Export the dataset to parquet", goal),
                           [(g["title"], g.get("parent_goal_id")) for g in self.goals()[0]["goals"]])
             # Escape drops an empty one.
@@ -1661,7 +1708,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(cards.first.locator(".card-name")).to_have_text("Signed uploads")
             expect(cards.first).to_have_class(re.compile(r"\bis-here\b"))
             expect(cards.first.locator(".card-text")).to_have_text("Move uploads off the API server.")
-            expect(cards.first.locator(".card-facts")).to_contain_text("this workspace")
+            expect(cards.first.locator(".card-facts")).to_contain_text("This workspace")
             # The project's name is its goals: the three directions offered,
             # each with its why, the chosen one open with its pieces counted.
             page.locator(".project-name").click()
@@ -1781,7 +1828,7 @@ class GoalPageBrowserTests(BrowserCase):
             expect(menu.get_by_role("menuitem", name="Sign out")).to_have_count(0)
             # Under a rule, the reader's level: nothing set yet, so the
             # slider stands at the start and the stops are all open.
-            expect(menu.locator(".menu-rule")).to_have_count(1)
+            expect(menu.locator(".menu-rule")).to_have_count(2)
             expect(menu.locator(".menu-cap")).to_have_text("Expertise")
             expect(menu.locator(".slider-name")).to_have_text("Not set")
             stops = menu.get_by_role("radio")

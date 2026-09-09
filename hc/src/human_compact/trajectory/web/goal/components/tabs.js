@@ -1,7 +1,7 @@
 import { h } from "../dom.js";
 import { TABS } from "../store.js";
 
-const LABELS = { bart: "Bart", paper: "Paper", preview: "Live preview", terminal: "Terminal", dataset: "Dataset" };
+const LABELS = { bart: "Bart", notes:"Notes", paper: "Paper", preview: "Live preview", terminal: "Terminal", dataset: "Dataset" };
 
 export function renderTabs(state, actions) {
   const paper = state.project?.resources?.find(r => r.kind === "paper");

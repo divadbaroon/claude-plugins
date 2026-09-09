@@ -11,6 +11,8 @@
 import {
   EMPTY_SLICE, sliceOf, withSlice, todosShown, hasOpenTodos, isWithBuilder, workInFlight, todoHeld, completionHeld,
 } from "./store.js";
+import {createTodoEditor, copyTodoText} from "./todo-editor.js";
+import {createNotificationActions} from "./notifications.js";
 
 const PANES_POLL_MS = 2000;
 const TODO_SAVE_DELAY_MS = 400;
@@ -20,6 +22,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createActions(store, services) {
   const { get, set } = store;
+  const notifications=createNotificationActions(store);
+  async function switchInterface(value) {
+    if (get().interfaceBusy) return;
+    set({interfaceBusy: true, interfaceError: ""});
+    try {
+      const answer = await services.saveInterface(value);
+      if (!answer.ok) throw new Error(answer.error || "Could not save the interface choice");
+      // The settings page may be embedded by the legacy workspace.
+      window.top.location.assign(answer.url);
+    } catch (error) {
+      set({interfaceBusy: false, interfaceError: error.message});
+    }
+  }
   function interaction(type, payload = {}) {
     if (services.recordInteraction) {
       services.recordInteraction({ type, payload, subgoalId: get().activeId || "" }).catch(() => {});
@@ -39,12 +54,56 @@ export function createActions(store, services) {
   // Stamped per page load: a conversation read back from the server
   // carries the ids it was saved with, and a new message must not take one.
   const nextId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
-  const todoTimers = new Map();    // "subgoal/todo" -> the save waiting on that row's text
   let signInRun = 0;               // the sign-in attempt that is current
   let wanted = "";                 // the goal the address names, if any
   let loadRun = 0;                 // the load whose answer is current
   let watcher = null;
   let panesTimer = null;          // the shared pane poll
+  let leaving = false;
+  window.addEventListener("pagehide",()=>{leaving=true;clearInterval(panesTimer);watcher?.close();});
+  const editor = createTodoEditor({get,set,changeSlice,services,refresh,invalidateReads:()=>{loadRun+=1;}});
+  const noteSaves = new Map();
+  const noteQueues = new Map();
+  let noteVersion = 0;
+
+  function editNotes(notes) {
+    const id=get().activeId;if(!id)return;
+    const previous=noteSaves.get(id);clearTimeout(previous?.timer);
+    const version=++noteVersion;
+    changeSlice(id,{notes,noteStatus:"Saving…",noteError:false});
+    const save=()=>{
+      if(entry.promise)return entry.promise;
+      clearTimeout(entry.timer);
+      const promise=(noteQueues.get(id)||Promise.resolve()).catch(()=>{}).then(async()=>{
+        await services.saveNotes({subgoalId:id,notes});
+        loadRun+=1;
+        if(noteSaves.get(id)?.version===version){noteSaves.delete(id);changeSlice(id,{noteStatus:"Saved",noteError:false});}
+      });
+      noteQueues.set(id,promise);
+      entry.promise=promise;
+      promise.catch(()=>{entry.promise=null;changeSlice(id,{noteStatus:"Could not save notes. Retry save.",noteError:true});});
+      return promise;
+    };
+    const entry={version,timer:setTimeout(()=>save().catch(()=>{}),400),save};noteSaves.set(id,entry);
+  }
+
+  async function copyTodos() {
+    try {await navigator.clipboard.writeText(copyTodoText(get()));changeSlice(get().activeId,{copyStatus:"Copied"});}
+    catch(_){changeSlice(get().activeId,{copyStatus:"Could not copy. Try again."});}
+  }
+
+  async function answerTodo(todoId) {
+    const state=get(),id=state.activeId,slice=sliceOf(state,id),todo=slice.todos.find(r=>r.id===todoId);
+    const text=slice.answers?.[todoId]?.trim();if(!text||!todo||slice.answerBusy)return;
+    changeSlice(id,{answerBusy:todoId,answerError:""});
+    try {
+      const mine={id:nextId("m"),who:"you",kind:"text",text:`For “${todo.text}”: ${text}`,createdAt:new Date().toISOString()};
+      const answer=await services.sendBartMessage({goalId:state.goal.id,subgoalId:id,text:mine.text,history:slice.chat,todos:slice.todos});
+      const replies=answer.replies.map(r=>({...r,id:nextId("m"),who:"bart",createdAt:new Date().toISOString()}));
+      changeSlice(id,c=>({answerBusy:null,answers:{...c.answers,[todoId]:""},chat:[...c.chat,mine,...replies]}));
+      keepChat(id);await refresh();
+    } catch(error){changeSlice(id,{answerBusy:null,answerError:error.message});}
+  }
 
   // A write the page does not wait on: the store already holds the change.
   function persist(promise) {
@@ -133,11 +192,13 @@ export function createActions(store, services) {
         slice.draft = held.draft;
         slice.newTodo = held.newTodo;
         slice.todosShown = held.todosShown;
-        slice.todos = slice.todos.map((todo) => {
-          if (!todoTimers.has(`${id}/${todo.id}`)) return todo;
-          const mine = held.todos.find((t) => t.id === todo.id);
-          return mine ? { ...todo, text: mine.text } : todo;
-        });
+        slice.selectedTodos=held.selectedTodos;
+        slice.saveError=held.saveError;
+        slice.answers=held.answers;slice.answerBusy=held.answerBusy;slice.answerError=held.answerError;
+        slice.copyStatus=held.copyStatus;
+        slice.noteStatus=held.noteStatus;slice.noteError=held.noteError;
+        if(noteSaves.has(id))slice.notes=held.notes;
+        slice.todos = editor.merge(id,slice.todos,held);
       }
       slices[id] = slice;
     }
@@ -149,6 +210,7 @@ export function createActions(store, services) {
       goal: loaded.goal,
       project: loaded.project || null,
       phases: loaded.phases || {},
+      notificationScope: loaded.notificationScope || state.notificationScope,
       goals: loaded.goals || [],
       empty: !loaded.goal,
       subgoals,
@@ -166,6 +228,7 @@ export function createActions(store, services) {
     try {
       loaded = await services.loadGoal({ goalId: wanted });
     } catch (error) {
+      if(leaving || run !== loadRun)return;
       console.error("engelbart: the goal did not load", error);
       if (get().status === "loading") set({ status: "failed" });
       return;
@@ -173,6 +236,7 @@ export function createActions(store, services) {
     if (run !== loadRun) return;
 
     set((state) => merge(state, loaded));
+    notifications.update();
     loadPanes();
   }
 
@@ -190,11 +254,13 @@ export function createActions(store, services) {
     try {
       panes = await services.getPanes({ subgoalId: id });
     } catch (error) {
+      if(leaving || run !== panesRun || get().activeId !== id)return;
       console.error("engelbart: the panes did not load", error);
       return;
     }
     if (run !== panesRun || get().activeId !== id) return;
     set({ panes, panesFor: id, phases: panes.phases || get().phases });
+    notifications.update();
     changeSlice(id, (current) => ({ chat: current.clearing ? current.chat : mergeMessages(current.chat, panes.chat || []) }));
     const preview = panes.preview;
     if (preview?.cwd && preview.autostart !== false && ["unconfigured", "ready", "stale"].includes(preview.status)
@@ -221,6 +287,7 @@ export function createActions(store, services) {
   async function boot() {
     loadAccount();   // beside the goal, never ahead of it
     wanted = new URLSearchParams(window.location.search).get("goal") || "";
+    set({activeId:new URLSearchParams(window.location.search).get("subgoal") || null});
     await refresh();
     interaction("project.opened");
     interaction("goal.opened", { goalId: wanted });
@@ -404,8 +471,10 @@ export function createActions(store, services) {
       set({ goalDraft: title });
       return;
     }
+    // The change feed can supersede this refresh before its goal is drawn.
+    // Keep the edit intent now so either response opens the first subgoal.
+    set({ addingSubgoal: true, subgoalDraft: "" });
     await refresh();
-    if (get().goal) set({ addingSubgoal: true, subgoalDraft: "" });
   }
 
   function selectSubgoal(id) {
@@ -609,68 +678,10 @@ export function createActions(store, services) {
     if (id) changeSlice(id, (current) => ({ todosShown: !todosShown(current) }));
   }
 
-  function toggleTodo(todoId) {
-    const id = get().activeId;
-    const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo || todoHeld(todo, get())) return;
-    const done = !todo.done;
-    changeSlice(id, (current) => ({
-      todos: current.todos.map((t) => (t.id === todoId ? { ...t, done, status: done ? "done" : "" } : t)),
-    }));
-    persist(services.updateTodo({ subgoalId: id, todoId, patch: { done } }));
-  }
-
-  // The text lands in the store on every keystroke and goes to the server
-  // once the reader pauses.
-  function editTodo(todoId, text) {
-    const id = get().activeId;
-    const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo || todoHeld(todo, get())) return;
-    changeSlice(id, (current) => ({
-      todos: current.todos.map((t) => (t.id === todoId ? { ...t, text } : t)),
-    }));
-    const key = `${id}/${todoId}`;
-    clearTimeout(todoTimers.get(key));
-    todoTimers.set(key, setTimeout(() => {
-      todoTimers.delete(key);
-      const row = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-      if (row) persist(services.updateTodo({ subgoalId: id, todoId, patch: { text: row.text } }));
-    }, TODO_SAVE_DELAY_MS));
-  }
-
-  function removeTodo(todoId) {
-    const id = get().activeId;
-    const todo = sliceOf(get(), id).todos.find((t) => t.id === todoId);
-    if (!todo || todoHeld(todo, get())) return;
-    const key = `${id}/${todoId}`;
-    clearTimeout(todoTimers.get(key));
-    todoTimers.delete(key);
-    changeSlice(id, (current) => ({ todos: current.todos.filter((t) => t.id !== todoId) }));
-    persist(services.removeTodo({ subgoalId: id, todoId }));
-  }
-
   function editNewTodo(text) {
     if (!sliceOf(get(), get().activeId).newTodo && text) interaction("todo.add_started");
     const id = get().activeId;
     if (id) changeSlice(id, { newTodo: text });
-  }
-
-  async function commitNewTodo() {
-    const state = get();
-    const id = state.activeId;
-    const text = sliceOf(state, id).newTodo.trim();
-    if (!id || !text) return;
-    changeSlice(id, { newTodo: "" });
-    let todo;
-    try {
-      todo = await services.addTodo({ subgoalId: id, text, source: null });
-    } catch (error) {
-      console.error("engelbart: the todo could not be added", error);
-      changeSlice(id, { newTodo: text });
-      return;
-    }
-
-    changeSlice(id, (current) => ({ todos: withRow(current.todos, todo) }));
   }
 
   // Build all hands the subgoal's open rows to the builder. What happens to
@@ -678,14 +689,21 @@ export function createActions(store, services) {
   // and the page reads the goal again to show it. A build that cannot start
   // says why, under the button.
   async function buildAll(todoId = null) {
+    if (get().building || workInFlight(get())) return;
+    if (todoId === null) editor.commitNewTodo();
     const state = get();
     const id = state.activeId;
     const slice = sliceOf(state, id);
     if (!id || state.building || workInFlight(state) || !hasOpenTodos(slice)) return;
-    const rows = todoId ? slice.todos.filter(t => t.id === todoId) : slice.todos;
+    const selected=slice.selectedTodos || [];
+    const rows = typeof todoId === "string" ? slice.todos.filter(t => t.id === todoId)
+      : selected.length ? slice.todos.filter(t=>selected.includes(t.id)) : slice.todos;
     set({ building: id, buildAllFor: todoId ? null : id, buildingIds: rows.filter(t=>!t.done).map(t=>t.id), buildNote: null });
     try {
+      await editor.flush(id);
+      await noteSaves.get(id)?.save();
       await services.startBuild({ goalId: state.goal.id, subgoalId: id, todos: rows });
+      changeSlice(id,{selectedTodos:[]});
     } catch (error) {
       set({ building: null, buildNote: { text: String((error && error.message) || error), error: true } });
       return;
@@ -696,6 +714,18 @@ export function createActions(store, services) {
   }
 
   return {
+    toggleNotifications:notifications.toggleNotifications,closeNotifications:notifications.closeNotifications,
+    markNotificationsRead:notifications.markNotificationsRead,
+    async openNotification(id) {
+      const item=notifications.readNotification(id);if(!item)return;
+      if(get().goal?.id!==item.goalId)await openGoal(item.goalId);
+      showGoal();selectSubgoal(item.subgoalId);notifications.closeNotifications();
+    },
+    editNotes, copyTodos, answerTodo,
+    clearTodoSelection:()=>changeSlice(get().activeId,{selectedTodos:[]}),
+    editAnswer:(todoId,text)=>changeSlice(get().activeId,c=>({answers:{...c.answers,[todoId]:text}})),
+    retryNotes:()=>noteSaves.get(get().activeId)?.save().catch(()=>{}),
+    switchInterface, loadAccount,
     setProjectDetailsOpen: open => { if (get().projectDetailsOpen !== open) set({projectDetailsOpen:open}); },
     toggleModels, chooseModel,
     toggleApi, closeApi: () => set({apiOpen:false}), loadApiCredits, switchApiCredits,
@@ -776,7 +806,9 @@ export function createActions(store, services) {
     cancelRenameSubgoal: () => set({renamingSubgoal:null}),
     beginAddSubgoal, editSubgoalDraft, commitAddSubgoal, cancelAddSubgoal,
     editDraft, sendMessage, acceptProposal, rejectProposal,
-    toggleTodosPane, toggleTodo, editTodo, removeTodo, editNewTodo, commitNewTodo,
+    toggleTodosPane, editNewTodo,
+    toggleTodo:editor.toggleTodo,editTodo:editor.editTodo,removeTodo:editor.removeTodo,
+    commitNewTodo:editor.commitNewTodo,todoKey:editor.todoKey,toggleTodoSelection:editor.toggleSelection,retryTodoSave:editor.retrySave,
     buildAll: () => buildAll(), buildTodo: id => buildAll(id),
     async toggleGoalCompletion(id) {
       const state=get(), goal=id===state.goal?.id ? state.goal : state.subgoals.find(s=>s.id===id);

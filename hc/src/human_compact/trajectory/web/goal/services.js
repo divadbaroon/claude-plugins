@@ -79,6 +79,7 @@ async function datasetImport(body) {
 }
 
 export const services = {
+  saveInterface: (value) => post("/api/interface", {interface: value}),
   projectPaperUrl,
   loadModels() { return get("/api/models"); },
   saveModels(settings) { return post("/api/op", {op:"set_build_settings", ...settings}); },
@@ -209,6 +210,8 @@ export const services = {
       goals: answer.goals || [],
       empty: Boolean(answer.empty),
       revision: answer.revision,
+      phases: answer.phases || {},
+      notificationScope: answer.notificationScope,
     };
   },
 
@@ -262,6 +265,11 @@ export const services = {
     return { ...answer.row, existing: Boolean(answer.existing), revision: answer.revision };
   },
 
+  insertTodo({subgoalId, todo, afterId}) {
+    return op({op:"insert_todo_row",goal_id:subgoalId,id:todo.id,text:todo.text,depth:todo.depth,after_id:afterId});
+  },
+  saveNotes({subgoalId,notes}) {return op({op:"set_notes",goal_id:subgoalId,notes});},
+
   /** One change to a row: { text } or { done }. Refused while the builder
       holds the row. */
   async updateTodo({ subgoalId, todoId, patch }) {
@@ -271,6 +279,9 @@ export const services = {
     }
     if ("done" in patch) {
       answer = await op({ op: "set_todo_done", goal_id: subgoalId, id: todoId, done: Boolean(patch.done) });
+    }
+    if ("depth" in patch) {
+      answer = await op({op:"set_todo_depth",goal_id:subgoalId,id:todoId,depth:patch.depth});
     }
     return { subgoalId, todoId, row: answer && answer.row, revision: answer && answer.revision };
   },
@@ -288,7 +299,7 @@ export const services = {
 
   async startBuild({ goalId, subgoalId, todos }) {
     const ids = todos
-      .filter((todo) => !todo.done && !WITH_BUILDER.has(todo.status))
+      .filter((todo) => todo.text.trim() && !todo.done && !WITH_BUILDER.has(todo.status))
       .map((todo) => todo.id);
     const answer = await op({ op: "build_todos", goal_id: subgoalId, ids });
     return { started: true, todoIds: answer.rows || ids, revision: answer.revision };

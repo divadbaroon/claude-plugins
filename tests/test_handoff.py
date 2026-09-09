@@ -298,7 +298,7 @@ class HandoffButtonTests(BridgeTestCase):
         "  return Promise.resolve({ ok: true, json: function () {"
         "    return Promise.resolve(body); } }); };"
         "var P = window.__hcPromptUI;"
-        "var btn = function () { P.gear.open(); H.render();"
+        "var btn = function () { P.gear.open(true); H.render();"
         "  var panel = P.gear.panel(); return panel && panel.querySelector('.hc-handoff-btn'); };"
         "var said = function () { var b = btn(); return b ? [b.getAttribute('data-hc-handoff'),"
         "  b.querySelector('.hc-handoff-said').textContent] : null; };"

@@ -230,7 +230,7 @@ class TodoWorkspaceBrowserTests(BrowserCase):
             self.expect(page.locator('.feed')).not_to_contain_text('g11')
             CS.append_bart_message('chat',self.subs[0],'The check found a problem; I am fixing it.',self.root,message_id='sys-life-fixture')
             self.expect(page.locator('[data-channel="lifecycle"]')).to_have_count(1)
-            self.expect(page.locator('[data-channel="lifecycle"] .msg-who')).to_have_text('bart · work update')
+            self.expect(page.locator('[data-channel="lifecycle"] .msg-who')).to_have_text('Bart · work update')
             page.reload();self.expect(page.locator('[data-channel="lifecycle"]')).to_have_count(1)
             self.expect(page.locator('.from-bart:not(.is-thinking)')).to_have_count(2)
             self.assertEqual([],errors)

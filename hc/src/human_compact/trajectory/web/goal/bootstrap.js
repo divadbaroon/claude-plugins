@@ -56,9 +56,10 @@ actions.boot();
 document.addEventListener("click", (event) => {
   if (!event.target.closest("[data-account]")) actions.closeAccount();
   if (!event.target.closest("[data-api]")) actions.closeApi();
+  if (!event.target.closest("[data-notifications]")) actions.closeNotifications();
 }, true);
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") { actions.closeAccount(); actions.closeApi(); }
+  if (event.key === "Escape") { actions.closeAccount(); actions.closeApi(); actions.closeNotifications(); }
 });
 
 // For the console and the tests; nothing on the page reads it.
