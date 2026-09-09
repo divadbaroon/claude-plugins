@@ -1326,6 +1326,46 @@ class GoalPageModuleTests(unittest.TestCase):
     def modules(self):
         return sorted(GOAL_DIR.rglob("*.js"))
 
+    def test_create_goal_keeps_edit_intent_when_the_change_feed_wins(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        source = (
+            f"import {{createActions}} from {json.dumps((GOAL_DIR / 'actions.js').as_uri())};\n"
+            f"import {{createStore,initialState}} from {json.dumps((GOAL_DIR / 'store.js').as_uri())};\n"
+            """
+import assert from 'node:assert/strict';
+globalThis.window = {addEventListener: () => {}};
+const reads = [];
+const store = createStore({...initialState(), status:'ready', empty:true,
+                           goalDraft:'A new goal'});
+const actions = createActions(store, {
+  createGoal: async () => ({id:'g1'}),
+  loadGoal: () => new Promise(resolve => reads.push(resolve)),
+});
+const creation = actions.commitCreateGoal();
+await Promise.resolve();
+assert.equal(reads.length, 1);
+const feed = actions.refresh();
+assert.equal(reads.length, 2);
+const loaded = {goal:{id:'g1', title:'A new goal'}, subgoals:[], slices:{}, revision:1};
+// The write's own read finishes first but has been superseded by the feed.
+reads[0](loaded);
+await creation;
+assert.equal(store.get().goal, null);
+// The newer answer must retain the requested first-subgoal editing mode.
+reads[1](loaded);
+await feed;
+assert.equal(store.get().goal.id, 'g1');
+assert.equal(store.get().addingSubgoal, true);
+assert.equal(store.get().subgoalDraft, '');
+""")
+        run = subprocess.run(
+            [node, "--experimental-default-type=module", "--input-type=module", "-"],
+            input=source, text=True, capture_output=True, timeout=20,
+        )
+        self.assertEqual(0, run.returncode, run.stderr)
+
     def test_every_import_names_a_file_that_exists(self):
         for module in self.modules():
             specifiers = self.IMPORT.findall(module.read_text(encoding="utf-8"))

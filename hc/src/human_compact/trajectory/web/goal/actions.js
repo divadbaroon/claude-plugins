@@ -471,8 +471,10 @@ export function createActions(store, services) {
       set({ goalDraft: title });
       return;
     }
+    // The change feed can supersede this refresh before its goal is drawn.
+    // Keep the edit intent now so either response opens the first subgoal.
+    set({ addingSubgoal: true, subgoalDraft: "" });
     await refresh();
-    if (get().goal) set({ addingSubgoal: true, subgoalDraft: "" });
   }
 
   function selectSubgoal(id) {

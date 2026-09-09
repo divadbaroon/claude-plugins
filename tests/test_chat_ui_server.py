@@ -3275,6 +3275,13 @@ class AddRootGoalTests(unittest.TestCase):
     """
 
     def setUp(self):
+        # Goal persistence does not depend on the reader's billing account.
+        # A configured helper otherwise makes fresh state reads contact the
+        # pool, whose five-second timeout exceeds this fixture's HTTP timeout.
+        billing = mock.patch(
+            "human_compact.claude_account.credit_alert", return_value=None)
+        billing.start()
+        self.addCleanup(billing.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.a = Path(self.tmp.name) / "chat-a"
