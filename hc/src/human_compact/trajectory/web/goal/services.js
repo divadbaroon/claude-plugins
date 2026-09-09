@@ -84,6 +84,7 @@ export const services = {
   saveModels(settings) { return post("/api/op", {op:"set_build_settings", ...settings}); },
   loadApiCredits() { return get("/api/claude-account?fresh=1"); },
   switchApiCredits(use) { return post("/api/op", {op:"claude_account", use}); },
+  chooseLocalDataset() { return datasetImport({action:"pick_local"}); },
   async uploadCollection(entries, progress) {
     const root = entries[0]?.path.split('/')[0];
     const folder = entries.every(e => e.path.startsWith(root+'/'));

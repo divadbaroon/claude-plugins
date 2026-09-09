@@ -130,6 +130,20 @@ class CollectionTests(unittest.TestCase):
         R.prepare(self.root,self.cwd,[raw]);p=PS.load_project(self.root,self.cwd)
         self.assertEqual(active['id'],p['activeDatasetId']);self.assertEqual('failed',p['resources'][-1]['status'])
 
+    def test_queued_native_picker_prepares_once_and_cancel_preserves_active(self):
+        folder=self.root/'native selection';folder.mkdir(parents=True);(folder/'data.csv').write_text('x,y\n1,2\n')
+        resource={'id':'queued-picker','kind':'dataset','name':'Local dataset','source':{'provider':'local_picker'}}
+        with mock.patch('human_compact.trajectory.ui.pick_directory',return_value={'ok':True,'cwd':str(folder),'name':folder.name}) as picker:
+            r=R.prepare(self.root,self.cwd,[resource])[0]
+            self.assertEqual('ready',r['status'],r);self.assertEqual('local_path',r['source']['provider'])
+            R.prepare(self.root,self.cwd,[resource]);self.assertEqual(1,picker.call_count)
+        active=PS.load_project(self.root,self.cwd)['activeDatasetId']
+        with mock.patch('human_compact.trajectory.ui.pick_directory',return_value={'ok':True,'cancelled':True}):
+            R.prepare(self.root,self.cwd,[dict(resource,id='cancelled-picker')])
+        p=PS.load_project(self.root,self.cwd)
+        self.assertEqual(active,p['activeDatasetId']);self.assertEqual('needs_user',p['resources'][-1]['status'])
+
+
 import test_dataset_upload as upload_fixtures
 from test_goal_page import server_for, BrowserCase
 class CollectionBrowserTests(BrowserCase):
@@ -197,3 +211,29 @@ class CollectionBrowserTests(BrowserCase):
                         self.assertTrue((cwd/r['access']['localPath']/'nested'/'events.csv').exists())
                     finally: browser.close()
 
+
+    def test_native_dataset_picker_uses_selected_folder_without_upload(self):
+        from human_compact.trajectory import ui
+        cwd=upload_fixtures.DatasetUploadBrowserTests.project(self)
+        folder=self.root/'Native dataset';(folder/'nested').mkdir(parents=True)
+        (folder/'nested'/'metrics.csv').write_text('metric,value\nlatency,1\n')
+        with server_for(self.chat) as url,self.sync_playwright() as runtime:
+            for name in ('chromium','firefox','webkit'):
+                with self.subTest(browser=name):
+                    browser=getattr(runtime,name).launch(headless=True)
+                    try:
+                        page=browser.new_page();page.goto(url);page.get_by_role('tab',name='Dataset',exact=True).click()
+                        with mock.patch.object(ui,'pick_directory',return_value={'ok':True,'cwd':str(folder.resolve()),'name':folder.name}) as picker:
+                            page.get_by_role('button',name='Choose local folder',exact=True).click()
+                            self.expect(page.get_by_role('heading',name='Native dataset',exact=True)).to_be_visible()
+                            self.assertEqual(1,picker.call_count)
+                        project=PS.load_project(self.root,cwd);active=project['activeDatasetId']
+                        r=next(r for r in project['resources'] if r['id']==active)
+                        self.assertEqual(str(folder.resolve()),r['access']['localPath']);self.assertTrue(r['access']['linked'])
+                        with mock.patch.object(ui,'pick_directory',return_value={'ok':True,'cancelled':True}):
+                            page.get_by_role('button',name='Choose local folder',exact=True).click()
+                            self.expect(page.get_by_role('button',name='Choose local folder',exact=True)).to_be_enabled()
+                        self.assertEqual(active,PS.load_project(self.root,cwd)['activeDatasetId'])
+                        page.reload();page.get_by_role('tab',name='Dataset',exact=True).click()
+                        self.expect(page.get_by_role('heading',name='Native dataset',exact=True)).to_be_visible()
+                    finally: browser.close()

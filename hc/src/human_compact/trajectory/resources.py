@@ -445,6 +445,14 @@ def prepare(root, cwd, supplied, fetch=download):
                 path = folder / 'paper.pdf'
                 fetch(url, path, min(limit, 20 * 1024 * 1024))
                 _prepare_paper(cwd, folder, path, r)
+            elif r['kind'] == 'dataset' and source.get('provider') == 'local_picker':
+                from .ui import pick_directory
+                picked = pick_directory()
+                if not picked.get('ok'): raise NeedsUser(picked.get('error') or 'Could not open the folder picker. Choose local folder in Dataset.')
+                if picked.get('cancelled'): raise NeedsUser('No folder selected. Click Choose local folder in Dataset when ready.')
+                r['source'] = {'type':'local_folder','provider':'local_path','path':picked['cwd']}
+                r['name'] = picked.get('name') or Path(picked['cwd']).name
+                r.update(DC.link_local(root, cwd, r))
             elif r['kind'] == 'dataset' and source.get('provider') == 'local_path':
                 r.update(DC.link_local(root, cwd, r))
             elif r['kind'] == 'dataset' and raw.get('manifest') and source.get('provider'):
