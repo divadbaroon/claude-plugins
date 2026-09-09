@@ -4,11 +4,42 @@ import json
 import shutil
 import subprocess
 import unittest
+from unittest import mock
 
-from test_goal_page import BrowserCase, GOAL_DIR, seed_design, server_for
+from test_goal_page import BrowserCase, GOAL_DIR, seed_design, server_for, AGENT_EVENTS, GM, ui, CHAT_AGENT
+from human_compact.trajectory.agents import runtime as RT
 
 
 class BuildNotificationTests(unittest.TestCase):
+    def test_failed_insert_retries_before_its_dependent_edits(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node is not installed")
+        store_uri = "data:text/javascript;base64," + base64.b64encode((GOAL_DIR / "store.js").read_bytes()).decode()
+        editor_source = (GOAL_DIR / "todo-editor.js").read_text().replace('"./store.js"', json.dumps(store_uri))
+        editor_uri = "data:text/javascript;base64," + base64.b64encode(editor_source.encode()).decode()
+        source = f"import {{createTodoEditor}} from {json.dumps(editor_uri)};import {{EMPTY_SLICE,withSlice}} from {json.dumps(store_uri)};\n"
+        source += """
+import assert from 'node:assert/strict';
+import {webcrypto} from 'node:crypto';
+if(!globalThis.crypto)globalThis.crypto=webcrypto;globalThis.document={querySelector:()=>null};
+let state={activeId:'s',slices:{s:{...EMPTY_SLICE,todos:[{id:'old',text:'First second',done:false,status:'',depth:0}]}},phases:{}};
+const store={get:()=>state,set:p=>{state=typeof p==='function'?p(state):{...state,...p}}};
+let offline=true;const calls=[],disk=new Map([['old','First second']]);
+const services={insertTodo:async({todo})=>{calls.push('insert');if(offline)throw Error('offline');disk.set(todo.id,todo.text)},
+ updateTodo:async({todoId,patch})=>{calls.push('update');if(!disk.has(todoId))throw Error('missing row');disk.set(todoId,patch.text)}};
+const editor=createTodoEditor({...store,changeSlice:(id,p)=>store.set(s=>withSlice(s,id,p)),services,refresh:()=>{},invalidateReads:()=>{}});
+editor.todoKey({key:'Enter',target:{selectionStart:5,selectionEnd:5},preventDefault:()=>{}},'old');
+const made=state.slices.s.todos[1];editor.editTodo(made.id,'Second modified');
+await assert.rejects(editor.flush());assert.deepEqual(calls,['insert']);
+offline=false;await editor.retrySave();
+assert.deepEqual(calls,['insert','insert','update','update']);
+assert.equal(disk.get('old'),'First');assert.equal(disk.get(made.id),'Second modified');
+assert.equal(state.slices.s.saveError,'');await editor.flush();
+"""
+        run = subprocess.run([node, "--input-type=module", "-"], input=source, text=True, capture_output=True, timeout=20)
+        self.assertEqual(0, run.returncode, run.stderr)
+
     def run_js(self, body):
         node = shutil.which("node")
         if not node:
@@ -94,6 +125,58 @@ alerts.update();assert.equal(store.get().notificationItems.length,1);
 
 
 class StandardPresentationBrowserTests(BrowserCase):
+    def test_inline_answer_reaches_paused_build_runtime(self):
+        goal, children = seed_design(self.chat)
+        goals, important = self.goals()
+        row = GM.by_id(goals, children[0])["todo_items"][0]
+        row.update(status="asking", question="Which format should I use?")
+        ui._save_goals(self.chat, goals, important, True)
+        AGENT_EVENTS.record("chat", self.root, AGENT_EVENTS.new_event("chat.needs_human", "agent",
+            {"question":row["question"],"rows":[row["id"]],"resume":"build"}, subgoal_id=children[0], todo_id=row["id"]))
+        def resume(session, root, subgoal, row_id, text):
+            current, flags = self.goals()
+            found = next(r for r in GM.by_id(current, subgoal)["todo_items"] if r["id"] == row_id)
+            found.update(status="building", question="")
+            ui._save_goals(self.chat, current, flags, True)
+            return {"ok":True}
+        with mock.patch.object(CHAT_AGENT,"ask",return_value={"ok":True,"resolution":"resume","say":"Use CSV","needs":{}}), \
+                mock.patch.object(RT.Runtime,"answer",side_effect=resume) as answer, \
+                server_for(self.chat) as url, self.page_on(url) as (page, errors):
+            field=page.get_by_label("Answer about " + row["text"], exact=True)
+            self.expect(field).to_be_visible()
+            field.fill("Use CSV and continue.")
+            field.press("Enter")
+            self.expect(field).to_have_count(0)
+            self.assertEqual(1, answer.call_count)
+            self.assertEqual(row["id"], answer.call_args.args[3])
+            self.assertIn("Use CSV and continue.", answer.call_args.args[4])
+            self.assertTrue(AGENT_EVENTS.read("chat",self.root,types=["human.answered"]))
+            self.assertEqual([], errors)
+
+    def test_actual_server_completion_updates_bell_once_and_read_survives_reload(self):
+        goal, children=seed_design(self.chat)
+        with server_for(self.chat) as url, self.page_on(url) as (page, errors):
+            page.wait_for_selector(".workspace-standard")
+            page.wait_for_function("window.engelbart?.store.get().notificationScope?.session")
+            for kind in ["build.started","verify.started","verify.passed"]:
+                AGENT_EVENTS.record("chat", self.root, AGENT_EVENTS.new_event(kind,"system",{"rows":["ta","tb"]},subgoal_id=children[1]))
+            page.evaluate("window.engelbart.actions.loadPanes()")
+            bell=page.get_by_role("button",name="Notifications, 1 unread",exact=True)
+            self.expect(bell).to_be_visible()
+            page.evaluate("window.engelbart.actions.loadPanes()")
+            bell.click()
+            item=page.locator(".notification-item")
+            self.expect(item).to_have_count(1)
+            self.expect(item).to_contain_text("2 todos completed")
+            item.click()
+            self.assertEqual(children[1],page.evaluate("window.engelbart.store.get().activeId"))
+            self.assertTrue(page.evaluate("window.engelbart.store.get().notificationItems[0].read"))
+            page.reload(wait_until="domcontentloaded")
+            page.get_by_role("button",name="Notifications",exact=True).click()
+            self.expect(page.locator(".notification-item")).to_have_count(1)
+            self.expect(page.locator(".notification-item.is-unread")).to_have_count(0)
+            self.assertEqual([],errors)
+
     def test_chat_renders_markdown_as_safe_dom_in_the_real_component(self):
         seed_design(self.chat)
         with server_for(self.chat) as url, self.page_on(url + "/workspace") as (page, _errors):
