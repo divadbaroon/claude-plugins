@@ -136,6 +136,18 @@ def safe_path(cwd, relative):
     return path
 
 
+def resource_path(cwd, resource, value):
+    if resource.get('source', {}).get('provider') != 'local_path':
+        return safe_path(cwd, value)
+    from . import dataset_collections as DC
+    root = DC.local_root(resource['source'].get('path', ''))
+    path = Path(value)
+    if path == root: return root
+    try: relative = path.relative_to(root).as_posix()
+    except ValueError: raise ValueError('File is outside the linked dataset')
+    return DC.secure_file(root, relative)
+
+
 def column_type(values):
     values = [v for v in values if v != '']
     if values and all(re.fullmatch(r'-?\d+', v) for v in values):
@@ -347,11 +359,11 @@ def cached_ready(cwd, r):
             with paths[1].open(encoding='utf-8') as f:
                 if not f.read(4096).strip(): return False
         elif r['kind'] == 'dataset':
-            if not safe_path(cwd, access['localPath']).is_dir(): return False
+            if not resource_path(cwd, r, access['localPath']).is_dir(): return False
             primary = access.get('primaryFiles') or []
             inspected = {f.get('path'): f for f in r.get('metadata', {}).get('files', [])}
             if not primary or not all(p in inspected for p in primary): return False
-            paths = [safe_path(cwd, p) for p in primary]
+            paths = [resource_path(cwd, r, p) for p in primary]
             for name, path in zip(primary, paths):
                 if not path.is_file() or path.stat().st_size != inspected[name].get('size'): return False
                 with path.open('rb') as f: head = f.read(4096)
@@ -376,7 +388,7 @@ def cached_ready(cwd, r):
         stamps = r.get('metadata', {}).get('artifactStamps', {})
         for path in paths:
             if not path.is_file() or not path.stat().st_size: return False
-            previous = stamps.get(str(path.relative_to(cwd)))
+            previous = stamps.get(str(path) if r.get('source', {}).get('provider') == 'local_path' else str(path.relative_to(cwd)))
             if previous and previous != artifact_stamp(path): return False
         return True
     except (OSError, ValueError, KeyError, IndexError, TypeError, StopIteration, UnicodeError, csv.Error):
@@ -433,6 +445,8 @@ def prepare(root, cwd, supplied, fetch=download):
                 path = folder / 'paper.pdf'
                 fetch(url, path, min(limit, 20 * 1024 * 1024))
                 _prepare_paper(cwd, folder, path, r)
+            elif r['kind'] == 'dataset' and source.get('provider') == 'local_path':
+                r.update(DC.link_local(root, cwd, r))
             elif r['kind'] == 'dataset' and raw.get('manifest') and source.get('provider'):
                 from . import dataset_collections as DC
                 collection_fetch = (lambda url, path, cap: download(url, path, cap, timeout=1800)) if fetch is download else fetch
@@ -475,7 +489,7 @@ def prepare(root, cwd, supplied, fetch=download):
             else:
                 raise NeedsUser('This resource type is reference-only for now')
             artifacts = [r['access'][k] for k in ('pdf', 'text')] if r['kind'] == 'paper' else r['access']['primaryFiles']
-            r['metadata']['artifactStamps'] = {p: artifact_stamp(safe_path(cwd, p)) for p in artifacts}
+            r['metadata']['artifactStamps'] = {p: artifact_stamp(resource_path(cwd, r, p)) for p in artifacts}
             r['status'] = 'ready'
         except NeedsUser as exc:
             r.update(status='needs_user', error=str(exc)[:300])
@@ -578,7 +592,7 @@ def dataset_preview(root, cwd, rid):
             break
         if isinstance(files[0].get("sample"), list):
             return files[0]
-        return dict(inspect_table(safe_path(cwd, files[0]["path"])), path=files[0]["path"])
+        return dict(inspect_table(resource_path(cwd, r, files[0]["path"])), path=files[0]["path"])
     raise FileNotFoundError("No ready project dataset")
 
 
@@ -760,7 +774,7 @@ def dataset_rows(root, cwd, offset=0, limit=200):
     primary = resource.get('access', {}).get('primaryFiles') or []
     if not primary:
         raise ValueError('Dataset has no prepared data file')
-    path = safe_path(cwd, primary[0])
+    path = resource_path(cwd, resource, primary[0])
     if not path.is_file() or path.stat().st_size > upload_limit():
         raise ValueError('Dataset file is missing or too large')
     rows, size, scanned, more = [], 0, 0, False

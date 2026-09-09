@@ -28,3 +28,7 @@ Release requires the updated installed wheel (0.20.0). Publish the installed cli
 Hosted Paper-step attachments (0.20.1)
 ------------------------------------
 The hosted uploader carries private uploaded collections through the same resources payload. Supabase file URLs are signed only at authenticated claim time. The importer downloads each listed file into the existing staging session and makes the completed dataset active automatically. Signed URLs are removed before writing project metadata. A failed or expired download preserves the current dataset and asks for retry/local supply. Hosted copies remain private in the separate dataset bucket; the Paper bucket and 20 MiB PDF policy are unchanged.
+
+## Linked local folders (0.20.2)
+
+The hosted Paper step can carry a `local_path` provider with a user-entered absolute or `~/` folder path. The installed runtime resolves it on this computer and inspects it in place, without copying files or uploading bytes. Metadata is stored in project resource storage; the data remains in the original folder. It uses the same bounded collection manifest, Dataset pane, active dataset and Build subset context. Keep the folder at its original path. Missing paths become needs_user; invalid paths, symlinks and special files fail without replacing the previous active dataset. Normal local ingestion size/count policies still apply.
