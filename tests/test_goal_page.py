@@ -1330,9 +1330,15 @@ class GoalPageModuleTests(unittest.TestCase):
         node = shutil.which("node")
         if not node:
             self.skipTest("node is not installed")
+        # Declare browser .js modules without version-specific Node flags.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        modules = Path(temporary.name) / "goal"
+        shutil.copytree(GOAL_DIR, modules)
+        (modules / "package.json").write_text('{"type":"module"}')
         source = (
-            f"import {{createActions}} from {json.dumps((GOAL_DIR / 'actions.js').as_uri())};\n"
-            f"import {{createStore,initialState}} from {json.dumps((GOAL_DIR / 'store.js').as_uri())};\n"
+            f"import {{createActions}} from {json.dumps((modules / 'actions.js').as_uri())};\n"
+            f"import {{createStore,initialState}} from {json.dumps((modules / 'store.js').as_uri())};\n"
             """
 import assert from 'node:assert/strict';
 globalThis.window = {addEventListener: () => {}};
@@ -1361,7 +1367,7 @@ assert.equal(store.get().addingSubgoal, true);
 assert.equal(store.get().subgoalDraft, '');
 """)
         run = subprocess.run(
-            [node, "--experimental-default-type=module", "--input-type=module", "-"],
+            [node, "--input-type=module", "-"],
             input=source, text=True, capture_output=True, timeout=20,
         )
         self.assertEqual(0, run.returncode, run.stderr)
