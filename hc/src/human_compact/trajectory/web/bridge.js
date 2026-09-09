@@ -10298,8 +10298,9 @@
       "[data-hc-launch] .hc-guide-q{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;border:1px solid currentColor;border-radius:50%;font-size:9px;line-height:1}",
       "[data-hc-launch] .hc-panels{order:-1;display:inline-flex;align-items:center;gap:8px;padding-right:8px;border-right:1px solid var(--bd);align-self:center}",
       "[data-hc-launch][data-hc-overview] .hc-panels{display:none}",
-      "[data-hc-launch] .hc-panel{display:inline-flex;cursor:pointer;color:var(--fnt);user-select:none}",
+      "[data-hc-launch] .hc-panel{display:inline-flex;align-items:center;gap:4px;border:0;background:none;padding:2px;font:11px var(--hc-sans);cursor:pointer;color:var(--fnt);user-select:none}",
       "[data-hc-launch] .hc-panel:hover,[data-hc-launch] .hc-panel-on{color:var(--ink)}",
+      "[data-hc-launch] .hc-panel:focus-visible{outline:2px solid var(--acc);outline-offset:3px}",
       // Rail headings, shared by both rails.
       "[data-hc-launch] .hc-rail-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 10px;border-bottom:1px solid var(--bd);overflow:hidden}",
       "[data-hc-launch] .hc-rail-name{font:600 9.5px var(--hc-sans);letter-spacing:1.2px;color:var(--mut)}",
@@ -18819,10 +18820,8 @@
       left: clampWidth("left", saved.left != null ? saved.left : RAIL_DEFAULT.left),
       right: clampWidth("right", saved.right != null ? saved.right : RAIL_DEFAULT.right),
       hideLeft: saved.hideLeft === true,
-      // Away unless the reader has asked for it. The rail is still the one
-      // editor of the TODO rows -- the tree hands every row write to it --
-      // so this hides a panel, not a system.
-      hideRight: saved.hideRight !== false,
+      // Keep Todos, Notes and Understanding visible unless explicitly hidden.
+      hideRight: saved.hideRight === true,
     };
     return layout;
   }
@@ -18923,12 +18922,19 @@
     if (!slot) return false;
     var l = loadLayout();
     if (!slot.children || !slot.children.length) {
-      [["left", "9", "goals rail"], ["right", "15", "prompt rail"]].forEach(function (spec) {
-        var btn = document.createElement("span");
+      [["left", "9", "Goals"], ["right", "15", "Todos, Notes and Understanding"]].forEach(function (spec) {
+        var btn = document.createElement("button");
         btn.className = "hc-panel";
+        btn.setAttribute("type", "button");
+        btn.setAttribute("aria-label", spec[2]);
         btn.setAttribute("data-hc-panel", spec[0]);
-        btn.title = "Show or hide the " + spec[2];
+        btn.title = "Show or hide " + spec[2];
         btn.innerHTML = PANEL_ICON.replace("{X}", spec[1]);
+        if (spec[0] === "right") {
+          var label = document.createElement("span");
+          label.textContent = "Todos";
+          btn.appendChild(label);
+        }
         slot.appendChild(btn);
       });
     }
@@ -18937,6 +18943,7 @@
       var side = kids[i].getAttribute("data-hc-panel");
       var on = side === "left" ? !l.hideLeft : !l.hideRight;
       kids[i].className = "hc-panel" + (on ? " hc-panel-on" : "");
+      kids[i].setAttribute("aria-pressed", on ? "true" : "false");
     }
     return true;
   }
@@ -20124,6 +20131,7 @@
       ["rowRef: (el) => { (this._rowEls = this._rowEls || {})[n.id] = el; },",
        "rowRef: (el) => { (this._rowEls = this._rowEls || {})[n.id] = el; }, canDel: true,"],
       ["walk(goals.slice(0, rootsVis), 0);",
+       chat ? "this._pathMode = false; walk(goals.slice(0, rootsVis), 0);" :
        "(function(){var self=this;var PH=['brainstorm','understand','implement','apply'];var PHL={brainstorm:'Brainstorm',understand:'Understand',implement:'Implement',apply:'Apply'};var byp={};var any=false;var rootId='';var scan=function(ns,par){(ns||[]).forEach(function(n){if(n&&PH.indexOf(n.phase)>=0){(byp[n.phase]=byp[n.phase]||[]).push(n);any=true;if(!rootId)rootId=par;}scan(n&&n.children,n&&n.id);});};scan(goals,'');self._pathMode=any;if(!any){walk(goals.slice(0, rootsVis), 0);return;}var dn=function(n){return n.done||((n.children||[]).length>0&&(n.children||[]).every(dn));};var cur='';for(var i=0;i<PH.length;i++){var gg=byp[PH[i]]||[];var un=false;for(var j=0;j<gg.length;j++){if(!dn(gg[j])){un=true;break;}}if(un){cur=PH[i];break;}}PH.forEach(function(ph){var gs=byp[ph]||[];if(!gs.length)return;var allDone=gs.every(dn);var okey='__phopen_'+ph;var isCur=ph===cur;var stO=self.state[okey];var open=(stO===undefined)?isCur:stO;var tog=function(e){if(e&&e.stopPropagation)e.stopPropagation();var o=(self.state[okey]===undefined)?isCur:self.state[okey];var p={};p[okey]=!o;self.set(function(){return p;});};rows.push({id:'__phase_'+ph,isReal:false,isAdd:false,isPhase:true,title:PHL[ph],rawTitle:PHL[ph],pad:'0px',guide:'none',caret:open?'▾':(allDone?'✓':'○'),check:'',circB:'transparent',bg:'transparent',hovBg:'var(--acchov)',fw:isCur?'700':'600',tcol:allDone?'var(--mut)':(isCur?'var(--ink)':'var(--fnt)'),deco:'none',isSel:false,isEdit:false,showTitle:true,canDel:false,dragOp:'1',dropShadow:'none',sel:tog,toggle:tog,done:function(){},edit:function(){},del:function(){},addSub:function(){},key:function(){},blur:function(){},ref:function(){},dragStart:function(){},rowRef:function(){}});if(!open)return;gs.forEach(function(g){var isSel=selId===g.id;var isEd=editId===g.id;rows.push({id:g.id,isReal:true,isAdd:false,isPhase:false,title:g.title||'Untitled',rawTitle:g.title,pad:'22px',guide:'none',caret:'',bg:isSel?'var(--accbg)':'transparent',hovBg:isSel?'var(--accbg)':'var(--acchov)',dragOp:'1',dropShadow:'none',rowRef:function(el){(self._rowEls=self._rowEls||{})[g.id]=el;},fw:isSel?'600':'400',isSel:isSel,isEdit:isEd,showTitle:!isEd,canDel:false,tcol:g.done?'var(--mut)':'var(--ink)',deco:g.done?'line-through':'none',check:g.done?'✓':'',circB:g.done?'var(--fnt)':(g.status==='inprog'?'var(--acc)':'var(--fnt)'),sel:function(){if(self._justDragged)return;self.set(function(){return{selId:g.id,paneTab:'context'};});},toggle:function(){},done:function(e){if(e&&e.stopPropagation)e.stopPropagation();self.set(function(s){return{goals:self.up(s.goals,g.id,function(x){return Object.assign({},x,{done:!x.done});}),editId:null};},true);},edit:function(e){if(e&&e.stopPropagation)e.stopPropagation();self.set(function(){return{selId:g.id,editId:g.id};});},addSub:function(){},del:function(){},key:function(e){if(e.key==='Enter')self.commit(g.id,e.target.value);else if(e.key==='Escape'){self._esc=g.id;self.cancel(g.id);}},blur:function(e){self.commit(g.id,e.target.value);},ref:function(el){if(el&&!el._f){el._f=1;el.focus();el.select();}}});});rows.push({id:'__addg_'+ph,isReal:false,isAdd:true,isPhase:false,addLabel:'Add goal',pad:'22px',guide:'none',caret:'',check:'',circB:'transparent',bg:'transparent',hovBg:'var(--hov)',fw:'400',tcol:'var(--mut)',deco:'none',isSel:false,isEdit:false,showTitle:false,title:'',rawTitle:'',canDel:false,dragOp:'1',dropShadow:'none',sel:function(){var n=self.node();n.phase=ph;self._new=n.id;self.set(function(s){return{goals:self.up(s.goals,rootId,function(x){return Object.assign({},x,{open:true,children:(x.children||[]).concat([n])});}),selId:n.id,editId:n.id};},true);},edit:function(){},toggle:function(){},done:function(){},del:function(){},addSub:function(){},key:function(){},blur:function(){},ref:function(){},dragStart:function(){},rowRef:function(){}});});}).call(this);"],
       // In path mode the left column is a project path, not a goal list, so
       // the heading says so and the whole-tree "Add goal" gives way to a
@@ -20496,13 +20504,14 @@
       // live only inside the artifact card, so pressing run opened a
       // pane that said to press run. The anchors now exist either way,
       // and the invitation only shows when nothing is happening.
-      // The tree the panel actually draws. The artifact renders a flat
-      // list of goal titles; renderGoalTree draws goals, subgoals and
-      // todos as one accordion in its place, so the artifact's own list
-      // is named here only so the stylesheet can put it away.
+      // Legacy keeps the artifact's compact goal/subgoal list. TODOs are
+      // edited in the right rail, not duplicated in a replacement accordion.
       ["<div ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">",
-       chat ? "<div class=\"hc-tree\"></div>\n<div class=\"hc-tree-old\" ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">"
+       chat ? "<div class=\"hc-tree-legacy\" ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">"
             : "<div ref=\"{{ treeRef }}\" style=\"display:{{ treeListDisp }};flex:1;min-height:0;overflow-y:auto\">"],
+      ["<div style=\"flex:none;align-self:stretch;width:{{ row.pad }};background-image:{{ row.guide }}\"></div>",
+       chat ? "<div class=\"hc-goal-indent\" style=\"flex:none;align-self:stretch;width:{{ row.pad }}\"></div>"
+            : "<div style=\"flex:none;align-self:stretch;width:{{ row.pad }};background-image:{{ row.guide }}\"></div>"],
       ["<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if>",
        "<sc-if value=\"{{ artEmpty }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px\"><div class=\"hc-live\"></div><div class=\"hc-live-rest\"></div></div><sc-if value=\"{{ artIdle }}\" hint-placeholder-val=\"{{ false }}\"><div style=\"margin-top:16px;font-size:11.5px;color:var(--fnt)\">No artifact yet \u2014 run the agent from the AGENT tab.</div></sc-if></sc-if>"],
       ["artEmpty: !art, hasArtifact: !!art,",
@@ -20616,7 +20625,8 @@
       // add one. Emitted after the goal's children so the shape reads
       // goal -> subgoal -> work, which is the order it is thought about in.
       ["      if (open) walk(kids, d + 1);",
-       "      if (open) walk(kids, d + 1);\n"
+       chat ? "      if (open) walk(kids, d + 1); // legacy: goals only, TODOs stay in the right rail"
+       : "      if (open) walk(kids, d + 1);\n"
        + "      if (open) (function(){\n"
        + "        var mine = (n.todo_items || []).filter(function (r) { return r && r.id; });\n"
        + "        var self = this;\n"
