@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-13",
+  "target": "http://127.0.0.1:8768/",
+  "surface": "Chrome through browser-client",
+  "question_navigation": {"passed": 30, "total": 30},
+  "incident_steps": {"passed": 12, "total": 12},
+  "checks": [
+    "Question search filters and keyboard clearing restores all 30 entries",
+    "Related question navigation displays the selected answer",
+    "Incident source disclosure renders the exact pending-question return branch",
+    "Proposed fixes and regression scenarios expand separately from current behavior",
+    "Fast/full wording presets switch lanes and explicit full override applies",
+    "Original full payload contains Notes; quick omits the new note; later full includes it",
+    "Pending-answer Bart trace explicitly bypasses Overseer",
+    "Incident step survives URL-fragment reload"
+  ],
+  "responsive": [
+    {"width": 390, "views": ["overview", "questions and lane widget", "Bart incident"], "horizontal_page_overflow": false},
+    {"width": 1024, "views": ["Bart incident"], "horizontal_page_overflow": false}
+  ],
+  "console_errors_or_warnings": [],
+  "live_models_or_builds_run": false,
+  "installed_runtime_modified": false
+}

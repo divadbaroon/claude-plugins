@@ -15,6 +15,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     evidence = json.loads((HERE / "evidence.json").read_text())
     template = (HERE / "explorer.html").read_text()
+    template = template.replace("__GUIDE_CSS__", (HERE / "guide.css").read_text())
+    template = template.replace("__GUIDE_SCRIPT__", (HERE / "guide.js").read_text())
     aliases = {"B": "build.py", "O": "agents/orchestrator.py", "U": "ui.py",
                "A": "web/goal/actions.js", "S": "web/goal/services.js", "C": "agents/context.py"}
     spans = [("trajectory/" + aliases[a], int(s), int(e))
@@ -43,10 +45,12 @@ def main():
     (output / "index.html").write_text(html)
     validation = {"scope": evidence["scope"], "date": evidence["date"],
                   "probes": evidence["probes"], "no_live_model_calls": True,
+                  "lane_cases": evidence["lane_cases"],
                   "source_files": {k: {"sha256": v["sha256"], "spans": v["spans"]} for k, v in selected.items()}}
     (output / "validation.json").write_text(json.dumps(validation, indent=2) + "\n")
     (HERE / "validation.json").write_text(json.dumps(validation, indent=2) + "\n")
     shutil.copyfile(HERE / "README.md", output / "README.md")
+    shutil.copyfile(HERE / "browser-validation.json", output / "browser-validation.json")
     print(json.dumps({"output": str(output / "index.html"), "bytes": len(html.encode()),
                       "source_files": len(selected), "source_spans": len(spans), "probes": "passed"}))
 

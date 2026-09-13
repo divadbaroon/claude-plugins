@@ -4,6 +4,8 @@ Run with the installed hc runtime's Python, or PYTHONPATH=hc/src python3.
 All state is synthetic and lives in TemporaryDirectory; stdout is JSON.
 """
 import hashlib
+import ast
+import inspect
 import json
 import os
 from pathlib import Path
@@ -70,12 +72,36 @@ def main():
             assert estimate["minutes"] == 20 and estimate["tokens"] >= 150000
         package = Path(B.__file__).resolve().parents[1]
         files = ["trajectory/build.py", "trajectory/ui.py", "trajectory/chat_state.py",
-                 "trajectory/web/goal/actions.js", "trajectory/web/goal/services.js", "trajectory/web/goal/store.js",
+                 "trajectory/web/goal/components/todos.js", "trajectory/web/goal/actions.js", "trajectory/web/goal/services.js", "trajectory/web/goal/store.js",
                  "trajectory/agents/orchestrator.py", "trajectory/agents/overseer.py", "trajectory/agents/context.py",
                  "trajectory/agents/chat.py", "trajectory/agents/path.py", "trajectory/agents/acceptance.py",
-                 "trajectory/agents/verifier.py", "trajectory/brainstorm.py", "trajectory/setup_chat.py", "trajectory/providers.py"]
+                 "trajectory/agents/verifier.py", "trajectory/agents/artifacts.py",
+                 "trajectory/agents/runtime.py", "trajectory/agents/communication.py",
+                 "trajectory/preview.py", "trajectory/brainstorm.py", "trajectory/setup_chat.py", "trajectory/providers.py"]
+        lane_patterns = {}
+        for node in ast.walk(ast.parse(inspect.getsource(B.prefer_quick))):
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in ("risky", "bounded"):
+                        lane_patterns[target.id] = ast.literal_eval(node.value.args[0])
+        lane_examples = [
+            ("original", [r["text"] for r in items]),
+            ("later", [r["text"] for r in later]),
+            ("vague", ["fix it"]), ("risky", ["Add a database button"]),
+            ("wording_full", ["Rename the navigation item", "Add a Clear button"]),
+            ("wording_fast", ["Rename the navigation label", "Add a Clear button"]),
+            ("empty", []), ("blank", [""]), ("four", ["Add a button"] * 4),
+            ("one_300", ["x" * 300]), ("one_301", ["x" * 301]),
+            ("two_500", ["button " + "x" * 493] * 2),
+            ("two_501", ["button " + "x" * 494] * 2),
+            ("unicode_boundary", ["αdatabaseα"]), ("unicode_length", ["😀" * 300]),
+        ]
+        with patch.dict(os.environ, {"HC_BUILD_LANE": "auto"}):
+            lane_cases = [{"id": key, "rows": rows, "quick": B.prefer_quick([{"text": t} for t in rows])}
+                          for key, rows in lane_examples]
         out = {"date": "2026-09-13", "scope": "Installed Engelbart 0.20.4; synthetic fixture; no model calls",
                "items": items, "later": later, "probes": probes,
+               "lane_patterns": lane_patterns, "lane_cases": lane_cases,
                "full_prompt": full.replace(str(cwd), "/example/specification-study"),
                "later_full_prompt": newer_full.replace(str(cwd), "/example/specification-study"),
                "later_quick_prompt": quick.replace(str(cwd), "/example/specification-study"),

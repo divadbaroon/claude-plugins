@@ -19,6 +19,123 @@
     }
   },
   "no_live_model_calls": true,
+  "lane_cases": [
+    {
+      "id": "original",
+      "rows": [
+        "Add a scenario editor",
+        "Add an input field",
+        "Add an expected-output field",
+        "Add a Run button",
+        "Display scenario history"
+      ],
+      "quick": false
+    },
+    {
+      "id": "later",
+      "rows": [
+        "Rename the Run button to Test scenario",
+        "Add a Clear button"
+      ],
+      "quick": true
+    },
+    {
+      "id": "vague",
+      "rows": [
+        "fix it"
+      ],
+      "quick": false
+    },
+    {
+      "id": "risky",
+      "rows": [
+        "Add a database button"
+      ],
+      "quick": false
+    },
+    {
+      "id": "wording_full",
+      "rows": [
+        "Rename the navigation item",
+        "Add a Clear button"
+      ],
+      "quick": false
+    },
+    {
+      "id": "wording_fast",
+      "rows": [
+        "Rename the navigation label",
+        "Add a Clear button"
+      ],
+      "quick": true
+    },
+    {
+      "id": "empty",
+      "rows": [],
+      "quick": false
+    },
+    {
+      "id": "blank",
+      "rows": [
+        ""
+      ],
+      "quick": false
+    },
+    {
+      "id": "four",
+      "rows": [
+        "Add a button",
+        "Add a button",
+        "Add a button",
+        "Add a button"
+      ],
+      "quick": false
+    },
+    {
+      "id": "one_300",
+      "rows": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": true
+    },
+    {
+      "id": "one_301",
+      "rows": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": false
+    },
+    {
+      "id": "two_500",
+      "rows": [
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": true
+    },
+    {
+      "id": "two_501",
+      "rows": [
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": false
+    },
+    {
+      "id": "unicode_boundary",
+      "rows": [
+        "\u03b1database\u03b1"
+      ],
+      "quick": true
+    },
+    {
+      "id": "unicode_length",
+      "rows": [
+        "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+      ],
+      "quick": true
+    }
+  ],
   "source_files": {
     "trajectory/web/goal/services.js": {
       "sha256": "1da505de975730ce74efa67b5b174d15e60ac929866cd422e55c59271c767865",
@@ -42,6 +159,14 @@
         [
           255,
           271
+        ],
+        [
+          231,
+          253
+        ],
+        [
+          300,
+          305
         ],
         [
           231,
@@ -79,12 +204,44 @@
         [
           4640,
           4655
+        ],
+        [
+          4640,
+          4655
+        ],
+        [
+          850,
+          877
+        ],
+        [
+          604,
+          655
+        ],
+        [
+          604,
+          655
+        ],
+        [
+          604,
+          655
+        ],
+        [
+          711,
+          744
+        ],
+        [
+          604,
+          655
         ]
       ]
     },
     "trajectory/web/goal/actions.js": {
       "sha256": "5becd0a083f2a3890d70be45b18ad4d86231dc24d2a3192337273f20cb090e01",
       "spans": [
+        [
+          686,
+          717
+        ],
         [
           686,
           717
@@ -149,6 +306,66 @@
         [
           214,
           291
+        ],
+        [
+          146,
+          209
+        ],
+        [
+          552,
+          600
+        ],
+        [
+          492,
+          511
+        ],
+        [
+          492,
+          500
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          214,
+          286
+        ],
+        [
+          214,
+          286
+        ],
+        [
+          229,
+          286
+        ],
+        [
+          602,
+          638
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          214,
+          240
+        ],
+        [
+          229,
+          268
+        ],
+        [
+          257,
+          286
+        ],
+        [
+          257,
+          268
         ]
       ]
     },
@@ -258,6 +475,58 @@
         [
           1398,
           1472
+        ],
+        [
+          1398,
+          1472
+        ],
+        [
+          238,
+          326
+        ],
+        [
+          1525,
+          1560
+        ],
+        [
+          328,
+          348
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          238,
+          326
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          2057,
+          2176
+        ],
+        [
+          2072,
+          2176
+        ],
+        [
+          2057,
+          2069
+        ],
+        [
+          2057,
+          2069
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          1737,
+          1804
         ]
       ]
     },
@@ -288,12 +557,20 @@
         [
           1681,
           1788
+        ],
+        [
+          1881,
+          2008
         ]
       ]
     },
     "trajectory/web/goal/store.js": {
       "sha256": "17a2e8e563cf3a6b7b0cf6b3202159040079156365b5f0cb60c0d083e4a57c9f",
       "spans": [
+        [
+          116,
+          139
+        ],
         [
           116,
           139
@@ -310,6 +587,30 @@
         [
           1,
           105
+        ],
+        [
+          49,
+          126
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
         ]
       ]
     },
@@ -327,6 +628,34 @@
         [
           70,
           97
+        ],
+        [
+          119,
+          169
+        ],
+        [
+          28,
+          95
+        ],
+        [
+          132,
+          169
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          82,
+          92
         ]
       ]
     },
@@ -357,6 +686,14 @@
         [
           145,
           247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
         ]
       ]
     },
@@ -370,6 +707,100 @@
         [
           1,
           124
+        ]
+      ]
+    },
+    "trajectory/agents/artifacts.py": {
+      "sha256": "4d287841db9dbeffd048b7165359977a779f07e0afebabef2c673aa67e5b97c7",
+      "spans": [
+        [
+          48,
+          120
+        ],
+        [
+          48,
+          186
+        ],
+        [
+          65,
+          118
+        ],
+        [
+          123,
+          171
+        ],
+        [
+          65,
+          118
+        ]
+      ]
+    },
+    "trajectory/agents/acceptance.py": {
+      "sha256": "6908bb5064e991183417c007626ed4c07b3b3d0bc85c3a8bd64832bac6f8145f",
+      "spans": [
+        [
+          65,
+          158
+        ]
+      ]
+    },
+    "trajectory/web/goal/components/todos.js": {
+      "sha256": "4ac3b39b6d3b772ebdeb02af2435476a88c5a44cd020b4b1e76e6b9f131fe195",
+      "spans": [
+        [
+          62,
+          107
+        ],
+        [
+          62,
+          107
+        ],
+        [
+          62,
+          107
+        ]
+      ]
+    },
+    "trajectory/agents/runtime.py": {
+      "sha256": "32970571642f1ffdb3701341d677a212796431acaa1e1c74213794c700e3da22",
+      "spans": [
+        [
+          164,
+          199
+        ],
+        [
+          171,
+          199
+        ]
+      ]
+    },
+    "trajectory/preview.py": {
+      "sha256": "ba49a23e52b5d4761af2d28bd22ef1266d330fda03f6412ad417fb15f31a311b",
+      "spans": [
+        [
+          648,
+          739
+        ],
+        [
+          648,
+          739
+        ]
+      ]
+    },
+    "trajectory/agents/communication.py": {
+      "sha256": "cedac34abfab3a1bf7df25bcc8efa034ef82406c3c22154c953fc8a581db2caa",
+      "spans": [
+        [
+          97,
+          100
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          97,
+          100
         ]
       ]
     }

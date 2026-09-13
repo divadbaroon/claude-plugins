@@ -88,3 +88,51 @@ Official capability references, checked September 13:
 Claude Code supports streaming input; this Build launcher chooses closed stdin.
 Built-in computer-use requires an interactive session and does not run under
 `-p`. Configured browser automation tools are a different capability.
+
+## Consolidated conversation guide
+
+The opening overview now connects **30 questions** to the two original traces
+and two incident replays. `guide.js` holds the curated answers, relations,
+incident timelines, and local fast/full simulator; `guide.css` styles this layer.
+Both are embedded by `render.py`, so the export remains one portable HTML file.
+
+- The question index searches question wording, answer text, and categories.
+  Only the selected answer is expanded. Related questions link across topics.
+- URL fragments preserve questions, incident steps, and original trace views,
+  for example `#question=preview-coupling`, `#incident=bart&step=3`, and
+  `#trace=todos&step=2&view=payload`.
+- The fast/full widget uses patterns extracted from the installed Python
+  function. Unicode word boundaries and character counting are preserved.
+  It never changes the user's settings or dispatches work.
+- The two incident replays are curated observations from the user's actual
+  seven-row build and later Bart message. They are separate from the synthetic
+  five-row original scenario. Screenshots are reconstructed from the supplied
+  content; private screenshots and full transcripts are not embedded.
+- The broad `pkill` command is observed. Attribution of the preview shutdown
+  to that command is explicitly labelled an inference because no PID-specific
+  termination record was captured. The raw Bart classifier response is not
+  available in the curated evidence; the matching application return branch
+  is shown without inventing its output.
+- Every recovery or routing change described under proposed fixes remains a
+  proposal. This documentation update does not patch the installed runtime.
+
+The incident provenance is local audit evidence, not a new live reproduction:
+`supabase-preview/agent_events.jsonl` lines 377–398, 410–411 and the builder
+transcript `f8817919-08e7-46f5-9749-774ca9a0bb15.jsonl` lines 1032 and 1175.
+The exported page includes only the relevant fields and public source excerpts.
+
+After refreshing the probe, validate the JavaScript and simulator:
+
+```sh
+python3 docs/runtime-explorer/validate.py
+```
+
+This checks 15 examples against captured results from the real Python selector,
+including size boundaries, nested-row counts, wording changes, risky work,
+Unicode word boundaries and code-point length, plus two override cases.
+
+Browser validation for the consolidated guide is recorded in
+[`browser-validation.json`](browser-validation.json): all 30 question links,
+all 12 incident steps, search, source disclosure, fast/full controls, original
+prompt comparisons, pending-answer routing, deep-link reload, and responsive
+checks at 390 and 1,024 pixels. No browser console errors or warnings were found.
