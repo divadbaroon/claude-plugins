@@ -1,0 +1,377 @@
+{
+  "scope": "Installed Engelbart 0.20.4; synthetic fixture; no model calls",
+  "date": "2026-09-13",
+  "probes": {
+    "initial_rows": 5,
+    "initial_protocol_ids": [
+      "t001",
+      "t005"
+    ],
+    "initial_quick": false,
+    "later_quick": true,
+    "full_includes_notes": true,
+    "next_full_includes_new_note": true,
+    "next_quick_includes_new_note": false,
+    "cold_fallback": {
+      "tokens": 150124,
+      "minutes": 20,
+      "source": "default"
+    }
+  },
+  "no_live_model_calls": true,
+  "source_files": {
+    "trajectory/web/goal/services.js": {
+      "sha256": "1da505de975730ce74efa67b5b174d15e60ac929866cd422e55c59271c767865",
+      "spans": [
+        [
+          255,
+          280
+        ],
+        [
+          297,
+          307
+        ],
+        [
+          231,
+          253
+        ],
+        [
+          239,
+          253
+        ],
+        [
+          255,
+          271
+        ],
+        [
+          231,
+          253
+        ]
+      ]
+    },
+    "trajectory/ui.py": {
+      "sha256": "e54b9de91f1b0223c51bdddb02b066bd3ee72cd038735d6e90f66affa1db35b2",
+      "spans": [
+        [
+          875,
+          914
+        ],
+        [
+          4640,
+          4655
+        ],
+        [
+          551,
+          582
+        ],
+        [
+          551,
+          582
+        ],
+        [
+          780,
+          807
+        ],
+        [
+          711,
+          744
+        ],
+        [
+          4640,
+          4655
+        ]
+      ]
+    },
+    "trajectory/web/goal/actions.js": {
+      "sha256": "5becd0a083f2a3890d70be45b18ad4d86231dc24d2a3192337273f20cb090e01",
+      "spans": [
+        [
+          686,
+          717
+        ],
+        [
+          686,
+          717
+        ],
+        [
+          686,
+          717
+        ]
+      ]
+    },
+    "trajectory/agents/orchestrator.py": {
+      "sha256": "690709755e4a94483c4fde66dc0496684005f21a7ff9a2822a9f610614352e12",
+      "spans": [
+        [
+          492,
+          517
+        ],
+        [
+          492,
+          517
+        ],
+        [
+          552,
+          572
+        ],
+        [
+          600,
+          651
+        ],
+        [
+          621,
+          667
+        ],
+        [
+          375,
+          395
+        ],
+        [
+          163,
+          237
+        ],
+        [
+          239,
+          288
+        ],
+        [
+          395,
+          470
+        ],
+        [
+          621,
+          667
+        ],
+        [
+          375,
+          469
+        ],
+        [
+          214,
+          291
+        ]
+      ]
+    },
+    "trajectory/build.py": {
+      "sha256": "d1cf68df638390573920e036aff40fe2a60be4764d30c79dffeff508342bc823",
+      "spans": [
+        [
+          238,
+          348
+        ],
+        [
+          2057,
+          2069
+        ],
+        [
+          1398,
+          1504
+        ],
+        [
+          2856,
+          2893
+        ],
+        [
+          107,
+          147
+        ],
+        [
+          1525,
+          1560
+        ],
+        [
+          1615,
+          1638
+        ],
+        [
+          866,
+          885
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          2057,
+          2176
+        ],
+        [
+          238,
+          326
+        ],
+        [
+          328,
+          348
+        ],
+        [
+          1398,
+          1472
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          2856,
+          2893
+        ],
+        [
+          396,
+          495
+        ],
+        [
+          150,
+          326
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          853,
+          950
+        ],
+        [
+          1023,
+          1042
+        ],
+        [
+          1628,
+          1638
+        ],
+        [
+          2800,
+          2849
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          1660,
+          1711
+        ],
+        [
+          1398,
+          1472
+        ]
+      ]
+    },
+    "trajectory/agents/context.py": {
+      "sha256": "0ef2604c666d4c6e9dafb354d4966e476cb955291c4c2f6f83e5e2bfcfd1153c",
+      "spans": [
+        [
+          116,
+          153
+        ],
+        [
+          116,
+          153
+        ]
+      ]
+    },
+    "trajectory/chat_state.py": {
+      "sha256": "f7fa04501699b29d925791116abe2ef2057f422b0730e4537976ed1ca7f184eb",
+      "spans": [
+        [
+          1808,
+          1855
+        ],
+        [
+          1881,
+          2008
+        ],
+        [
+          1681,
+          1788
+        ]
+      ]
+    },
+    "trajectory/web/goal/store.js": {
+      "sha256": "17a2e8e563cf3a6b7b0cf6b3202159040079156365b5f0cb60c0d083e4a57c9f",
+      "spans": [
+        [
+          116,
+          139
+        ],
+        [
+          116,
+          139
+        ]
+      ]
+    },
+    "trajectory/agents/verifier.py": {
+      "sha256": "7b76e390bc737785257848fe63209be053affb9d7e07572110b71b81c26350ec",
+      "spans": [
+        [
+          1,
+          105
+        ]
+      ]
+    },
+    "trajectory/agents/overseer.py": {
+      "sha256": "c9926517178c922118d6a572e384d771b977469cda1caf5f96552f536602810b",
+      "spans": [
+        [
+          70,
+          97
+        ],
+        [
+          1,
+          169
+        ],
+        [
+          70,
+          97
+        ]
+      ]
+    },
+    "trajectory/setup_chat.py": {
+      "sha256": "b594950cff93d60907aac6b79936899a685753c517d9a93c8104d305cd40d0bf",
+      "spans": [
+        [
+          153,
+          160
+        ]
+      ]
+    },
+    "trajectory/providers.py": {
+      "sha256": "99e067982ae62a42397e96428e313a7328fa601b12200e005c515603d06b2b58",
+      "spans": [
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ]
+      ]
+    },
+    "trajectory/agents/chat.py": {
+      "sha256": "1b795f7e8087fcd2bcd19fa80eebae781e47ff4f3f197d0f3094df6221e2c442",
+      "spans": [
+        [
+          1,
+          124
+        ],
+        [
+          1,
+          124
+        ]
+      ]
+    }
+  }
+}
