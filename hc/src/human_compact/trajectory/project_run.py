@@ -88,6 +88,8 @@ def environment(cwd, inherited_values=None, validate_required=True, skipped=None
         if p.exists():
             for k,v in PE.dotenv(PE.read(p)).items():values.setdefault(k,v)
     values.update(PE.saved(root))
+    from . import project_supabase as PS
+    values.update(PS.launch_values(root))
     if any('$' in v for v in values.values()):raise ValueError('Environment interpolation needs review before native execution.')
     # Preserve OS tooling, not hc's credentials or unrelated API secrets.
     base={k:v for k,v in os.environ.items() if k in ('PATH','HOME','USER','LOGNAME','TMPDIR','TEMP','TMP','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','LANG','LC_ALL')}

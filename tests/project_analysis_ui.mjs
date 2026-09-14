@@ -443,3 +443,20 @@ assert.equal(publicInput.value,'https://saved.example');
 publicInput.oninput({target:{value:'https://replacement.example'}});
 assert.deepEqual(publicEdit,{name:'NEXT_PUBLIC_SUPABASE_URL',value:'https://replacement.example'});
 console.log('Saved public value is visible and editable');
+
+// Local Supabase is explicit, resumes configuration, and discards stale hosted drafts.
+const sbRows=[{name:'NEXT_PUBLIC_SUPABASE_URL',status:'missing',requirement:'required',evidence:[]}];
+const sbStore=createStore({...initialState(),newProject:{page:'environment',path:'/sb',result:{path:'/sb'},environment:{ok:true,variables:sbRows,warnings:[],localSupabase:{available:true}},envValues:{NEXT_PUBLIC_SUPABASE_URL:'https://prod.example',OTHER:'keep'},environmentSkips:{'/sb':['NEXT_PUBLIC_SUPABASE_URL'],'/other':['KEEP']}}});
+let sbCalls=0;
+const sbActions=createActions(sbStore,{
+ projectLocalSupabase:async args=>{sbCalls++;assert.equal(args.path,'/sb');return {ok:true,available:true,status:'ready',selected:true,variableNames:['NEXT_PUBLIC_SUPABASE_URL']};},
+ inspectProjectEnvironment:async()=>({ok:true,variables:[],warnings:[],localSupabase:{available:true,status:'ready',selected:true}})
+});
+assert.equal(sbCalls,0);
+find(renderNewProject(sbStore.get(),sbActions),n=>n.tag==='button'&&text(n)==='Install Docker and set up local Supabase').onclick();
+await new Promise(r=>setTimeout(r,0));
+assert.equal(sbCalls,1);
+assert.deepEqual(sbStore.get().newProject.envValues,{OTHER:'keep'});
+assert.deepEqual(sbStore.get().newProject.environmentSkips,{'/sb':[],'/other':['KEEP']});
+assert.match(text(renderNewProject(sbStore.get(),sbActions)),/Stop local services/);
+console.log('Explicit local Supabase action and scoped configuration resume passed');

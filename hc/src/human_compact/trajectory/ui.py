@@ -6099,6 +6099,18 @@ class H(BaseHTTPRequestHandler):
                     except (OSError, TypeError):
                         self._send(200, {"ok":False,"error":"Cannot read or run this retained plan. Analyze the project again."})
                     return
+                if body.get("op") == "project_local_supabase":
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok":False,"error":"local chat scope required"}); return
+                    from . import project_supabase as PS
+                    try:
+                        action=body.get("action", "inspect")
+                        result=(PS.inspect(body.get("path"),body.get("repositoryRoot")) if action=="inspect"
+                                else PS.start(body.get("path"),body.get("repositoryRoot"),action))
+                        self._send(200,result)
+                    except (OSError,ValueError,TypeError) as exc:
+                        self._send(200,{"ok":False,"error":str(exc)[:700]})
+                    return
                 if body.get("op") in ("inspect_project_environment", "inspect_project_environment_inventory", "save_project_environment"):
                     if not self.server.chat_scoped:
                         self._send(200, {"ok":False,"error":"local chat scope required"})
@@ -6108,6 +6120,9 @@ class H(BaseHTTPRequestHandler):
                         result = (PE.save(body.get("path"), body.get("values"))
                                   if body["op"] == "save_project_environment"
                                   else PE.scan(body.get("path"), include_nested=body["op"] == "inspect_project_environment_inventory", repository_root=body.get("repositoryRoot")))
+                        if body["op"] != "inspect_project_environment_inventory":
+                            from . import project_supabase as PS
+                            result["localSupabase"]=PS.inspect(body.get("path"),body.get("repositoryRoot"))
                         self._send(200, result)
                     except (OSError, ValueError, TypeError, RuntimeError):
                         self._send(200, {"ok":False,"error":"Could not inspect or save this project's environment. Check the directory and local storage permissions."})

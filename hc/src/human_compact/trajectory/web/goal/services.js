@@ -91,6 +91,7 @@ export const services = {
     const response=await fetch('/api/project-paper-links',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-HC-Name':encodeURIComponent(file.name)},body:file});
     return response.json();
   },
+  projectLocalSupabase: args => post('/api/op', {op:'project_local_supabase',...args}),
   inspectProjectEnvironment: args => post('/api/op', {op:'inspect_project_environment',...args}),
   saveProjectEnvironment: args => post('/api/op', {op:'save_project_environment',...args}),
   analyzeProject: args => post('/api/op', {op:'analyze_project',...args}),

@@ -25,6 +25,7 @@ function createProjectSessionActions(store, services, storage=globalThis.localSt
       if(!s?.autoContinue||s.busy||s.error)return;
       if((!s.page||['plan','order'].includes(s.page))&&s.result?.ok){await actions.inspectProjectEnvironment();return;}
       if(s.page==='environment'&&s.environment?.ok){
+        if(s.environment.localSupabase?.selected&&s.environment.localSupabase.status!=='ready')return;
         const paths=s.result.environmentPaths?.length?s.result.environmentPaths:[s.result.path];
         const safe=(r,path)=>r?.ok&&r.variables.every(v=>
           s.environmentSkips?.[path]?.includes(v.name)||v.blocksContinuation===false||
@@ -74,6 +75,31 @@ function createProjectSessionActions(store, services, storage=globalThis.localSt
       update({environmentSkips:{...s.environmentSkips,[path]:[...names]},...(skip?{envValues:{...s.envValues,[name]:''}}:{})});
       await actions.autoAdvanceProject();
     },
+    async setupLocalSupabase(action='start'){
+      const s=get().newProject;if(s.busy)return;
+      const path=s.environmentPath||s.result.path;
+      const repositoryRoot=s.result.repositoryRoot||s.environment.repositoryRoot||s.result.path;
+      update({busy:true,error:''});
+      try{
+        let localSupabase=await services.projectLocalSupabase({path,repositoryRoot,action});
+        while(true){
+          if(!localSupabase?.ok)throw new Error(localSupabase?.error||'Local setup failed');
+          update({environment:{...get().newProject.environment,localSupabase}});
+          if(localSupabase.status!=='working')break;
+          await new Promise(resolve=>setTimeout(resolve,2000));
+          localSupabase=await services.projectLocalSupabase({path,repositoryRoot,action:'inspect'});
+        }
+        const environment=await services.inspectProjectEnvironment({path,repositoryRoot});
+        if(!environment.ok)throw new Error(environment.error||'Could not refresh configuration');
+        // Local provisioning owns these fields; discard stale production drafts and skips.
+        const owned=new Set(localSupabase.variableNames||[]);
+        const envValues=Object.fromEntries(Object.entries(get().newProject.envValues||{}).filter(([name])=>!owned.has(name)));
+        const skips=(get().newProject.environmentSkips?.[path]||[]).filter(name=>!owned.has(name));
+        update({environment,envValues,environmentSkips:{...get().newProject.environmentSkips,[path]:skips},environmentChecks:{...get().newProject.environmentChecks,[path]:environment}});
+      }catch(error){update({error:error.message});}
+      finally{update({busy:false});}
+      if(action==='start'&&get().newProject.environment?.localSupabase?.status==='ready')await actions.autoAdvanceProject();
+    },
     async skipAllEnvironmentValues(){
       const s=get().newProject;
       if(s.busy||!s.environment)return;
@@ -122,6 +148,7 @@ function createProjectSessionActions(store, services, storage=globalThis.localSt
         if(!await actions.saveProjectEnvironment(false))return;
       }
       s=get().newProject;
+      if(s.environment.localSupabase?.selected&&s.environment.localSupabase.status!=='ready')return;
       if(s.environment.variables.some(v=>v.group==='required'&&v.blocksContinuation&&!s.environmentSkips?.[s.environmentPath||s.result.path]?.includes(v.name)))return;
       update({viewStep:null});await actions.openProjectRun();await actions.autoAdvanceProject();
     },
@@ -238,7 +265,16 @@ function renderEnvironment(s, actions) {
       h('h2',{id:'env-title'},'Environment check'),copyModalButton(),renderAutoContinue(s,actions),h('p',{},s.environmentPath||s.result.path),
       s.result.environmentPaths?.length>1&&h('label',{},'Component configuration',h('select',{disabled:s.busy||Object.values(s.envValues||{}).some(Boolean),value:s.environmentPath,onchange:e=>actions.selectEnvironmentPath(e.target.value)},s.result.environmentPaths.map(path=>h('option',{value:path,selected:path===s.environmentPath},path)))),
       h('p',{},'Review configuration for the production build and start plan. Values you enter are saved only in local Engelbart storage, outside the repository.'),
-      s.busy&&h('p',{role:'status'},'Checking environment…'),
+      report?.localSupabase?.available&&h('section',{class:'environment-group'},
+        h('h3',{},'Local Supabase'),
+        h('p',{},report.localSupabase.reason||'Use an isolated local database instead of entering hosted Supabase credentials.'),
+        h('p',{},'This action installs Docker if needed and the Supabase CLI, downloads service images, and creates local database storage. Docker Desktop may show system and license prompts. Existing compatible local engines are reused.'),
+        h('p',{},'Local auth, database and storage only. External auth providers and edge functions are disabled. Unrelated API keys are unchanged.'),
+        report.localSupabase.warnings?.map(w=>h('p',{},w)),
+        h('button',{class:'ghost-btn',disabled:s.busy||report.localSupabase.status==='ready',onclick:()=>actions.setupLocalSupabase('start')},report.localSupabase.status?'Resume local Supabase':'Install Docker and set up local Supabase'),
+        report.localSupabase.status&&h('button',{class:'ghost-btn',disabled:s.busy,onclick:()=>actions.setupLocalSupabase('stop')},'Stop local services'),
+        h('p',{},'Stopping preserves database data. Hosted configuration can still be entered in the fields below when local setup has not been selected.')),
+      s.busy&&h('p',{role:'status'},report?.localSupabase?.status==='working'?'Setting up local services…':'Checking environment…'),
       s.error&&h('p',{role:'alert'},s.error),
       report&&h('div',{},
         report.repositoryRoot&&h('p',{},'Repository searched: '+report.repositoryRoot),
@@ -265,7 +301,7 @@ function renderEnvironment(s, actions) {
         h('button',{class:'ghost-btn',disabled:s.busy,onclick:actions.inspectProjectEnvironment},'Recheck'),
         h('button',{class:'ghost-btn',disabled:s.busy||!report?.variables.some(row=>row.editable!==false&&row.requirement==='required'&&row.status!=='found'&&!s.envValues?.[row.name]&&!s.environmentSkips?.[s.environmentPath||s.result.path]?.includes(row.name)),onclick:actions.skipAllEnvironmentValues,title:'Skip all missing required values for this component and run'},'Skip all'),
         h('button',{class:'ghost-btn',disabled:s.busy||!Object.values(s.envValues||{}).some(Boolean),onclick:actions.saveProjectEnvironment},'Save locally'),
-        h('button',{class:'ghost-btn',disabled:s.busy||!report||report.variables.some(v=>v.group==='required'&&v.blocksContinuation&&!s.envValues?.[v.name]&&!s.environmentSkips?.[s.environmentPath||s.result.path]?.includes(v.name)),onclick:actions.continueProjectEnvironment},Object.values(s.envValues||{}).some(Boolean)?'Save and continue':'Continue'))));
+        h('button',{class:'ghost-btn',disabled:s.busy||!report||(report.localSupabase?.selected&&report.localSupabase.status!=='ready')||report.variables.some(v=>v.group==='required'&&v.blocksContinuation&&!s.envValues?.[v.name]&&!s.environmentSkips?.[s.environmentPath||s.result.path]?.includes(v.name)),onclick:actions.continueProjectEnvironment},Object.values(s.envValues||{}).some(Boolean)?'Save and continue':'Continue'))));
 }
 
 function renderComponents(s,actions){
