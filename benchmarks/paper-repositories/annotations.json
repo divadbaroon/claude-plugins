@@ -1,0 +1,402 @@
+[
+  {
+    "id": "chainforge", "repo": "ianarawjo/ChainForge", "doi": "10.48550/arXiv.2309.09128",
+    "keywords": "HCI; LLM evaluation; prompt engineering; hypothesis testing", "types": "system; tool; cli_package; visualization",
+    "dependencies": "python; node; browser; api_credentials; llm_api; docker; vector_store",
+    "contents": "Flask/ReactFlow application, chainforge serve CLI, prompt experiments and response visualizations.",
+    "details": "Python >=3.10; Flask and OpenAI client; nested React frontend. Provider APIs or local Ollama for model queries. Docker/Compose optional. RAG extra adds retrieval libraries; FAISS is optional.",
+    "env": "Provider credentials: OPENAI_API_KEY, ANTHROPIC_API_KEY, COHERE_API_KEY, GOOGLE_API_KEY (provider-dependent); public configuration: CHAINFORGE_ALLOWED_HOSTS.",
+    "urls": "https://chainforge.ai/play/", "scope": "web_preview",
+    "constraints": "Opening the UI can work without paid credentials; generating responses requires a configured provider. Monorepo and optional RAG extras complicate installation."
+  },
+  {
+    "id": "hypocompass", "repo": "mqo00/hypocompass", "doi": "10.1007/978-3-031-64302-6_19",
+    "keywords": "CS education; learning by teaching; debugging; hypothesis construction", "types": "system; tool; dataset_in_git",
+    "dependencies": "python; node; browser; legacy_runtime; llm_api; multi_service",
+    "contents": "Debugging tutor with React frontend, Flask backend, generated problem materials and study scripts.",
+    "details": "Flask 2.2.3 and openai 0.27.4 in backend requirements; React 17/react-scripts 4.0.3 frontend. Documented separate backend 8090 and frontend 8080. Local file logging under backend/data.",
+    "env": "Runtime flag: NODE_OPTIONS=--openssl-legacy-provider; public port configuration in package scripts. Provider credential mechanism is not established by the reviewed setup documents.",
+    "urls": "https://github.com/mqo00/hypocompass/tree/main/study_material", "scope": "web_preview",
+    "constraints": "README suggests Node 16. Backend and frontend must both start. Do not infer credential requirement from an installed OpenAI client alone."
+  },
+  {
+    "id": "generative-agents", "repo": "joonspk-research/generative_agents", "doi": "10.48550/arXiv.2304.03442",
+    "keywords": "HCI; generative agents; social simulation; memory", "types": "system; simulation; visualization; dataset_in_git",
+    "dependencies": "python; browser; api_credentials; llm_api; file_config; legacy_runtime; multi_service",
+    "contents": "Smallville simulation engine, Django game environment, saved simulation states and replay visualization.",
+    "details": "Author-tested Python 3.9.12; Django 2.2, NumPy 1.19.5 and openai 0.27.0. Environment server and simulation server run separately.",
+    "env": "Credential is a Python configuration variable openai_api_key in manually created reverie/backend_server/utils.py, not a documented environment variable.",
+    "urls": "https://github.com/joonspk-research/generative_agents/tree/main/environment/frontend_server/storage", "scope": "web_preview",
+    "constraints": "Replay and new simulation are distinct workflows. New simulation makes paid model calls; UI health alone does not validate agent behavior."
+  },
+  {
+    "id": "storm", "repo": "stanford-oval/storm", "doi": "10.48550/arXiv.2402.14207",
+    "keywords": "human-AI interaction; information synthesis; retrieval; scientific writing", "types": "system; tool; cli_script",
+    "dependencies": "python; browser; api_credentials; llm_api; search_api; file_config; vector_store",
+    "contents": "STORM/Co-STORM knowledge curation library, article generation examples and Streamlit demo.",
+    "details": "Python >=3.10; knowledge-storm, DSPy/LiteLLM and Streamlit demo dependencies. Search backends include You.com and Bing. VectorRM optionally uses local or cloud Qdrant.",
+    "env": "Provider/search secrets: OPENAI_API_KEY, YDC_API_KEY, BING_SEARCH_API_KEY; optional QDRANT_API_KEY. README also uses secrets.toml and .streamlit configuration.",
+    "urls": "https://storm-project.stanford.edu/", "scope": "web_preview",
+    "constraints": "Core package and nested demo have distinct entry points. Cloud search and model credentials are needed for the corresponding article-generation example."
+  },
+  {
+    "id": "dspy", "repo": "stanfordnlp/dspy", "doi": "10.48550/arXiv.2310.03714",
+    "keywords": "context engineering; prompt optimization; LLM programming", "types": "tool; cli_script",
+    "dependencies": "python; api_credentials; llm_api; vector_store; local_cache",
+    "contents": "Declarative language-model programming library, optimizers, examples and reliability test scripts.",
+    "details": "Python >=3.10,<3.15; OpenAI, LiteLLM, Pydantic and diskcache. Anthropic, Weaviate, MCP and Deno are optional extras. Model-specific examples require provider access or local models.",
+    "env": "Provider-dependent API credentials; reliability tests use model configuration YAML. Exact variable names vary by provider and are not an exhaustive inventory.",
+    "urls": "https://dspy.ai/", "scope": "library_or_cli",
+    "constraints": "Library import is a different contract from a web server. Selecting a usage example is necessary for a functional test."
+  },
+  {
+    "id": "autogen", "repo": "microsoft/autogen", "doi": "10.48550/arXiv.2308.08155",
+    "keywords": "multi-agent systems; LLM orchestration; tool use", "types": "system; tool; cli_package",
+    "dependencies": "python; node; browser; api_credentials; llm_api; docker; dotnet; multi_package",
+    "contents": "Python and .NET agent frameworks, examples, and AutoGen Studio GUI packages.",
+    "details": "Python >=3.10; autogen-agentchat and autogen-ext[openai]; optional autogenstudio GUI. Browser/MCP examples use Node and Playwright. Docker devcontainer and .NET implementations are separate paths.",
+    "env": "LLM credential: OPENAI_API_KEY for documented examples; other providers require their own settings.",
+    "urls": "https://microsoft.github.io/autogen/", "scope": "web_preview",
+    "constraints": "Must choose a component such as Studio. Installing a root monorepo or importing the framework does not start the GUI."
+  },
+  {
+    "id": "swe-agent", "repo": "SWE-agent/SWE-agent", "doi": "10.48550/arXiv.2405.15793",
+    "keywords": "software agents; agent-computer interfaces; automated programming", "types": "system; tool; cli_package; visualization",
+    "dependencies": "python; api_credentials; llm_api; docker; browser; external_download",
+    "contents": "sweagent CLI, software-agent execution/configuration code and trajectory inspector.",
+    "details": "Python >=3.11; SWE-ReX/LiteLLM tooling plus Flask inspector dependencies. Tasks use repository environments; Docker setup and provider credentials depend on selected execution backend.",
+    "env": "GitHub access credential: GITHUB_TOKEN in .env.example; model provider credentials are configured separately.",
+    "urls": "https://swe-agent.com/", "scope": "library_or_cli",
+    "constraints": "Launching the inspector does not prove an agent completed a coding task. Running tasks executes external code and consumes configured model resources."
+  },
+  {
+    "id": "workarena", "repo": "ServiceNow/WorkArena", "doi": "10.48550/arXiv.2403.07718",
+    "keywords": "web agents; knowledge work; benchmark; human-AI interaction", "types": "system; simulation; cli_package; dataset_in_git; dataset_in_hf",
+    "dependencies": "python; browser; api_credentials; hosted_service; gated_data; external_download",
+    "contents": "BrowserGym task implementations/configurations, setup and human-evaluation CLIs; HF-hosted instance access metadata.",
+    "details": "browsergym-core, Playwright browser installation, requests, Faker and huggingface_hub. WorkArena requires access to hosted ServiceNow instances. HF instance access requires authorization.",
+    "env": "HF access credential: HUGGING_FACE_HUB_TOKEN; README says to unset legacy SNOW_INSTANCE_URL when upgrading to the instance-pool workflow.",
+    "urls": "https://huggingface.co/datasets/ServiceNow/WorkArena-Instances", "scope": "library_or_cli",
+    "constraints": "Gated remote service access is an expected prerequisite. The HF artifact contains instance access information, not a replacement for a ServiceNow deployment."
+  },
+  {
+    "id": "webarena", "repo": "web-arena-x/webarena", "doi": "10.48550/arXiv.2307.13854",
+    "keywords": "web agents; benchmark; realistic environments; task completion", "types": "system; simulation; dataset_in_git; cli_script",
+    "dependencies": "python; browser; docker; database; mysql; postgresql; api_credentials; llm_api; multi_service; external_download",
+    "contents": "Canonical web-agent evaluation harness, task definitions and setup instructions for realistic website environments.",
+    "details": "Python 3.10 recipe and Playwright; Docker website stack includes shopping, administration, forum, GitLab, maps and encyclopedia services. Setup documents use MySQL and PostgreSQL; evaluation examples call OpenAI.",
+    "env": "LLM secret: OPENAI_API_KEY; public website base URLs are exported for the chosen environment. Site credentials and database state are separate configuration.",
+    "urls": "https://github.com/web-arena-x/webarena/tree/main/environment_docker", "scope": "web_preview",
+    "constraints": "Multi-container environment and external images. Native-only preview support cannot be interpreted as full benchmark compatibility."
+  },
+  {
+    "id": "vega-lite", "repo": "vega/vega-lite", "doi": "10.1109/TVCG.2016.2599030",
+    "keywords": "visualization; grammar of graphics; interaction", "types": "tool; visualization; dataset_visualization",
+    "dependencies": "node; browser; ruby; file_config; external_download",
+    "contents": "Visualization compiler, example specifications, generated graphics and documentation site source.",
+    "details": "Node/npm and Vega ecosystem libraries. Full documentation site uses Ruby/Bundler/Jekyll; example data are copied from the vega-datasets package. Library build and site serve are different scripts.",
+    "env": "Public build settings: TZ and BUNDLE_GEMFILE in package scripts; no credential prerequisite documented for local library use.",
+    "urls": "https://vega.github.io/vega-lite/examples/", "scope": "library_or_cli",
+    "constraints": "A successful compiler build is not a server. Jekyll site dependencies are additional to the JavaScript library."
+  },
+  {
+    "id": "voyager", "repo": "uwdata/voyager", "doi": "10.1109/TVCG.2015.2467191",
+    "keywords": "HCI; exploratory data analysis; visualization recommendation", "types": "system; tool; visualization; dataset_visualization",
+    "dependencies": "node; browser; legacy_runtime; bower; external_download",
+    "contents": "Original Voyager faceted visualization browser and client-side data exploration interface.",
+    "details": "npm/Gulp/Angular-era frontend; Bower installs client dependencies including Datalib, Vega-Lite and Vega-Lite UI. npm start runs gulp serve.",
+    "env": "No runtime credential requirement documented in the reviewed README/package manifest; dependency installation still uses network access.",
+    "urls": "https://vega.github.io/voyager/", "scope": "web_preview",
+    "constraints": "This is the original Voyager repository, not the Voyager 2 paper. Legacy Bower/Gulp compatibility is an intentional stress case."
+  },
+  {
+    "id": "draco2", "repo": "cmudig/draco2", "doi": "10.48550/arXiv.2308.14247",
+    "keywords": "visualization design; constraints; answer set programming", "types": "tool; visualization; dataset_visualization",
+    "dependencies": "python; constraint_solver; browser; optional_server",
+    "contents": "Visualization constraint knowledge base, recommendation/validation APIs, tests and interactive documentation.",
+    "details": "Python >=3.11, Clingo >=5.8, NumPy; optional server extra adds FastAPI, Uvicorn and tabulate. Visualization experiments use example data.",
+    "env": "No required credential variable documented in reviewed install path.",
+    "urls": "https://dig.cmu.edu/draco2/", "scope": "library_or_cli",
+    "constraints": "Core solver usage and optional HTTP API are separate workflows. A correct diagnosis can be library-only or require the server extra."
+  },
+  {
+    "id": "wizmap", "repo": "poloclub/wizmap", "doi": "10.18653/v1/2023.acl-demo.50",
+    "keywords": "embeddings; visual analytics; HCI; dimensionality reduction", "types": "system; tool; visualization; dataset_visualization",
+    "dependencies": "node; browser; python; external_download; webgl",
+    "contents": "Svelte/WebGL embedding-map application and Python notebook widget/preprocessing package.",
+    "details": "npm/Vite/Svelte 3 frontend with D3 modules. Optional Python workflow uses NumPy, IPython, quadtreed3, ndjson and scikit-learn; map data are loaded as generated JSON.",
+    "env": "No credential prerequisite documented for local map viewing; hosted gallery data require network access.",
+    "urls": "https://poloclub.github.io/wizmap/", "scope": "web_preview",
+    "constraints": "Viewing existing embeddings and creating embeddings are different tasks; model inference is not required for the viewer itself."
+  },
+  {
+    "id": "bertviz", "repo": "jessevig/bertviz", "doi": "10.18653/v1/P19-3007",
+    "keywords": "transformers; attention; interpretability; visualization", "types": "tool; visualization; dataset_visualization",
+    "dependencies": "python; notebook; browser; external_download; model_weights; gpu_optional",
+    "contents": "Attention visualization Python package with notebook and exported HTML views.",
+    "details": "Transformers, PyTorch, IPython, boto3 and sentencepiece. Examples download model weights/tokenizers; notebooks may use JupyterLab/ipywidgets. GPU depends on model size.",
+    "env": "Public example models do not document required secrets. Gated/custom model authentication is outside this inspected path.",
+    "urls": "https://github.com/jessevig/bertviz/tree/master/notebooks", "scope": "notebook_or_visualization",
+    "constraints": "Notebook output is not a standalone web application. Visualizing supplied attention tensors can avoid downloading a model."
+  },
+  {
+    "id": "lit", "repo": "PAIR-code/lit", "doi": "10.18653/v1/2020.emnlp-demos.15",
+    "keywords": "interpretability; NLP; interactive error analysis; HCI", "types": "system; tool; visualization; dataset_visualization",
+    "dependencies": "python; node; browser; docker; model_weights; external_download; gpu_optional",
+    "contents": "Language Interpretability Tool server, TypeScript/D3 frontend, model wrappers and example datasets.",
+    "details": "Python >=3.9 with NumPy <2; frontend build toolchain; model/demo extras introduce PyTorch or other inference dependencies. Docker/Podman is optional. Models and datasets depend on selected demo.",
+    "env": "Provider credentials are demo-dependent; no universal secret requirement established by core installation documents.",
+    "urls": "https://pair-code.github.io/lit/", "scope": "web_preview",
+    "constraints": "Choose a documented demo or model wrapper. HTTP health does not verify salience/model computations."
+  },
+  {
+    "id": "ecco", "repo": "jalammar/ecco", "doi": "10.18653/v1/2021.acl-demo.30",
+    "keywords": "NLP; explainable AI; activations; feature attribution", "types": "tool; visualization; dataset_visualization",
+    "dependencies": "python; notebook; browser; model_weights; external_download; gpu_optional",
+    "contents": "Notebook-based language-model explanation library with token, activation and attribution visualizations.",
+    "details": "PyTorch, Transformers, NumPy and Captum; local Hugging Face-compatible models or downloaded weights. Jupyter/IPython rendering path.",
+    "env": "No universal credential requirement documented for local models; remote model access is model-dependent.",
+    "urls": "https://www.eccox.io/", "scope": "notebook_or_visualization",
+    "constraints": "Notebook-first library; do not require an HTTP listener to recognize it. Older model APIs can fail against newer Transformers releases."
+  },
+  {
+    "id": "mesa", "repo": "mesa/mesa", "doi": "10.21105/joss.07668",
+    "keywords": "agent-based modeling; simulation; social science", "types": "tool; simulation; visualization; dataset_visualization",
+    "dependencies": "python; browser; docker; native_build; optional_server",
+    "contents": "Agent-based simulation framework, example models and interactive visualization components.",
+    "details": "Python >=3.12; NumPy, pandas, SciPy and platform-conditional Pythran on macOS. viz extra adds Solara, Altair and Matplotlib. Docker/Compose is an optional example workflow.",
+    "env": "Public model-selection configuration: MODEL_DIR in documented Docker workflow. No required model API credential for core simulation.",
+    "urls": "https://github.com/mesa/mesa/tree/main/mesa/examples", "scope": "simulation",
+    "constraints": "A specific example model must be selected for visualization. The current source runtime floor differs from older Mesa releases."
+  },
+  {
+    "id": "gymnasium", "repo": "Farama-Foundation/Gymnasium", "doi": "10.48550/arXiv.2407.17032",
+    "keywords": "reinforcement learning; simulation; environment interfaces", "types": "tool; simulation",
+    "dependencies": "python; graphics; native_build_optional; gpu_optional",
+    "contents": "Reinforcement-learning environment API, environments, wrappers and examples.",
+    "details": "Python >=3.10 with NumPy and cloudpickle. Rendering uses optional pygame-ce; Box2D/SWIG, MuJoCo, Atari, JAX and Torch are environment-specific extras.",
+    "env": "No API credential prerequisite for core local environments; display/graphics configuration depends on rendering backend.",
+    "urls": "https://gymnasium.farama.org/", "scope": "simulation",
+    "constraints": "Core environment reset/step can run headlessly. Rendering or all-extras installation introduces additional platform requirements."
+  },
+  {
+    "id": "minigrid", "repo": "Farama-Foundation/Minigrid", "doi": "10.48550/arXiv.2306.13831",
+    "keywords": "reinforcement learning; grounded language; navigation; simulation", "types": "tool; simulation; cli_script",
+    "dependencies": "python; graphics; platform_constraint",
+    "contents": "Procedural 2D grid environments, BabyAI tasks and manual-control script.",
+    "details": "Python >=3.10; Gymnasium, NumPy and pygame-ce. Optional wave-function-collapse examples add NetworkX and imageio.",
+    "env": "No credential requirement documented for local environments; pygame display configuration is host-dependent.",
+    "urls": "https://minigrid.farama.org/", "scope": "simulation",
+    "constraints": "README officially supports Linux/macOS and does not claim Windows support. Grid stepping and interactive rendering are distinct checks."
+  },
+  {
+    "id": "overcooked", "repo": "HumanCompatibleAI/overcooked_ai", "doi": "10.48550/arXiv.1910.05789",
+    "keywords": "human-AI coordination; cooperative agents; simulation", "types": "system; simulation; cli_package; visualization; dataset_in_git",
+    "dependencies": "python; browser; docker; graphics; legacy_runtime; gpu_optional",
+    "contents": "Cooperative cooking simulator, layouts, visualizations and demo command-line entry points.",
+    "details": "Current pyproject requires Python >=3.10,<3.11 and NumPy <2; Gymnasium, OpenCV, pygame and ipywidgets. Demo Docker script; optional training extra adds Ray, TensorFlow CUDA and W&B.",
+    "env": "Training tracker authentication is optional; no API secret prerequisite is documented for the base simulation.",
+    "urls": "https://github.com/HumanCompatibleAI/overcooked_ai/tree/master/src/overcooked_ai_py/data", "scope": "simulation",
+    "constraints": "Tight Python pin and optional training GPU stack. A running demo does not prove human-AI coordination results reproduce."
+  },
+  {
+    "id": "mujoco", "repo": "google-deepmind/mujoco", "doi": "10.1109/IROS.2012.6386109",
+    "keywords": "physics; robotics; simulation; model-based control", "types": "tool; simulation; visualization; cli_script",
+    "dependencies": "cpp; native_build; python; graphics; gpu_optional; node_optional",
+    "contents": "C/C++ physics engine, Python bindings, simulator GUI, MJX and WebAssembly demos.",
+    "details": "Source build uses a native CMake toolchain. Python bindings require Python >=3.10, GLFW, PyOpenGL and NumPy. Optional MJX uses JAX/JAXlib; WASM demo uses npm/Vite.",
+    "env": "Graphics/backend and native-build configuration are platform-dependent; no commercial API secret required by the reviewed install path.",
+    "urls": "https://mujoco.org/", "scope": "simulation",
+    "constraints": "Desktop/OpenGL rendering differs from a web preview. Source compilation and pip wheels are different setup paths."
+  },
+  {
+    "id": "jspsych", "repo": "jspsych/jsPsych", "doi": "10.21105/joss.05351",
+    "keywords": "cognition; behavioral experiments; learning science; browser experiments", "types": "tool; system; cli_script",
+    "dependencies": "node; browser; multi_package; file_config",
+    "contents": "Browser experiment library, plugins, examples and build tooling.",
+    "details": "Root source build requires Node >=18 and npm >=9, with Turbo/Gulp workspace scripts. Released example HTML can be opened directly in a browser. No database is required for local trials.",
+    "env": "Build configuration: CI in prepare script. Experiment hosting and data submission credentials depend on the experiment, not the core library.",
+    "urls": "https://www.jspsych.org/", "scope": "web_preview",
+    "constraints": "Do not mistake a documentation server for an experiment. Build/release example assets must resolve for a meaningful browser check."
+  },
+  {
+    "id": "moabb", "repo": "NeuroTechX/moabb", "doi": "10.1088/1741-2552/aadea0",
+    "keywords": "BCI; EEG; reproducibility; benchmarking", "types": "tool; dataset_external; visualization; dataset_visualization; cli_script",
+    "dependencies": "python; external_download; local_cache; scientific_libraries; gpu_optional",
+    "contents": "BCI dataset fetchers, preprocessing/evaluation pipelines and dataset analysis/plotting scripts; raw EEG is remote.",
+    "details": "Python >=3.11; MNE, NumPy >=2, SciPy, scikit-learn, PyRiemann, h5py and pooch. Raw dataset download/cache required for real-data experiments. Optional deep-learning extra uses Braindecode.",
+    "env": "Dataset/cache directories are configurable; credentials and terms depend on the selected source dataset. No universal dataset access secret is inferred.",
+    "urls": "https://moabb.neurotechx.com/docs/dataset_summary.html; https://bnci-horizon-2020.eu/database/data-sets", "scope": "dataset_or_pipeline",
+    "constraints": "Downloads vary greatly across EEG datasets. Repository checkout does not include the raw recordings or establish cross-subject reproducibility."
+  },
+  {
+    "id": "mne-python", "repo": "mne-tools/mne-python", "doi": "10.3389/fnins.2013.00267",
+    "keywords": "cognitive neuroscience; MEG; EEG; signal processing", "types": "tool; cli_package; dataset_external; visualization; dataset_visualization",
+    "dependencies": "python; scientific_libraries; external_download; local_cache; qt_optional; graphics",
+    "contents": "MEG/EEG analysis library, mne CLI, dataset fetchers, tutorials and plotting/3D visualization.",
+    "details": "Python >=3.11; NumPy, SciPy, Matplotlib and pooch. Full GUI extras add Qt/PyVista/VTK. Example recordings are fetched separately.",
+    "env": "Dataset path/cache and graphics configuration; no required cloud credential in the core install path.",
+    "urls": "https://mne.tools/stable/documentation/datasets.html", "scope": "dataset_or_pipeline",
+    "constraints": "Headless numerical analysis and desktop 3D visualization have different dependency requirements."
+  },
+  {
+    "id": "braindecode", "repo": "braindecode/braindecode", "doi": "10.1002/hbm.23730",
+    "keywords": "BCI; EEG decoding; deep learning; visualization", "types": "tool; dataset_external; visualization; dataset_visualization",
+    "dependencies": "python; scientific_libraries; model_weights; gpu_optional; external_download",
+    "contents": "EEG deep-learning models, dataset/preprocessing abstractions, training examples and visualization utilities.",
+    "details": "Python >=3.11; PyTorch/torchaudio, MNE, skorch, h5py and pandas. MOABB downloads and Hugging Face model-hub integration are optional extras; GPU useful for training.",
+    "env": "Data paths and optional model-hub authentication depend on selected dataset/model. No universal API key requirement documented.",
+    "urls": "https://braindecode.org/", "scope": "dataset_or_pipeline",
+    "constraints": "Model construction can be tested without large data; reproducing EEG decoding results requires data and a specified evaluation pipeline."
+  },
+  {
+    "id": "swe-bench", "repo": "SWE-bench/SWE-bench", "doi": "10.48550/arXiv.2310.06770",
+    "keywords": "software engineering; benchmark; code agents; reproducibility", "types": "tool; cli_package; dataset_in_hf",
+    "dependencies": "python; docker; external_download; disk_intensive; api_credentials_optional; gpu_optional",
+    "contents": "SWE-bench CLI and containerized evaluation harness; issue/patch datasets hosted on Hugging Face.",
+    "details": "Python >=3.10; datasets, Docker SDK, GitPython, huggingface_hub and Typer. Real evaluation builds/runs Docker images; README recommends substantial virtual disk space. Inference extras add model clients/GPU libraries.",
+    "env": "Optional provider credentials for inference and optional HF/GitHub credentials; public dataset loading and local supplied-patch evaluation do not inherently require paid model calls.",
+    "urls": "https://huggingface.co/datasets/SWE-bench/SWE-bench; https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified", "scope": "dataset_or_pipeline",
+    "constraints": "Full harness runs are storage-intensive; a small dataset read is not a successful patch evaluation. ARM image setup differs from x86."
+  },
+  {
+    "id": "human-eval", "repo": "openai/human-eval", "doi": "10.48550/arXiv.2107.03374",
+    "keywords": "program synthesis; code evaluation; functional correctness", "types": "tool; cli_package; dataset_in_git",
+    "dependencies": "python; scientific_libraries; legacy_packaging",
+    "contents": "HumanEval compressed JSONL problems and functional-correctness evaluation CLI.",
+    "details": "Python 3.7+ recipe; NumPy, tqdm and Fire. setup.py uses pkg_resources, which newer setuptools versions may omit.",
+    "env": "No required API credential for reading bundled problems or evaluating supplied completions; generation is outside this repository's evaluation contract.",
+    "urls": "https://github.com/openai/human-eval/tree/master/data", "scope": "dataset_or_pipeline",
+    "constraints": "Repository deliberately disables execution by default pending explicit setup. Dataset inspection is a separate check from executing generated code."
+  },
+  {
+    "id": "gsm8k", "repo": "openai/grade-school-math", "doi": "10.48550/arXiv.2110.14168",
+    "keywords": "mathematical reasoning; verification; language models; dataset", "types": "dataset_in_git; tool; cli_script",
+    "dependencies": "python; scientific_libraries; incomplete_manifest",
+    "contents": "GSM8K JSONL data, Socratic variants and Python dataset/training utilities.",
+    "details": "Raw JSONL can be inspected with the standard library. setup.py imports NumPy but does not declare a complete runtime dependency list; training dependencies require further code inspection.",
+    "env": "No secret required to read committed data; training environment requirements are not fully specified by reviewed packaging metadata.",
+    "urls": "https://github.com/openai/grade-school-math/tree/master/grade_school_math/data", "scope": "dataset",
+    "constraints": "Intentional incomplete-manifest case. Treat dataset availability independently of training-code executability."
+  },
+  {
+    "id": "mmlu", "repo": "hendrycks/test", "doi": "10.48550/arXiv.2009.03300",
+    "keywords": "knowledge evaluation; multitask benchmark; language models", "types": "dataset_external; cli_script",
+    "dependencies": "python; external_download; api_credentials; llm_api; incomplete_manifest",
+    "contents": "MMLU evaluation/calibration scripts; original CSV dataset distributed as an external university-hosted tar archive.",
+    "details": "README identifies OpenAI API evaluation code and an external data download. No root dependency manifest was found by the bounded scan; source-level dependencies need review before execution.",
+    "env": "OpenAI authentication needed for the API evaluation path; reviewed README does not establish the exact environment variable name.",
+    "urls": "https://people.eecs.berkeley.edu/~hendrycks/data.tar", "scope": "dataset_or_pipeline",
+    "constraints": "This records the original external distribution even though mirrors exist elsewhere. Archive retrieval and evaluation are separate stages."
+  },
+  {
+    "id": "natural-instructions-data", "repo": "allenai/natural-instructions", "doi": "10.48550/arXiv.2204.07705",
+    "keywords": "instruction learning; task generalization; NLP; dataset", "types": "dataset_in_git; cli_script",
+    "dependencies": "python; scientific_libraries; large_repository",
+    "contents": "Super-NaturalInstructions task JSON files, official splits and data-validation/conversion scripts.",
+    "details": "Raw JSON inspection needs no ML framework. src/requirements.txt lists iso-639 and NumPy for helper scripts. Training code is in the separate Tk-Instruct repository.",
+    "env": "No API credential is documented for local dataset inspection.",
+    "urls": "https://github.com/allenai/natural-instructions/tree/master/tasks; https://github.com/allenai/natural-instructions/tree/master/splits", "scope": "dataset",
+    "constraints": "Large task collection with source-specific data licenses. Cloning and checking JSON do not reproduce cross-task generalization."
+  },
+  {
+    "id": "tk-instruct-code", "repo": "yizhongw/Tk-Instruct", "doi": "10.48550/arXiv.2204.07705",
+    "keywords": "instruction learning; task generalization; NLP; training", "types": "tool; cli_script; dataset_external",
+    "dependencies": "python; docker; gpu; model_weights; external_download; git_dependency; legacy_runtime",
+    "contents": "Training/evaluation scripts for the same Super-NaturalInstructions paper, with external task data and HF model checkpoints.",
+    "details": "Transformers 4.18, datasets 1.17, FairScale, PyTorch training stack, W&B and a commit-pinned DeepSpeed Git dependency. Dockerfile provides an environment recipe; large models require substantial GPU memory.",
+    "env": "Optional W&B tracking credentials; OpenAI credentials only for the separate GPT-3 baseline. Training scripts need model/data locations.",
+    "urls": "https://github.com/allenai/natural-instructions; https://huggingface.co/allenai/tk-instruct-3b-def", "scope": "dataset_or_pipeline",
+    "constraints": "Paired with natural-instructions-data to test one paper with multiple repositories. HF artifact here is model weights, not an HF dataset."
+  },
+  {
+    "id": "diffusiondb", "repo": "poloclub/diffusiondb", "doi": "10.48550/arXiv.2210.14896",
+    "keywords": "text-to-image; prompts; dataset; human-AI interaction", "types": "dataset_in_hf; cli_script; dataset_visualization",
+    "dependencies": "python; external_download; disk_intensive; scientific_libraries",
+    "contents": "Dataset documentation, download/scraping scripts and metadata exploration examples; image/prompt data are on Hugging Face.",
+    "details": "Repository requirements list alive-progress. README's HF loader example additionally needs datasets and Pillow; Parquet analysis uses data tooling. Full 2M image download is approximately 1.7 TB per README.",
+    "env": "No paid credential documented for public dataset download; scraper credentials are a separate data-creation path, not established by the reviewed install recipe.",
+    "urls": "https://huggingface.co/datasets/poloclub/diffusiondb; https://huggingface.co/datasets/poloclub/diffusiondb/resolve/main/metadata.parquet", "scope": "dataset",
+    "constraints": "Use a bounded subset; full data retrieval is not a reasonable smoke test. Detect README dependencies omitted from requirements.txt."
+  },
+  {
+    "id": "scifact", "repo": "allenai/scifact", "doi": "10.48550/arXiv.2004.14974",
+    "keywords": "scientific claims; fact verification; NLP; dataset", "types": "dataset_external; tool; cli_script",
+    "dependencies": "python; model_weights; external_download; legacy_runtime; gpu_optional; native_tools_optional",
+    "contents": "Scientific claim verification pipelines, dataset/model download scripts and report generation scripts; dataset stored in public S3.",
+    "details": "Python 3.7 recipe; PyTorch 1.5, Transformers 2.7, NumPy 1.18, scispaCy model tarball and shell scripts. Optional PDF reporting needs pandoc and wkhtmltopdf.",
+    "env": "Public S3 downloads do not require AWS account credentials; optional external retrieval services have their own configuration.",
+    "urls": "https://scifact.s3-us-west-2.amazonaws.com/release/latest/data.tar.gz; https://scifact.s3-us-west-2.amazonaws.com/release/latest/claims_with_citances.jsonl", "scope": "dataset_or_pipeline",
+    "constraints": "Old binary dependencies stress modern Python/Apple Silicon. Data download, model loading and claim verification need distinct outcomes."
+  },
+  {
+    "id": "sentence-transformers", "repo": "huggingface/sentence-transformers", "doi": "10.18653/v1/D19-1410",
+    "keywords": "sentence embeddings; semantic similarity; representation learning", "types": "tool; cli_script",
+    "dependencies": "python; model_weights; external_download; gpu_optional; scientific_libraries",
+    "contents": "Sentence embedding library and training/evaluation examples associated with Sentence-BERT.",
+    "details": "Python >=3.10, PyTorch >=2.2, Transformers >=5,<6, Hugging Face Hub, NumPy and scikit-learn. Optional ONNX/OpenVINO and training extras.",
+    "env": "Public model downloads need no universal API secret; gated model authentication is model-specific.",
+    "urls": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2", "scope": "library_or_cli",
+    "constraints": "Repository moved from UKPLab to Hugging Face. Current package differs from the original 2019 implementation; reviewed revision is recorded."
+  },
+  {
+    "id": "lm-eval", "repo": "EleutherAI/lm-evaluation-harness", "doi": "10.48550/arXiv.2405.14782",
+    "keywords": "evaluation; language models; reproducibility; benchmark", "types": "tool; cli_package; dataset_in_hf; cli_script",
+    "dependencies": "python; external_download; model_weights; gpu_optional; api_credentials_optional; sqlite; local_cache",
+    "contents": "Language Model Evaluation Harness CLI, task configurations and result reporting; task data commonly loaded from HF.",
+    "details": "Python >=3.10, datasets/evaluate, NumPy, Jinja2 and sqlitedict. HF inference, vLLM, API clients, W&B and Zeno are optional extras with different prerequisites.",
+    "env": "HF_TOKEN for hub uploads/gated access; provider credentials for selected API model backend. Local supplied models are a separate path.",
+    "urls": "https://github.com/EleutherAI/lm-evaluation-harness/tree/main/lm_eval/tasks", "scope": "dataset_or_pipeline",
+    "constraints": "Paper is Lessons from the Trenches, written by harness developers; do not substitute the software Zenodo DOI for its paper DOI. Task/model/configuration must accompany any score."
+  },
+  {
+    "id": "hf-datasets", "repo": "huggingface/datasets", "doi": "10.18653/v1/2021.emnlp-demo.21",
+    "keywords": "datasets; NLP; reproducibility; data infrastructure", "types": "tool; cli_package; dataset_in_hf",
+    "dependencies": "python; scientific_libraries; external_download; local_cache; api_credentials_optional",
+    "contents": "Dataset loading/processing library and examples; actual datasets are independent HF repositories or external files.",
+    "details": "NumPy, pandas, PyArrow, fsspec and Hugging Face Hub declared in setup.py. Dataset revisions, local caches and file-format backends affect reproducibility.",
+    "env": "Optional HF access token for gated/private datasets or uploads; cache configuration is separate from credentials.",
+    "urls": "https://huggingface.co/datasets/cornell-movie-review-data/rotten_tomatoes", "scope": "dataset_or_pipeline",
+    "constraints": "Library is not a single dataset. Use a specified small public dataset/revision for functional testing; load success is not model evaluation."
+  },
+  {
+    "id": "faiss", "repo": "facebookresearch/faiss", "doi": "10.48550/arXiv.2401.08281",
+    "keywords": "similarity search; vector indexing; retrieval", "types": "tool; cli_script; dataset_external",
+    "dependencies": "cpp; native_build; blas; python; gpu_optional; external_download",
+    "contents": "Vector indexing/search library, Python bindings and CPU/GPU benchmark scripts with external benchmark datasets.",
+    "details": "C++/CMake and BLAS; optional Python interface uses NumPy and packaging. CUDA/ROCm/cuVS are optional GPU paths. Benchmark scripts can require SIFT/Deep1B or other downloaded data.",
+    "env": "Native build and GPU toolchain configuration; no hosted API credentials required for local vector search.",
+    "urls": "https://github.com/facebookresearch/faiss/tree/main/benchs", "scope": "library_or_cli",
+    "constraints": "Native source build and precompiled CPU wheels are different cases. Synthetic-vector smoke tests avoid billion-vector dataset downloads."
+  },
+  {
+    "id": "seaborn", "repo": "mwaskom/seaborn", "doi": "10.21105/joss.03021",
+    "keywords": "statistical visualization; exploratory data analysis; Python", "types": "tool; visualization; dataset_visualization",
+    "dependencies": "python; scientific_libraries; external_download_optional",
+    "contents": "Statistical plotting library, gallery/example code and tests.",
+    "details": "Python >=3.10; NumPy >=2, pandas >=2.2 and Matplotlib >=3.9. Optional stats extra adds SciPy/statsmodels. Example dataset loading uses an external repository; supplied data can be plotted offline.",
+    "env": "No API secret required for local plots; example-data cache/network configuration is separate.",
+    "urls": "https://github.com/mwaskom/seaborn-data", "scope": "notebook_or_visualization",
+    "constraints": "A static generated plot is a valid artifact; absence of a long-running server is expected."
+  },
+  {
+    "id": "umap", "repo": "lmcinnes/umap", "doi": "10.21105/joss.00861",
+    "keywords": "dimensionality reduction; embeddings; visualization", "types": "tool; visualization; dataset_visualization",
+    "dependencies": "python; scientific_libraries; jit; visualization_extras; external_download_optional",
+    "contents": "UMAP embedding implementation, example notebooks and optional plotting interfaces.",
+    "details": "Python >=3.10; NumPy, SciPy, scikit-learn, Numba and PyNNDescent. Plot extra adds Matplotlib, Datashader, Bokeh/HoloViews; parametric UMAP optionally uses TensorFlow.",
+    "env": "No required API credential documented for local arrays; optional example datasets may use external downloads.",
+    "urls": "https://umap-learn.readthedocs.io/", "scope": "notebook_or_visualization",
+    "constraints": "Numba JIT warmup affects first-run latency. Local data transformation and optional plotting need separate checks."
+  },
+  {
+    "id": "feature-visualization", "repo": "distillpub/post--feature-visualization", "doi": "10.23915/distill.00007",
+    "keywords": "interpretability; neural networks; feature visualization; interactive publishing", "types": "visualization; dataset_visualization; system",
+    "dependencies": "browser; node; legacy_runtime; static_assets; external_download",
+    "contents": "Interactive Distill paper source and committed public HTML/JavaScript visualization assets.",
+    "details": "Source build uses Svelte 1, Webpack 3, Babel 6 and D3 4. Committed public/ output provides a separate static-serving path; remote article resources may still need network access.",
+    "env": "Public build setting: NODE_ENV. No API credential prerequisite documented for viewing the article.",
+    "urls": "https://distill.pub/2017/feature-visualization/; https://github.com/distillpub/post--feature-visualization/tree/master/public", "scope": "web_preview",
+    "constraints": "Serving committed visualization assets does not regenerate neural feature images. Legacy source rebuild is a different, harder case."
+  }
+]

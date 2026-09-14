@@ -1,0 +1,176 @@
+{
+  "checked_at": "2026-09-14T03:47:41.586595+00:00",
+  "method": "Unauthenticated HTTP HEAD with redirects; headers only, no artifact downloads. HTTP 200 establishes endpoint availability, not access to gated data, artifact completeness or correctness. Signed redirect query strings are intentionally omitted.",
+  "links": [
+    {
+      "url": "https://bnci-horizon-2020.eu/database/data-sets",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://braindecode.org/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://chainforge.ai/play/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://dig.cmu.edu/draco2/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://distill.pub/2017/feature-visualization/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://dspy.ai/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://github.com/allenai/natural-instructions/tree/master/splits",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://github.com/distillpub/post--feature-visualization/tree/master/public",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://gymnasium.farama.org/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/allenai/tk-instruct-3b-def",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/datasets/SWE-bench/SWE-bench",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/datasets/ServiceNow/WorkArena-Instances",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/datasets/cornell-movie-review-data/rotten_tomatoes",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/datasets/poloclub/diffusiondb",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/datasets/poloclub/diffusiondb/resolve/main/metadata.parquet",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://microsoft.github.io/autogen/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://minigrid.farama.org/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://mne.tools/stable/documentation/datasets.html",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://moabb.neurotechx.com/docs/dataset_summary.html",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://mujoco.org/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://pair-code.github.io/lit/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://people.eecs.berkeley.edu/~hendrycks/data.tar",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://poloclub.github.io/wizmap/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://scifact.s3-us-west-2.amazonaws.com/release/latest/claims_with_citances.jsonl",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://scifact.s3-us-west-2.amazonaws.com/release/latest/data.tar.gz",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://storm-project.stanford.edu/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://swe-agent.com/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://umap-learn.readthedocs.io/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://vega.github.io/vega-lite/examples/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://vega.github.io/voyager/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://www.eccox.io/",
+      "status": 200,
+      "error": null
+    },
+    {
+      "url": "https://www.jspsych.org/",
+      "status": 200,
+      "error": null
+    }
+  ]
+}
