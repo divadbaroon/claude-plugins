@@ -58,7 +58,10 @@ unrelated turns are never silently attached.
 
 ## Live completion check
 
-The browser-created linked question is persisted and acknowledged by this
-conversation’s desktop queue. It waits behind the implementation turn.
-The automatic answer-capture boundary will be checked when that turn runs;
-current browser checks use clearly labelled, isolated answer fixtures.
+Completed: selecting an authored passage created a linked question, the
+installed desktop queue delivered it to this same conversation, and the
+service captured its real completed answer under the correct parent.
+The answer marker was removed. Browser inspection confirmed the answer,
+source quote, parent link, and source reference after regeneration and reload.
+The real response exposed flattened numbered steps; the renderer now preserves
+ordered lists. No queued follow-up tests remain. The local service stays open.

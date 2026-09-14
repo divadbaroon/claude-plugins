@@ -97,9 +97,16 @@
       "keyboard_selection_shortcut_and_escape": true,
       "html_and_unsafe_links_display_as_text": true,
       "phone_390_no_horizontal_overflow": true,
-      "phone_composer_inside_viewport": true
+      "phone_composer_inside_viewport": true,
+      "same_thread_question_received": true,
+      "real_completed_answer_captured": true,
+      "answer_marker_removed": true,
+      "real_answer_visible_in_browser": true,
+      "real_answer_survives_regeneration_and_reload": true,
+      "real_answer_ordered_steps_rendered_as_list": true
     },
-    "boundary": "One live question was saved through the browser and acknowledged by the desktop Codex queue for this same conversation. Its answer waits until this implementation turn ends. Answer display, nesting, failure, and deferred rendering were exercised with labelled sample answers in an isolated SQLite store; those are not live model responses. Existing Engelbart build/runtime simulations remain unchanged.",
-    "backend_boundary_tests": 11
+    "boundary": "A linked question created by selecting a passage in the browser reached this same Codex conversation through the desktop queue. Its real completed reply was captured under the original parent, with the answer marker removed, and verified visibly on the page after guide regeneration and reload. Numbered steps, bold text, code, and the source link render correctly. Failure/reconnect and deferred-render tests used explicitly labelled sample answers in isolated state. This validates one successful local round trip, not long-term delivery reliability or all desktop CLI versions.",
+    "backend_boundary_tests": 11,
+    "live_answer_sha256": "6ebc452aff6805753ae3c17c2eb7d938cd13fcf886b4cd37202e9a432707884b"
   }
 }

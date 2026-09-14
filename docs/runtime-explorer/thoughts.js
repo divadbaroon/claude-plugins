@@ -154,15 +154,19 @@ function thoughtInlineMarkdown(raw){
  return out+esc(raw.slice(last));
 }
 function thoughtMarkdown(raw){
- const lines=String(raw||'').replace(/\r\n?/g,'\n').split('\n');let html='',paragraph=[],list=[],code=[],inCode=false;
+ const lines=String(raw||'').replace(/\r\n?/g,'\n').split('\n');let html='',paragraph=[],list=[],listKind='ul',listStart=1,code=[],inCode=false;
  const flushParagraph=()=>{if(paragraph.length){html+='<p>'+thoughtInlineMarkdown(paragraph.join(' '))+'</p>';paragraph=[]}};
- const flushList=()=>{if(list.length){html+='<ul>'+list.map(x=>'<li>'+thoughtInlineMarkdown(x)+'</li>').join('')+'</ul>';list=[]}};
+ const flushList=()=>{if(list.length){html+='<'+listKind+(listKind==='ol'?' start="'+listStart+'"':'')+'>'+list.map(x=>'<li>'+thoughtInlineMarkdown(x)+'</li>').join('')+'</'+listKind+'>';list=[]}};
  const flushCode=()=>{html+='<pre><code>'+esc(code.join('\n'))+'</code></pre>';code=[]};
  lines.forEach(line=>{
   if(/^\s*```/.test(line)){flushParagraph();flushList();if(inCode)flushCode();inCode=!inCode;return}
   if(inCode){code.push(line);return}
-  const bullet=line.match(/^\s*[-*]\s+(.+)$/);
-  if(bullet){flushParagraph();list.push(bullet[1]);return}
+  const bullet=line.match(/^\s*[-*]\s+(.+)$/),ordered=line.match(/^\s*(\d{1,9})[.)]\s+(.+)$/);
+  if(bullet||ordered){
+   flushParagraph();const kind=ordered?'ol':'ul';if(list.length&&listKind!==kind)flushList();
+   if(!list.length){listKind=kind;listStart=ordered?Number(ordered[1]):1}
+   list.push(ordered?ordered[2]:bullet[1]);return;
+  }
   if(!line.trim()){flushParagraph();flushList();return}
   flushList();paragraph.push(line.trim());
  });

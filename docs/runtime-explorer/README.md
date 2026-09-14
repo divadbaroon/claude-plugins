@@ -230,3 +230,9 @@ Backend boundary checks:
 python3 -m unittest discover -s docs/runtime-explorer -p test_thoughts.py -v
 python3 docs/runtime-explorer/validate.py
 ```
+
+The live highlight round trip was verified: a browser-selected passage became
+an input in the existing Codex conversation, whose real completed answer was
+captured under the correct parent and displayed after regeneration/reload.
+This establishes one successful local round trip; it does not establish
+long-term queue reliability or compatibility with all future CLI versions.
