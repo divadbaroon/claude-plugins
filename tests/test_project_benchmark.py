@@ -85,6 +85,73 @@ class BenchmarkTests(unittest.TestCase):
         self.assertLess(len(json.dumps(report)),3_000_000)
         with self.assertRaises(ValueError):B.create_batch(b['dataset']['id'], ['invented'],{})
 
+    def test_joined_existing_run_never_becomes_this_cases_startup_success(self):
+        batch,ids=self.cohort();ctx={'batchId':batch['id'],'caseId':ids[0]}
+        requested='a'*32;borrowed='b'*32
+        token=B.begin(ctx,'analyze_project',{})
+        B.finish(token,{'ok':True,'analysisId':requested})
+        token=B.begin(ctx,'project_run_start',{'id':requested})
+        B.finish(token,{'ok':True,'run':{'id':borrowed,'status':'running','healthy':True,'joinedExistingRun':True}})
+        token=B.begin(ctx,'project_run_state',{'id':borrowed})
+        B.finish(token,{'ok':True,'run':{'id':borrowed,'status':'running','healthy':True}})
+        report=B.export_batch(batch['id'],refresh=False);case=report['cases'][0]
+        self.assertEqual(case['outcome'],'blocked')
+        self.assertEqual(report['summary']['healthyStartup'],0)
+        self.assertEqual(case['runId'],requested)
+        self.assertEqual(case['execution']['requestedRunId'],requested)
+        self.assertEqual(case['execution']['observedRunId'],borrowed)
+        self.assertTrue(case['execution']['joinedExistingRun'])
+        token=B.begin(ctx,'project_run_start',{'id':requested,'retry':True})
+        B.finish(token,{'ok':True,'run':{'id':requested,'status':'running','healthy':True}})
+        report=B.export_batch(batch['id'],refresh=False)
+        self.assertEqual(report['summary']['healthyStartup'],1)
+        self.assertFalse(report['cases'][0]['execution']['joinedExistingRun'])
+        self.assertIn(borrowed,report['cases'][0]['joinedRunIds'])
+
+    def test_client_terminal_outcome_is_classified_without_duplicate_backend_errors(self):
+        batch,ids=self.cohort();ctx={'batchId':batch['id'],'caseId':ids[0]}
+        token=B.begin(ctx,'discover_project_components',{})
+        B.finish(token,{'ok':True,'root':'/not/a/fixture','components':[{'requiresContainer':True}]})
+        B.operation({'action':'client_outcome','context':ctx,'code':'container_required'})
+        report=B.export_batch(batch['id'],refresh=False)
+        self.assertEqual(report['cases'][0]['outcome'],'unsupported')
+        self.assertIn('container',json.dumps(report['cases'][0]))
+        size=len(report['cases'][0]['events'])
+        B.operation({'action':'client_outcome','context':ctx,'code':'controller_error'})
+        self.assertEqual(len(B.export_batch(batch['id'],refresh=False)['cases'][0]['events']),size)
+
+    def test_short_public_values_preserve_schema_and_checkout_capture(self):
+        batch,ids=self.cohort();ctx={'batchId':batch['id'],'caseId':ids[0]}
+        token=B.begin(ctx,'save_project_environment',{'values':{'NAME':'a','PORT':'1','SECRET':'nested-private-key'}})
+        B.finish(token,{'ok':True,'publicValues':{'NAME':'a','PORT':'1'}})
+        with mock.patch.object(B,'checkout_revision',return_value={'actualCommit':'c'*40}):
+            token=B.begin(ctx,'discover_project_components',{})
+            B.finish(token,{'ok':True,'root':'/fixture','components':[],'stdout':'name=a, port=1','trace':{'nested-private-key':'value'}})
+        report=B.export_batch(batch['id'],refresh=False);case=report['cases'][0]
+        self.assertEqual(case['checkoutRevision']['actualCommit'],'c'*40)
+        self.assertEqual(case['events'][-1]['operation'],'discover_project_components')
+        self.assertEqual(case['events'][-1]['stage'],'checkout_discovery')
+        self.assertEqual(case['events'][-1]['status'],'done')
+        self.assertIn('[REDACTED]',case['events'][-1]['response']['stdout'])
+        self.assertNotIn('nested-private-key',json.dumps(case['events']))
+
+    def test_order_failure_survives_poll_eviction_and_fixed_rate(self):
+        batch,ids=self.cohort();ctx={'batchId':batch['id'],'caseId':ids[0]}
+        for _ in range(25):
+            token=B.begin(ctx,'project_order_state',{})
+            B.finish(token,{'ok':True,'order':{'status':'assessing'}})
+        token=B.begin(ctx,'project_order_state',{})
+        B.finish(token,{'ok':True,'order':{'status':'error','error':'Specific assessment boundary failed','stage':'assessment','agentTrace':[{'error':'model unavailable'}]}})
+        for _ in range(50):
+            token=B.begin(ctx,'project_run_state',{})
+            B.finish(token,{'ok':True,'run':{'status':'running','healthy':True}})
+        report=B.export_batch(batch['id'],refresh=False)
+        first=report['cases'][0]['firstFailure']
+        self.assertEqual(first['error'],'Specific assessment boundary failed')
+        self.assertIn('model unavailable',json.dumps(first))
+        self.assertNotIn('Specific assessment boundary failed',json.dumps(report['cases'][0]['events']))
+        self.assertEqual(report['summary']['healthyStartupRate'],0.2)
+
 class BenchmarkBoundaryTests(unittest.TestCase):
     def test_http_recording_local_scope_and_secret_redaction(self):
         from test_goal_page import server_for,post_json
@@ -147,6 +214,21 @@ class BenchmarkExecutionTests(unittest.TestCase):
             self.assertEqual(case['outcome'],'healthy_startup')
             self.assertIn('fixture install',json.dumps(case));self.assertIn('"exitCode": 7',json.dumps(case))
             self.assertTrue(any(e.get('durationSeconds') is not None for e in case['events']))
+            # A second case sharing this checkout receives the controller's real
+            # joinedExistingRun response. It must not borrow the first case's pass.
+            second=R.retain({'path':str(repo),'plan':R.read(rid)['plan']})
+            other={'batchId':b['id'],'caseId':ids[1]}
+            token=B.begin(other,'project_run_start',{'id':second})
+            joined=R.start(second)
+            self.assertTrue(joined['joinedExistingRun'])
+            B.finish(token,{'ok':True,'run':joined})
+            token=B.begin(other,'project_run_state',{'id':rid})
+            B.finish(token,{'ok':True,'run':R.view(rid)})
+            report=B.export_batch(b['id'])
+            self.assertEqual(report['summary']['healthyStartup'],1)
+            self.assertEqual(report['cases'][1]['outcome'],'blocked')
+            self.assertEqual(report['cases'][1]['runId'],second)
+
         finally:R.reset(rid);R._JOBS.pop(rid,None)
 
     def test_checkout_revision_and_global_report_budget(self):

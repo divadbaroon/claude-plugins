@@ -22,11 +22,21 @@ MAX_FILES = 24
 MAX_BATCH_BYTES = 8 * 1024 * 1024
 _LOCK = threading.RLock()
 _SECRETS = set()
+# Preserve protocol keys, while treating arbitrary metadata/trace keys as content.
+_SCHEMA_KEYS = set('''id operation stage status request response run order ok error reason
+command cwd root path source sourceUrl repoUrl healthy analysisId variables name kind group
+requirement blocksContinuation evidence file line publicValues values envValues secretValues
+startedAt finishedAt durationSeconds started_at exitCode stdout stderr attempts attempt agentTrace
+prompt promptChars responseTruncated provider model effort tools phase timeoutSeconds suppliedFiles
+requestedFiles followupReason outcome components requiresContainer framework environmentPaths result
+firstFailure actualCommit reviewedCommit matchesReviewedCommit trackedFilesDirty note variableNames
+execution requestedRunId observedRunId joinedExistingRun metadata at clientOutcome
+'''.split()) | set(HEADERS)
 OPERATIONS = {'discover_project_components':'checkout_discovery', 'analyze_project':'assessment',
     'project_order_start':'run_order', 'project_order_state':'run_order',
     'inspect_project_environment':'environment', 'save_project_environment':'environment',
     'project_run_start':'run', 'project_run_state':'run', 'project_run_reset':'reset',
-    'project_run_approval':'repair'}
+    'project_run_approval':'repair', 'benchmark_client_outcome':'controller'}
 
 
 def _key(value):
@@ -169,7 +179,7 @@ def _saved_secrets():
     # after server restart; values remain in memory and never enter benchmark files.
     from . import project_environment as PE
     home=folder().parent/'project-environments'
-    for file in list(home.glob('*.json'))[:500]:
+    for file in home.glob('*.json'):
         try:
             values=json.loads(PE.read(file))
             if isinstance(values,dict):_SECRETS.update(str(v) for v in values.values() if isinstance(v,str) and v)
@@ -185,11 +195,17 @@ def sanitize(value):
         variants.add(json.dumps(secret,ensure_ascii=False)[1:-1])
     replacements=sorted(variants,key=len,reverse=True)
     def mask(text):
-        for secret in replacements:text=text.replace(secret,'[REDACTED]')
+        for secret in replacements:
+            if len(secret)<4:
+                text=re.sub(r'(?<![\w])'+re.escape(secret)+r'(?![\w])','[REDACTED]',text)
+            else:text=text.replace(secret,'[REDACTED]')
         return text
-    def walk(item,depth=0):
+    enums={'operation':set(OPERATIONS),'stage':set(OPERATIONS.values())|{'install','build','start','health','plan','validation','compatibility','error'},
+           'status':{'pending','running','done','failed','error','ready','needs_input','unsupported','awaiting_approval','stopped','found','missing','optional'}}
+    def walk(item,depth=0,field=None):
         if depth>16:return '[truncated: nesting limit]'
         if isinstance(item,str):
+            if item in enums.get(field,set()):return item
             text=scrub(item,mask)
             return text if len(text)<=8000 else text[:8000]+' [truncated: string limit]'
         if isinstance(item,dict):
@@ -197,7 +213,9 @@ def sanitize(value):
             for key,v in list(item.items())[:160]:
                 if _key(str(key)) in {'values','envvalues','publicvalues','secretvalues','environmentvalues','authorization','password','token','apikey'}:
                     out[str(key)]='[omitted: configuration values]'
-                else:out[walk(str(key),depth+1)]=walk(v,depth+1)
+                else:
+                    safe_key=str(key) if str(key) in _SCHEMA_KEYS else walk(str(key),depth+1)
+                    out[safe_key]=walk(v,depth+1,str(key))
             if len(item)>160:out['_truncated']='dictionary limit'
             return out
         if isinstance(item,list):
@@ -212,6 +230,7 @@ def _outcome(case,answer):
     run=answer.get('run') or {}; order=answer.get('order') or {}
     status=run.get('status') or order.get('status')
     if answer.get('ok') is False or status in ('failed','error'):return 'failed'
+    if run and (case.get('execution',{}).get('joinedExistingRun') or run.get('id') in case.get('joinedRunIds',[])):return 'blocked'
     if status=='unsupported':return 'unsupported'
     if status in ('needs_input','awaiting_approval'):return 'blocked'
     if any(v.get('status')=='missing' and v.get('blocksContinuation',True) for v in answer.get('variables',[]) if isinstance(v,dict)):return 'blocked'
@@ -246,7 +265,7 @@ def begin(context,operation,body):
         if not operation.endswith('_state'):case['outcome']='in_progress'
         # Apply redaction to existing evidence too if a newly submitted value was present earlier.
         _save(sanitize_batch(batch))
-        return {'batchId':batch['id'],'caseId':case['id'],'eventId':event['id'],'startedAt':event['startedAt']}
+        return {'batchId':batch['id'],'caseId':case['id'],'eventId':event['id'],'startedAt':event['startedAt'],'operation':operation,'requestedRunId':body.get('id') if operation=='project_run_start' else None}
 
 
 def sanitize_batch(batch):
@@ -264,16 +283,32 @@ def finish(token,answer):
             clean={'ok':answer.get('ok'),'evidenceTruncated':True,'excerpt':raw[:MAX_EVENT_BYTES//2]}
         event=next((e for e in case['events'] if e['id']==token['eventId']),None)
         if event is not None:event.update(finishedAt=time.time(),durationSeconds=round(time.time()-token['startedAt'],4),status='done',response=clean)
-        case['outcome']=_outcome(case,answer)
+        run=answer.get('run') or {};order=answer.get('order') or {}
+        observed=run.get('id');requested=token.get('requestedRunId')
+        if observed:
+            case['observedRunId']=observed
+            joined=case.setdefault('joinedRunIds',[])
+            if run.get('joinedExistingRun'):
+                if observed not in joined:joined.append(observed)
+                if len(joined)>40:joined.pop(20);case['droppedJoinedRunIds']=case.get('droppedJoinedRunIds',0)+1
+                case['execution']={'requestedRunId':requested or case.get('runId'),'observedRunId':observed,'joinedExistingRun':True}
+                if requested:case['runId']=requested
+            elif token.get('operation')=='project_run_start':
+                case['execution']={'requestedRunId':requested,'observedRunId':observed,'joinedExistingRun':observed in joined}
+                if observed not in joined:case['runId']=observed
+            elif observed not in joined:
+                case['runId']=observed
+            if event is not None and token.get('operation')=='project_run_start':event['execution']=dict(case.get('execution',{}))
+        case['outcome']=(answer['clientOutcome'] if token.get('operation')=='benchmark_client_outcome' and answer.get('clientOutcome') in ('unsupported','failed') else _outcome(case,answer))
         if case['outcome']=='failed' and 'firstFailure' not in case:
-            run=answer.get('run') or {}
+            failure=run or order
             case['firstFailure']=sanitize({'at':time.time(),'operation':event.get('operation') if event else 'unknown',
-                'error':str(answer.get('error') or run.get('reason') or '')[:1500],
-                'stage':run.get('stage'),'command':str(run.get('command') or '')[:1500],'cwd':run.get('cwd'),'exitCode':run.get('exitCode'),'stdout':str(run.get('stdout') or '')[:1500],'stderr':str(run.get('stderr') or '')[:1500]})
+                'error':str(answer.get('error') or failure.get('error') or failure.get('reason') or '')[:1500],
+                'stage':failure.get('failedStage') or failure.get('stage'),'command':str(failure.get('command') or '')[:1500],'cwd':failure.get('cwd') or failure.get('path'),'exitCode':failure.get('exitCode'),'stdout':str(failure.get('stdout') or '')[:1500],'stderr':str(failure.get('stderr') or '')[:1500],
+                'agentTraceExcerpt':json.dumps(sanitize(failure.get('agentTrace')))[:1600] if failure.get('agentTrace') else None})
         if event and event.get('operation')=='discover_project_components' and answer.get('ok') and answer.get('root'):
             case['checkoutRevision']=checkout_revision(answer['root'],case['metadata'])
         if answer.get('analysisId'):case['runId']=answer['analysisId']
-        if isinstance(answer.get('run'),dict) and answer['run'].get('id'):case['runId']=answer['run']['id']
         if isinstance(answer.get('order'),dict):
             if answer['order'].get('id'):case['orderId']=answer['order']['id']
             if answer['order'].get('result',{}).get('analysisId'):case['runId']=answer['order']['result']['analysisId']
@@ -301,10 +336,11 @@ def export_batch(id,refresh=True):
         if refresh:
             from . import project_run as PR, project_order as PO
             for case in batch['cases']:
-                op='project_run_state' if case.get('runId') else 'project_order_state' if case.get('orderId') else None
+                run_id=case.get('observedRunId') if case.get('execution',{}).get('joinedExistingRun') else case.get('runId')
+                op='project_run_state' if run_id else 'project_order_state' if case.get('orderId') else None
                 if not op:continue
                 token=begin({'batchId':id,'caseId':case['id']},op,{})
-                try:answer={'ok':True, 'run' if case.get('runId') else 'order':PR.view(case['runId']) if case.get('runId') else PO.view(case['orderId'])}
+                try:answer={'ok':True, 'run' if run_id else 'order':PR.view(run_id) if run_id else PO.view(case['orderId'])}
                 except (OSError,ValueError,TypeError):answer={'ok':False,'error':'Retained controller evidence unavailable; original observations retained.'}
                 finish(token,answer)
             batch=_read(id)
@@ -312,7 +348,7 @@ def export_batch(id,refresh=True):
         counts={}
         for case in batch['cases']:counts[case['outcome']]=counts.get(case['outcome'],0)+1
         batch['exportedAt']=time.time()
-        batch['summary']={'denominator':len(batch['selection']['ids']),'counts':counts,'healthyStartup':counts.get('healthy_startup',0),'scientificCorrectness':'not_assessed'}
+        batch['summary']={'denominator':len(batch['selection']['ids']),'counts':counts,'healthyStartup':counts.get('healthy_startup',0),'healthyStartupRate':counts.get('healthy_startup',0)/len(batch['selection']['ids']),'scientificCorrectness':'not_assessed'}
         return batch
 
 
@@ -330,6 +366,18 @@ def operation(body):
     if action=='create':return {'ok':True,'batch':create_batch(body.get('datasetId'),body.get('selectedIds'),body.get('filters'))}
     if action=='export':return {'ok':True,'batch':export_batch(body.get('id'))}
     if action=='latest':return {'ok':True,**latest()}
+    if action=='client_outcome':
+        reasons={'container_required':('unsupported','The discovered component requires a container-capable runtime.'),
+                 'controller_error':('failed','The project controller reported a terminal error after a completed service response.')}
+        if body.get('code') not in reasons:raise ValueError('Unknown client outcome classification.')
+        context=body.get('context') or {}
+        with _LOCK:
+            case=_case(_read(context.get('batchId')),context.get('caseId'))
+            if case['outcome'] in ('failed','blocked','unsupported'):return {'ok':True}
+            outcome,error=reasons[body['code']]
+            token=begin(context,'benchmark_client_outcome',{})
+            finish(token,{'ok':False,'clientOutcome':outcome,'error':error,'source':'client_controller'})
+        return {'ok':True}
     if action=='exception':
         token=begin(body.get('context') or {},'analyze_project',{})
         finish(token,{'ok':False,'error':str(body.get('error') or 'Browser request interrupted')[:1000]})

@@ -29,12 +29,20 @@ export function createProjectWorkspace(store,services,createSession){
   function select(id){const p=sessions.get(id);if(p)publish({activeProjectInstance:id,newProject:p.state,projectWorkspaceAdding:false});}
   function restoreBatch(batch){
     for(const c of batch.cases){
-      if([...sessions.values()].some(p=>p.benchmark?.batchId===batch.id&&p.benchmark.caseId===c.id))continue;
-      const p=add({path:c.repoUrl,sourceUrl:c.repoUrl,busy:false,error:'',launchRequested:true,autoContinue:false,
-        benchmark:{batchId:batch.id,caseId:c.id},result:c.runId?{analysisId:c.runId}:null});
-      if(c.runId)p.actions.openProjectRun();
-      else if(c.orderId)p.actions.resumeProjectOrder(c.orderId);
+      let p=[...sessions.values()].find(p=>p.benchmark?.batchId===batch.id&&p.benchmark.caseId===c.id);
+      if(!p)p=add({path:c.repoUrl,sourceUrl:c.repoUrl,busy:false,error:'',launchRequested:true,autoContinue:false,
+        benchmark:{batchId:batch.id,caseId:c.id},result:null});
+      // The browser can have saved during discovery or an environment pause, before
+      // the controller ID arrived. Hydrate that session from newer server evidence.
+      const runId=c.runId;
+      if(runId&&!p.state.result?.analysisId){
+        p.state={...p.state,autoContinue:false,result:{analysisId:runId,path:p.state.path}};
+        p.actions.openProjectRun();
+      }else if(!runId&&c.orderId&&!p.state.order?.id&&!p.state.result?.analysisId){
+        p.state={...p.state,autoContinue:false};p.actions.resumeProjectOrder(c.orderId);
+      }
     }
+    remember();publish({projectInstances:[...sessions.values()].map(p=>({id:p.id,...p.state}))});
   }
   const benchmark=createBenchmarkActions(store,services,{add,select,restoreBatch});
   const controls={

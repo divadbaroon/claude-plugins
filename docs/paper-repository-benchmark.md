@@ -4,7 +4,7 @@ The **Projects → Benchmark CSV** tab imports paper/repository cases and routes
 
 ## Import and select
 
-1. Open Projects and select **Benchmark CSV**. Upload `benchmarks/paper-repositories/corpus.csv` from this checkout, or use **Download CSV template** to prepare another dataset. The template demonstrates the schema; its placeholder repository is not a verified research artifact.
+1. Click **New Project**, then select **Benchmark CSV**. Upload `benchmarks/paper-repositories/corpus.csv` from this checkout, or use **Download CSV template** to prepare another dataset. The template demonstrates the schema; its placeholder repository is not a verified research artifact.
 2. Search the table or filter by dependency and artifact type. Tags are separated by semicolons; case, spaces, and hyphens normalize for filtering. Every original column remains available in the report metadata.
 3. Check individual rows, or **Select visible**. Hidden selected rows remain selected; the count explicitly reports them. **Clear selection** removes all selected rows.
 4. Click **Run selected (N)**. Exactly those N cases receive new Projects sessions. Manually added projects are excluded. Duplicate clicks are ignored. Use the existing **Automatic** control to choose whether assessment continues automatically or pauses for manual steps.
@@ -32,11 +32,13 @@ The report's counts sum to its fixed selected-case denominator:
 | --- | --- |
 | `pending` | No controller operation has started. |
 | `in_progress` | A boundary is pending or the latest observation is nonterminal. A pending boundary may have been interrupted. |
-| `blocked` | Missing configuration, a controller request for input, or pending approval. |
+| `blocked` | Missing configuration, a controller request for input, pending approval, or borrowing an existing run whose new plan was not executed. |
 | `unsupported` | The controller rejects the artifact, or an apparent HTTP success belongs to a declared dataset, CLI, simulation, script, or library without an explicit application/system type. |
 | `failed` | Checkout, assessment, execution, or another observed controller operation failed. |
 | `interrupted` | An observed stopped run. Retained controller restart failures may instead be reported as failed/blocked with their reason. |
 | `healthy_startup` | The latest applicable controller observation reports a running, healthy application. |
+
+`healthyStartupRate` divides `healthyStartup` by the fixed selected-case denominator; the GUI shows this fraction and percentage. Reused runs never contribute a new startup success. `execution` records requested versus observed run IDs and `joinedRunIds` retains borrowed identities across later polls and retries.
 
 `healthyStartup` is the count of **current observed healthy application startups**, not an estimate of scientific reproducibility or correctness. A later process failure or unavailable retained run can change that case's current outcome; earlier observations remain evidence. A dataset inspection or successful CLI exit is not a startup pass. Artifact type is supplied metadata, so incorrect type labels are a validity threat. Sampling and dependency coverage also affect any reported rate; this is a diagnostic cohort, not a representative population estimate.
 
@@ -50,7 +52,7 @@ Persistence is local under `$HUMAN_COMPACT_HOME/project-benchmarks/` (default `~
 
 The workspace restores benchmark identity and available sessions on reopen. If browser storage is cleared, the most recent server-side cohort reconstructs sessions without automatically running new cases. Reports remain available when a session lacks a run ID or its retained run becomes unavailable. Older cohorts can be exported by ID through the same local `project_benchmark` operation; there is no archive picker in this version. Concurrent tabs or server processes should not write the same cohort; atomic files avoid partial JSON but do not provide a cross-process event merge.
 
-Submitted environment values, including public configuration values, are excluded from benchmark request logs. The server removes value maps, applies existing credential-pattern redaction, and redacts known submitted values recursively before persistence/export. It reloads known values from authoritative local environment storage after a server restart. Variable names and statuses remain available. Benchmark operations bypass general request/response snapshots so raw environment submissions do not enter telemetry through the new path. Unrecognized secrets embedded in arbitrary repository text cannot be exhaustively identified by pattern matching.
+Submitted environment values, including public configuration values, are excluded from benchmark request logs. The server removes value maps, applies existing credential-pattern redaction, and redacts known submitted values recursively before persistence/export. It reloads known values from authoritative local environment storage after a server restart. Variable names, schema keys, and trusted status/operation enums remain available. Short values are redacted as standalone tokens rather than as substrings of unrelated words or IDs. Benchmark operations bypass general request/response snapshots so raw environment submissions do not enter telemetry through the new path. Unrecognized secrets embedded in arbitrary repository text cannot be exhaustively identified by pattern matching.
 
 ## Debug with Codex
 

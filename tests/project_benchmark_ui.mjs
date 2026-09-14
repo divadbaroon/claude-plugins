@@ -1,3 +1,4 @@
+import {createProjectAnalysisActions} from './new-project.js';
 import assert from 'node:assert/strict';
 import {createStore,initialState} from './store.js';
 import {createProjectWorkspace} from './project-workspace.js';
@@ -51,3 +52,33 @@ globalThis.document={createElement:tag=>new Element(tag),createTextNode:text=>({
 const filters=renderBenchmark(store.get(),actions);
 const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
 assert.deepEqual(descendants(filters).filter(node=>node.tag==='select').map(node=>node.attrs['aria-label']),['Dependency','Artifact type']);
+
+// The real session catches container blockers internally; the benchmark must observe
+// the resolved error state, rather than waiting only for rejected promises.
+storage.clear();const containerStore=createStore(initialState());const clientReports=[];
+const containerDataset={...dataset,cases:[cases[0]]};
+const containerActions=createProjectAnalysisActions(containerStore,{
+  projectBenchmark:async request=>{
+    clientReports.push(request);
+    if(request.action==='latest')return {ok:true,dataset:null,batch:null};
+    if(request.action==='import')return {ok:true,dataset:containerDataset};
+    if(request.action==='create')return {ok:true,batch:{id:'container-batch',dataset:{id:'dataset'},selection:{ids:['case-1']},cases:containerDataset.cases}};
+    return {ok:true};
+  },
+  discoverProjectComponents:async()=>({ok:true,root:'/container-fixture',components:[{path:'/container-fixture',requiresContainer:true}]}),
+  analyzeProject:async()=>{throw Error('Container blocker must stop before assessment');}
+});
+containerActions.openNewProject();await containerActions.importProjectBenchmark({name:'container.csv',text:async()=>''});
+containerActions.selectVisibleBenchmark();await containerActions.runSelectedBenchmark();
+assert.ok(clientReports.some(request=>request.action==='client_outcome'&&request.code==='container_required'));
+assert.ok(containerStore.get().projectInstances.some(p=>p.error?.includes('container-capable')));
+
+// A partial browser snapshot must be hydrated from the newer server record.
+storage.clear();batch.cases[0].runId='retained-run';
+storage.set('engelbart-project-workspace',JSON.stringify([{id:'partial',path:cases[0].repoUrl,sourceUrl:cases[0].repoUrl,launchRequested:true,benchmark:{batchId:'batch',caseId:'case-1'}}]));
+const hydrated=[];const partialStore=createStore(initialState());
+const partialSession=(scoped,svc)=>({...session(scoped,svc),openProjectRun(){hydrated.push(scoped.get().newProject.result?.analysisId);assert.equal(scoped.get().newProject.autoContinue,false);}});
+const partialActions=createProjectWorkspace(partialStore,services,partialSession);
+partialActions.openNewProject();await partialActions.loadProjectBenchmark();
+assert.deepEqual(hydrated,['retained-run']);
+assert.equal(partialStore.get().projectInstances.find(p=>p.id==='partial').result.analysisId,'retained-run');

@@ -76,7 +76,13 @@ export function createBenchmarkActions(store,services,{add,select,restoreBatch})
         const sessions=answer.batch.cases.map(c=>add({path:c.repoUrl,sourceUrl:c.repoUrl,busy:false,result:null,error:'',launchRequested:true,autoContinue:store.get().projectWorkspaceAutomatic!==false,benchmark:{batchId:answer.batch.id,caseId:c.id}}));
         // Dedicated sessions preserve row identity even when two rows share a repository.
         await Promise.allSettled(sessions.map(async p=>{
-          try{await p.actions.analyzeNewProject();}
+          try{
+            await p.actions.analyzeNewProject();
+            if(p.state.error){
+              const code=p.state.discovery?.components?.length===1&&p.state.discovery.components[0].requiresContainer?'container_required':'controller_error';
+              await request({action:'client_outcome',context:p.state.benchmark,code});
+            }
+          }
           catch{await request({action:'exception',context:p.state.benchmark,error:'Project controller stopped before completing analysis.'});}
         }));
       }catch(e){update({error:e.message});}finally{launching=false;update({launching:false});}
@@ -119,6 +125,7 @@ export function renderBenchmark(state,actions){
       b.batch&&h('button',{class:'ghost-btn',disabled:b.launching,onclick:actions.newBenchmarkCohort},'New cohort')),
     b.batch&&h('div',{class:'project-benchmark-report'},
       h('p',{},'Batch '+b.batch.id+' · fixed denominator '+b.batch.selection.ids.length),
+      h('p',{},b.batch.summary?'Startup health '+b.batch.summary.healthyStartup+'/'+b.batch.summary.denominator+' ('+(100*b.batch.summary.healthyStartupRate).toFixed(1)+'%)':'Startup health awaiting refresh'),
       h('p',{},b.batch.summary?Object.entries(b.batch.summary.counts).map(([k,v])=>v+' '+k.replaceAll('_',' ')).join(' · '):'Download or refresh evidence to update outcomes.'),
       h('p',{},'Healthy startup measures an application responding to its health check. Scientific correctness is not assessed. Dataset and CLI cases are not startup successes.'),
       h('button',{class:'ghost-btn',onclick:actions.refreshProjectBenchmark},'Refresh outcomes'),
