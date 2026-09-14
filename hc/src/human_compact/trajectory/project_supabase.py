@@ -134,7 +134,7 @@ def docker_env():
     try:contexts=json.loads(command([binary,'context','inspect'],RT.home(),env))
     except ValueError as exc:raise DockerUnavailable('Docker context is not yet available. Complete Docker startup.') from exc
     endpoint=contexts[0]['Endpoints']['docker']['Host']
-    if not endpoint.startswith(('unix://','npipe://')):
+    if not endpoint.startswith(('unix:///','npipe:////./pipe/')):
         raise ValueError('Select a local Docker context. Remote Docker endpoints are not allowed for local setup.')
     env['DOCKER_HOST']=endpoint
     try:command([binary,'info','--format','{{.ServerVersion}}'],RT.home(),env,15)

@@ -74,3 +74,10 @@ Contracts: https://supabase.com/docs/reference/cli/supabase-start,
 https://supabase.com/docs/reference/cli/supabase-status,
 https://docs.docker.com/desktop/setup/install/mac-install/,
 https://docs.docker.com/desktop/setup/install/linux/ubuntu/.
+
+Local validation results: 57 focused tests passed; Firefox and WebKit compatibility
+passed (2 tests). The installed native round trip passed its Claude lifecycle test
+but failed the pre-existing installer stdout contract: Berkeley expects the BART
+banner, while this feature branch prints installation progress. This fails before
+Supabase UI execution. No merge is permitted while that gate or the macOS/Ubuntu/
+Windows CI gates remain red or unverified.
