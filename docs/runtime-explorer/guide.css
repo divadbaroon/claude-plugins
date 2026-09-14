@@ -53,3 +53,33 @@
 .incident-controls{display:flex;justify-content:space-between;margin:24px 0;gap:10px}.incident-controls button{font-size:12px}.reading-paths{display:flex;gap:9px;flex-wrap:wrap}
 @media(max-width:850px){.guide{padding:26px 20px}.qa-layout{grid-template-columns:230px minmax(0,1fr);gap:24px}.orientation{gap:24px}.incident-layout{grid-template-columns:210px minmax(0,1fr);gap:22px}.architecture-strip{gap:10px}.architecture-strip button{padding:12px 8px}.architecture-strip button:not(:last-child):after{right:-11px;font-size:11px}.architecture-strip strong{font-size:12px}}
 @media(max-width:650px){.guide{padding:24px 16px}.guide-head{display:block}.guide-head h2{font-size:23px}.guide-head>button{margin-top:14px}.orientation{grid-template-columns:1fr;gap:23px;margin:24px 0}.architecture-strip{grid-template-columns:1fr}.architecture-strip button{min-height:0;display:grid;grid-template-columns:115px 1fr;gap:5px 12px;padding:12px}.architecture-strip .role-type{grid-column:1}.architecture-strip small{grid-column:2;grid-row:1/3}.architecture-strip button:not(:last-child):after{content:'↓';right:50%;top:auto;bottom:-12px}.story-entry{grid-template-columns:23px 1fr;gap:10px}.story-entry>button{grid-column:2;justify-self:start;margin-top:3px}.qa-layout{display:block}.qa-sidebar{position:static;margin-bottom:25px}.qa-results{max-height:220px;border-bottom:1px solid var(--line)}.qa-article h2{font-size:22px}.qa-answer{font-size:14px}.incident-layout{display:block}.incident-timeline{grid-template-columns:repeat(2,minmax(0,1fr));margin-bottom:23px}.incident-stop{padding:10px 8px;gap:8px}.state-grid{gap:6px}.state-grid div{padding:10px 8px}.guide-links button{max-width:100%;text-align:left}.lane-box{padding:15px}.topnav{gap:20px}.topnav button{font-size:12px}.question-neighbors button{max-width:49%}}
+.policy-table-wrap{overflow-x:auto;max-width:100%;margin:18px 0 22px;border:1px solid var(--line,#e2e5e9);border-radius:8px}
+.policy-table{border-collapse:collapse;width:100%;min-width:560px;font-size:13px;line-height:1.55;text-align:left}
+.policy-table th,.policy-table td{padding:13px 14px;vertical-align:top;border-bottom:1px solid var(--line,#e2e5e9)}
+.policy-table thead th{background:#f3f5f7;font-weight:600}
+.policy-table tbody th{font-weight:600;width:24%}
+.policy-table tr:last-child>*{border-bottom:0}
+.policy-detail{margin:12px 0;border:1px solid var(--line,#e2e5e9);border-radius:8px;padding:0 16px}
+.policy-detail>summary{cursor:pointer;font-weight:600;padding:15px 0;line-height:1.55}
+.policy-detail p{font-size:14px;line-height:1.7}
+.policy-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:400px;overflow:auto;background:#f5f6f8;padding:16px;border-radius:6px}
+.policy-detail .evidence-wrap{margin-bottom:18px}
+.policy-lab{padding:22px;border:1px solid #b7c8e2;background:#f7f9fd;border-radius:10px;margin:24px 0}
+.policy-lab h3{margin-top:0}
+.policy-controls{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:18px 0}
+.policy-controls label{font-size:13px;display:block}
+.policy-controls select{display:block;width:100%;max-width:100%;min-width:0;margin-top:7px;padding:10px 8px;border:1px solid #aeb8c8;border-radius:6px;background:white;font:inherit;color:#172235}
+.policy-outcome{display:flex;gap:15px;align-items:center;border-top:1px solid #d6dfec;padding-top:20px;flex-wrap:wrap}
+.policy-outcome>div{display:flex;flex-direction:column;gap:7px;flex:1;min-width:115px}
+.policy-outcome strong{font-size:23px;color:#234b87}
+.inventory-group dl{margin:0 0 20px}
+.inventory-group dl>div{padding:12px 0;border-top:1px solid var(--line,#e2e5e9)}
+.inventory-group dt{font-weight:600;font-size:14px;margin-bottom:5px}
+.inventory-group dd{margin:0;font-size:14px;line-height:1.7}
+@media(max-width:620px){.policy-lab{padding:16px}.policy-controls{grid-template-columns:1fr}.policy-outcome{gap:10px}.policy-outcome strong{font-size:20px}.policy-outcome>div{min-width:80px}.policy-detail{padding:0 12px}.policy-table{min-width:530px}}
+.queue-case label{display:block;font-size:13px;margin-bottom:8px}
+.queue-case select{width:100%;max-width:100%;padding:10px;background:white;border:1px solid #aeb8c8;border-radius:6px;font:inherit;font-size:13px;color:#172235}
+.queue-steps{padding-left:24px;font-size:14px;line-height:1.7}
+.queue-steps li{padding:5px 0 5px 5px}
+#queue-result h4{font-size:20px;margin:24px 0 10px;color:#234b87}
+#queue-result>p{font-size:14px;line-height:1.7}

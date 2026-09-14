@@ -91,10 +91,13 @@ Built-in computer-use requires an interactive session and does not run under
 
 ## Consolidated conversation guide
 
-The opening overview now connects **30 questions** to the two original traces
+The opening overview now connects **36 questions** to the two original traces
 and two incident replays. `guide.js` holds the curated answers, relations,
 incident timelines, and local fast/full simulator; `guide.css` styles this layer.
 Both are embedded by `render.py`, so the export remains one portable HTML file.
+`policy-guide.js` adds the role comparison, eight Path operations, complete
+Overseer table, 40 fixed-behavior entries in ten orchestrator groups, and the
+queue/Notes scenarios. These are appended to the same searchable question index.
 
 - The question index searches question wording, answer text, and categories.
   Only the selected answer is expanded. Related questions link across topics.
@@ -136,3 +139,36 @@ Browser validation for the consolidated guide is recorded in
 all 12 incident steps, search, source disclosure, fast/full controls, original
 prompt comparisons, pending-answer routing, deep-link reload, and responsive
 checks at 390 and 1,024 pixels. No browser console errors or warnings were found.
+
+## Routing and queue follow-up
+
+The six appended answers cover Path, Chat versus Brainstorm, all Overseer
+options, the orchestrator inventory, queue behavior/stashing, and a new batch
+on the same subgoal with changed Notes. The existing Notes answer now also
+states that backend joining does not refresh Notes.
+
+The routing control displays captured results from the installed
+`OVERSEER.route`, not a JavaScript reimplementation: 17 scenarios × eight
+hypothetical outputs (six actions, invalid output, and an exception), all
+checked with a stub model. It distinguishes model invocation, the guarded
+action, and the orchestrator's extra smalltalk/question/escalation handling.
+The JSON is labelled hypothetical input with a real captured code decision.
+
+The queue probe checks real `start`, `_join`, `joined_message`, and `deliver`
+behavior in temporary state. A fake live process captures `redirect`; it never
+terminates or starts Claude. Nine checks establish conversation/lane retention,
+new-row inclusion, Notes omission on join, no queue entry for joins, queued to
+building transition, draining, enqueue-time prompt snapshots, and empty repeat
+delivery. This is not a live hook delivery or Claude resume/completion test.
+
+The scenario selector covers the standard busy UI, backend join, later full,
+later quick, and alternate connected-session queue. Captured message examples
+show the context difference. Current headless submissions do not populate the
+legacy `later.json` queue. The app does not automatically stash per-TODO code
+changes; code stays in the shared working directory.
+
+Follow-up browser checks cover all six appended links, all ten inventory
+disclosures, all five queue scenarios, nine routing boundary combinations,
+all eight hypothetical model-output choices, captured message disclosure,
+question deep links, and phone layout. Earlier 30-question validation is
+retained as the baseline; it was not rerun in full for this additive update.

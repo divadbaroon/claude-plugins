@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 def main():
     evidence = json.loads((HERE / "evidence.json").read_text())
     guide = (HERE / "guide.js").read_text()
-    template = (HERE / "explorer.html").read_text().replace("__GUIDE_SCRIPT__", guide)
+    template = (HERE / "explorer.html").read_text().replace("__GUIDE_SCRIPT__", guide + "\n" + (HERE / "policy-guide.js").read_text())
     script = "\n".join(re.findall(r"<script>(.*?)</script>", template, re.S))
     selection = guide[guide.index("const word="):guide.index("const lanePresets=")]
     parity = "const E=" + json.dumps({k: evidence[k] for k in ("lane_patterns", "lane_cases")}) + ";\n"
@@ -35,6 +35,12 @@ console.log(JSON.stringify({python_parity_cases:E.lane_cases.length,override_cas
         subprocess.run(["node", "--check", str(check)], check=True)
         check.write_text(parity)
         subprocess.run(["node", str(check)], check=True)
+    assert len(evidence["routing_cases"]) == 17
+    assert all(len(c["outcomes"]) == 8 for c in evidence["routing_cases"])
+    print(json.dumps({"captured_routing_cases": 17, "hypothetical_model_outputs": 8,
+                      "real_policy_outcomes": 136, "passed": True}))
+    assert all(evidence["queue_probe"]["checks"].values())
+    print(json.dumps({"queue_checks": evidence["queue_probe"]["checks"], "passed": True}))
 
 
 if __name__ == "__main__":

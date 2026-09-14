@@ -16,7 +16,7 @@ def main():
     evidence = json.loads((HERE / "evidence.json").read_text())
     template = (HERE / "explorer.html").read_text()
     template = template.replace("__GUIDE_CSS__", (HERE / "guide.css").read_text())
-    template = template.replace("__GUIDE_SCRIPT__", (HERE / "guide.js").read_text())
+    template = template.replace("__GUIDE_SCRIPT__", (HERE / "guide.js").read_text() + "\n" + (HERE / "policy-guide.js").read_text())
     aliases = {"B": "build.py", "O": "agents/orchestrator.py", "U": "ui.py",
                "A": "web/goal/actions.js", "S": "web/goal/services.js", "C": "agents/context.py"}
     spans = [("trajectory/" + aliases[a], int(s), int(e))
@@ -46,6 +46,8 @@ def main():
     validation = {"scope": evidence["scope"], "date": evidence["date"],
                   "probes": evidence["probes"], "no_live_model_calls": True,
                   "lane_cases": evidence["lane_cases"],
+                  "routing_cases": evidence["routing_cases"],
+                  "queue_checks": evidence["queue_probe"]["checks"],
                   "source_files": {k: {"sha256": v["sha256"], "spans": v["spans"]} for k, v in selected.items()}}
     (output / "validation.json").write_text(json.dumps(validation, indent=2) + "\n")
     (HERE / "validation.json").write_text(json.dumps(validation, indent=2) + "\n")

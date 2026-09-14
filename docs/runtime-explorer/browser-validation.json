@@ -2,8 +2,16 @@
   "date": "2026-09-13",
   "target": "http://127.0.0.1:8768/",
   "surface": "Chrome through browser-client",
-  "question_navigation": {"passed": 30, "total": 30},
-  "incident_steps": {"passed": 12, "total": 12},
+  "question_navigation": {
+    "passed": 36,
+    "total": 36,
+    "baseline": 30,
+    "appended_this_update": 6
+  },
+  "incident_steps": {
+    "passed": 12,
+    "total": 12
+  },
   "checks": [
     "Question search filters and keyboard clearing restores all 30 entries",
     "Related question navigation displays the selected answer",
@@ -15,10 +23,61 @@
     "Incident step survives URL-fragment reload"
   ],
   "responsive": [
-    {"width": 390, "views": ["overview", "questions and lane widget", "Bart incident"], "horizontal_page_overflow": false},
-    {"width": 1024, "views": ["Bart incident"], "horizontal_page_overflow": false}
+    {
+      "width": 390,
+      "views": [
+        "overview",
+        "questions and lane widget",
+        "Bart incident"
+      ],
+      "horizontal_page_overflow": false
+    },
+    {
+      "width": 1024,
+      "views": [
+        "Bart incident"
+      ],
+      "horizontal_page_overflow": false
+    },
+    {
+      "width": 390,
+      "views": [
+        "Overseer routing controls and scrollable table",
+        "same-subgoal queue selector and message"
+      ],
+      "horizontal_page_overflow": false
+    }
   ],
   "console_errors_or_warnings": [],
   "live_models_or_builds_run": false,
-  "installed_runtime_modified": false
+  "installed_runtime_modified": false,
+  "followup_checks": {
+    "new_questions": [
+      "path",
+      "chat-brainstorm",
+      "overseer-matrix",
+      "orchestrator-rules",
+      "queue-status",
+      "same-subgoal-notes"
+    ],
+    "overseer_boundary_combinations": 9,
+    "hypothetical_model_output_controls": 8,
+    "inventory_groups_expanded": 10,
+    "inventory_rule_entries": 40,
+    "queue_paths_checked": [
+      "busy",
+      "joined",
+      "full",
+      "quick",
+      "session"
+    ],
+    "message_disclosures": [
+      "join omits SAVED NOTE and includes added rows",
+      "session delivery retains enqueue-time Notes"
+    ],
+    "search": "same subgoal returns 3; keyboard clear restores 36",
+    "deep_link_reload": "same-subgoal-notes restored",
+    "browser_model_calls": 0,
+    "browser_builds": 0
+  }
 }

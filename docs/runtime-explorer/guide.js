@@ -8,10 +8,10 @@ const qa=[
   detail:'“Agent” names a role in this codebase. It does not establish that the role is a persistent model session or a Claude subagent.',sources:[O(146,209),O(552,600),B(1398,1472)],jump:jump('todos',3),related:['overseer','nested','terminals']},
  {id:'overseer',group:'Who does what',title:'Is the Overseer an agent or code?',
   answer:['It is a Python routing module with an optional LLM call. It returns a structured decision; the orchestrator executes that decision.','Build requested, build completed, and verification failed use fixed rules without an Overseer model call. Interpreting a Bart message can use an LLM to choose Chat, Brainstorm, or Path.'],
-  sources:[ref('agents/overseer.py',119,169)],jump:jump('bart',2),related:['rules','roles','bart']},
+  detail:'A fixed action does not imply zero model calls. Several other events still call the model and then force the fallback action. See the complete routing table below.',sources:[ref('agents/overseer.py',119,169)],jump:jump('bart',2),related:['overseer-matrix','orchestrator-rules','chat-brainstorm','path','rules','roles','bart']},
  {id:'rules',group:'Who does what',title:'What are the deterministic rules?',
   answer:['Build clicked → builder. Builder completed → verifier. Verification failed with fewer than two repairs → repair. Verification failed after two repairs → escalate to you. These decisions do not call an Overseer model.','Hard guards also constrain model-backed routing: a Bart message cannot directly dispatch Build or Verify; a verified result cannot start another build or verification. Invalid model responses fall back to fixed rules.'],
-  detail:'Fast/full selection is another deterministic rule, but it lives in build.py rather than the Overseer.',sources:[ref('agents/overseer.py',28,95),ref('agents/overseer.py',132,169)],related:['fast-rules','error-prompts','overseer']},
+  detail:'These are examples. The complete Overseer table and orchestrator inventory are now appended to this question index. Fast/full selection is another deterministic rule, but it lives in build.py rather than the Overseer.',sources:[ref('agents/overseer.py',28,95),ref('agents/overseer.py',132,169)],related:['overseer-matrix','orchestrator-rules','fast-rules','error-prompts','overseer']},
  {id:'payload',group:'Sending TODOs',title:'What does the initial TODO payload look like? Is it JSON?',
   answer:['The browser sends a JSON operation containing the subgoal ID and selected TODO IDs. It does not put the entire Notes document into that HTTP request.','The server loads saved state and builds a Markdown prompt. Claude’s stream-json output is a third format: JSON events containing assistant text, tool activity, and result data.'],
   sources:[S(300,305),B(238,326),B(1525,1560)],jump:jump('todos',1,'payload'),related:['context','nested','claude-p']},
@@ -31,8 +31,8 @@ const qa=[
   answer:['Full builds include a snapshot of the active goal tree and authored Notes, the focused goal, own prompt, Understanding, selected rows, and available acceptance, project resources, run instructions, attachments, and reader profile.','Quick builds omit the goal tree, Notes, own prompt, and Understanding. Neither lane automatically copies your original Claude chat or Bart transcript. A resource link is not automatically the full linked document.'],
   sources:questions.context.sources,jump:jump('todos',2,'context'),related:['new-notes','fast-rules','bart-context']},
  {id:'new-notes',group:'Context & follow-up work',title:'I add more Notes during a build. Does the builder receive them?',
-  answer:['Saving the standard Notes tab updates local state. It does not send a message to, or refresh the prompt of, the running builder.','A later full build composes a fresh Notes snapshot. A later quick build omits those Notes. The legacy operation that redirects a building row with a note is a separate route.'],
-  sources:[B(238,326),U(4640,4655),B(1993,2046)],jump:jump('todos',5,'context'),related:['context','later-build','concurrency']},
+  answer:['Saving the standard Notes tab updates local state. It does not send a message to, or refresh the prompt of, the running builder.','A later full build composes a fresh Notes snapshot. A later quick build omits those Notes. Joining rows through the backend also omits a fresh Notes snapshot: it resumes the existing conversation with a row-update message.','The standard Build control waits until this subgoal is no longer building/checking/fixing, and saving new rows is not an automatic queue. The legacy operation that redirects a building row with a note is a separate route.'],
+  sources:[B(238,326),U(4640,4655),B(1993,2046),B(2325,2352)],jump:jump('todos',5,'context'),related:['same-subgoal-notes','queue-status','context','later-build','concurrency']},
  {id:'later-build',group:'Context & follow-up work',title:'Do the two later TODOs reuse the same session or start another?',
   answer:['After the earlier batch finishes, a full build starts a new Claude session with fresh context. A quick build can reuse a retained quick session for that subgoal, for up to eight uses if its transcript exists.','The initial full session is not automatically the retained quick session. In your original scenario, the first later quick batch starts a new session unless an older eligible quick session already exists.'],
   sources:[B(2057,2176)],jump:jump('todos',8,'payload'),related:['new-notes','terminals','fast-default']},
@@ -95,6 +95,7 @@ const qa=[
   answer:['The earlier escalation left a pending question with resume=build. The orchestrator intercepted your new message before ordinary Overseer routing and asked Chat whether it authorized resuming or cancelling.','If the result has an unresolved need or is neither resume nor cancel, the code discards the generated response and returns the saved question verbatim. This is why the screenshot repeats the exact work-update text as a Bart reply.'],
   detail:'The fix is to distinguish an answer to the pending decision, a question about the blocker, and an unrelated conversation. Only the first should change whether the build continues.',sources:[O(229,286),ref('agents/communication.py',97,100)],incident:'bart',related:['bart-during-build','error-prompts','overseer']}
 ];
+qa.push(...policyQuestions(),...queueQuestions());
 const groups=[...new Set(qa.map(q=>q.group))];
 qa.sort((a,b)=>groups.indexOf(a.group)-groups.indexOf(b.group));
 const qaById=Object.fromEntries(qa.map(q=>[q.id,q]));
@@ -152,11 +153,12 @@ function renderQuestionList(){const found=filteredQuestions();$('qa-count').text
 function renderQuestionArticle(){
  const q=qaById[selectedQuestion]||qa[0],i=qa.indexOf(q);
  $('qa-article').innerHTML='<p class="guide-kicker">'+esc(q.group)+'</p><h2>'+esc(q.title)+'</h2><div class="qa-answer">'+q.answer.map(p=>'<p>'+esc(p)+'</p>').join('')+'</div>'+(q.detail?'<p class="qa-detail">'+esc(q.detail)+'</p>':'')+
- (q.widget==='lane'?laneWidget():'')+
+ (q.widget==='lane'?laneWidget():policyWidget(q.widget))+
  '<div class="guide-links">'+(q.jump?'<button class="primary" data-qa-trace="'+q.id+'">Open the relevant trace</button>':'')+(q.incident?'<button class="primary" data-incident="'+q.incident+'">Replay this failure</button>':'')+'</div>'+
  guideSources(q.sources)+(q.links?'<p class="small">Official capability references, checked September 13: '+q.links.map(([t,u])=>'<a href="'+u+'" target="_blank" rel="noreferrer">'+esc(t)+'</a>').join(' · ')+'</p>':'')+
  '<h3>Connected questions</h3><div class="guide-links">'+(q.related||[]).map(id=>qButton(id)).join('')+'</div><div class="question-neighbors"><button data-qa="'+(qa[i-1]?.id||q.id)+'" '+(i===0?'disabled':'')+'>← Previous question</button><button data-qa="'+(qa[i+1]?.id||q.id)+'" '+(i===qa.length-1?'disabled':'')+'>Next question →</button></div>';
  if(q.widget==='lane')renderLaneResult();
+ if(q.widget==='policy')renderPolicyResult();
 }
 function renderQuestions(){
  $('guide-panel').innerHTML='<div class="guide-head"><div><h2>Your questions</h2><p class="guide-lead">One answer at a time. Search by your wording; related questions and traces preserve the connections.</p></div><button data-guide="overview">Back to the overview</button></div><div class="qa-layout"><aside class="qa-sidebar" aria-label="Question index"><label for="qa-search">Search this conversation</label><input class="qa-search" id="qa-search" type="search" placeholder="Notes, fast, preview, tokens…" value="'+esc(searchText)+'"><div class="qa-count" id="qa-count" role="status"></div><div class="qa-results" id="qa-results"></div></aside><article class="qa-article" id="qa-article" aria-live="polite"></article></div><div style="height:32px"></div>'+guideFooter();
