@@ -74,6 +74,17 @@ function createProjectSessionActions(store, services, storage=globalThis.localSt
       update({environmentSkips:{...s.environmentSkips,[path]:[...names]},...(skip?{envValues:{...s.envValues,[name]:''}}:{})});
       await actions.autoAdvanceProject();
     },
+    async skipAllEnvironmentValues(){
+      const s=get().newProject;
+      if(s.busy||!s.environment)return;
+      const path=s.environmentPath||s.result.path;
+      const names=new Set(s.environmentSkips?.[path]||[]);
+      for(const row of s.environment.variables){
+        if(row.editable!==false&&row.requirement==='required'&&row.status!=='found'&&!s.envValues?.[row.name])names.add(row.name);
+      }
+      update({environmentSkips:{...s.environmentSkips,[path]:[...names]}});
+      await actions.autoAdvanceProject();
+    },
     editEnvironmentValue(name,value) { update({envValues:{...get().newProject.envValues,[name]:value}}); },
     async selectEnvironmentPath(path){if(get().newProject.busy)return;update({environmentPath:path,envValues:{}});await this.inspectProjectEnvironment();},
     async inspectProjectEnvironment() {
@@ -252,6 +263,7 @@ function renderEnvironment(s, actions) {
       h('div',{class:'project-analysis-actions'},
         h('button',{class:'ghost-btn',disabled:s.busy,onclick:actions.backToProjectPlan},'Back'),
         h('button',{class:'ghost-btn',disabled:s.busy,onclick:actions.inspectProjectEnvironment},'Recheck'),
+        h('button',{class:'ghost-btn',disabled:s.busy||!report?.variables.some(row=>row.editable!==false&&row.requirement==='required'&&row.status!=='found'&&!s.envValues?.[row.name]&&!s.environmentSkips?.[s.environmentPath||s.result.path]?.includes(row.name)),onclick:actions.skipAllEnvironmentValues,title:'Skip all missing required values for this component and run'},'Skip all'),
         h('button',{class:'ghost-btn',disabled:s.busy||!Object.values(s.envValues||{}).some(Boolean),onclick:actions.saveProjectEnvironment},'Save locally'),
         h('button',{class:'ghost-btn',disabled:s.busy||!report||report.variables.some(v=>v.group==='required'&&v.blocksContinuation&&!s.envValues?.[v.name]&&!s.environmentSkips?.[s.environmentPath||s.result.path]?.includes(v.name)),onclick:actions.continueProjectEnvironment},Object.values(s.envValues||{}).some(Boolean)?'Save and continue':'Continue'))));
 }

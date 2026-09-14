@@ -387,6 +387,21 @@ skipActions.openNewProject();
 assert.equal(skipState.get().projectWorkspaceAdding,true);
 assert.match(text(renderNewProject(skipState.get(),skipActions)),/GitHub URLs/);
 console.log('Explicit component skip launches, preview reports Done, Projects reopens entry');
+// Bulk skip preserves entered/saved values and other components' choices.
+const bulkRows=[
+ {name:'MISSING',requirement:'required',status:'missing'},
+ {name:'ENTERED',requirement:'required',status:'missing'},
+ {name:'SAVED',requirement:'required',status:'found'},
+ {name:'OPTIONAL',requirement:'optional',status:'optional'},
+ {name:'OTHER',requirement:'required',status:'missing',editable:false}
+].map(row=>({...row,evidence:[]}));
+const bulkStore=createStore({...initialState(),newProject:{page:'environment',result:{path:'/bulk'},environment:{ok:true,variables:bulkRows,warnings:[]},envValues:{ENTERED:'draft'},environmentSkips:{'/other':['KEEP']}}});
+const bulkActions=createActions(bulkStore,{});
+assert.ok(!find(renderNewProject(bulkStore.get(),bulkActions),n=>n.tag==='button'&&text(n)==='Skip all').disabled);
+await bulkActions.skipAllEnvironmentValues();
+assert.deepEqual(bulkStore.get().newProject.environmentSkips,{'/other':['KEEP'],'/bulk':['MISSING']});
+assert.equal(bulkStore.get().newProject.envValues.ENTERED,'draft');
+assert.ok(find(renderNewProject(bulkStore.get(),bulkActions),n=>n.tag==='button'&&text(n)==='Skip all').disabled);
 // Continue saves filled values before advancing, and save errors keep drafts.
 const enteredState=createStore({...initialState(),newProject:{page:'environment',path:'/entered',result:{path:'/entered',analysisId:'entered'},environmentPath:'/entered',environment:{ok:true,variables:[{name:'API_URL',group:'required',blocksContinuation:true,status:'missing',requirement:'required',evidence:[]}],warnings:[]},envValues:{API_URL:'fixture-value'}}});
 const continueCalls=[];let saveFails=true;
