@@ -97,7 +97,7 @@ export function createBenchmarkActions(store,services,{add,select,restoreBatch})
 export function renderBenchmark(state,actions){
   const b=state.projectBenchmark||{},d=b.dataset,filters=b.filters||{},selected=new Set(b.selectedIds||[]),visible=visibleCases(d,filters);
   const hidden=[...selected].filter(id=>!visible.some(c=>c.id===id)).length;
-  const selectFilter=(key,label,options)=>h('label',{},label,h('select',{value:filters[key]||'',onchange:e=>actions.filterProjectBenchmark(key,e.target.value)},
+  const selectFilter=(key,label,options)=>h('label',{},label,h('select',{'aria-label':label,value:filters[key]||'',onchange:e=>actions.filterProjectBenchmark(key,e.target.value)},
     h('option',{value:''},'All'),[...new Set(options)].sort().map(value=>h('option',{value,selected:filters[key]===value},value))));
   const sameBatch=b.batch?.dataset.id===d?.id&&b.batch&&JSON.stringify([...b.batch.selection.ids].sort())===JSON.stringify([...selected].sort());
   return h('section',{class:'project-benchmark','aria-label':'Paper repository benchmark'},

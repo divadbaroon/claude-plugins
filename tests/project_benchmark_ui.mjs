@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createStore,initialState} from './store.js';
 import {createProjectWorkspace} from './project-workspace.js';
-import {visibleCases} from './project-benchmark.js';
+import {visibleCases,renderBenchmark} from './project-benchmark.js';
 const storage=new Map();globalThis.localStorage={getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)};
 const cases=[1,2,3].map(i=>({id:'case-'+i,repoUrl:'https://github.com/demo/repo'+i,artifactTypes:['web_application'],dependencies:[i===3?'node':'python'],keywords:['learning'],metadata:{}}));
 const dataset={id:'dataset',cases,name:'fixture.csv'};
@@ -40,3 +40,14 @@ const serverRestored=createProjectWorkspace(serverRestoredStore,services,session
 serverRestored.openNewProject();await serverRestored.loadProjectBenchmark();
 assert.equal(serverRestoredStore.get().projectInstances.filter(c=>c.benchmark?.batchId==='batch').length,2);
 assert.equal(launches.length,2,'restoration does not execute cases');
+
+class Element {
+  constructor(tag){this.tag=tag;this.children=[];this.attrs={};}
+  setAttribute(key,value){this.attrs[key]=value;}
+  append(child){this.children.push(child);}
+}
+globalThis.Node=Element;
+globalThis.document={createElement:tag=>new Element(tag),createTextNode:text=>({text})};
+const filters=renderBenchmark(store.get(),actions);
+const descendants=node=>[node,...(node.children||[]).flatMap(descendants)];
+assert.deepEqual(descendants(filters).filter(node=>node.tag==='select').map(node=>node.attrs['aria-label']),['Dependency','Artifact type']);
