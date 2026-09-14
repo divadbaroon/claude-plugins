@@ -95,7 +95,7 @@ class Base:
         return f"{self.kind}:{self.model}"
     def generate(self, prompt: str) -> str:
         raise NotImplementedError
-    def generate_plain(self, prompt: str) -> str:
+    def generate_plain(self, prompt: str, *, planning=False) -> str:
         """One question in, one answer out -- no tools, no agent turn.
 
         The prompt already carries everything the answer is allowed to come
@@ -148,10 +148,14 @@ API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
 
 def subscription_env(base=None):
-    """A copy of the environment that lets `claude` use the claude.ai login."""
+    """Use the claude.ai login and its endpoint, or preserve explicit key routing.
+
+    A proxy endpoint without its API credential can hang both Bart and setup.
+    Keep endpoint overrides only when the caller opts into issued-key mode.
+    """
     env = dict(os.environ if base is None else base)
     if os.environ.get("HC_USE_API_KEY") != "1":
-        for name in API_KEY_VARS:
+        for name in (*API_KEY_VARS, "ANTHROPIC_BASE_URL"):
             env.pop(name, None)
     return env
 
@@ -276,8 +280,8 @@ class ClaudeCLI(Base):
     def generate(self, prompt):
         return self._run(prompt)
 
-    def generate_plain(self, prompt):
-        return self._run(prompt, plain=True)
+    def generate_plain(self, prompt, *, planning=False):
+        return self._run(prompt, plain=True, structured=planning)
 
     def generate_reading(self, prompt, read_dirs=()):
         return self._run(prompt, read=list(read_dirs or ()))

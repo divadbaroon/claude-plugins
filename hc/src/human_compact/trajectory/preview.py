@@ -745,7 +745,10 @@ _RUNS_LOCK = threading.Lock()
 
 def running(cwd) -> Optional[Proc]:
     with _RUNS_LOCK:
-        return _RUNS.get(_resolved(cwd))
+        where=_resolved(cwd)
+        primary=_RUNS.get(where)
+        if primary and primary.alive():return primary
+        return next((p for key,p in _RUNS.items() if key.startswith(where+'::setup:') and p.alive()),primary)
 
 
 def start(root: Optional[Path], cwd, profile: Dict[str, Any],
@@ -1461,3 +1464,80 @@ def contract(goal: Dict[str, Any], rows: List[Dict[str, Any]],
         "verification": {"expected": (intent or {}).get("expected", ""),
                          "scenario": (intent or {}).get("scenario", [])},
     }
+
+
+class PlanProc(Proc):
+    """The same process owner, with separate bounded, redacted streams for plans."""
+    def spawn(self, env=None, redact=lambda text: text):
+        self.stdout = ''
+        self.stderr = ''
+        self._output_lock = threading.Lock()
+        shell = shutil.which('bash') or '/bin/sh'
+        self.process = subprocess.Popen(
+            self.profile.get('argv') or [shell, '-c', self.profile['command']], cwd=self.cwd, env=env,
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            **detached_popen_kwargs())
+        def drain(pipe, name):
+            import codecs
+            decoder = codecs.getincrementaldecoder('utf-8')('replace')
+            # Buffer before redaction so secrets split across read boundaries stay hidden.
+            raw = ''
+            while True:
+                chunk = os.read(pipe.fileno(), 4096)
+                if not chunk: break
+                raw = (raw + decoder.decode(chunk))[-262144:]
+                with self._output_lock:
+                    setattr(self, name, redact(raw)[-262144:])
+                for line in raw.splitlines()[-4:]: self._sniff(redact(line))
+            pipe.close()
+        readers = [threading.Thread(target=drain,args=(self.process.stdout,'stdout'),daemon=True),
+                   threading.Thread(target=drain,args=(self.process.stderr,'stderr'),daemon=True)]
+        for reader in readers: reader.start()
+        def finish():
+            code = self.process.wait()
+            for reader in readers: reader.join(timeout=2)
+            self.exit_code = code
+        self.thread = threading.Thread(target=finish,daemon=True)
+        self.thread.start()
+
+    def logs(self):
+        with self._output_lock:
+            return {'stdout':self.stdout, 'stderr':self.stderr}
+
+    def probe(self, force=False):
+        # Never follow a process-announced URL off the local machine.
+        from urllib.parse import urlsplit
+        class LocalRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                p=urlsplit(newurl)
+                if p.hostname not in ('localhost','127.0.0.1','::1') or p.scheme not in ('http','https'):
+                    return None
+                return super().redirect_request(req,fp,code,msg,headers,newurl)
+        self.healthy=False
+        if not self.alive() or not self.url: return
+        p=urlsplit(self.url)
+        if p.hostname=='0.0.0.0': self.url=self.url.replace('0.0.0.0','127.0.0.1',1);p=urlsplit(self.url)
+        if p.hostname not in ('localhost','127.0.0.1','::1') or p.scheme not in ('http','https') or p.username or p.password: return
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),LocalRedirect())
+        try:
+            request=urllib.request.Request(self.url,headers={'User-Agent':'Engelbart-Preview-Health/1'})
+            with opener.open(request,timeout=2) as response:
+                self.healthy=200 <= response.status < 400 and self.alive()
+        except Exception: pass
+
+
+def start_plan_process(cwd, command, env, redact, *, owner=None, argv=None):
+    """Explicit plan execution; no detection, model, substitution or autostart."""
+    where=_resolved(cwd)
+    with _RUNS_LOCK:
+        key=where if owner is None else where+'::setup:'+owner
+        held=_RUNS.get(key)
+        existing=_RUNS.get(where) if owner else None
+        other=any(p.alive() for k,p in _RUNS.items() if k.startswith(where+'::setup:') and (not owner or not k.startswith(where+'::setup:'+owner.split(':',1)[0]+':')))
+        if other or (held and held.alive()) or (existing and existing.alive()): raise ValueError('Another process is already running in this project.')
+        proc=PlanProc(where,{'command':command,'argv':argv,'id':owner or 'railpack','name':'Project setup'},None)
+        # Managed apps render in the embedded preview. CRA and other browser-aware
+        # dev servers must not open an extra browser window on startup/recovery.
+        proc.spawn({**(os.environ if env is None else env),'BROWSER':'none'},redact)
+        _RUNS[key]=proc
+        return proc

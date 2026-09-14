@@ -5868,6 +5868,23 @@ class H(BaseHTTPRequestHandler):
         if not self._begin_request():
             return
         try:
+            if self.path == "/api/project-paper-links":
+                from . import project_paper_links as PL
+                from urllib.parse import unquote
+                import subprocess
+                import sys
+                try:
+                    lengths=self.headers.get_all('Content-Length',[])
+                    size=int(lengths[0]) if len(lengths)==1 else 0
+                    if not 0<size<=PL.LIMIT or self.headers.get_all('Transfer-Encoding'):
+                        raise ValueError('Choose a nonempty file under 20 MB.')
+                    name=unquote(self.headers.get('X-HC-Name',''))
+                    result=subprocess.run([sys.executable,str(Path(PL.__file__).resolve()),name],
+                        input=self.rfile.read(size),capture_output=True,timeout=25)
+                    self._send(200,json.loads(result.stdout))
+                except Exception:
+                    self._send(400,{'ok':False,'error':'Could not read this paper. Use a PDF, DOCX, TXT, or Markdown file under 20 MB.'})
+                return
             if self.path == "/api/project-paper/upload":
                 self._take_dataset("paper")
                 return
@@ -5902,7 +5919,9 @@ class H(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
-            self._note_request(body)
+            if not (self.path == "/api/op" and isinstance(body, dict)
+                    and body.get("op") == "save_project_environment"):
+                self._note_request(body)
             if self.path == "/api/interface":
                 try:
                     if not isinstance(body, dict):
@@ -6015,6 +6034,67 @@ class H(BaseHTTPRequestHandler):
                     self._send(200, {"ok": False, "error":
                                      "this is a shared workspace: only your "
                                      "own goals can be edited here"})
+                    return
+                if body.get("op") in ("project_order_start", "project_order_state"):
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok":False,"error":"local chat scope required"}); return
+                    from . import project_order as PO
+                    try:
+                        result=PO.start(body.get("path")) if body["op"]=="project_order_start" else PO.view(body.get("id"))
+                        self._send(200,{"ok":True,"order":result})
+                    except (OSError,ValueError,TypeError) as exc:
+                        self._send(200,{"ok":False,"error":str(exc)[:1000]})
+                    return
+                if body.get("op") == "discover_project_components":
+                    if not self.server.chat_scoped:
+                        self._send(200,{"ok":False,"error":"local chat scope required"}); return
+                    from . import project_checkout as PC
+                    try: self._send(200, PC.discover(body.get("path")))
+                    except ValueError as exc: self._send(200,{"ok":False,"error":str(exc)[:1000]})
+                    except (OSError,TypeError): self._send(200,{"ok":False,"error":"Could not prepare or inspect this project."})
+                    return
+                if body.get("op") == "project_owner_control":
+                    if not self.server.chat_scoped:
+                        self._send(200,{"ok":False,"error":"local chat scope required"}); return
+                    from . import project_run as PR
+                    try:self._send(200,PR.owner_control(self.server.project_owner,body))
+                    except (ValueError,OSError) as exc:self._send(200,{"ok":False,"error":str(exc)[:1000]})
+                    return
+                if body.get("op") in ("project_run_state", "project_run_start", "project_run_reset", "project_run_approval"):
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok":False,"error":"local chat scope required"}); return
+                    from . import project_run as PR
+                    try:
+                        if body["op"] == "project_run_approval":
+                            self._send(200,{"ok":True,"run":PR.decide_approval(body.get("id"),body.get("approvalId"),body.get("approve"))}); return
+                        if body["op"] == "project_run_reset":
+                            self._send(200, PR.reset(body.get("id"))); return
+                        result = PR.start(body.get("id"), bool(body.get("retry")),owner=self.server.project_owner,environment_skips=body.get("environmentSkips")) if body["op"] == "project_run_start" else PR.view(body.get("id"))
+                        self._send(200, {"ok":True,"run":result})
+                    except ValueError as exc:
+                        self._send(200, {"ok":False,"error":str(exc)[:1000]})
+                    except (OSError, TypeError):
+                        self._send(200, {"ok":False,"error":"Cannot read or run this retained plan. Analyze the project again."})
+                    return
+                if body.get("op") in ("inspect_project_environment", "inspect_project_environment_inventory", "save_project_environment"):
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok":False,"error":"local chat scope required"})
+                        return
+                    from . import project_environment as PE
+                    try:
+                        result = (PE.save(body.get("path"), body.get("values"))
+                                  if body["op"] == "save_project_environment"
+                                  else PE.scan(body.get("path"), include_nested=body["op"] == "inspect_project_environment_inventory", repository_root=body.get("repositoryRoot")))
+                        self._send(200, result)
+                    except (OSError, ValueError, TypeError, RuntimeError):
+                        self._send(200, {"ok":False,"error":"Could not inspect or save this project's environment. Check the directory and local storage permissions."})
+                    return
+                if body.get("op") == "analyze_project":
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok": False, "error": "chat scope only"})
+                        return
+                    from . import project_analysis
+                    self._send(200, project_analysis.analyze(body.get("path"), body.get("repositoryRoot")))
                     return
                 if body.get("op") == "pick_directory":
                     # Outside the state lock on purpose: the chooser waits on
@@ -6308,6 +6388,8 @@ def _configure_server(server, trajdir, chat_scoped, follow=True,
         trajdir, chat_scoped, shared_project)
     server.state_lock = threading.RLock()
     server.expected_host = f"127.0.0.1:{server.server_address[1]}"
+    from . import project_owner
+    server.project_owner = project_owner.ticket(server.server_address[1])
     server.activity_lock = threading.Lock()
     server.last_activity = time.monotonic()
     server.active_requests = 0

@@ -15,16 +15,19 @@ from human_compact.trajectory import goal_synth, providers  # noqa: E402
 class ClaudeCLIProviderTests(unittest.TestCase):
     def test_api_keys_are_kept_only_for_an_explicit_issued_key_process(self):
         base = {"ANTHROPIC_API_KEY": "sk-personal",
-                "ANTHROPIC_AUTH_TOKEN": "sk-issued"}
+                "ANTHROPIC_AUTH_TOKEN": "sk-issued",
+                "ANTHROPIC_BASE_URL": "https://proxy.example.test"}
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HC_USE_API_KEY", None)
             ordinary = providers.subscription_env(base)
         self.assertNotIn("ANTHROPIC_API_KEY", ordinary)
         self.assertNotIn("ANTHROPIC_AUTH_TOKEN", ordinary)
+        self.assertNotIn("ANTHROPIC_BASE_URL", ordinary)
 
         with patch.dict(os.environ, {"HC_USE_API_KEY": "1"}, clear=False):
             issued = providers.subscription_env(base)
         self.assertEqual("sk-issued", issued["ANTHROPIC_AUTH_TOKEN"])
+        self.assertEqual("https://proxy.example.test", issued["ANTHROPIC_BASE_URL"])
 
     @patch("human_compact.trajectory.providers.subprocess.run")
     def test_json_calls_are_bounded_low_effort_and_tool_free(self, run):
@@ -51,6 +54,17 @@ class ClaudeCLIProviderTests(unittest.TestCase):
             providers.CLAUDE_TIMEOUT_SECONDS,
             run.call_args.kwargs["timeout"],
         )
+
+    @patch("human_compact.trajectory.providers.subprocess.run")
+    def test_planning_plain_calls_have_explicit_low_effort(self, run):
+        run.return_value=Mock(returncode=0,stdout='{"status":"needs_input"}',stderr='')
+        result=providers.ClaudeCLI("sonnet",timeout=90).generate_plain("exact prompt",planning=True)
+        command=run.call_args.args[0]
+        self.assertEqual('low',command[command.index('--effort')+1])
+        self.assertEqual('',command[command.index('--tools')+1])
+        self.assertEqual('exact prompt',run.call_args.kwargs['input'])
+        self.assertEqual(90,run.call_args.kwargs['timeout'])
+        self.assertEqual('{"status":"needs_input"}',result)
 
     @patch("human_compact.trajectory.providers.subprocess.run")
     def test_a_reader_supplied_link_allows_only_web_tools(self, run):
