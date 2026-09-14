@@ -266,6 +266,9 @@ def _start(id,retry=False,owner=None,environment_skips=None):
                 recover(id,job,redact,initial_plan=order_plan);return
             try:
                 if preflight_error:raise ValueError(preflight_error)
+                from . import project_package_manager as PM
+                for step in steps:
+                    PM.check_runtime(job['repositoryRoot'],state['cwd'],shlex.split(step['command']),base)
                 for i,step in enumerate(steps):
                     with _LOCK:
                         if job.get('cancelled'): raise ValueError('Stopped by Reset')
@@ -404,7 +407,11 @@ def recover(id,job,redact,initial_plan=None,resume=None):
             signature=json.dumps(rejected_commands,sort_keys=True)
             repeated_rejection=any(a.get('rejectedSignature')==signature for a in state['attempts'][:-1])
             job['proc']=None
-            try:plan=S.validate(job['repositoryRoot'],proposal)
+            try:
+                plan=S.validate(job['repositoryRoot'],proposal)
+                if plan['status']=='plan':
+                    from . import project_package_manager as PM
+                    PM.preserve_railpack(plan,job['plan'],state['cwd'])
             except ValueError as exc:
                 attempt['rejectedSignature']=signature
                 raise ProposalRejected(str(exc)) from exc
@@ -417,6 +424,16 @@ def recover(id,job,redact,initial_plan=None,resume=None):
                              configuration=None,runtime=None,componentCwd=None,compatibility=[],
                              reason='Checking runtime constraints and dependency metadata')
                 persist()
+            from . import project_package_manager as PM
+            try:
+                for step in plan['preparation']+plan['services']:
+                    PM.check_runtime(job['repositoryRoot'],step['cwd'],step['argv'],environment(step['cwd'],validate_required=False)[0])
+            except ValueError as exc:
+                with _LOCK:
+                    attempt.update(status='needs_input',reason=str(exc))
+                    state.update(status='needs_input',reason=redact(str(exc)),stage='package-manager')
+                    persist()
+                return
             stop_services()  # Release only processes owned by this attempt before checking ports.
             conflicts=Ports.conflicts(plan)
             if conflicts and len(plan['services'])>1:

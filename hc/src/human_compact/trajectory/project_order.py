@@ -91,7 +91,7 @@ def _excerpt(root,request,redact):
 
 
 def declared_default(root):
-    """Trace literal root npm aliases; never execute package scripts to discover intent."""
+    """Trace literal root package-manager aliases; never execute package scripts to discover intent."""
     try:
         path=root/'package.json'
         if path.is_symlink() or path.stat().st_size>100000:return None
@@ -105,7 +105,7 @@ def declared_default(root):
             if not isinstance(command,str):return None
             chain.append({'script':current,'command':command})
             tokens=shlex.split(command)
-            if len(tokens)==3 and tokens[:2]==['npm','run']:current=tokens[2];continue
+            if len(tokens)==3 and tokens[0] in ('npm','bun','pnpm','yarn') and tokens[1]=='run':current=tokens[2];continue
             result={'script':name,'chain':chain,'evidence':'package.json','targetComponent':None}
             if tokens and tokens[0]=='vite' and '--config' in tokens:
                 index=tokens.index('--config')+1
@@ -177,6 +177,8 @@ def assess(root, discovery, analyses, redact, observe=None):
            'relationships':discovery['relationships'],'declaredDependencies':discovery['dependencies'],
            'documentation':discovery['documentation'][:30],'files':docs,'railpack':analyses,
            'declaredDefault':declared_default(root)}
+    from . import project_package_manager as PM
+    brief['packageManagers']=[PM.evidence(root,c['path']) for c in discovery['components']]
     engine=PV._engine('synthesize',90,root=root)
     for turn in range(2):
         prompt=POLICY+'\nEvidence JSON:\n'+json.dumps(S.scrub_tree(brief,redact),ensure_ascii=False)

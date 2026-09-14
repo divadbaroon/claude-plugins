@@ -18,9 +18,14 @@ Return ONLY JSON. Do not return source edits, cleanup, sudo, shell expressions,
 containers, downloads of scripts, credential values, or invented commands.
 Use existing package scripts and documented Python entrypoints. All cwd values
 are relative to repositoryRoot. Commands are argv arrays, never shell strings.
-Preparation permits npm install/ci, npm run build, python3 -m venv .venv,
+Preserve Railpack's package manager and lockfile. Never substitute npm for Bun,
+pnpm, or Yarn. Reconcile packageManager declarations, lockfiles and documentation;
+conflicting evidence requires review. Missing local managers require input, not fallback.
+Preparation permits npm install/ci, bun install [--frozen-lockfile],
+pnpm install [--frozen-lockfile], yarn install [--frozen-lockfile or --immutable],
+<manager> run build (including npm run build), python3 -m venv .venv,
 and .venv/bin/python -m pip install -r requirements.txt. Services permit npm
-start, npm run <existing-script>, or local Python entrypoints. No -c or -e.
+start, <manager> run <existing-script>, or local Python entrypoints. No -c or -e.
 For service scripts directly invoking vite (not shell chains or wrappers), npm
 arguments after -- may contain --host 127.0.0.1 or --host ::1, --port <1024-65535>,
 and --strictPort. For scripts directly invoking next dev or next start, allow
@@ -29,6 +34,8 @@ Keep the existing dev/start choice when only fixing its port. Update healthUrl
 with the launch port. Check dependent API/proxy/CORS/origin configuration before
 changing ports. originalFailure remains the execution failure even after a
 proposal validation error; every repair must address it.
+For Bun, pnpm, and Yarn, put these validated options directly after the script
+name, e.g. ["bun","run","dev","--port","3201","--hostname","127.0.0.1"].
 No other forwarded arguments are supported. For a rejected
 proposal, use failure.validationError and failure.rejectedCommands to correct
 it within the remaining repair budget; never repeat rejected command inputs.
@@ -185,6 +192,9 @@ def propose(record, failure, attempts, redact, observe=None):
     brief['availableServices']=[{'kind':'static','cwd':str(p.relative_to(root)),
         'entrypoint':'index.html','argv':['hc-static'],'description':'Built-in loopback static-file server; no install or build.'}
         for p in sorted(static_dirs) if PS.eligible(p)]
+    from . import project_package_manager as PM
+    brief['packageManager']=PM.evidence(root,directory)
+    brief['railpack']=PM.railpack_commands(record.get('plan',{}))
     engine=PV._engine('synthesize',90,root=root)
     for turn in range(2):
         prompt=POLICY+'\nEvidence JSON:\n'+json.dumps(brief,ensure_ascii=False)
@@ -222,19 +232,27 @@ def command(root, step, preparation):
         allowed=True
     elif step.get('kind'):
         raise ValueError('Unsupported service kind')
-    elif argv[0]=='npm':
+    elif argv[0] in ('npm','bun','pnpm','yarn'):
+        from . import project_package_manager as PM
+        if len(argv)<2:raise ValueError('Package-manager command is incomplete')
+        PM.check_choice(root,cwd,argv[0])
         p=within(root,str((cwd/'package.json').relative_to(root)))
         if p.stat().st_size>100000:raise ValueError('Package manifest is too large')
         package=json.loads(p.read_text())
-        if preparation and argv[1:] in (['install'],['ci']):allowed=True
+        installs={'npm':(['install'],['ci']), 'bun':(['install'],['install','--frozen-lockfile']),
+                  'pnpm':(['install'],['install','--frozen-lockfile']),
+                  'yarn':(['install'],['install','--frozen-lockfile'],['install','--immutable'])}
+        if preparation and argv[1:] in installs[argv[0]]:allowed=True
         forwarded=[]
-        if not preparation and len(argv)>3 and argv[1]=='run' and argv[3]=='--':
+        if not preparation and len(argv)>3 and argv[1]=='run':
             script_name=argv[2];tokens=shlex.split(package.get('scripts',{}).get(script_name,''))
             next_service=len(tokens)>=2 and tokens[:2] in (['next','dev'],['next','start'])
             if not tokens or (tokens[0]!='vite' and not next_service) or any(re.search(r'[;&|`<>$\n\r]',t) for t in tokens):
                 raise ValueError('Forwarded launch options require a service script directly invoking vite or next dev/start')
             host_flag='--hostname' if next_service else '--host'
-            forwarded=argv[4:];seen=set();i=0
+            if argv[0]=='npm' and argv[3]!='--':raise ValueError('npm launch options require --')
+            if argv[0]!='npm' and argv[3]=='--':raise ValueError('Pass Bun, pnpm, and Yarn launch options directly after the script name')
+            forwarded=argv[4:] if argv[0]=='npm' else argv[3:];seen=set();i=0
             if not forwarded:raise ValueError('Empty forwarded launch options')
             while i<len(forwarded):
                 flag=forwarded[i]

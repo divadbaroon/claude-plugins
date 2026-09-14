@@ -21,7 +21,7 @@ from packaging.utils import parse_wheel_filename
 
 VERSIONS = ('3.10','3.11','3.12','3.13','3.14')
 MANIFESTS = ('requirements.txt','pyproject.toml','.python-version','uv.lock','poetry.lock',
-             'Pipfile','Pipfile.lock','package.json','package-lock.json','yarn.lock','pnpm-lock.yaml')
+             'Pipfile','Pipfile.lock','package.json','package-lock.json','yarn.lock','pnpm-lock.yaml','bun.lock','bun.lockb')
 MAX_FILE = 4000000
 
 
