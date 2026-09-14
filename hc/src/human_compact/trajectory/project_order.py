@@ -12,7 +12,8 @@ from . import project_run as R, project_environment as PE, preview as PV, provid
 
 _LOCK=threading.RLock()
 _ACTIVE={}
-MAX_COMPONENTS=6
+MAX_COMPONENTS=64
+MAX_RAILPACK_COMPONENTS=6
 POLICY='''You are the Run Order Agent, not the setup repair agent. No execution has
 been attempted. Determine which discovered components belong to the intended
 application and how to prepare and launch them together. Directories alone do
@@ -28,6 +29,15 @@ An initial needs_input result triggers a host-controlled evidence follow-up.
 On that follow-up, resolve questions answerable from the repository before
 asking the user. Genuine unresolved choices and missing external values may
 still require input. Do not treat a second call as permission to guess.
+Container services are discovery candidates, not a repository-wide blocker.
+Select the intended app and all required runtime dependencies before checking
+container support. Exclude unrelated tooling/test fixtures only with repository
+evidence; directory names alone are not enough. Read their Compose files and
+nearby READMEs if relevance is unclear. This host cannot execute containers.
+If a selected app requires a discovered container service, include its inventory
+ID in selectedComponents and explain why; return status:"plan" with full selection,
+exclusions, rationale and evidence, preparation:[], services:[], entryService:"".
+The host will report the selected container requirement without executing it.
 Read the supplied manifests, scripts, documentation and Railpack context.
 Railpack describes container builds; distinguish these from documented local
 commands. A service's working directory is the directory its command must run
@@ -65,7 +75,7 @@ def view(id):
 
 def _redactor(root, components):
     values=[]
-    for directory in [root]+[Path(c['path']) for c in components]:
+    for directory in [root]+[Path(c['path']) for c in components if c.get('path')]:
         values.extend(PE.saved(directory).values())
         for name in ('.env','.env.local','.env.production','.env.production.local'):
             p=directory/name
@@ -83,7 +93,7 @@ def _excerpt(root,request,redact):
     offset=0 if isinstance(request,str) else request.get('offset',0)
     if not isinstance(offset,int) or not 0<=offset<=48000:raise ValueError('Invalid excerpt offset')
     p=S.within(root,name)
-    if not p.is_file() or any(part in PE.SKIP for part in Path(name).parts) or (p.name not in S.FILES and p.suffix not in ('.py','.js','.ts')):raise ValueError('Only setup manifests, README and bounded source excerpts may be requested')
+    if not p.is_file() or any(part in PE.SKIP for part in Path(name).parts) or (p.name not in S.FILES and p.suffix not in ('.py','.js','.ts') and p.name not in PC.COMPOSE):raise ValueError('Only setup manifests, README and bounded source excerpts may be requested')
     with p.open('rb') as stream:
         before=stream.read(offset);data=stream.read(3000)
     return {'path':name,'startLine':before.count(b'\n')+1,'offset':offset,
@@ -117,10 +127,25 @@ def declared_default(root):
     except (OSError,ValueError,TypeError,AttributeError):return None
 
 
+def container_evidence(root,candidates):
+    names=[]
+    for c in candidates:
+        if not c.get('requiresContainer'):continue
+        for e in c.get('evidence',[]):
+            file=e['file'];names.append(file)
+            directory=(root/file).parent
+            while directory.is_relative_to(root) and directory!=root:
+                readme=directory/'README.md'
+                if readme.is_file():
+                    names.append(readme.relative_to(root).as_posix());break
+                directory=directory.parent
+    return list(dict.fromkeys(names))
+
+
 def followup_evidence(root, discovery, brief, redact):
-    seen={f['path'] for f in brief['files']}
+    seen={f['path'] for f in brief['files']+brief.get('containerEvidence',[])}
     default=brief.get('declaredDefault') or {}
-    names=[default.get('config')]+sorted(discovery['documentation'],key=lambda n:(len(Path(n).parts),n))
+    names=[default.get('config')]+container_evidence(root,discovery['components'])+sorted(discovery['documentation'],key=lambda n:(len(Path(n).parts),n))
     names += [e['file'] for c in discovery['components'] for e in c['evidence'] if Path(e['file']).name in S.FILES]
     excerpts=[]
     for name in dict.fromkeys(n for n in names if n):
@@ -173,15 +198,25 @@ def assess(root, discovery, analyses, redact, observe=None):
         if len(docs)>=4:break
         try:docs.append(_excerpt(root,name,redact))
         except (OSError,ValueError):pass
-    brief={'repositoryRoot':str(root),'components':discovery['components'],
+    brief={'repositoryRoot':str(root),'components':[{k:v for k,v in c.items() if k!='path'} for c in discovery['components']],
            'relationships':discovery['relationships'],'declaredDependencies':discovery['dependencies'],
            'documentation':discovery['documentation'][:30],'files':docs,'railpack':analyses,
            'declaredDefault':declared_default(root)}
     from . import project_package_manager as PM
-    brief['packageManagers']=[PM.evidence(root,c['path']) for c in discovery['components']]
+    brief['packageManagers']=[PM.evidence(root,c['path']) for c in discovery['components'] if c.get('path')]
+    brief['containerEvidence']=[_excerpt(root,n,redact) for n in container_evidence(root,discovery['components'])[:3]]
     engine=PV._engine('synthesize',90,root=root)
     for turn in range(2):
         prompt=POLICY+'\nEvidence JSON:\n'+json.dumps(S.scrub_tree(brief,redact),ensure_ascii=False)
+        # Preserve the whole inventory; shorten excerpts rather than rejecting a
+        # large repository before the agent can classify its components.
+        excerpts=brief['files']+brief.get('containerEvidence',[])+brief.get('requestedFiles',[])
+        while len(prompt)>36000:
+            longest=max(excerpts,key=lambda f:len(f.get('text','')),default={})
+            if len(longest.get('text',''))<=700:break
+            longest['text']=longest['text'][:max(700,len(longest['text'])-1000)]
+            longest['truncated']=True
+            prompt=POLICY+'\nEvidence JSON:\n'+json.dumps(S.scrub_tree(brief,redact),ensure_ascii=False)
         if len(prompt)>36000:raise ValueError('Run-order context budget exceeded. Narrow the selected project directory.')
         raw=Trace.call(engine,prompt,redact,observe)
         if len(raw)>24000:raise ValueError('Run-order response budget exceeded')
@@ -229,13 +264,13 @@ def start(directory):
         try:
             discovery=PC.discover(str(root))
             candidates=discovery['components']
-            if any(c.get('requiresContainer') for c in candidates):
-                raise ValueError('Declared container services need a container-capable runtime. Native startup will not be inferred over them.')
-            if not 2<=len(candidates)<=MAX_COMPONENTS:raise ValueError('Run-order assessment supports two to six local components. Select a narrower project directory.')
+            if not 2<=len(candidates)<=MAX_COMPONENTS:raise ValueError('Discovery exceeds the bounded inventory of 64 components. Select a narrower project directory.')
             redact=_redactor(root,candidates)
             analysis_context=[];outputs=[]
             record['order']['components']=outputs
-            for c in candidates:
+            native=[c for c in candidates if c.get('path') and not c.get('requiresContainer')]
+            native.sort(key=lambda c:(c['id']!='.', not bool(c.get('scripts')),len(Path(c['id']).parts),c['id']))
+            for c in native[:MAX_RAILPACK_COMPONENTS]:
                 component={'component':c['id'],'status':'running','startedAt':time.time()}
                 outputs.append(component)
                 record['order']['progress']='Analyzing '+c['id'];R.write(id,record)
@@ -281,6 +316,21 @@ def validate_citation(root, evidence):
 
 
 def apply_assessment(record, root, candidates, proposal):
+    selected=proposal.get('selectedComponents',[])
+    containers=[c for c in candidates if c.get('requiresContainer') and c['id'] in selected] if isinstance(selected,list) else []
+    if proposal.get('status')=='plan' and containers:
+        ids={c['id'] for c in candidates}
+        excluded=proposal.get('excludedComponents')
+        if not all(isinstance(x,str) for x in selected) or len(set(selected))!=len(selected) or not set(selected)<=ids:
+            raise ValueError('Run-order plan must identify supported component IDs')
+        if not isinstance(excluded,list) or len(excluded)!=len(ids-set(selected)) or {x.get('id') for x in excluded if isinstance(x,dict)}!=ids-set(selected) or any(not isinstance(x,dict) or not x.get('reason') for x in excluded):
+            raise ValueError('Explain which components were excluded and why')
+        if not proposal.get('orderingRationale') or not proposal.get('evidence'):raise ValueError('Selected container requirements need rationale and evidence')
+        for citation in proposal['evidence']:validate_citation(root,citation)
+        record.pop('orderPlan',None)
+        record['order'].update(status='needs_input',reason='The selected application requires container services: '+', '.join(c['id'] for c in containers)+'. Container execution is not supported by this runner.',
+            selectedComponents=selected,excludedComponents=excluded,orderingRationale=proposal['orderingRationale'],evidence=proposal['evidence'])
+        return
     validated=S.validate(root,proposal)
     if validated['status']!='plan':
         record['order'].update(status=validated['status'],reason=validated['reason'])

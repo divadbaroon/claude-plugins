@@ -152,12 +152,43 @@ class OrderTests(unittest.TestCase):
             self.assertNotIn('private-fixture-token',json.dumps(run))
             R.reset(id)
             self.assertFalse(any(p.alive() for p in R._JOBS[id]['setupProcs'].values()))
-    def test_declared_containers_do_not_trigger_native_order_agent(self):
-        (self.root/'compose.yml').write_text('services:\n  web:\n    build: .\n')
-        with mock.patch.object(O,'assess') as assess,mock.patch.object(O.PA,'analyze') as analyze:
+    def test_container_fixture_reaches_agent_and_can_be_excluded(self):
+        fixture=self.root/'tooling/test';fixture.mkdir(parents=True)
+        (fixture/'compose.yml').write_text('services:\n  fixture:\n    image: fixture\n')
+        (fixture/'README.md').write_text('Only a compatibility test fixture; not part of the application.')
+        proposal=self.plan();proposal['excludedComponents']=[{'id':'tooling/test/compose.yml#fixture','reason':'README identifies an unrelated compatibility test'}]
+        engine=mock.Mock();engine.generate_plain.return_value=json.dumps(proposal)
+        with mock.patch.object(O.PA,'analyze',side_effect=self.railpack) as analyze,mock.patch.object(PV,'_engine',return_value=engine),mock.patch.object(PV,'start_plan_process') as launch:
             result=self.wait(O.start(str(self.root))['id'])
-            self.assertEqual('error',result['status']);self.assertIn('container',result['error'])
-            assess.assert_not_called();analyze.assert_not_called()
+            self.assertEqual('done',result['status'],result)
+            self.assertEqual(1,engine.generate_plain.call_count)
+            self.assertEqual(2,analyze.call_count);launch.assert_not_called()
+            prompt=engine.generate_plain.call_args.args[0]
+            self.assertIn('tooling/test/compose.yml#fixture',prompt)
+            self.assertIn('Only a compatibility test fixture',prompt)
+
+    def test_selected_container_blocks_only_after_agent_selection(self):
+        (self.root/'compose.yml').write_text('services:\n  db:\n    image: postgres\n')
+        proposal=self.plan();proposal['selectedComponents'].append('compose.yml#db')
+        proposal.update(preparation=[],services=[],entryService='')
+        proposal['orderingRationale']='The application requires the Compose database.'
+        engine=mock.Mock();engine.generate_plain.return_value=json.dumps(proposal)
+        with mock.patch.object(O.PA,'analyze',side_effect=self.railpack),mock.patch.object(PV,'_engine',return_value=engine),mock.patch.object(PV,'start_plan_process') as launch:
+            result=self.wait(O.start(str(self.root))['id'])
+            self.assertEqual('needs_input',result['status'],result)
+            self.assertIn('compose.yml#db',result['reason'])
+            self.assertEqual(1,engine.generate_plain.call_count);launch.assert_not_called()
+            self.assertNotIn('orderPlan',R.read(result['id']))
+
+    def test_large_inventory_reaches_assessment_with_bounded_railpack(self):
+        for i in range(12):
+            folder=self.root/('library'+str(i));folder.mkdir()
+            (folder/'package.json').write_text('{}')
+        with mock.patch.object(O.PA,'analyze',side_effect=self.railpack) as analyze,mock.patch.object(O,'assess',return_value={'status':'needs_input','reason':'Select CLI or web interface'}) as assess:
+            result=self.wait(O.start(str(self.root))['id'])
+            self.assertEqual('needs_input',result['status'])
+            self.assertEqual(14,len(assess.call_args.args[1]['components']))
+            self.assertEqual(O.MAX_RAILPACK_COMPONENTS,analyze.call_count)
 
     def test_live_prompt_and_timeout_are_persisted(self):
         entered=threading.Event();release=threading.Event()
