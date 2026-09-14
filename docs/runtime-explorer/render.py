@@ -15,8 +15,8 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     evidence = json.loads((HERE / "evidence.json").read_text())
     template = (HERE / "explorer.html").read_text()
-    template = template.replace("__GUIDE_CSS__", (HERE / "guide.css").read_text())
-    template = template.replace("__GUIDE_SCRIPT__", (HERE / "guide.js").read_text() + "\n" + (HERE / "policy-guide.js").read_text())
+    template = template.replace("__GUIDE_CSS__", "\n".join((HERE / name).read_text() for name in ("guide.css", "thoughts.css")))
+    template = template.replace("__GUIDE_SCRIPT__", "\n".join((HERE / name).read_text() for name in ("guide.js", "policy-guide.js", "thoughts.js")))
     aliases = {"B": "build.py", "O": "agents/orchestrator.py", "U": "ui.py",
                "A": "web/goal/actions.js", "S": "web/goal/services.js", "C": "agents/context.py"}
     spans = [("trajectory/" + aliases[a], int(s), int(e))

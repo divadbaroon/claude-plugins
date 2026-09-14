@@ -79,5 +79,27 @@
     "deep_link_reload": "same-subgoal-notes restored",
     "browser_model_calls": 0,
     "browser_builds": 0
+  },
+  "highlight_questions": {
+    "date": "2026-09-13",
+    "checks": {
+      "authored_passage_selection_and_composer": true,
+      "same_thread_queue_acknowledged": true,
+      "stored_quote_and_parent": true,
+      "linked_highlight_restored": true,
+      "highlight_added_answer_and_nested_followup": true,
+      "root_question_has_no_parent": true,
+      "reload_preserves_nested_questions": true,
+      "failure_retains_question_and_retry": true,
+      "offline_submit_retains_draft": true,
+      "reconnect_allows_same_draft_submission": true,
+      "deferred_answer_renders_after_selection_clears": true,
+      "keyboard_selection_shortcut_and_escape": true,
+      "html_and_unsafe_links_display_as_text": true,
+      "phone_390_no_horizontal_overflow": true,
+      "phone_composer_inside_viewport": true
+    },
+    "boundary": "One live question was saved through the browser and acknowledged by the desktop Codex queue for this same conversation. Its answer waits until this implementation turn ends. Answer display, nesting, failure, and deferred rendering were exercised with labelled sample answers in an isolated SQLite store; those are not live model responses. Existing Engelbart build/runtime simulations remain unchanged.",
+    "backend_boundary_tests": 11
   }
 }

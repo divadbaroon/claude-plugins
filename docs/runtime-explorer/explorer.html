@@ -22,7 +22,7 @@ __GUIDE_CSS__
 <div class="flow" id="flow" aria-label="Architecture; select a component to inspect its boundary"></div>
 <div class="columns"><aside class="scene" id="scene" aria-label="Scenario state"></aside><section class="requests"><h2 class="section-title">Trace · select a step</h2><div class="request-list" id="requests"></div></section><section class="inspector" aria-label="Inspector"><div class="inspector-head"><h2 id="inspect-title"></h2><span class="tag" id="inspect-kind"></span></div><div class="tabs" role="tablist" aria-label="Inspector view"><button role="tab" id="view-explain" aria-controls="detail" aria-selected="true" data-view="explain">Behavior</button><button role="tab" id="view-payload" aria-controls="detail" aria-selected="false" data-view="payload">Payload</button><button role="tab" id="view-context" aria-controls="detail" aria-selected="false" data-view="context">Context</button><button role="tab" id="view-source" aria-controls="detail" aria-selected="false" data-view="source">Source</button></div><div class="content" id="detail" role="tabpanel" aria-labelledby="view-explain" aria-live="polite"></div></section></div>
 <div class="questions" id="questions"><span>Inspect a question</span></div>
-<footer><p>Behavior traced from the installed Python package and browser assets. Example names, messages, row IDs, and process labels are synthetic. Prompt assembly and row selection were executed in an isolated fixture; model responses, timing, and browser verification outcomes were not executed. Source excerpts retain their installed line numbers.</p><p><a href="validation.json" target="_blank">Probe results</a> · <a href="README.md" target="_blank">Reproduce</a><br>No live account, project, or model connection.</p></footer>
+<footer><p>Behavior traced from the installed Python package and browser assets. Example names, messages, row IDs, and process labels are synthetic. Prompt assembly and row selection were executed in an isolated fixture; model responses, timing, and browser verification outcomes were not executed. Source excerpts retain their installed line numbers.</p><p><a href="validation.json" target="_blank">Probe results</a> · <a href="README.md" target="_blank">Reproduce</a><br>Walkthrough controls simulate behavior. Ask Codex sends your question to the connected conversation.</p></footer>
 </main>
 <script id="evidence" type="application/json">__EVIDENCE__</script>
 <script>
@@ -149,6 +149,7 @@ document.addEventListener('change',e=>{if(e.target.id==='bart-route'){bartRoute=
 // Native buttons remain keyboard reachable; arrow keys move within tab groups.
 document.querySelectorAll('[role=tablist]').forEach(group=>group.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;const buttons=[...group.querySelectorAll('[role=tab]')],n=buttons.indexOf(document.activeElement);if(n<0)return;event.preventDefault();const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(n+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;buttons[next].focus();buttons[next].click()}));
 readLocation();
+initThoughts();
 })();
 </script>
 </body>

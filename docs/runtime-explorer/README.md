@@ -24,8 +24,10 @@ python3 -m http.server 8768 --bind 127.0.0.1 --directory "$HOME/Desktop/Codex Re
 ```
 
 Open `http://127.0.0.1:8768/`. The exported `index.html` also opens directly;
-all interaction, prompts and source excerpts are embedded. No dependencies,
-API requests, model calls, account actions, or builds are made by the page.
+walkthrough controls, prompts, and source excerpts are embedded and simulate
+behavior without dispatching builds. To ask questions in Codex, replace the
+static server with the question service below. The static export still reads
+normally, but cannot submit or load added questions without that service.
 
 `explorer.html` is a template; `render.py` substitutes the probe's JSON.
 Raw `evidence.json` is ignored because it includes full source files; the
@@ -172,3 +174,59 @@ disclosures, all five queue scenarios, nine routing boundary combinations,
 all eight hypothetical model-output choices, captured message disclosure,
 question deep links, and phone layout. Earlier 30-question validation is
 retained as the baseline; it was not rerun in full for this additive update.
+
+## Ask from a highlight
+
+Select a passage and choose **Ask Codex** (or use Alt+Shift+A after selecting).
+Write the question, then **Save and ask Codex**. It appears beneath its parent
+in the question index, with the selected quote retained. You can highlight an
+added answer to ask a further subquestion. **Add question** works without a
+selection; **Export added Q&A** downloads the saved questions and answers.
+
+Run this service instead of `http.server` on the same port:
+
+```sh
+python3 docs/runtime-explorer/serve.py \
+  --directory "$HOME/Desktop/Codex Readings/engelbart-runtime-explorer" \
+  --thread YOUR_EXISTING_CODEX_THREAD_UUID \
+  --transcript /absolute/path/to/rollout-for-that-thread.jsonl
+```
+
+Keep the Codex desktop app open. `--thread` defaults to `CODEX_THREAD_ID` when
+launched from Codex. The transcript must be that thread's existing local
+JSONL file. On this Mac the service prefers the app's bundled CLI, which
+supports `codex queue --thread … --message …`; `--codex` permits an explicit
+compatible binary. This uses the existing conversation and its configured
+model/tools. It does not launch a substitute LLM or builder session.
+
+Questions wait behind the current Codex turn. The service sends one page
+question at a time, then waits for its completed answer before sending the
+next. The UI shows delivery status; it does not imply an immediate response.
+Queued questions are normal conversation inputs, so intervening chat messages
+can affect what Codex works on. Each question requests a unique answer marker.
+Only correlated completed answers from the configured transcript are saved;
+commentary and unrelated final answers are excluded. The marker is removed
+from the displayed answer. This depends on the installed CLI and rollout
+event format, not a stable public integration API.
+
+Added Q&A live in `<output>/.thoughts/questions.sqlite3` (override with
+`--data-dir`). Regenerating `index.html` does not erase them. The store binds
+to one thread/transcript, survives service restarts, and deduplicates request
+IDs. Back up that directory or use Export. The portable HTML alone does not
+contain your added Q&A. No database, transcript, or credentials are served as
+static files or included in the repository.
+
+Delivery failures retain the question and expose retry. A timeout or restart
+during delivery is marked uncertain and is never automatically resent. Check
+the Codex conversation before retrying, since it may already be queued.
+The server binds only to loopback and checks Host, Origin, JSON content type,
+and a random session token for mutations. Prompt text is passed as one argv
+value, never interpolated into shell code. Model prose is escaped before its
+small Markdown subset is rendered; executable links are rejected.
+
+Backend boundary checks:
+
+```sh
+python3 -m unittest discover -s docs/runtime-explorer -p test_thoughts.py -v
+python3 docs/runtime-explorer/validate.py
+```

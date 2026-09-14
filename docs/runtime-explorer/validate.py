@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 def main():
     evidence = json.loads((HERE / "evidence.json").read_text())
     guide = (HERE / "guide.js").read_text()
-    template = (HERE / "explorer.html").read_text().replace("__GUIDE_SCRIPT__", guide + "\n" + (HERE / "policy-guide.js").read_text())
+    template = (HERE / "explorer.html").read_text().replace("__GUIDE_SCRIPT__", "\n".join((HERE / name).read_text() for name in ("guide.js", "policy-guide.js", "thoughts.js")))
     script = "\n".join(re.findall(r"<script>(.*?)</script>", template, re.S))
     selection = guide[guide.index("const word="):guide.index("const lanePresets=")]
     parity = "const E=" + json.dumps({k: evidence[k] for k in ("lane_patterns", "lane_cases")}) + ";\n"
