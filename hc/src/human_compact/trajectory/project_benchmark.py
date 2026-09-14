@@ -22,7 +22,8 @@ MAX_FILES = 24
 MAX_BATCH_BYTES = 8 * 1024 * 1024
 _LOCK = threading.RLock()
 _SECRETS = set()
-# Preserve protocol keys, while treating arbitrary metadata/trace keys as content.
+# Known run/order, discovery/assessment, environment, runtime and model-trace
+# protocol keys are structure; arbitrary metadata/trace keys remain redactable content.
 _SCHEMA_KEYS = set('''id operation stage status request response run order ok error reason
 command cwd root path source sourceUrl repoUrl healthy analysisId variables name kind group
 requirement blocksContinuation evidence file line publicValues values envValues secretValues
@@ -31,6 +32,22 @@ prompt promptChars responseTruncated provider model effort tools phase timeoutSe
 requestedFiles followupReason outcome components requiresContainer framework environmentPaths result
 firstFailure actualCommit reviewedCommit matchesReviewedCommit trackedFilesDirty note variableNames
 execution requestedRunId observedRunId joinedExistingRun metadata at clientOutcome
+stages calls summary failedStage agentTraceExcerpt
+acceptedPlan actualUrl actualVersion approval argv blocked boundPort build canDownloadPython
+cancel cancelled candidates chain changes commands compatibility component componentCwd condition
+config configuration declaredDefault declaredDependencies dependencies dependency description
+detectedProviders displayVariables documentation done downloadRequiresApproval downloadVersions
+editable embeddable endLine entryService entrypoint env environment environmentSkips everHealthy
+excludedComponents executable failure failures files hasDefault healthUrl index info install
+inventoryOnly isEntry issues levels limit limitations mode nativePlan number offset orderPlan
+orderingRationale originalFailure owner pid plan port portChanges portConflicts ports preparation
+previousAttempts progress proposal providers public purpose python pythonRuntimes railpack rawInfo
+rawPlan reasons recommendedVersion ref rejectedCommands relationships repo repositoryExamples
+repositoryInventory repositoryRoot requestedHealthUrl requestedUrl requestedVersion reused role
+runtime runtimeInventory scope script selectedComponents service services start startCommand
+startLine state success suggestedPort targetComponent targetPath text truncated types unknown url
+validationError validationErrors version warnings wheelGapCount wheelGaps wheelMatches workerError
+steps deploy packages caches _configuration _runtime
 '''.split()) | set(HEADERS)
 OPERATIONS = {'discover_project_components':'checkout_discovery', 'analyze_project':'assessment',
     'project_order_start':'run_order', 'project_order_state':'run_order',

@@ -152,6 +152,23 @@ class BenchmarkTests(unittest.TestCase):
         self.assertNotIn('Specific assessment boundary failed',json.dumps(report['cases'][0]['events']))
         self.assertEqual(report['summary']['healthyStartupRate'],0.2)
 
+    def test_controller_and_trace_schema_keys_survive_matching_public_values(self):
+        batch,ids=self.cohort();ctx={'batchId':batch['id'],'caseId':ids[0]}
+        token=B.begin(ctx,'save_project_environment',{'values':{'NAME':'stage','TRACE_LABEL':'calls','DESCRIPTION':'summary','SECRET':'freeform-private-key'}})
+        B.finish(token,{'ok':True})
+        token=B.begin(ctx,'project_run_state',{})
+        B.finish(token,{'ok':True,'run':{'status':'running','healthy':True,
+            'stages':[{'stage':'start','status':'done','stdout':'stage calls summary'}],
+            'attempts':[{'summary':'Preparation completed','agentTrace':{'calls':[{'status':'done','summary':'Plan accepted','response':'stage calls summary','custom':{'freeform-private-key':'content'}}]}}]}})
+        report=B.export_batch(batch['id'],refresh=False)
+        run=report['cases'][0]['events'][-1]['response']['run']
+        self.assertEqual(run['stages'][0]['stage'],'start')
+        self.assertEqual(run['attempts'][0]['summary'],'Preparation completed')
+        call=run['attempts'][0]['agentTrace']['calls'][0]
+        self.assertEqual(call['summary'],'Plan accepted')
+        self.assertNotIn('freeform-private-key',json.dumps(run))
+        self.assertEqual(call['response'],'[REDACTED] [REDACTED] [REDACTED]')
+
 class BenchmarkBoundaryTests(unittest.TestCase):
     def test_http_recording_local_scope_and_secret_redaction(self):
         from test_goal_page import server_for,post_json
