@@ -156,6 +156,24 @@ class SetupTests(unittest.TestCase):
         self.assertIn('flask==3.0',engine.generate_plain.call_args.args[0])
         engine.generate_searching.assert_not_called()
         with self.assertRaises(ValueError):S.excerpt(self.root,'.env.local',redact)
+    def test_bun_install_approval_resumes_same_attempt(self):
+        from human_compact.trajectory import project_package_manager as PM
+        plan=self.plan();id=self.retained()
+        request={'manager':'bun','version':'1.3.14','directory':'/managed/bun'}
+        with mock.patch.object(S,'propose',return_value=plan),mock.patch.object(PM,'check_runtime',side_effect=[PM.MissingBun(),None,None]),mock.patch.object(PM,'bun_request',return_value=request),mock.patch.object(PM,'install_bun') as install:
+            R.start(id)
+            deadline=time.monotonic()+5
+            while R.view(id)['status']!='awaiting_approval' and time.monotonic()<deadline:time.sleep(.02)
+            state=R.view(id);self.assertEqual('awaiting_approval',state['status'])
+            install.assert_not_called()
+            approval=state['approval'];self.assertEqual('bun',approval['kind'])
+            R.decide_approval(id,approval['id'],True)
+            state=self.wait(id)
+            self.assertEqual('running',state['status'],state)
+            install.assert_called_once()
+            self.assertEqual(request,install.call_args.args[0])
+            self.assertEqual(1,len(state['attempts']))
+
     def test_execution_failure_survives_rejected_repair(self):
         failed=self.plan(fail=True)
         rejected=self.plan(fail=True);rejected['services'][0]['argv']=['npm','install','--force']

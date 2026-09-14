@@ -91,6 +91,8 @@ def environment(cwd, inherited_values=None, validate_required=True, skipped=None
     if any('$' in v for v in values.values()):raise ValueError('Environment interpolation needs review before native execution.')
     # Preserve OS tooling, not hc's credentials or unrelated API secrets.
     base={k:v for k,v in os.environ.items() if k in ('PATH','HOME','USER','LOGNAME','TMPDIR','TEMP','TMP','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','LANG','LC_ALL')}
+    from . import project_package_manager as PM
+    base=PM.launch_env(root,root,base)
     base.update(values)
     secrets=sorted({v for v in values.values() if v},key=len,reverse=True)
     def redact(text):
@@ -425,9 +427,23 @@ def recover(id,job,redact,initial_plan=None,resume=None):
                              reason='Checking runtime constraints and dependency metadata')
                 persist()
             from . import project_package_manager as PM
+            if approved and state.get('approval',{}).get('kind')=='bun':
+                state.update(stage='package-manager',reason='Installing Bun into Engelbart local storage');persist()
+                PM.install_bun(state['approval']['runtime'],lambda:job.get('cancelled',False))
+                approved=False  # Any subsequent Python download needs its own approval.
             try:
                 for step in plan['preparation']+plan['services']:
                     PM.check_runtime(job['repositoryRoot'],step['cwd'],step['argv'],environment(step['cwd'],validate_required=False)[0])
+            except PM.MissingBun as exc:
+                request=PM.bun_request(exc.version)
+                with _LOCK:
+                    state.update(status='awaiting_approval',stage='package-manager',reason=str(exc),
+                        approval={'id':uuid.uuid4().hex,'status':'pending','kind':'bun','runtime':request,
+                                  'summary':'Install Bun '+request['version']+' and continue',
+                                  'changes':['Install Bun '+request['version']+' in '+request['directory']],
+                                  'proposal':proposal})
+                    persist()
+                return
             except ValueError as exc:
                 with _LOCK:
                     attempt.update(status='needs_input',reason=str(exc))
@@ -520,6 +536,7 @@ def recover(id,job,redact,initial_plan=None,resume=None):
                         step['argv']=[interpreter,'-m','venv',str(paths[r['cwd']])]
                 else:
                     env,values,local_redact=environment(environment_cwd,selected_values,skipped=state.get('environmentSkips',{}).get(str(Path(environment_cwd).resolve()),[]))
+                    env=PM.launch_env(job['repositoryRoot'],step['cwd'],env)
                     if step.get('kind')=='static':
                         from . import project_static as PS
                         from urllib.parse import urlsplit

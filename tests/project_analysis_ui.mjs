@@ -174,6 +174,8 @@ const approvalState={...store.get(),newProject:{page:'run',result:{analysisId:'s
 let decision;
 const approvalModal=renderNewProject(approvalState,{...actions,decideProjectRepair:value=>decision=value});
 find(approvalModal,n=>n.tag==='button'&&text(n)==='Approve and retry').onclick();assert.equal(decision,true);
+approvalState.newProject.run.approval.kind='bun';
+assert.match(text(renderNewProject(approvalState,actions)),/Install Bun and continue/);
 find(approvalModal,n=>n.tag==='button'&&text(n)==='Decline').onclick();assert.equal(decision,false);
 assert.match(text(approvalModal),/Exact repair plan/);
 // GitHub discovery must hand the local repository root to analysis, even without components.

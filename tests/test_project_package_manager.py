@@ -51,3 +51,14 @@ class PackageManagerTests(unittest.TestCase):
             PM.preserve_railpack(plan,railpack,self.root)
         plan['preparation'][0]['argv']=['bun','install','--frozen-lockfile']
         PM.preserve_railpack(plan,railpack,self.root)
+
+    def test_managed_bun_path_and_version_validation(self):
+        self.manifest('bun@1.3.14')
+        with patch.dict(os.environ,{'HUMAN_COMPACT_HOME':str(self.root/'hc')}):
+            directory=PM.bun_bin('1.3.14');directory.mkdir(parents=True)
+            (directory/('bun.exe' if os.name=='nt' else 'bun')).write_text('fixture')
+            env=PM.launch_env(self.root,self.root,{'PATH':'original'})
+            self.assertEqual(str(directory)+os.pathsep+'original',env['PATH'])
+            with self.assertRaises(ValueError):PM.bun_home('../../escape')
+            with patch.object(PM.shutil,'which',return_value=None):
+                with self.assertRaises(PM.MissingBun):PM.check_runtime(self.root,self.root,['bun','install'],{})
