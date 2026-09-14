@@ -34,6 +34,16 @@ Keep the existing dev/start choice when only fixing its port. Update healthUrl
 with the launch port. Check dependent API/proxy/CORS/origin configuration before
 changing ports. originalFailure remains the execution failure even after a
 proposal validation error; every repair must address it.
+Before proposing a workaround, compare the failed command with the documented
+workflow and Railpack: package manager, lockfile, runtime, working directory and
+script. A runner-selected command may be wrong even when its error comes from
+a dependency. Correct that mismatch before bypassing dependency checks.
+Before returning unsupported, review repository-supported alternatives and name
+the exact missing runner capability or incompatible application requirement.
+Distinguish a runner limitation from an application defect; do not claim the app
+cannot run merely because one proposed command is prohibited. Use needs_input
+for missing installed tools or configuration. Explain this diagnosis in summary
+or reason, citing the relevant repository evidence.
 For Bun, pnpm, and Yarn, put these validated options directly after the script
 name, e.g. ["bun","run","dev","--port","3201","--hostname","127.0.0.1"].
 No other forwarded arguments are supported. For a rejected
@@ -147,8 +157,10 @@ def propose(record, failure, attempts, redact, observe=None):
     relatives=[]
     directory=cwd
     # Execution supplies the component directory; never derive it from shell text.
-    if failure.get('componentCwd'):
-        directory=within(root,failure['componentCwd'],directory=True)
+    component_cwd=failure.get('componentCwd') or (failure.get('originalFailure') or {}).get('componentCwd')
+    if component_cwd:
+        directory=within(root,component_cwd,directory=True)
+    component_directory=directory
     while directory.is_relative_to(root):
         for name in ('requirements.txt','pyproject.toml','package.json','README.md'):
             p=directory/name
@@ -162,14 +174,14 @@ def propose(record, failure, attempts, redact, observe=None):
     from . import project_runtime as RT
     report=PE.scan(str(cwd))
     brief={'repositoryRoot':str(root),'cwd':str(cwd.relative_to(root)),
-           'failure':{k:scrub(str(failure.get(k,''))[-2000:],redact) for k in ('stage','command','exitCode','reason','stdout','stderr')},
+           'failure':{k:scrub(str(failure.get(k) or '')[-2000:],redact) for k in ('stage','command','exitCode','reason','stdout','stderr')},
            'environment':[{'name':r['name'],'status':r['status']} for r in report['variables']][:80],
            'runtimeInventory':RT.inventory(),'files':files,'previousAttempts':[
                {k:a.get(k) for k in ('summary','reason','status','pythonRuntimes','executedRuntimes','failure')} for a in attempts[-MAX_ATTEMPTS:]]}
     for key in ('componentCwd','runtime','compatibility','validationError','rejectedCommands','originalFailure','portConflicts','suggestedPort'):
         if key in failure:brief['failure'][key]=failure[key]
     if isinstance(brief['failure'].get('originalFailure'),dict):
-        brief['failure']['originalFailure']={k:scrub(str(v)[-2000:],redact) for k,v in brief['failure']['originalFailure'].items() if k in ('stage','command','reason','stdout','stderr','componentCwd')}
+        brief['failure']['originalFailure']={k:scrub(str(v)[-2000:],redact) for k,v in brief['failure']['originalFailure'].items() if v is not None and k in ('stage','command','reason','stdout','stderr','componentCwd')}
     if brief['failure'].get('compatibility'):
         brief['failure']['compatibility']=[{
             'cwd':a['cwd'],'recommendedVersion':a['recommendedVersion'],'scope':a['scope'],
@@ -193,7 +205,7 @@ def propose(record, failure, attempts, redact, observe=None):
         'entrypoint':'index.html','argv':['hc-static'],'description':'Built-in loopback static-file server; no install or build.'}
         for p in sorted(static_dirs) if PS.eligible(p)]
     from . import project_package_manager as PM
-    brief['packageManager']=PM.evidence(root,directory)
+    brief['packageManager']=PM.evidence(root,component_directory)
     brief['railpack']=PM.railpack_commands(record.get('plan',{}))
     engine=PV._engine('synthesize',90,root=root)
     for turn in range(2):
@@ -206,6 +218,11 @@ def propose(record, failure, attempts, redact, observe=None):
         raw=Trace.call(engine,prompt,redact,observe)
         if len(raw)>24000:raise ValueError('Setup response budget exceeded')
         value=providers._last_json_object(raw)
+        if value.get('status')=='unsupported' and not turn:
+            brief['terminalReview']={
+                'proposal':scrub_tree(value,redact),
+                'instruction':'Review this conclusion against the documented workflow, packageManager and Railpack evidence. Check supported alternatives before stopping; identify whether the blocker belongs to the runner or application, and the exact missing capability. Return a corrected plan, needs_input for missing tools/configuration, or an evidence-backed unsupported reason. This is the final evidence-review turn.'}
+            continue
         if value.get('status')!='read_more':return value
         names=value.get('files')
         if turn or not isinstance(names,list) or not 1<=len(names)<=3:

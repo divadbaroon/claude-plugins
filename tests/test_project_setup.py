@@ -89,6 +89,7 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(5,len(result['attempts']))
             self.assertIn('5 repair attempts',result['reason'])
             self.assertEqual(9,propose.call_args.args[1]['exitCode'])
+            self.assertEqual(9,propose.call_args.args[1]['originalFailure']['exitCode'])
             self.assertFalse(any(p.alive() for p in R._JOBS[id]['setupProcs'].values()))
 
     def test_fifth_repair_can_reach_healthy_services(self):
@@ -155,6 +156,44 @@ class SetupTests(unittest.TestCase):
         self.assertIn('flask==3.0',engine.generate_plain.call_args.args[0])
         engine.generate_searching.assert_not_called()
         with self.assertRaises(ValueError):S.excerpt(self.root,'.env.local',redact)
+    def test_execution_failure_survives_rejected_repair(self):
+        failed=self.plan(fail=True)
+        rejected=self.plan(fail=True);rejected['services'][0]['argv']=['npm','install','--force']
+        id=self.retained()
+        with mock.patch.object(S,'propose',side_effect=[failed,rejected,{'status':'needs_input','reason':'Review runtime'}]) as propose:
+            R.start(id);result=self.wait(id)
+        self.assertEqual('needs_input',result['status'])
+        feedback=propose.call_args.args[1]
+        self.assertEqual('validation',feedback['stage'])
+        self.assertEqual(9,feedback['originalFailure']['exitCode'])
+        self.assertEqual('backend',feedback['originalFailure']['stage'])
+
+    def test_unsupported_rechecks_documented_bun_workflow(self):
+        sub=self.root/'app';sub.mkdir()
+        (sub/'package.json').write_text(json.dumps({'packageManager':'bun@1.3.14','scripts':{'dev':'next dev'}}))
+        (sub/'bun.lock').write_text('{}')
+        (sub/'README.md').write_text('Install with bun install; launch with bun run dev.')
+        engine=mock.Mock()
+        engine.generate_plain.side_effect=[json.dumps({'status':'unsupported','reason':'npm peer conflict requires prohibited flags'}),
+            json.dumps({'status':'needs_input','reason':'The repository requires Bun; install the declared Bun runtime.'})]
+        failure={'stage':'validation','originalFailure':{'stage':'install','command':'npm install','stderr':'ERESOLVE react peer conflict','componentCwd':'app'},'componentCwd':'app'}
+        with mock.patch.object(PV,'_engine',return_value=engine):
+            result=S.propose({'cwd':str(self.root)},failure,[],str)
+        self.assertEqual('needs_input',result['status'])
+        self.assertEqual(2,engine.generate_plain.call_count)
+        brief=json.loads(engine.generate_plain.call_args.args[0].split('Evidence JSON:\n',1)[1])
+        self.assertEqual('bun',brief['packageManager']['manager'])
+        self.assertIn('bun install',str(brief['files']))
+        self.assertIn('terminalReview',brief)
+        self.assertEqual('npm install',brief['failure']['originalFailure']['command'])
+
+    def test_terminal_review_is_bounded(self):
+        engine=mock.Mock();engine.generate_plain.return_value=json.dumps({'status':'unsupported','reason':'Documented runtime unsupported'})
+        with mock.patch.object(PV,'_engine',return_value=engine):
+            result=S.propose({'cwd':str(self.root)},{'stage':'install'},[],str)
+        self.assertEqual('unsupported',result['status'])
+        self.assertEqual(2,engine.generate_plain.call_count)
+
     def test_repair_receives_failed_component_and_verified_runtime_history(self):
         backend=self.root/'system'/'backend';backend.mkdir(parents=True)
         (backend/'requirements.txt').write_text('aiohttp==3.8.4\nfrozenlist==1.3.3\n')

@@ -366,7 +366,7 @@ def recover(id,job,redact,initial_plan=None,resume=None):
         return
     failure={k:state.get(k) for k in ('stage','command','reason','exitCode','stdout','stderr','componentCwd','runtime','configuration','compatibility')}
     if initial_plan is None and resume is None:state.setdefault('failures',[]).append(failure)
-    original_failure=dict(failure)
+    original_failure=dict((state.get('originalFailure') if resume is not None or failure.get('stage')=='validation' else None) or failure)
     def persist():save_job(id,job)
     def check():
         if job.get('cancelled'):raise ValueError('Stopped by Reset')
@@ -653,6 +653,9 @@ def recover(id,job,redact,initial_plan=None,resume=None):
                     state['stages'][job['index']].update(status='failed',**proc.logs())
                 attempt.update(status='failed',reason=reason)
                 failure={k:state.get(k) for k in ('stage','command','exitCode','stdout','stderr','componentCwd','runtime','configuration','compatibility')};failure['reason']=reason
+                # Keep the latest execution error across subsequent validation failures.
+                original_failure=dict(failure)
+                state['originalFailure']=original_failure
                 attempt['failure']=failure
                 state['failures'].append(failure)
                 state.update(status='setup_planning' if attempt.get('services') and repairs()<S.MAX_ATTEMPTS else 'failed',healthy=False,reason=reason)
