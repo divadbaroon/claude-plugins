@@ -21,6 +21,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install ./hc
+      - run: python benchmarks/paper-repositories/build_corpus.py --check
       - run: python -W error::ResourceWarning -m unittest discover -s tests -v
       - run: python -m py_compile compact-focus/compact_focus/*.py
       - run: python -m pip install ./compact-focus
