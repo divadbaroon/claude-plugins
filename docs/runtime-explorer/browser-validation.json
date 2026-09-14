@@ -1,0 +1,112 @@
+{
+  "date": "2026-09-13",
+  "target": "http://127.0.0.1:8768/",
+  "surface": "Chrome through browser-client",
+  "question_navigation": {
+    "passed": 36,
+    "total": 36,
+    "baseline": 30,
+    "appended_this_update": 6
+  },
+  "incident_steps": {
+    "passed": 12,
+    "total": 12
+  },
+  "checks": [
+    "Question search filters and keyboard clearing restores all 30 entries",
+    "Related question navigation displays the selected answer",
+    "Incident source disclosure renders the exact pending-question return branch",
+    "Proposed fixes and regression scenarios expand separately from current behavior",
+    "Fast/full wording presets switch lanes and explicit full override applies",
+    "Original full payload contains Notes; quick omits the new note; later full includes it",
+    "Pending-answer Bart trace explicitly bypasses Overseer",
+    "Incident step survives URL-fragment reload"
+  ],
+  "responsive": [
+    {
+      "width": 390,
+      "views": [
+        "overview",
+        "questions and lane widget",
+        "Bart incident"
+      ],
+      "horizontal_page_overflow": false
+    },
+    {
+      "width": 1024,
+      "views": [
+        "Bart incident"
+      ],
+      "horizontal_page_overflow": false
+    },
+    {
+      "width": 390,
+      "views": [
+        "Overseer routing controls and scrollable table",
+        "same-subgoal queue selector and message"
+      ],
+      "horizontal_page_overflow": false
+    }
+  ],
+  "console_errors_or_warnings": [],
+  "live_models_or_builds_run": false,
+  "installed_runtime_modified": false,
+  "followup_checks": {
+    "new_questions": [
+      "path",
+      "chat-brainstorm",
+      "overseer-matrix",
+      "orchestrator-rules",
+      "queue-status",
+      "same-subgoal-notes"
+    ],
+    "overseer_boundary_combinations": 9,
+    "hypothetical_model_output_controls": 8,
+    "inventory_groups_expanded": 10,
+    "inventory_rule_entries": 40,
+    "queue_paths_checked": [
+      "busy",
+      "joined",
+      "full",
+      "quick",
+      "session"
+    ],
+    "message_disclosures": [
+      "join omits SAVED NOTE and includes added rows",
+      "session delivery retains enqueue-time Notes"
+    ],
+    "search": "same subgoal returns 3; keyboard clear restores 36",
+    "deep_link_reload": "same-subgoal-notes restored",
+    "browser_model_calls": 0,
+    "browser_builds": 0
+  },
+  "highlight_questions": {
+    "date": "2026-09-13",
+    "checks": {
+      "authored_passage_selection_and_composer": true,
+      "same_thread_queue_acknowledged": true,
+      "stored_quote_and_parent": true,
+      "linked_highlight_restored": true,
+      "highlight_added_answer_and_nested_followup": true,
+      "root_question_has_no_parent": true,
+      "reload_preserves_nested_questions": true,
+      "failure_retains_question_and_retry": true,
+      "offline_submit_retains_draft": true,
+      "reconnect_allows_same_draft_submission": true,
+      "deferred_answer_renders_after_selection_clears": true,
+      "keyboard_selection_shortcut_and_escape": true,
+      "html_and_unsafe_links_display_as_text": true,
+      "phone_390_no_horizontal_overflow": true,
+      "phone_composer_inside_viewport": true,
+      "same_thread_question_received": true,
+      "real_completed_answer_captured": true,
+      "answer_marker_removed": true,
+      "real_answer_visible_in_browser": true,
+      "real_answer_survives_regeneration_and_reload": true,
+      "real_answer_ordered_steps_rendered_as_list": true
+    },
+    "boundary": "A linked question created by selecting a passage in the browser reached this same Codex conversation through the desktop queue. Its real completed reply was captured under the original parent, with the answer marker removed, and verified visibly on the page after guide regeneration and reload. Numbered steps, bold text, code, and the source link render correctly. Failure/reconnect and deferred-render tests used explicitly labelled sample answers in isolated state. This validates one successful local round trip, not long-term delivery reliability or all desktop CLI versions.",
+    "backend_boundary_tests": 11,
+    "live_answer_sha256": "6ebc452aff6805753ae3c17c2eb7d938cd13fcf886b4cd37202e9a432707884b"
+  }
+}

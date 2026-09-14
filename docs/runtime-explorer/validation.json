@@ -1,0 +1,3456 @@
+{
+  "scope": "Installed Engelbart 0.20.4; synthetic fixture; no model calls",
+  "date": "2026-09-13",
+  "probes": {
+    "initial_rows": 5,
+    "initial_protocol_ids": [
+      "t001",
+      "t005"
+    ],
+    "initial_quick": false,
+    "later_quick": true,
+    "full_includes_notes": true,
+    "next_full_includes_new_note": true,
+    "next_quick_includes_new_note": false,
+    "cold_fallback": {
+      "tokens": 150124,
+      "minutes": 20,
+      "source": "default"
+    }
+  },
+  "no_live_model_calls": true,
+  "lane_cases": [
+    {
+      "id": "original",
+      "rows": [
+        "Add a scenario editor",
+        "Add an input field",
+        "Add an expected-output field",
+        "Add a Run button",
+        "Display scenario history"
+      ],
+      "quick": false
+    },
+    {
+      "id": "later",
+      "rows": [
+        "Rename the Run button to Test scenario",
+        "Add a Clear button"
+      ],
+      "quick": true
+    },
+    {
+      "id": "vague",
+      "rows": [
+        "fix it"
+      ],
+      "quick": false
+    },
+    {
+      "id": "risky",
+      "rows": [
+        "Add a database button"
+      ],
+      "quick": false
+    },
+    {
+      "id": "wording_full",
+      "rows": [
+        "Rename the navigation item",
+        "Add a Clear button"
+      ],
+      "quick": false
+    },
+    {
+      "id": "wording_fast",
+      "rows": [
+        "Rename the navigation label",
+        "Add a Clear button"
+      ],
+      "quick": true
+    },
+    {
+      "id": "empty",
+      "rows": [],
+      "quick": false
+    },
+    {
+      "id": "blank",
+      "rows": [
+        ""
+      ],
+      "quick": false
+    },
+    {
+      "id": "four",
+      "rows": [
+        "Add a button",
+        "Add a button",
+        "Add a button",
+        "Add a button"
+      ],
+      "quick": false
+    },
+    {
+      "id": "one_300",
+      "rows": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": true
+    },
+    {
+      "id": "one_301",
+      "rows": [
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": false
+    },
+    {
+      "id": "two_500",
+      "rows": [
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": true
+    },
+    {
+      "id": "two_501",
+      "rows": [
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "button xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "quick": false
+    },
+    {
+      "id": "unicode_boundary",
+      "rows": [
+        "\u03b1database\u03b1"
+      ],
+      "quick": true
+    },
+    {
+      "id": "unicode_length",
+      "rows": [
+        "\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00\ud83d\ude00"
+      ],
+      "quick": true
+    }
+  ],
+  "routing_cases": [
+    {
+      "id": "bart",
+      "label": "Bart: ordinary wording",
+      "event": {
+        "type": "bart.message",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "How does Bart work?",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "chat",
+        "reason": "an ordinary message: answered, not brainstormed",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "an ordinary message: answered, not brainstormed",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "an ordinary message: answered, not brainstormed",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "options",
+      "label": "Bart: explicit options",
+      "event": {
+        "type": "bart.message",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "What are my options?",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "brainstorm",
+        "reason": "the reader asked for options",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "the reader asked for options",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "the reader asked for options",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "plan",
+      "label": "Bart: explicit planning",
+      "event": {
+        "type": "bart.message",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "Break this down",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "replan",
+        "reason": "the reader asked for the piece to be planned",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "the reader asked for the piece to be planned",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "the reader asked for the piece to be planned",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "both",
+      "label": "Bart: options + planning",
+      "event": {
+        "type": "bart.message",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "Brainstorm, then break this down",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "brainstorm",
+        "reason": "the reader asked for options",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "the reader asked for options",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "the reader asked for options",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "smalltalk",
+      "label": "Bart: hello (before orchestrator override)",
+      "event": {
+        "type": "bart.message",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "Hi Bart",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "chat",
+        "reason": "an ordinary message: answered, not brainstormed",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "an ordinary message: answered, not brainstormed",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "an ordinary message: answered, not brainstormed",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "plan_requested",
+      "label": "Plan requested",
+      "event": {
+        "type": "plan.requested",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "replan",
+        "reason": "a plan was asked for",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "a plan was asked for",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "a plan was asked for",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "human",
+      "label": "Chat needs a human preference",
+      "event": {
+        "type": "chat.needs_human",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "brainstorm",
+        "reason": "the answer turns on the reader's preference: ",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "the answer turns on the reader's preference: ",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "the answer turns on the reader's preference: ",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "discovery",
+      "label": "Chat needs project discovery",
+      "event": {
+        "type": "chat.needs_discovery",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "chat",
+        "reason": "the answer is in the project directory; discover it, do not ask the reader: ",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "the answer is in the project directory; discover it, do not ask the reader: ",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "the answer is in the project directory; discover it, do not ask the reader: ",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "build_requested",
+      "label": "Build requested",
+      "event": {
+        "type": "todo.build_requested",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "build",
+        "reason": "rows were handed to the build",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "t001",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "rows were handed to the build",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "completed",
+      "label": "Build completed",
+      "event": {
+        "type": "build.completed",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "verify",
+        "reason": "the build says it is done; check it",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "t001",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 0,
+          "decision": {
+            "action": "verify",
+            "reason": "the build says it is done; check it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "failed",
+      "label": "Build failed",
+      "event": {
+        "type": "build.failed",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "none",
+        "reason": "the build failed on its own account; the rows say so on the page",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": [
+          {
+            "kind": "run_result",
+            "text": "build failed:",
+            "at": "2026-09-14T03:55:01+00:00",
+            "by": "system",
+            "subgoalId": "g002",
+            "todoId": "",
+            "runId": ""
+          }
+        ]
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "the build failed on its own account; the rows say so on the page",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "the build failed on its own account; the rows say so on the page",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "run_result",
+                "text": "build failed:",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "question",
+      "label": "Builder asked a question",
+      "event": {
+        "type": "build.question",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "none",
+        "reason": "the build stopped to ask; the reader's answer resumes it",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "t001",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "the build stopped to ask; the reader's answer resumes it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "the build stopped to ask; the reader's answer resumes it",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": []
+          }
+        }
+      }
+    },
+    {
+      "id": "passed",
+      "label": "Verification passed",
+      "event": {
+        "type": "verify.passed",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "none",
+        "reason": "verified: Synthetic check result",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": [
+          {
+            "kind": "verification_result",
+            "text": "passed: Synthetic check result",
+            "at": "2026-09-14T03:55:01+00:00",
+            "by": "system",
+            "subgoalId": "g002",
+            "todoId": "",
+            "runId": ""
+          },
+          {
+            "kind": "todo_status",
+            "text": "done",
+            "at": "2026-09-14T03:55:01+00:00",
+            "by": "system",
+            "subgoalId": "g002",
+            "todoId": "t001",
+            "runId": ""
+          }
+        ]
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "chat": {
+          "model_calls": 1,
+          "decision": {
+            "action": "chat",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "brainstorm": {
+          "model_calls": 1,
+          "decision": {
+            "action": "brainstorm",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "replan": {
+          "model_calls": 1,
+          "decision": {
+            "action": "replan",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "build": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "verify": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "Hypothetical model explanation",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "invalid": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "verified: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "exception": {
+          "model_calls": 1,
+          "decision": {
+            "action": "none",
+            "reason": "verified: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "passed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              },
+              {
+                "kind": "todo_status",
+                "text": "done",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "t001",
+                "runId": ""
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "repair1",
+      "label": "Verification failed: 0 repairs used",
+      "event": {
+        "type": "verify.failed",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "build",
+        "reason": "repair 1 of 2: Synthetic check result",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "t001",
+        "contextUpdates": [
+          {
+            "kind": "verification_result",
+            "text": "failed: Synthetic check result",
+            "at": "2026-09-14T03:55:01+00:00",
+            "by": "system",
+            "subgoalId": "g002",
+            "todoId": "",
+            "runId": ""
+          }
+        ]
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "chat": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "brainstorm": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "replan": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "build": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "verify": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "invalid": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "exception": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 1 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "repair2",
+      "label": "Verification failed: 1 repair used",
+      "event": {
+        "type": "verify.failed",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 1,
+      "fallback": {
+        "action": "build",
+        "reason": "repair 2 of 2: Synthetic check result",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "t001",
+        "contextUpdates": [
+          {
+            "kind": "verification_result",
+            "text": "failed: Synthetic check result",
+            "at": "2026-09-14T03:55:01+00:00",
+            "by": "system",
+            "subgoalId": "g002",
+            "todoId": "",
+            "runId": ""
+          }
+        ]
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "chat": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "brainstorm": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "replan": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "build": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "verify": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "invalid": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "exception": {
+          "model_calls": 0,
+          "decision": {
+            "action": "build",
+            "reason": "repair 2 of 2: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "escalate",
+      "label": "Verification failed: 2 repairs used",
+      "event": {
+        "type": "verify.failed",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 2,
+      "fallback": {
+        "action": "chat",
+        "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "t001",
+        "contextUpdates": [
+          {
+            "kind": "verification_result",
+            "text": "failed: Synthetic check result",
+            "at": "2026-09-14T03:55:01+00:00",
+            "by": "system",
+            "subgoalId": "g002",
+            "todoId": "",
+            "runId": ""
+          }
+        ]
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "chat": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "brainstorm": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "replan": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "build": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "verify": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "invalid": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        },
+        "exception": {
+          "model_calls": 0,
+          "decision": {
+            "action": "chat",
+            "reason": "repaired 2 times and still failing; tell the reader: Synthetic check result",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "t001",
+            "contextUpdates": [
+              {
+                "kind": "verification_result",
+                "text": "failed: Synthetic check result",
+                "at": "2026-09-14T03:55:01+00:00",
+                "by": "system",
+                "subgoalId": "g002",
+                "todoId": "",
+                "runId": ""
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "notes",
+      "label": "Notes edited (not routed)",
+      "event": {
+        "type": "notes.edited",
+        "subgoalId": "g002",
+        "todoId": "t001",
+        "payload": {
+          "text": "",
+          "rows": [
+            "t001"
+          ],
+          "reason": "Synthetic check result"
+        }
+      },
+      "attempts": 0,
+      "fallback": {
+        "action": "none",
+        "reason": "not a transition the Overseer acts on: notes.edited",
+        "targetSubgoalId": "g002",
+        "targetTodoId": "",
+        "contextUpdates": []
+      },
+      "outcomes": {
+        "none": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "chat": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "brainstorm": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "replan": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "build": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "verify": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "invalid": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        },
+        "exception": {
+          "model_calls": 0,
+          "decision": {
+            "action": "none",
+            "reason": "not a transition the Overseer acts on: notes.edited",
+            "targetSubgoalId": "g002",
+            "targetTodoId": "",
+            "contextUpdates": []
+          }
+        }
+      }
+    }
+  ],
+  "queue_checks": {
+    "join_preserves_conversation": true,
+    "join_keeps_existing_lane": true,
+    "join_includes_new_rows": true,
+    "join_omits_saved_notes": true,
+    "join_does_not_enqueue": true,
+    "session_queue_drains": true,
+    "session_rows_queued_then_building": true,
+    "queued_prompt_is_snapshot": true,
+    "second_delivery_empty": true
+  },
+  "source_files": {
+    "trajectory/web/goal/services.js": {
+      "sha256": "1da505de975730ce74efa67b5b174d15e60ac929866cd422e55c59271c767865",
+      "spans": [
+        [
+          255,
+          280
+        ],
+        [
+          297,
+          307
+        ],
+        [
+          231,
+          253
+        ],
+        [
+          239,
+          253
+        ],
+        [
+          255,
+          271
+        ],
+        [
+          231,
+          253
+        ],
+        [
+          300,
+          305
+        ],
+        [
+          231,
+          253
+        ]
+      ]
+    },
+    "trajectory/ui.py": {
+      "sha256": "e54b9de91f1b0223c51bdddb02b066bd3ee72cd038735d6e90f66affa1db35b2",
+      "spans": [
+        [
+          875,
+          914
+        ],
+        [
+          4640,
+          4655
+        ],
+        [
+          551,
+          582
+        ],
+        [
+          551,
+          582
+        ],
+        [
+          780,
+          807
+        ],
+        [
+          711,
+          744
+        ],
+        [
+          4640,
+          4655
+        ],
+        [
+          4640,
+          4655
+        ],
+        [
+          850,
+          877
+        ],
+        [
+          604,
+          655
+        ],
+        [
+          604,
+          655
+        ],
+        [
+          604,
+          655
+        ],
+        [
+          711,
+          744
+        ],
+        [
+          604,
+          655
+        ]
+      ]
+    },
+    "trajectory/web/goal/actions.js": {
+      "sha256": "5becd0a083f2a3890d70be45b18ad4d86231dc24d2a3192337273f20cb090e01",
+      "spans": [
+        [
+          686,
+          717
+        ],
+        [
+          686,
+          717
+        ],
+        [
+          686,
+          717
+        ],
+        [
+          686,
+          717
+        ],
+        [
+          686,
+          715
+        ],
+        [
+          686,
+          715
+        ]
+      ]
+    },
+    "trajectory/agents/orchestrator.py": {
+      "sha256": "690709755e4a94483c4fde66dc0496684005f21a7ff9a2822a9f610614352e12",
+      "spans": [
+        [
+          492,
+          517
+        ],
+        [
+          492,
+          517
+        ],
+        [
+          552,
+          572
+        ],
+        [
+          600,
+          651
+        ],
+        [
+          621,
+          667
+        ],
+        [
+          375,
+          395
+        ],
+        [
+          163,
+          237
+        ],
+        [
+          239,
+          288
+        ],
+        [
+          395,
+          470
+        ],
+        [
+          621,
+          667
+        ],
+        [
+          375,
+          469
+        ],
+        [
+          214,
+          291
+        ],
+        [
+          146,
+          209
+        ],
+        [
+          552,
+          600
+        ],
+        [
+          492,
+          511
+        ],
+        [
+          492,
+          500
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          214,
+          286
+        ],
+        [
+          214,
+          286
+        ],
+        [
+          229,
+          286
+        ],
+        [
+          602,
+          638
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          214,
+          240
+        ],
+        [
+          229,
+          268
+        ],
+        [
+          257,
+          286
+        ],
+        [
+          257,
+          268
+        ],
+        [
+          446,
+          467
+        ],
+        [
+          53,
+          76
+        ],
+        [
+          214,
+          286
+        ],
+        [
+          146,
+          209
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          1,
+          50
+        ],
+        [
+          79,
+          142
+        ],
+        [
+          146,
+          286
+        ],
+        [
+          288,
+          347
+        ],
+        [
+          349,
+          488
+        ],
+        [
+          492,
+          666
+        ],
+        [
+          678,
+          720
+        ],
+        [
+          446,
+          467
+        ],
+        [
+          146,
+          188
+        ],
+        [
+          105,
+          118
+        ],
+        [
+          146,
+          163
+        ],
+        [
+          229,
+          286
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          1,
+          50
+        ],
+        [
+          105,
+          155
+        ],
+        [
+          688,
+          720
+        ],
+        [
+          146,
+          209
+        ],
+        [
+          214,
+          286
+        ],
+        [
+          288,
+          347
+        ],
+        [
+          349,
+          423
+        ],
+        [
+          425,
+          467
+        ],
+        [
+          492,
+          572
+        ],
+        [
+          469,
+          488
+        ],
+        [
+          574,
+          600
+        ],
+        [
+          602,
+          666
+        ],
+        [
+          710,
+          720
+        ]
+      ]
+    },
+    "trajectory/build.py": {
+      "sha256": "d1cf68df638390573920e036aff40fe2a60be4764d30c79dffeff508342bc823",
+      "spans": [
+        [
+          238,
+          348
+        ],
+        [
+          2057,
+          2069
+        ],
+        [
+          1398,
+          1504
+        ],
+        [
+          2856,
+          2893
+        ],
+        [
+          107,
+          147
+        ],
+        [
+          1525,
+          1560
+        ],
+        [
+          1615,
+          1638
+        ],
+        [
+          866,
+          885
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          2057,
+          2176
+        ],
+        [
+          238,
+          326
+        ],
+        [
+          328,
+          348
+        ],
+        [
+          1398,
+          1472
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          2856,
+          2893
+        ],
+        [
+          396,
+          495
+        ],
+        [
+          150,
+          326
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          853,
+          950
+        ],
+        [
+          1023,
+          1042
+        ],
+        [
+          1628,
+          1638
+        ],
+        [
+          2800,
+          2849
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          1660,
+          1711
+        ],
+        [
+          1398,
+          1472
+        ],
+        [
+          1398,
+          1472
+        ],
+        [
+          238,
+          326
+        ],
+        [
+          1525,
+          1560
+        ],
+        [
+          328,
+          348
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          238,
+          326
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          2325,
+          2352
+        ],
+        [
+          2057,
+          2176
+        ],
+        [
+          2072,
+          2176
+        ],
+        [
+          2057,
+          2069
+        ],
+        [
+          2057,
+          2069
+        ],
+        [
+          1737,
+          1846
+        ],
+        [
+          1737,
+          1804
+        ],
+        [
+          396,
+          496
+        ],
+        [
+          1867,
+          1892
+        ],
+        [
+          1993,
+          2046
+        ],
+        [
+          2072,
+          2179
+        ],
+        [
+          1398,
+          1472
+        ],
+        [
+          1578,
+          1615
+        ],
+        [
+          1738,
+          1757
+        ],
+        [
+          1993,
+          2179
+        ],
+        [
+          2263,
+          2281
+        ],
+        [
+          2325,
+          2352
+        ]
+      ]
+    },
+    "trajectory/agents/context.py": {
+      "sha256": "0ef2604c666d4c6e9dafb354d4966e476cb955291c4c2f6f83e5e2bfcfd1153c",
+      "spans": [
+        [
+          116,
+          153
+        ],
+        [
+          116,
+          153
+        ],
+        [
+          182,
+          191
+        ],
+        [
+          65,
+          101
+        ],
+        [
+          182,
+          191
+        ]
+      ]
+    },
+    "trajectory/chat_state.py": {
+      "sha256": "f7fa04501699b29d925791116abe2ef2057f422b0730e4537976ed1ca7f184eb",
+      "spans": [
+        [
+          1808,
+          1855
+        ],
+        [
+          1881,
+          2008
+        ],
+        [
+          1681,
+          1788
+        ],
+        [
+          1881,
+          2008
+        ]
+      ]
+    },
+    "trajectory/web/goal/store.js": {
+      "sha256": "17a2e8e563cf3a6b7b0cf6b3202159040079156365b5f0cb60c0d083e4a57c9f",
+      "spans": [
+        [
+          116,
+          139
+        ],
+        [
+          116,
+          139
+        ],
+        [
+          116,
+          139
+        ],
+        [
+          121,
+          138
+        ]
+      ]
+    },
+    "trajectory/agents/verifier.py": {
+      "sha256": "7b76e390bc737785257848fe63209be053affb9d7e07572110b71b81c26350ec",
+      "spans": [
+        [
+          1,
+          105
+        ],
+        [
+          49,
+          126
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ],
+        [
+          85,
+          115
+        ]
+      ]
+    },
+    "trajectory/agents/overseer.py": {
+      "sha256": "c9926517178c922118d6a572e384d771b977469cda1caf5f96552f536602810b",
+      "spans": [
+        [
+          70,
+          97
+        ],
+        [
+          1,
+          169
+        ],
+        [
+          70,
+          97
+        ],
+        [
+          119,
+          169
+        ],
+        [
+          28,
+          95
+        ],
+        [
+          132,
+          169
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          82,
+          92
+        ],
+        [
+          9,
+          169
+        ],
+        [
+          132,
+          169
+        ],
+        [
+          82,
+          92
+        ]
+      ]
+    },
+    "trajectory/setup_chat.py": {
+      "sha256": "b594950cff93d60907aac6b79936899a685753c517d9a93c8104d305cd40d0bf",
+      "spans": [
+        [
+          153,
+          160
+        ]
+      ]
+    },
+    "trajectory/providers.py": {
+      "sha256": "99e067982ae62a42397e96428e313a7328fa601b12200e005c515603d06b2b58",
+      "spans": [
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ],
+        [
+          145,
+          247
+        ]
+      ]
+    },
+    "trajectory/agents/chat.py": {
+      "sha256": "1b795f7e8087fcd2bcd19fa80eebae781e47ff4f3f197d0f3094df6221e2c442",
+      "spans": [
+        [
+          1,
+          124
+        ],
+        [
+          1,
+          124
+        ],
+        [
+          25,
+          97
+        ],
+        [
+          58,
+          97
+        ],
+        [
+          81,
+          124
+        ]
+      ]
+    },
+    "trajectory/agents/artifacts.py": {
+      "sha256": "4d287841db9dbeffd048b7165359977a779f07e0afebabef2c673aa67e5b97c7",
+      "spans": [
+        [
+          48,
+          120
+        ],
+        [
+          48,
+          186
+        ],
+        [
+          65,
+          118
+        ],
+        [
+          123,
+          171
+        ],
+        [
+          65,
+          118
+        ]
+      ]
+    },
+    "trajectory/agents/acceptance.py": {
+      "sha256": "6908bb5064e991183417c007626ed4c07b3b3d0bc85c3a8bd64832bac6f8145f",
+      "spans": [
+        [
+          65,
+          158
+        ]
+      ]
+    },
+    "trajectory/web/goal/components/todos.js": {
+      "sha256": "4ac3b39b6d3b772ebdeb02af2435476a88c5a44cd020b4b1e76e6b9f131fe195",
+      "spans": [
+        [
+          62,
+          107
+        ],
+        [
+          62,
+          107
+        ],
+        [
+          62,
+          107
+        ],
+        [
+          8,
+          14
+        ]
+      ]
+    },
+    "trajectory/agents/runtime.py": {
+      "sha256": "32970571642f1ffdb3701341d677a212796431acaa1e1c74213794c700e3da22",
+      "spans": [
+        [
+          164,
+          199
+        ],
+        [
+          171,
+          199
+        ]
+      ]
+    },
+    "trajectory/preview.py": {
+      "sha256": "ba49a23e52b5d4761af2d28bd22ef1266d330fda03f6412ad417fb15f31a311b",
+      "spans": [
+        [
+          648,
+          739
+        ],
+        [
+          648,
+          739
+        ]
+      ]
+    },
+    "trajectory/agents/communication.py": {
+      "sha256": "cedac34abfab3a1bf7df25bcc8efa034ef82406c3c22154c953fc8a581db2caa",
+      "spans": [
+        [
+          97,
+          100
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          97,
+          100
+        ],
+        [
+          32,
+          55
+        ]
+      ]
+    },
+    "trajectory/agents/path.py": {
+      "sha256": "23ef9b507cf6d6853cb4419c9d3ccae432d91c2a727854741099c694de774a78",
+      "spans": [
+        [
+          11,
+          118
+        ],
+        [
+          46,
+          118
+        ]
+      ]
+    },
+    "trajectory/brainstorm.py": {
+      "sha256": "895ab6f3e80fe618fd0ff254110c60b4348afcbea1405def6ff211c5b52bcb38",
+      "spans": [
+        [
+          431,
+          448
+        ]
+      ]
+    },
+    "trajectory/agents/brainstorm.py": {
+      "sha256": "386a58c9133a7cd306d6ac600755257c348ca0024662b526faaac3f020331ebf",
+      "spans": [
+        [
+          21,
+          36
+        ],
+        [
+          21,
+          36
+        ]
+      ]
+    },
+    "trajectory/agents/replies.py": {
+      "sha256": "d7f1e0a032fdd4f50b7de4f45a9150e10d90b122a29e74254e71a8ff74ef1cd5",
+      "spans": [
+        [
+          13,
+          84
+        ],
+        [
+          31,
+          71
+        ]
+      ]
+    },
+    "trajectory/agents/policy.py": {
+      "sha256": "b2956970fd74380ea0979bb76543962cca0d9f335acb64afa931ed6b44a095d6",
+      "spans": [
+        [
+          20,
+          128
+        ],
+        [
+          90,
+          128
+        ],
+        [
+          20,
+          84
+        ]
+      ]
+    },
+    "trajectory/agents/presentation.py": {
+      "sha256": "713c9a38653643885a1adf4aea44274c4f354c74c5f04cba408e6f70f50ae187",
+      "spans": [
+        [
+          1,
+          18
+        ],
+        [
+          1,
+          18
+        ]
+      ]
+    }
+  }
+}
