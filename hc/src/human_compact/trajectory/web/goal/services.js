@@ -79,20 +79,21 @@ async function datasetImport(body) {
 }
 
 export const services = {
-  startProjectOrder: ({path}) => post('/api/op',{op:'project_order_start',path}),
-  projectOrderState: ({id}) => post('/api/op',{op:'project_order_state',id}),
-  discoverProjectComponents: ({path}) => post('/api/op',{op:'discover_project_components',path}),
-  approveProjectRepair: ({id,approvalId,approve}) => post('/api/op',{op:'project_run_approval',id,approvalId,approve}),
-  resetProjectRun: ({id}) => post('/api/op',{op:'project_run_reset',id}),
-  projectRunState: ({id}) => post('/api/op',{op:'project_run_state',id}),
-  startProjectRun: ({id,retry,environmentSkips}) => post('/api/op',{op:'project_run_start',id,retry,...(environmentSkips?{environmentSkips}:{})}),
+  projectBenchmark: body => post('/api/op',{op:'project_benchmark',...body}),
+  startProjectOrder: args => post('/api/op',{op:'project_order_start',...args}),
+  projectOrderState: args => post('/api/op',{op:'project_order_state',...args}),
+  discoverProjectComponents: args => post('/api/op',{op:'discover_project_components',...args}),
+  approveProjectRepair: args => post('/api/op',{op:'project_run_approval',...args}),
+  resetProjectRun: args => post('/api/op',{op:'project_run_reset',...args}),
+  projectRunState: args => post('/api/op',{op:'project_run_state',...args}),
+  startProjectRun: args => post('/api/op',{op:'project_run_start',...args}),
   extractProjectPaperLinks: async ({file}) => {
     const response=await fetch('/api/project-paper-links',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-HC-Name':encodeURIComponent(file.name)},body:file});
     return response.json();
   },
-  inspectProjectEnvironment: ({path,repositoryRoot}) => post('/api/op', {op:'inspect_project_environment',path,repositoryRoot}),
-  saveProjectEnvironment: ({path,values}) => post('/api/op', {op:'save_project_environment',path,values}),
-  analyzeProject: ({path,repositoryRoot}) => post('/api/op', {op:'analyze_project', path,repositoryRoot}),
+  inspectProjectEnvironment: args => post('/api/op', {op:'inspect_project_environment',...args}),
+  saveProjectEnvironment: args => post('/api/op', {op:'save_project_environment',...args}),
+  analyzeProject: args => post('/api/op', {op:'analyze_project',...args}),
   chooseProjectDirectory: ({start}) => post('/api/op', {op:'pick_directory', start}),
   saveInterface: (value) => post("/api/interface", {interface: value}),
   projectPaperUrl,

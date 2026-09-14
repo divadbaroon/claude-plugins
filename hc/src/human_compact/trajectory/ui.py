@@ -5045,13 +5045,23 @@ class H(BaseHTTPRequestHandler):
             self.server.last_activity = time.monotonic()
 
     def _send(self, code, body, ctype="application/json"):
+        token = getattr(self, "_benchmark_token", None)
+        if token is not None:
+            self._benchmark_token = None
+            from . import project_benchmark as PB
+            try:
+                PB.finish(token, body if isinstance(body, dict) else {"ok": False, "error": "Unexpected controller response"})
+            except (OSError, ValueError, TypeError):
+                if isinstance(body, dict):
+                    body = {**body, "benchmarkEvidenceError": "Could not persist this observation; the pending event is retained."}
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self._status = code
         op = self._op
         if op is not None and op.enabled:
             refused = code >= 400
             if not isinstance(body, bytes):
-                op.snapshot("processing_output", body)
+                if not getattr(self, "_benchmark_private", False):
+                    op.snapshot("processing_output", body)
                 refused = refused or (isinstance(body, dict)
                                       and body.get("ok") is False)
             if refused:
@@ -5865,6 +5875,8 @@ class H(BaseHTTPRequestHandler):
         self._send(200, data, "application/pdf")
 
     def _serve_post(self):
+        self._benchmark_token = None
+        self._benchmark_private = False
         if not self._begin_request():
             return
         try:
@@ -5919,7 +5931,8 @@ class H(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 self._send(400, {"ok": False, "error": "bad json"})
                 return
-            if not (self.path == "/api/op" and isinstance(body, dict)
+            self._benchmark_private = bool(isinstance(body, dict) and (body.get("benchmark") or body.get("op") == "project_benchmark"))
+            if not self._benchmark_private and not (self.path == "/api/op" and isinstance(body, dict)
                     and body.get("op") == "save_project_environment"):
                 self._note_request(body)
             if self.path == "/api/interface":
@@ -6035,6 +6048,16 @@ class H(BaseHTTPRequestHandler):
                                      "this is a shared workspace: only your "
                                      "own goals can be edited here"})
                     return
+                if body.get("op") == "project_benchmark" or body.get("benchmark"):
+                    if not self.server.chat_scoped:
+                        self._send(200, {"ok": False, "error": "local chat scope required"}); return
+                    from . import project_benchmark as PB
+                    try:
+                        if body.get("op") == "project_benchmark":
+                            self._send(200, PB.operation(body)); return
+                        self._benchmark_token = PB.begin(body["benchmark"], body.get("op"), body)
+                    except (OSError, ValueError, TypeError, AttributeError) as exc:
+                        self._send(200, {"ok": False, "error": "Benchmark evidence could not be prepared: " + str(exc)[:300]}); return
                 if body.get("op") in ("project_order_start", "project_order_state"):
                     if not self.server.chat_scoped:
                         self._send(200, {"ok":False,"error":"local chat scope required"}); return
@@ -6271,6 +6294,16 @@ class H(BaseHTTPRequestHandler):
                 self._send(409 if result.get("conflict") else 200, result)
             else:
                 self._send(404, {"error": "not found"})
+        except Exception as exc:
+            token = getattr(self, "_benchmark_token", None)
+            if token:
+                self._benchmark_token = None
+                from . import project_benchmark as PB
+                try:
+                    PB.finish(token, {"ok": False, "error": "Controller exception: " + type(exc).__name__})
+                except (OSError, ValueError, TypeError):
+                    pass  # The pre-operation pending record remains diagnostic evidence.
+            raise
         finally:
             self._finish_request()
 

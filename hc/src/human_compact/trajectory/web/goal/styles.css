@@ -710,3 +710,18 @@ button.sub-mark:disabled { cursor:default; opacity:.4; }
 .project-entry-controls .ghost-btn { margin-left: 0; }
 .project-sources form label { margin-top: 4px; }
 .project-entry > h2 { margin-bottom: 18px; }
+
+/* CSV benchmark extends the existing Projects source panel. */
+.project-benchmark { display: grid; gap: 12px; min-width: 0; }
+.project-benchmark p { margin: 0; }
+.project-benchmark-controls, .project-benchmark-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.project-benchmark-controls label, .project-benchmark-filters label { display: grid; gap: 5px; font-size: 13px; }
+.project-benchmark-filters input, .project-benchmark-filters select { min-width: 150px; max-width: 260px; padding: 8px; border: 1px solid #c8d0da; border-radius: 6px; background: #fff; color: inherit; }
+.project-benchmark-table { overflow: auto; max-height: 460px; border: 1px solid #d8dde3; border-radius: 8px; }
+.project-benchmark table { border-collapse: collapse; width: 100%; font-size: 12px; text-align: left; }
+.project-benchmark th, .project-benchmark td { padding: 10px; border-bottom: 1px solid #e4e8ed; vertical-align: top; }
+.project-benchmark th { position: sticky; top: 0; background: #f2f5f8; z-index: 1; }
+.project-benchmark td strong, .project-benchmark td small { display: block; overflow-wrap: anywhere; }
+.project-benchmark td small { margin-top: 5px; color: #566577; }
+.project-benchmark-report { border: 1px solid #c8d0da; background: #f7f9fc; border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+@media(max-width:700px) { .project-source-tabs { flex-wrap: wrap; } .project-benchmark-filters label { width: 100%; } }

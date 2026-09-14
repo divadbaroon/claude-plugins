@@ -1,38 +1,51 @@
 import {h,svg} from './dom.js';
+import {createBenchmarkActions,benchmarkServices,renderBenchmark} from './project-benchmark.js';
 
 const canRun=p=>p?.path&&!p.launchRequested&&!p.busy&&!p.error&&(!p.run||p.run.status==='ready')&&(!p.order||p.order.status==='done');
 
 export function createProjectWorkspace(store,services,createSession){
   const sessions=new Map();
   let sequence=0;
-  const remember=()=>{try{globalThis.localStorage?.setItem('engelbart-project-workspace',JSON.stringify([...sessions.values()].map(p=>({id:p.id,path:p.state?.path||'',sourceUrl:p.state?.sourceUrl,launchRequested:p.state?.launchRequested||!!p.state?.run,runId:p.state?.page==='run'?p.state.result?.analysisId:undefined,orderId:p.state?.page==='order'?p.state.order?.id:undefined}))));}catch{}};
+  const remember=()=>{try{globalThis.localStorage?.setItem('engelbart-project-workspace',JSON.stringify([...sessions.values()].map(p=>({id:p.id,benchmark:p.state?.benchmark,path:p.state?.path||'',sourceUrl:p.state?.sourceUrl,launchRequested:p.state?.launchRequested||!!p.state?.run,runId:p.state?.page==='run'||p.state?.benchmark&&p.state?.run?p.state.result?.analysisId:undefined,orderId:p.state?.page==='order'?p.state.order?.id:undefined}))));}catch{}};
   const publish=(patch={})=>store.set(patch);
   function add(state,savedId,inheritAutomatic=true){
     if(inheritAutomatic)state={...state,autoContinue:state.autoContinue??(store.get().projectWorkspaceAutomatic!==false)};
     const id=savedId||'project-'+Date.now()+'-'+(++sequence);
     const scoped={get:()=>({...store.get(),newProject:sessions.get(id)?.state}),set:patch=>{
       if(!sessions.has(id)||!Object.hasOwn(patch,'newProject'))return;
-      const session=sessions.get(id);session.state=patch.newProject;remember();
+      const session=sessions.get(id);session.state=session.benchmark&&patch.newProject?{...patch.newProject,benchmark:session.benchmark}:patch.newProject;remember();
       publish({projectInstances:[...sessions.values()].map(p=>({id:p.id,...p.state})),
-        ...(store.get().activeProjectInstance===id&&store.get().newProject?{newProject:patch.newProject}: {})});
+        ...(store.get().activeProjectInstance===id&&store.get().newProject?{newProject:session.state}: {})});
     }};
-    const session={id,state};sessions.set(id,session);
+    const session={id,state,benchmark:state.benchmark};sessions.set(id,session);
     // Each controller captures its own store and resume keys. Async completions
     // never resolve against whichever project happens to be selected now.
     const storage={getItem:key=>globalThis.localStorage?.getItem(key+':'+id),setItem:(key,value)=>globalThis.localStorage?.setItem(key+':'+id,value),removeItem:key=>globalThis.localStorage?.removeItem(key+':'+id)};
-    session.actions=createSession(scoped,services,storage);
+    session.actions=createSession(scoped,state.benchmark?benchmarkServices(services,state.benchmark,error=>publish({projectBenchmark:{...store.get().projectBenchmark,error}})):services,storage);
     remember();
     publish({projectInstances:[...sessions.values()].map(p=>({id:p.id,...p.state}))});
     return session;
   }
   function select(id){const p=sessions.get(id);if(p)publish({activeProjectInstance:id,newProject:p.state,projectWorkspaceAdding:false});}
+  function restoreBatch(batch){
+    for(const c of batch.cases){
+      if([...sessions.values()].some(p=>p.benchmark?.batchId===batch.id&&p.benchmark.caseId===c.id))continue;
+      const p=add({path:c.repoUrl,sourceUrl:c.repoUrl,busy:false,error:'',launchRequested:true,autoContinue:false,
+        benchmark:{batchId:batch.id,caseId:c.id},result:c.runId?{analysisId:c.runId}:null});
+      if(c.runId)p.actions.openProjectRun();
+      else if(c.orderId)p.actions.resumeProjectOrder(c.orderId);
+    }
+  }
+  const benchmark=createBenchmarkActions(store,services,{add,select,restoreBatch});
   const controls={
+    ...benchmark,
     openNewProject(){
+      void benchmark.loadProjectBenchmark();
       if(sessions.size){select(store.get().activeProjectInstance||sessions.keys().next().value);publish({projectWorkspaceAdding:true});return;}
       let saved=[];
       try{saved=JSON.parse(globalThis.localStorage?.getItem('engelbart-project-workspace')||'[]');}catch{}
       if(Array.isArray(saved)&&saved.length){
-        const restored=saved.filter(p=>typeof p.id==='string'&&typeof p.path==='string').slice(0,50).map(p=>({saved:p,session:add({path:p.path,sourceUrl:p.sourceUrl,launchRequested:p.launchRequested||!!p.runId||!!p.orderId,busy:false,result:null,error:''},p.id)}));
+        const restored=saved.filter(p=>typeof p.id==='string'&&typeof p.path==='string').slice(0,50).map(p=>({saved:p,session:add({path:p.path,sourceUrl:p.sourceUrl,benchmark:p.benchmark,launchRequested:p.launchRequested||!!p.runId||!!p.orderId,busy:false,result:null,error:''},p.id)}));
         if(restored.length){
           select(restored[0].session.id);
           for(const {saved:p,session} of restored){
@@ -60,7 +73,7 @@ export function createProjectWorkspace(store,services,createSession){
       await Promise.allSettled([...sessions.values()].map(p=>p.actions.setProjectAutoContinue(enabled)));
     },
     showProjectEntry(){publish({projectWorkspaceAdding:true});},
-    selectProjectSource(tab){if(['github','local','paper'].includes(tab))publish({projectSourceTab:tab});},
+    selectProjectSource(tab){if(['github','local','paper','benchmark'].includes(tab)){publish({projectSourceTab:tab});if(tab==='benchmark')void benchmark.loadProjectBenchmark();}},
     async addProjectPapers(files){
       const added=[];
       const papers=[...(store.get().projectPapers||[])];
@@ -213,7 +226,7 @@ function renderProjectOverview(projects,actions){
 }
 
 function renderProjectSources(state,actions){
-  const tabs=[['github','GitHub'],['local','Local codebase'],['paper','Paper']];
+  const tabs=[['github','GitHub'],['local','Local codebase'],['paper','Paper'],['benchmark','Benchmark CSV']];
   const selected=state.projectSourceTab||'github';
   return h('section',{class:'project-sources'},
     h('div',{role:'tablist','aria-label':'Add project or paper',class:'project-source-tabs'},
@@ -229,6 +242,7 @@ function renderProjectSources(state,actions){
           if(next!==undefined){e.preventDefault();actions.selectProjectSource(tabs[next][0]);document.getElementById('project-source-'+tabs[next][0])?.focus();}
         }},label))),
     h('div',{role:'tabpanel',id:'project-source-panel-'+selected,'aria-labelledby':'project-source-'+selected,key:selected},
+      selected==='benchmark'?renderBenchmark(state,actions):
       selected==='github'?h('div',{},
           h('form',{onsubmit:e=>{e.preventDefault();actions.addGithubProjects();}},
             h('label',{for:'project-urls'},'GitHub URLs · one per line'),
