@@ -1,3 +1,4 @@
+import {createProjectAnalysisActions} from './new-project.js';
 /* What the reader can do on the goal page, each one a change to the store
    and, where something is worth keeping, a call across the service
    boundary. Components call these and never touch the store themselves.
@@ -714,6 +715,7 @@ export function createActions(store, services) {
   }
 
   return {
+    ...createProjectAnalysisActions(store, services),
     toggleNotifications:notifications.toggleNotifications,closeNotifications:notifications.closeNotifications,
     markNotificationsRead:notifications.markNotificationsRead,
     async openNotification(id) {

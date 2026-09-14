@@ -1,3 +1,4 @@
+import {renderNewProject} from '../new-project.js';
 /* The page: header, then the view the header's path names -- every
    project, this project's goals, or the goal: the plan rail and the main
    column with its tabs and whichever pane the current tab shows, or, for
@@ -19,6 +20,7 @@ export function renderPage(state, actions) {
   const empty = state.status === "ready" && state.empty;
   return h("div", { class: "app workspace-standard" },
     renderHeader(state, actions),
+    renderNewProject(state, actions),
     state.view === "projects" ? renderProjects(state, actions)
     : state.view === "goals" ? renderGoals(state, actions)
     : h("div", { class: "body" },

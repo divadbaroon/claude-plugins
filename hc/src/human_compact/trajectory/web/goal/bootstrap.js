@@ -37,8 +37,13 @@ function draw(state) {
     const input = host.querySelector('[data-key="sub-add-input"]');
     if (input && document.activeElement !== input) input.focus();
   }
+  const modal = host.querySelector('.project-analysis-modal');
+  if (modal && !modal.contains(document.activeElement)) {
+    const input = modal.querySelector('input:not(:disabled),button:not(:disabled)');
+    if (input) input.focus();
+  }
   // A workspace with no goal opens on the line that asks for one.
-  if (state.status === "ready" && state.empty) {
+  if (state.status === "ready" && state.empty && !state.newProject) {
     const input = host.querySelector("#goal-input");
     if (input && document.activeElement !== input) input.focus();
   }

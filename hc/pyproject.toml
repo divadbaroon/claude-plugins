@@ -8,7 +8,7 @@ version = "0.20.4"
 description = "Session-scoped goal workspaces and persistent context for Claude Code."
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["pypdf>=5,<7", "pyarrow>=18,<24", "openpyxl>=3.1,<4", "defusedxml>=0.7,<1"]
+dependencies = ["psutil>=6,<8", "packaging>=24,<27", "tomli>=2,<3; python_version < '3.11'", "pypdf>=5,<7", "pyarrow>=18,<24", "openpyxl>=3.1,<4", "defusedxml>=0.7,<1", "PyYAML>=6,<7"]
 authors = [{ name = "David Baroon" }]
 license = { text = "MIT" }
 

@@ -1,0 +1,2673 @@
+{
+  "schema_version": 1,
+  "checked_at": "2026-09-14T03:47:05.102437+00:00",
+  "method": "Purposive coverage sampling; DOI identity from registry; repository linkage and dependency annotations reviewed against pinned primary-source files. No code execution inferred from metadata.",
+  "papers": {
+    "10.1002/hbm.23730": {
+      "doi": "10.1002/hbm.23730",
+      "title": "Deep learning with convolutional neural networks for EEG decoding and visualization",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.1002%2Fhbm.23730",
+      "paper_url": "https://doi.org/10.1002/hbm.23730",
+      "checked_at": "2026-09-14T03:46:34.055844+00:00"
+    },
+    "10.1007/978-3-031-64302-6_19": {
+      "doi": "10.1007/978-3-031-64302-6_19",
+      "title": "How to Teach Programming in the AI Era? Using LLMs as a Teachable Agent for Debugging",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.1007%2F978-3-031-64302-6_19",
+      "paper_url": "https://doi.org/10.1007/978-3-031-64302-6_19",
+      "checked_at": "2026-09-14T03:46:34.639617+00:00"
+    },
+    "10.1088/1741-2552/aadea0": {
+      "doi": "10.1088/1741-2552/aadea0",
+      "title": "MOABB: trustworthy algorithm benchmarking for BCIs",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.1088%2F1741-2552%2Faadea0",
+      "paper_url": "https://doi.org/10.1088/1741-2552/aadea0",
+      "checked_at": "2026-09-14T03:46:35.155277+00:00"
+    },
+    "10.1109/IROS.2012.6386109": {
+      "doi": "10.1109/iros.2012.6386109",
+      "title": "MuJoCo: A physics engine for model-based control",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.1109%2FIROS.2012.6386109",
+      "paper_url": "https://doi.org/10.1109/iros.2012.6386109",
+      "checked_at": "2026-09-14T03:46:35.668757+00:00"
+    },
+    "10.1109/TVCG.2015.2467191": {
+      "doi": "10.1109/tvcg.2015.2467191",
+      "title": "Voyager: Exploratory Analysis via Faceted Browsing of Visualization Recommendations",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.1109%2FTVCG.2015.2467191",
+      "paper_url": "https://doi.org/10.1109/tvcg.2015.2467191",
+      "checked_at": "2026-09-14T03:46:36.197152+00:00"
+    },
+    "10.1109/TVCG.2016.2599030": {
+      "doi": "10.1109/tvcg.2016.2599030",
+      "title": "Vega-Lite: A Grammar of Interactive Graphics",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.1109%2FTVCG.2016.2599030",
+      "paper_url": "https://doi.org/10.1109/tvcg.2016.2599030",
+      "checked_at": "2026-09-14T03:46:36.916415+00:00"
+    },
+    "10.18653/v1/2020.emnlp-demos.15": {
+      "doi": "10.18653/v1/2020.emnlp-demos.15",
+      "title": "The Language Interpretability Tool: Extensible, Interactive Visualizations and Analysis for NLP Models",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.18653%2Fv1%2F2020.emnlp-demos.15",
+      "paper_url": "https://doi.org/10.18653/v1/2020.emnlp-demos.15",
+      "checked_at": "2026-09-14T03:46:37.437400+00:00"
+    },
+    "10.18653/v1/2021.acl-demo.30": {
+      "doi": "10.18653/v1/2021.acl-demo.30",
+      "title": "Ecco: An Open Source Library for the Explainability of Transformer Language Models",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.18653%2Fv1%2F2021.acl-demo.30",
+      "paper_url": "https://doi.org/10.18653/v1/2021.acl-demo.30",
+      "checked_at": "2026-09-14T03:46:37.946696+00:00"
+    },
+    "10.18653/v1/2021.emnlp-demo.21": {
+      "doi": "10.18653/v1/2021.emnlp-demo.21",
+      "title": "Datasets: A Community Library for Natural Language Processing",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.18653%2Fv1%2F2021.emnlp-demo.21",
+      "paper_url": "https://doi.org/10.18653/v1/2021.emnlp-demo.21",
+      "checked_at": "2026-09-14T03:46:38.456674+00:00"
+    },
+    "10.18653/v1/2023.acl-demo.50": {
+      "doi": "10.18653/v1/2023.acl-demo.50",
+      "title": "WizMap: Scalable Interactive Visualization for Exploring Large Machine Learning Embeddings",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.18653%2Fv1%2F2023.acl-demo.50",
+      "paper_url": "https://doi.org/10.18653/v1/2023.acl-demo.50",
+      "checked_at": "2026-09-14T03:46:38.985481+00:00"
+    },
+    "10.18653/v1/D19-1410": {
+      "doi": "10.18653/v1/d19-1410",
+      "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.18653%2Fv1%2FD19-1410",
+      "paper_url": "https://doi.org/10.18653/v1/d19-1410",
+      "checked_at": "2026-09-14T03:46:39.495891+00:00"
+    },
+    "10.18653/v1/P19-3007": {
+      "doi": "10.18653/v1/p19-3007",
+      "title": "A Multiscale Visualization of Attention in the Transformer Model",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.18653%2Fv1%2FP19-3007",
+      "paper_url": "https://doi.org/10.18653/v1/p19-3007",
+      "checked_at": "2026-09-14T03:46:40.024449+00:00"
+    },
+    "10.21105/joss.00861": {
+      "doi": "10.21105/joss.00861",
+      "title": "UMAP: Uniform Manifold Approximation and Projection",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.21105%2Fjoss.00861",
+      "paper_url": "https://doi.org/10.21105/joss.00861",
+      "checked_at": "2026-09-14T03:46:40.532295+00:00"
+    },
+    "10.21105/joss.03021": {
+      "doi": "10.21105/joss.03021",
+      "title": "seaborn: statistical data visualization",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.21105%2Fjoss.03021",
+      "paper_url": "https://doi.org/10.21105/joss.03021",
+      "checked_at": "2026-09-14T03:46:41.041543+00:00"
+    },
+    "10.21105/joss.05351": {
+      "doi": "10.21105/joss.05351",
+      "title": "jsPsych: Enabling an Open-Source Collaborative\nEcosystem of Behavioral Experiments",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.21105%2Fjoss.05351",
+      "paper_url": "https://doi.org/10.21105/joss.05351",
+      "checked_at": "2026-09-14T03:46:41.615555+00:00"
+    },
+    "10.21105/joss.07668": {
+      "doi": "10.21105/joss.07668",
+      "title": "Mesa 3: Agent-based modeling with Python in 2025",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.21105%2Fjoss.07668",
+      "paper_url": "https://doi.org/10.21105/joss.07668",
+      "checked_at": "2026-09-14T03:46:42.119282+00:00"
+    },
+    "10.23915/distill.00007": {
+      "doi": "10.23915/distill.00007",
+      "title": "Feature Visualization",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.23915%2Fdistill.00007",
+      "paper_url": "https://doi.org/10.23915/distill.00007",
+      "checked_at": "2026-09-14T03:46:42.626994+00:00"
+    },
+    "10.3389/fnins.2013.00267": {
+      "doi": "10.3389/fnins.2013.00267",
+      "title": "MEG and EEG data analysis with MNE-Python",
+      "kind": "publication",
+      "registry_url": "https://api.crossref.org/works/10.3389%2Ffnins.2013.00267",
+      "paper_url": "https://doi.org/10.3389/fnins.2013.00267",
+      "checked_at": "2026-09-14T03:46:43.134533+00:00"
+    },
+    "10.48550/arXiv.1910.05789": {
+      "doi": "10.48550/arxiv.1910.05789",
+      "title": "On the Utility of Learning about Humans for Human-AI Coordination",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.1910.05789",
+      "paper_url": "https://arxiv.org/abs/1910.05789",
+      "checked_at": "2026-09-14T03:46:44.134168+00:00"
+    },
+    "10.48550/arXiv.2004.14974": {
+      "doi": "10.48550/arxiv.2004.14974",
+      "title": "Fact or Fiction: Verifying Scientific Claims",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2004.14974",
+      "paper_url": "https://arxiv.org/abs/2004.14974",
+      "checked_at": "2026-09-14T03:46:45.088290+00:00"
+    },
+    "10.48550/arXiv.2009.03300": {
+      "doi": "10.48550/arxiv.2009.03300",
+      "title": "Measuring Massive Multitask Language Understanding",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2009.03300",
+      "paper_url": "https://arxiv.org/abs/2009.03300",
+      "checked_at": "2026-09-14T03:46:46.055611+00:00"
+    },
+    "10.48550/arXiv.2107.03374": {
+      "doi": "10.48550/arxiv.2107.03374",
+      "title": "Evaluating Large Language Models Trained on Code",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2107.03374",
+      "paper_url": "https://arxiv.org/abs/2107.03374",
+      "checked_at": "2026-09-14T03:46:47.194362+00:00"
+    },
+    "10.48550/arXiv.2110.14168": {
+      "doi": "10.48550/arxiv.2110.14168",
+      "title": "Training Verifiers to Solve Math Word Problems",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2110.14168",
+      "paper_url": "https://arxiv.org/abs/2110.14168",
+      "checked_at": "2026-09-14T03:46:48.148249+00:00"
+    },
+    "10.48550/arXiv.2204.07705": {
+      "doi": "10.48550/arxiv.2204.07705",
+      "title": "Super-NaturalInstructions: Generalization via Declarative Instructions on 1600+ NLP Tasks",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2204.07705",
+      "paper_url": "https://arxiv.org/abs/2204.07705",
+      "checked_at": "2026-09-14T03:46:49.315173+00:00"
+    },
+    "10.48550/arXiv.2210.14896": {
+      "doi": "10.48550/arxiv.2210.14896",
+      "title": "DiffusionDB: A Large-scale Prompt Gallery Dataset for Text-to-Image Generative Models",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2210.14896",
+      "paper_url": "https://arxiv.org/abs/2210.14896",
+      "checked_at": "2026-09-14T03:46:50.291158+00:00"
+    },
+    "10.48550/arXiv.2304.03442": {
+      "doi": "10.48550/arxiv.2304.03442",
+      "title": "Generative Agents: Interactive Simulacra of Human Behavior",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2304.03442",
+      "paper_url": "https://arxiv.org/abs/2304.03442",
+      "checked_at": "2026-09-14T03:46:51.243069+00:00"
+    },
+    "10.48550/arXiv.2306.13831": {
+      "doi": "10.48550/arxiv.2306.13831",
+      "title": "Minigrid &amp; Miniworld: Modular &amp; Customizable Reinforcement Learning Environments for Goal-Oriented Tasks",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2306.13831",
+      "paper_url": "https://arxiv.org/abs/2306.13831",
+      "checked_at": "2026-09-14T03:46:52.231386+00:00"
+    },
+    "10.48550/arXiv.2307.13854": {
+      "doi": "10.48550/arxiv.2307.13854",
+      "title": "WebArena: A Realistic Web Environment for Building Autonomous Agents",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2307.13854",
+      "paper_url": "https://arxiv.org/abs/2307.13854",
+      "checked_at": "2026-09-14T03:46:53.505196+00:00"
+    },
+    "10.48550/arXiv.2308.08155": {
+      "doi": "10.48550/arxiv.2308.08155",
+      "title": "AutoGen: Enabling Next-Gen LLM Applications via Multi-Agent Conversation",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2308.08155",
+      "paper_url": "https://arxiv.org/abs/2308.08155",
+      "checked_at": "2026-09-14T03:46:54.596736+00:00"
+    },
+    "10.48550/arXiv.2308.14247": {
+      "doi": "10.48550/arxiv.2308.14247",
+      "title": "Draco 2: An Extensible Platform to Model Visualization Design",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2308.14247",
+      "paper_url": "https://arxiv.org/abs/2308.14247",
+      "checked_at": "2026-09-14T03:46:55.576970+00:00"
+    },
+    "10.48550/arXiv.2309.09128": {
+      "doi": "10.48550/arxiv.2309.09128",
+      "title": "ChainForge: A Visual Toolkit for Prompt Engineering and LLM Hypothesis Testing",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2309.09128",
+      "paper_url": "https://arxiv.org/abs/2309.09128",
+      "checked_at": "2026-09-14T03:46:56.590605+00:00"
+    },
+    "10.48550/arXiv.2310.03714": {
+      "doi": "10.48550/arxiv.2310.03714",
+      "title": "DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2310.03714",
+      "paper_url": "https://arxiv.org/abs/2310.03714",
+      "checked_at": "2026-09-14T03:46:57.545995+00:00"
+    },
+    "10.48550/arXiv.2310.06770": {
+      "doi": "10.48550/arxiv.2310.06770",
+      "title": "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2310.06770",
+      "paper_url": "https://arxiv.org/abs/2310.06770",
+      "checked_at": "2026-09-14T03:46:58.517584+00:00"
+    },
+    "10.48550/arXiv.2401.08281": {
+      "doi": "10.48550/arxiv.2401.08281",
+      "title": "The Faiss library",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2401.08281",
+      "paper_url": "https://arxiv.org/abs/2401.08281",
+      "checked_at": "2026-09-14T03:46:59.500680+00:00"
+    },
+    "10.48550/arXiv.2402.14207": {
+      "doi": "10.48550/arxiv.2402.14207",
+      "title": "Assisting in Writing Wikipedia-like Articles From Scratch with Large Language Models",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2402.14207",
+      "paper_url": "https://arxiv.org/abs/2402.14207",
+      "checked_at": "2026-09-14T03:47:00.516405+00:00"
+    },
+    "10.48550/arXiv.2403.07718": {
+      "doi": "10.48550/arxiv.2403.07718",
+      "title": "WorkArena: How Capable Are Web Agents at Solving Common Knowledge Work Tasks?",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2403.07718",
+      "paper_url": "https://arxiv.org/abs/2403.07718",
+      "checked_at": "2026-09-14T03:47:01.542866+00:00"
+    },
+    "10.48550/arXiv.2405.14782": {
+      "doi": "10.48550/arxiv.2405.14782",
+      "title": "Lessons from the Trenches on Reproducible Evaluation of Language Models",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2405.14782",
+      "paper_url": "https://arxiv.org/abs/2405.14782",
+      "checked_at": "2026-09-14T03:47:02.731292+00:00"
+    },
+    "10.48550/arXiv.2405.15793": {
+      "doi": "10.48550/arxiv.2405.15793",
+      "title": "SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2405.15793",
+      "paper_url": "https://arxiv.org/abs/2405.15793",
+      "checked_at": "2026-09-14T03:47:03.725679+00:00"
+    },
+    "10.48550/arXiv.2407.17032": {
+      "doi": "10.48550/arxiv.2407.17032",
+      "title": "Gymnasium: A Standard Interface for Reinforcement Learning Environments",
+      "kind": "arxiv_preprint",
+      "registry_url": "https://api.datacite.org/dois/10.48550%2FarXiv.2407.17032",
+      "paper_url": "https://arxiv.org/abs/2407.17032",
+      "checked_at": "2026-09-14T03:47:04.847137+00:00"
+    }
+  },
+  "repositories": {
+    "ianarawjo/ChainForge": {
+      "repository": "ianarawjo/ChainForge",
+      "revision": "5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 17,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/README.md",
+          "sha256": "de5973119ef7525fba251cb30cee0118ce406cbe2ac003836a4eba5425ac0ba5",
+          "bytes": 14904
+        },
+        {
+          "path": "docker-compose.yml",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/docker-compose.yml",
+          "sha256": "5f26fcb4b25bd26f3def50480bb97ed1ef600930c5d2cd525d2827dabc1db627",
+          "bytes": 1003
+        },
+        {
+          "path": "environment.yml",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/environment.yml",
+          "sha256": "de793f67f516a15c1c486172fee57784562a38efb68761131be5b022c1cae40b",
+          "bytes": 4692
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/setup.py",
+          "sha256": "dbc28bffea046cb5fcffaec257f86896785c01581d47c3eb578f18949b903ba6",
+          "bytes": 3706
+        },
+        {
+          "path": "docker/README.md",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/docker/README.md",
+          "sha256": "c511fd510baecc4c19bc36b9b4a10f765112a48ef251417c85f31aa67258182a",
+          "bytes": 11962
+        },
+        {
+          "path": "packager/README.md",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/packager/README.md",
+          "sha256": "d66c77121a692c91f5540b78533cf34e065dec1622654694945a155229f63811",
+          "bytes": 4568
+        },
+        {
+          "path": "tests/README.md",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/tests/README.md",
+          "sha256": "ac836e3e77ef7de8258d0305f7cb6f14d3ff8c1c3d6614aee8a7a4b85faaa802",
+          "bytes": 2879
+        },
+        {
+          "path": "chainforge/requirements-lock.txt",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/chainforge/requirements-lock.txt",
+          "sha256": "72abc31e959892074cfa390bc69779b5ef59c55d2496f712a052837e231564c1",
+          "bytes": 1993
+        },
+        {
+          "path": "chainforge/requirements-rag-lock.txt",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/chainforge/requirements-rag-lock.txt",
+          "sha256": "811d30b45399df7b077ad350d7782993fdfbe39f80aff0e22c8cc2fce17d4822",
+          "bytes": 2926
+        },
+        {
+          "path": "chainforge/requirements.txt",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/chainforge/requirements.txt",
+          "sha256": "2c846be0875d219cee1e9a585080d8a7d3126e8e7b060e249f92ba9414207904",
+          "bytes": 387
+        },
+        {
+          "path": "docker/docker-compose.gpu.yml",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/docker/docker-compose.gpu.yml",
+          "sha256": "dfcd3124a04485869219f0af3e0be4626d43a5c807e75f7b486aebfc93d9c549",
+          "bytes": 1172
+        },
+        {
+          "path": "docker/Dockerfile",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/docker/Dockerfile",
+          "sha256": "41f2a26e64aa2870f74570d6b85a9d17141b338edbaaf0640d1c32d286a643c7",
+          "bytes": 2995
+        },
+        {
+          "path": "docker/Dockerfile.gpu",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/docker/Dockerfile.gpu",
+          "sha256": "7eb4b2566a7906830d62cddb21dbe9d2528e5df3e982d8913989b011ed8b5dbf",
+          "bytes": 2969
+        },
+        {
+          "path": "chainforge/oaievals/README.md",
+          "url": "https://github.com/ianarawjo/ChainForge/blob/5adb84c219b0ee9db85ddd8c20f3e1844cad5fbc/chainforge/oaievals/README.md",
+          "sha256": "2583e70daf1db377d4216bee9734346b55d96de8f4f7c9d41080d5e852e067f9",
+          "bytes": 1507
+        }
+      ],
+      "errors": []
+    },
+    "mqo00/hypocompass": {
+      "repository": "mqo00/hypocompass",
+      "revision": "7bc855e7316aeb17e9919013a26aa0427138d480",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 4,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/mqo00/hypocompass/blob/7bc855e7316aeb17e9919013a26aa0427138d480/README.md",
+          "sha256": "befa5a6752336c46fcc461e317ad672484875e5bcbd8d5cb7253b8a6c800ec55",
+          "bytes": 3483
+        },
+        {
+          "path": "system/README.md",
+          "url": "https://github.com/mqo00/hypocompass/blob/7bc855e7316aeb17e9919013a26aa0427138d480/system/README.md",
+          "sha256": "7582cf79bc14d05999d5f4d4ee2492241c21baf28d539ff74e4f53efa9fab19e",
+          "bytes": 1898
+        },
+        {
+          "path": "system/backend/requirements.txt",
+          "url": "https://github.com/mqo00/hypocompass/blob/7bc855e7316aeb17e9919013a26aa0427138d480/system/backend/requirements.txt",
+          "sha256": "ffb9292f5843b9e2f254a41a4509b118c268a496261b58b3b5fc6b572715263c",
+          "bytes": 376
+        },
+        {
+          "path": "system/frontend/package.json",
+          "url": "https://github.com/mqo00/hypocompass/blob/7bc855e7316aeb17e9919013a26aa0427138d480/system/frontend/package.json",
+          "sha256": "995face2ce22984946aed81beba66031852050c55e5138878736473f719fb362",
+          "bytes": 1348
+        }
+      ],
+      "errors": []
+    },
+    "joonspk-research/generative_agents": {
+      "repository": "joonspk-research/generative_agents",
+      "revision": "fe05a71d3e4ed7d10bf68aa4eda6dd995ec070f4",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": true,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/joonspk-research/generative_agents/blob/fe05a71d3e4ed7d10bf68aa4eda6dd995ec070f4/README.md",
+          "sha256": "ae25b22ffa0a44d4e4a5135a9d4c12dd5e98b561d229842ea481239935c357a4",
+          "bytes": 12518
+        },
+        {
+          "path": "environment/frontend_server/requirements.txt",
+          "url": "https://github.com/joonspk-research/generative_agents/blob/fe05a71d3e4ed7d10bf68aa4eda6dd995ec070f4/environment/frontend_server/requirements.txt",
+          "sha256": "9b8f21640ef1bf81359dbfbdff78c61b7fc02e770acf99cc1bd6378708045fff",
+          "bytes": 1171
+        }
+      ],
+      "errors": []
+    },
+    "stanford-oval/storm": {
+      "repository": "stanford-oval/storm",
+      "revision": "fb951af7744dab086e34962e9bc6fe878e145f83",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 6,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/stanford-oval/storm/blob/fb951af7744dab086e34962e9bc6fe878e145f83/README.md",
+          "sha256": "711016d02ae72a43ae96198ede47ee0b36ab10029b323a76eb2d3cd87413e2a2",
+          "bytes": 20091
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/stanford-oval/storm/blob/fb951af7744dab086e34962e9bc6fe878e145f83/requirements.txt",
+          "sha256": "99de53814ee4dd6f3a9ed1f452f6d79b28490a01b85ed15a6200fc06812efa79",
+          "bytes": 172
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/stanford-oval/storm/blob/fb951af7744dab086e34962e9bc6fe878e145f83/setup.py",
+          "sha256": "269047658954b0857e8a8bb6c6bca0c15821731dfd471d336064b7c2520ff2c7",
+          "bytes": 1267
+        },
+        {
+          "path": "examples/storm_examples/README.md",
+          "url": "https://github.com/stanford-oval/storm/blob/fb951af7744dab086e34962e9bc6fe878e145f83/examples/storm_examples/README.md",
+          "sha256": "ab077ecfab26d6267129c29c058a3bcd74085cf675a86a2206bd3c9fd186e25e",
+          "bytes": 6101
+        },
+        {
+          "path": "frontend/demo_light/README.md",
+          "url": "https://github.com/stanford-oval/storm/blob/fb951af7744dab086e34962e9bc6fe878e145f83/frontend/demo_light/README.md",
+          "sha256": "4775a25310552d027ea2e796a84873b515ec0cbd322a98d05d436f4e4ed1861e",
+          "bytes": 1669
+        },
+        {
+          "path": "frontend/demo_light/requirements.txt",
+          "url": "https://github.com/stanford-oval/storm/blob/fb951af7744dab086e34962e9bc6fe878e145f83/frontend/demo_light/requirements.txt",
+          "sha256": "c196aab3ef5c75dcbcf3d3f900df82d708fdaf330ce83d1a0a8cd2120c9168f1",
+          "bytes": 176
+        }
+      ],
+      "errors": []
+    },
+    "stanfordnlp/dspy": {
+      "repository": "stanfordnlp/dspy",
+      "revision": "ecba33763316d2a4c6c756046a1118ecbff033e7",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 8,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/README.md",
+          "sha256": "9b2fa5d078b4e4aafe6f8a91d5677c735427e149a235708d98a18c28db8efdea",
+          "bytes": 4788
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/pyproject.toml",
+          "sha256": "8cf1e5c661445ba2850442b3d0ebeea13142b2deecffce6897d4412a554dfca6",
+          "bytes": 5595
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/docs/README.md",
+          "sha256": "9d41c6b554f110176f134030a0b90fa1178f97986cac868dbfb3bea1650ba83e",
+          "bytes": 2698
+        },
+        {
+          "path": "tests/README.md",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/tests/README.md",
+          "sha256": "689513aa39aaa58d7646995a2ff23ecd021c2637b92b68577d2e554a64127977",
+          "bytes": 245
+        },
+        {
+          "path": "docs/requirements.txt",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/docs/requirements.txt",
+          "sha256": "a927087492181efd5f218140aac6cb8aae40e0d3e1c436429558d6b7618380ec",
+          "bytes": 202
+        },
+        {
+          "path": "tests/reliability/README.md",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/tests/reliability/README.md",
+          "sha256": "5957fe2107bcdf8de8601b6f1f2e6db8e41983e8322fbe774266d6b03153207a",
+          "bytes": 5652
+        },
+        {
+          "path": ".github/.internal_dspyai/pyproject.toml",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/.github/.internal_dspyai/pyproject.toml",
+          "sha256": "76240dfe50600070fe70c23819808d811194749c7044c6bf22604e483d476d52",
+          "bytes": 783
+        },
+        {
+          "path": "tests/clients/fixtures/lm_3_3_0/README.md",
+          "url": "https://github.com/stanfordnlp/dspy/blob/ecba33763316d2a4c6c756046a1118ecbff033e7/tests/clients/fixtures/lm_3_3_0/README.md",
+          "sha256": "06607e4de1c7502313850539919a3537fea3c3514825e5cfe8649519b1c593be",
+          "bytes": 3828
+        }
+      ],
+      "errors": []
+    },
+    "microsoft/autogen": {
+      "repository": "microsoft/autogen",
+      "revision": "027ecf0a379bcc1d09956d46d12d44a3ad9cee14",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 81,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/README.md",
+          "sha256": "5d300aa3304aeecf1a48f68ac76a1af255b8645d666b8aa154790cb30f1dbb94",
+          "bytes": 20790
+        },
+        {
+          "path": "dotnet/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/dotnet/README.md",
+          "sha256": "de03b95792c94f4e7f3c684b88e4bde26a1d65d5a232a74bc57e8214897f6d73",
+          "bytes": 2796
+        },
+        {
+          "path": "python/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/python/README.md",
+          "sha256": "098c8467e3b9a28e506e87bd78eb0078bb1205175b4e375bf8e5f525cd759e08",
+          "bytes": 9146
+        },
+        {
+          "path": ".devcontainer/docker-compose.yml",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/.devcontainer/docker-compose.yml",
+          "sha256": "dd210277eb7dc1f3342a5204ab46a5af879f6ee1be84a88016413ced089cc600",
+          "bytes": 859
+        },
+        {
+          "path": ".devcontainer/Dockerfile",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/.devcontainer/Dockerfile",
+          "sha256": "d45a77ef467ffa91b5009e51ff7abc3506766472fd3f08533dc1acf35e63d33a",
+          "bytes": 322
+        },
+        {
+          "path": "python/pyproject.toml",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/python/pyproject.toml",
+          "sha256": "e3b51f9199dd3803652df3e3edfee60d1392c520e13dc17d447eb975c6d46505",
+          "bytes": 5044
+        },
+        {
+          "path": "docs/design/readme.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/docs/design/readme.md",
+          "sha256": "2c18ad80219678f10678d272172b67b912cbb74918a5ad794db81c6545df7647",
+          "bytes": 97
+        },
+        {
+          "path": "docs/dotnet/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/docs/dotnet/README.md",
+          "sha256": "989b8f12c479365cfe6690133a411ecc64729cb25e95d772f24b3ea0ba557e63",
+          "bytes": 384
+        },
+        {
+          "path": "dotnet/nuget/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/dotnet/nuget/README.md",
+          "sha256": "a7c148e4241c7a277260bc24aa3c0015bd13e2d07d6b4fe673bb5ee1dffb4f4d",
+          "bytes": 558
+        },
+        {
+          "path": "dotnet/website/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/dotnet/website/README.md",
+          "sha256": "5fceeb0697c48f07d842c05009a090c43c527a3303e99f7783c81d992a49eace",
+          "bytes": 376
+        },
+        {
+          "path": "python/docs/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/python/docs/README.md",
+          "sha256": "6515f38ca860dfa83a005d6d7521c7a072c4cab5054f6f28b24c1b61705ea999",
+          "bytes": 992
+        },
+        {
+          "path": "dotnet/samples/dev-team/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/dotnet/samples/dev-team/README.md",
+          "sha256": "37f7e70fa7e794ff07345d221a45f63eca54de31c657ee21ff8857208489360a",
+          "bytes": 3783
+        },
+        {
+          "path": "dotnet/samples/Hello/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/dotnet/samples/Hello/README.md",
+          "sha256": "f7cc16487c197eabb3602664ce94e9d55302c53120082d46e880ba9d88bb8893",
+          "bytes": 542
+        },
+        {
+          "path": "dotnet/src/AutoGen.LMStudio/README.md",
+          "url": "https://github.com/microsoft/autogen/blob/027ecf0a379bcc1d09956d46d12d44a3ad9cee14/dotnet/src/AutoGen.LMStudio/README.md",
+          "sha256": "df47db1b85d0be2309127850aca82f148431155b85ab85bb3a5f4cb03134e7de",
+          "bytes": 963
+        }
+      ],
+      "errors": []
+    },
+    "SWE-agent/SWE-agent": {
+      "repository": "SWE-agent/SWE-agent",
+      "revision": "3ea751c087f32b16e039a2233dd6eefecef325d5",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 20,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/README.md",
+          "sha256": "dcd880557720efbab0f5c0e68f2bc742309efecfce83244c9e670ec1f1adf76f",
+          "bytes": 8158
+        },
+        {
+          "path": ".env.example",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/.env.example",
+          "sha256": "35639e5eeb202a95b661acc264b2e340e28c55da3c42f48a815f358ebb15b2c6",
+          "bytes": 322
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/pyproject.toml",
+          "sha256": "c15229fac40a10716b53fda2cf6ba756d62cb59d682e7d10d7d62b640dfccef9",
+          "bytes": 6487
+        },
+        {
+          "path": ".devcontainer/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/.devcontainer/README.md",
+          "sha256": "8af28dc8a7e7cf64c1c9a9cef762c0a79145b412d322c970cbd662f4df00c477",
+          "bytes": 100
+        },
+        {
+          "path": "config/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/config/README.md",
+          "sha256": "2fcb654567289768c15bfc293cd7e650973f5b2d5f9100f1759f9d3ff5d1c141",
+          "bytes": 910
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/docs/README.md",
+          "sha256": "573020df0ad841f879f935f9f6fb960eda22753750f84f97baff5dc04a00dcf6",
+          "bytes": 444
+        },
+        {
+          "path": "trajectories/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/trajectories/README.md",
+          "sha256": "de112edf84f6aa74fe02b5cb3c0ce01394b254b409d48137515ec92127bced8e",
+          "bytes": 291
+        },
+        {
+          "path": "sweagent/inspector/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/sweagent/inspector/README.md",
+          "sha256": "11641076923c693ca5522587fd665d5a564e7fdf503dcb52f07d586702591cc5",
+          "bytes": 300
+        },
+        {
+          "path": "tools/review_on_submit_m/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/tools/review_on_submit_m/README.md",
+          "sha256": "a95e6d37ef38e15ddf66db332eb3a74bb045923e9ca43f5d519ad7a43519b2a2",
+          "bytes": 197
+        },
+        {
+          "path": "tests/test_data/data_sources/ctf/crypto/Katy/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/tests/test_data/data_sources/ctf/crypto/Katy/README.md",
+          "sha256": "c5bc2ac9e47d55efd364a9c337d932756998c37fcc0f8eadecbc7d068f8aebd8",
+          "bytes": 710
+        },
+        {
+          "path": "tests/test_data/data_sources/ctf/forensics/flash/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/tests/test_data/data_sources/ctf/forensics/flash/README.md",
+          "sha256": "abd0fe8f9960a10b4c6d089abea2206a944be008a21bc4e04b06a438cfd139ee",
+          "bytes": 257
+        },
+        {
+          "path": "tests/test_data/data_sources/ctf/misc/networking_1/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/tests/test_data/data_sources/ctf/misc/networking_1/README.md",
+          "sha256": "bb7f521e99cfaf646f2dfb5a5f3df08ffdb838afc6b0a15a3c764c64d215b635",
+          "bytes": 165
+        },
+        {
+          "path": "tests/test_data/data_sources/ctf/pwn/warmup/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/tests/test_data/data_sources/ctf/pwn/warmup/README.md",
+          "sha256": "f787da40974131fa266f5ebc22cc0ce3a31512f8cccbf9e87b35818a2a72fd71",
+          "bytes": 184
+        },
+        {
+          "path": "tests/test_data/data_sources/ctf/rev/rock/README.md",
+          "url": "https://github.com/SWE-agent/SWE-agent/blob/3ea751c087f32b16e039a2233dd6eefecef325d5/tests/test_data/data_sources/ctf/rev/rock/README.md",
+          "sha256": "5ad026077aee9b7b2d72f6ae1f56dc56cad9dfcadec4ede2886a074b97b84c8e",
+          "bytes": 159
+        }
+      ],
+      "errors": []
+    },
+    "ServiceNow/WorkArena": {
+      "repository": "ServiceNow/WorkArena",
+      "revision": "a772230a94cf1caf4166b8ead3983f3b3786455b",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 7,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/README.md",
+          "sha256": "834a48f0346036a0fc591a36f9eb6f513b44a2777a66afa0917f28fc63f29334",
+          "bytes": 9290
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/CITATION.cff",
+          "sha256": "34e6cb74247c077b5fa3f3d6803c48513e19d834e35b852ec7b7f7fd20dae435",
+          "bytes": 2619
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/pyproject.toml",
+          "sha256": "8b193737c9e363a8189f6d4eb841c0e967c0405ab6911699585a33a337ff7f79",
+          "bytes": 1668
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/requirements.txt",
+          "sha256": "4f40c28e99b6335f876983eb47f118a02d20458de55a9fa018bdf48d8f6a574d",
+          "bytes": 176
+        },
+        {
+          "path": "dev/environment.yaml",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/dev/environment.yaml",
+          "sha256": "d1451b6ed34ab09bd21e841a1a01386f6487b56178db8d6b2eb1d12fa30d8242",
+          "bytes": 153
+        },
+        {
+          "path": "dev/requirements.txt",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/dev/requirements.txt",
+          "sha256": "546f2ee1c395b2dcefe94b4ec2a711c1d413225c81a9a1b20f708f7523192ca7",
+          "bytes": 138
+        },
+        {
+          "path": "src/browsergym/workarena/tasks/scripts/README.md",
+          "url": "https://github.com/ServiceNow/WorkArena/blob/a772230a94cf1caf4166b8ead3983f3b3786455b/src/browsergym/workarena/tasks/scripts/README.md",
+          "sha256": "fa33ad19ff64db3a0186b0647ac99f0e7afdfacd0f84e122d0a588f717cec35b",
+          "bytes": 296
+        }
+      ],
+      "errors": []
+    },
+    "web-arena-x/webarena": {
+      "repository": "web-arena-x/webarena",
+      "revision": "dce04686a56253aefba7b18a4fa0937cf1dc987b",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 8,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/README.md",
+          "sha256": "081c826497f9b7da4952771ee128c2215ec3532379db0fe9f7fcbd899d9c9287",
+          "bytes": 9717
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/CITATION.cff",
+          "sha256": "78c954961c730da441f585e3e52331b60f10bc7bbd071074310b885980a35194",
+          "bytes": 353
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/requirements.txt",
+          "sha256": "86db3ff7932398742f9d567a230592b2843704660ed2220748d26b59e4d06bf2",
+          "bytes": 156
+        },
+        {
+          "path": "setup.cfg",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/setup.cfg",
+          "sha256": "27df18cca17c7e9c0e9ec07c8192fe383859b122bda4cfb9c1914db043f91646",
+          "bytes": 716
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/setup.py",
+          "sha256": "ef7b23c3468c8130483cd7578c14e977b39b372fd088f0e163b47be196d1291e",
+          "bytes": 69
+        },
+        {
+          "path": "environment_docker/README.md",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/environment_docker/README.md",
+          "sha256": "50aac7e58d83f3e61b1e90ca8f5ffa40e1e725c45109601aa8a7fd4ce0f4a0ff",
+          "bytes": 12451
+        },
+        {
+          "path": "resources/README.md",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/resources/README.md",
+          "sha256": "a1d6c28ee704c5fc59696fa42723c35829d67391fc6943e8d3361f2f8cf6883e",
+          "bytes": 2883
+        },
+        {
+          "path": "agent/prompts/README.md",
+          "url": "https://github.com/web-arena-x/webarena/blob/dce04686a56253aefba7b18a4fa0937cf1dc987b/agent/prompts/README.md",
+          "sha256": "0075e0804bf8b82c86f13935eea652463bb72e3804a13a2ae4c37f2cc1bdaa4b",
+          "bytes": 80
+        }
+      ],
+      "errors": []
+    },
+    "vega/vega-lite": {
+      "repository": "vega/vega-lite",
+      "revision": "831e308cf9feba791db0c279dea5f7983ca98445",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/vega/vega-lite/blob/831e308cf9feba791db0c279dea5f7983ca98445/README.md",
+          "sha256": "fc43a69cb2874d9ecf8e94e0e560cd86620d916170ecdba5d308f3efc12845eb",
+          "bytes": 2829
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/vega/vega-lite/blob/831e308cf9feba791db0c279dea5f7983ca98445/package.json",
+          "sha256": "b4c8d1a2f9de1d89589e1344233d6313b95f1db5e03222adcfcba6dec024c22c",
+          "bytes": 5273
+        }
+      ],
+      "errors": []
+    },
+    "uwdata/voyager": {
+      "repository": "uwdata/voyager",
+      "revision": "b3c8be7db5975f8b26d356e1e747ae3d0af74e9b",
+      "default_branch": "vy1",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/uwdata/voyager/blob/b3c8be7db5975f8b26d356e1e747ae3d0af74e9b/README.md",
+          "sha256": "d09e5e26f5ad1a3daa6b3b88303737aa62c3c03e26823a074975b9a11d1ef4a4",
+          "bytes": 4958
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/uwdata/voyager/blob/b3c8be7db5975f8b26d356e1e747ae3d0af74e9b/package.json",
+          "sha256": "3ab51855dc256f06a25c5c33644dda1f85868fda0518eb28d4f80172d37f6a84",
+          "bytes": 2544
+        }
+      ],
+      "errors": []
+    },
+    "cmudig/draco2": {
+      "repository": "cmudig/draco2",
+      "revision": "585bf7d0d4c5e75b1f557e923c8ff1a01ae16d58",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 4,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/cmudig/draco2/blob/585bf7d0d4c5e75b1f557e923c8ff1a01ae16d58/README.md",
+          "sha256": "bcdc436a06e94c5adfc7445c0b1cdd7443b86598c84ff119f221159c6a354c17",
+          "bytes": 3077
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/cmudig/draco2/blob/585bf7d0d4c5e75b1f557e923c8ff1a01ae16d58/CITATION.cff",
+          "sha256": "a2b90313042c5de5a2e174a75c566d657692b4ce316d824d3a6f0ea7b584cdb1",
+          "bytes": 938
+        },
+        {
+          "path": "Dockerfile",
+          "url": "https://github.com/cmudig/draco2/blob/585bf7d0d4c5e75b1f557e923c8ff1a01ae16d58/Dockerfile",
+          "sha256": "c539680dddfce0432f6e0e2e7e74831443f2a8396a2c95800d1e88e21465d48c",
+          "bytes": 964
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/cmudig/draco2/blob/585bf7d0d4c5e75b1f557e923c8ff1a01ae16d58/pyproject.toml",
+          "sha256": "58dc7452cf081ea7638e6877b91d7d0008ccb3f7c184f0e8f89a62444ffe3856",
+          "bytes": 2703
+        }
+      ],
+      "errors": []
+    },
+    "poloclub/wizmap": {
+      "repository": "poloclub/wizmap",
+      "revision": "f0f4af47a80bc64b0d81151d5a5040497ba7afcc",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 7,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/README.md",
+          "sha256": "d894d47a6a79bebfbbb241414a8e2bd09e3718cdf46a476df90a404ad920a8a7",
+          "bytes": 7215
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/package.json",
+          "sha256": "c3b9463c3b47038f68bc1d59d9a2386e07d3b07431470e5370a031c9e9cfdcac",
+          "bytes": 3237
+        },
+        {
+          "path": "notebook-widget/README.md",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/notebook-widget/README.md",
+          "sha256": "b52a49cdb30644c0074dac40e47f78003c1b038f0e72cb0c6e5d789047163c77",
+          "bytes": 7216
+        },
+        {
+          "path": "notebook-widget/package.json",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/notebook-widget/package.json",
+          "sha256": "c3b9463c3b47038f68bc1d59d9a2386e07d3b07431470e5370a031c9e9cfdcac",
+          "bytes": 3237
+        },
+        {
+          "path": "notebook-widget/requirements_dev.txt",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/notebook-widget/requirements_dev.txt",
+          "sha256": "850f19957d60bcc6c2887d5ae332d922bf43883f39c78acbc0c7483824f7264a",
+          "bytes": 214
+        },
+        {
+          "path": "notebook-widget/setup.cfg",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/notebook-widget/setup.cfg",
+          "sha256": "dc1a99791b1398dc361eb23db1028a13a92002ea6095261ccc5ecefc4f19e69b",
+          "bytes": 359
+        },
+        {
+          "path": "notebook-widget/setup.py",
+          "url": "https://github.com/poloclub/wizmap/blob/f0f4af47a80bc64b0d81151d5a5040497ba7afcc/notebook-widget/setup.py",
+          "sha256": "32c10ca25c923d1ab2cbd510d312f9afbc6297b9fd80f1c55a1f1ebec472a52f",
+          "bytes": 1701
+        }
+      ],
+      "errors": []
+    },
+    "jessevig/bertviz": {
+      "repository": "jessevig/bertviz",
+      "revision": "79dbaebfe31ada110c1268de7bb6509b14fe9df3",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/jessevig/bertviz/blob/79dbaebfe31ada110c1268de7bb6509b14fe9df3/README.md",
+          "sha256": "f89504d3ff65eb85ccb8fb82dafcd67a5b263952f5fe5022cae4179e0e6a4a2d",
+          "bytes": 18734
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/jessevig/bertviz/blob/79dbaebfe31ada110c1268de7bb6509b14fe9df3/setup.py",
+          "sha256": "8b54a88c364bb34ad8ee77de7ac872aed53c153b18172cedfccfc13d103deac7",
+          "bytes": 723
+        }
+      ],
+      "errors": []
+    },
+    "PAIR-code/lit": {
+      "repository": "PAIR-code/lit",
+      "revision": "3debb609cf1b9e8775471c262026e0a1a1f87a28",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 17,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/README.md",
+          "sha256": "6f7c8bde4ef5fea1a942bdb2393bb0425184ae49d3a2f42e3420bda8a6ecf513",
+          "bytes": 9991
+        },
+        {
+          "path": "Dockerfile",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/Dockerfile",
+          "sha256": "7906d7aeb6048e157623cc8a9b7e1ca668496839a3d9aee7787fc110d4d2c1b9",
+          "bytes": 2339
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/pyproject.toml",
+          "sha256": "2b457199990918a365e5900b3a8d07d4db5a1a3d700801b22bfa1b7c1f839399",
+          "bytes": 3299
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/requirements.txt",
+          "sha256": "bbfe079c5d8bc254fb1569a18a5e06ac91beb507ded7e6db41df903ac2f5d715",
+          "bytes": 1170
+        },
+        {
+          "path": "requirements_examples_common.txt",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/requirements_examples_common.txt",
+          "sha256": "929f214384c25d1cd195f3a5fcc6fedf95143f28e1e1c12ca09e238a5e36066e",
+          "bytes": 786
+        },
+        {
+          "path": "requirements_examples_discriminative_ai.txt",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/requirements_examples_discriminative_ai.txt",
+          "sha256": "9a8e0360c7902b3f7335bb4e9552fe07f6b4bdb9ff3e15f691fcf13419f1c1ef",
+          "bytes": 786
+        },
+        {
+          "path": "requirements_examples_generative_ai.txt",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/requirements_examples_generative_ai.txt",
+          "sha256": "7da290fcbac7281619084622d384864709f8d62553d73344430588e02f968ce5",
+          "bytes": 883
+        },
+        {
+          "path": "requirements_test.txt",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/requirements_test.txt",
+          "sha256": "dea87b0a85afac666771e5e8fa80f37b90d5fd775d1137e30238903f273fe9fa",
+          "bytes": 864
+        },
+        {
+          "path": "website/README.md",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/website/README.md",
+          "sha256": "0347e0c0c42375759a0f1a290cf6d74d1a6e207443d0c44ba8099d65b7099b51",
+          "bytes": 1958
+        },
+        {
+          "path": "lit_nlp/package.json",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/lit_nlp/package.json",
+          "sha256": "60452110ad5ef0728414ee83c4e2b0d8859abd07580511af5491590f6750fa68",
+          "bytes": 1914
+        },
+        {
+          "path": "website/package.json",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/website/package.json",
+          "sha256": "aab4028561654d5d21b82b716a4fe5ff3dd0553e6003da85f35315616b43f734",
+          "bytes": 363
+        },
+        {
+          "path": "lit_nlp/examples/gcp/README.md",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/lit_nlp/examples/gcp/README.md",
+          "sha256": "eb35cc63a24fd6ee9e6542209534cd14dc7c7d7bdec9c09a719d641e19138346",
+          "bytes": 746
+        },
+        {
+          "path": "lit_nlp/examples/glue/README.md",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/lit_nlp/examples/glue/README.md",
+          "sha256": "3ae396742dd643113f480a7917876154d07db91bea88a884cc48dc25ee697826",
+          "bytes": 268
+        },
+        {
+          "path": "lit_nlp/examples/penguin/README.md",
+          "url": "https://github.com/PAIR-code/lit/blob/3debb609cf1b9e8775471c262026e0a1a1f87a28/lit_nlp/examples/penguin/README.md",
+          "sha256": "8aabb24f56c4a62a753b2af03f8d72a58a8dc3d583949af4323bac7226078357",
+          "bytes": 256
+        }
+      ],
+      "errors": []
+    },
+    "jalammar/ecco": {
+      "repository": "jalammar/ecco",
+      "revision": "2a38a1360c8edb2e4ff4a08fba404b5164c21e06",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 6,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "readme.md",
+          "url": "https://github.com/jalammar/ecco/blob/2a38a1360c8edb2e4ff4a08fba404b5164c21e06/readme.md",
+          "sha256": "4af2781aad2e4d4832c38e59924505250eaa4bea4ddb5ad5343ba13525124e44",
+          "bytes": 11238
+        },
+        {
+          "path": "README.rst",
+          "url": "https://github.com/jalammar/ecco/blob/2a38a1360c8edb2e4ff4a08fba404b5164c21e06/README.rst",
+          "sha256": "a1a586236f9154e058ae0bbabb4b16d82a37ac6eb843d944cb4c13fe37567de6",
+          "bytes": 3735
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/jalammar/ecco/blob/2a38a1360c8edb2e4ff4a08fba404b5164c21e06/requirements.txt",
+          "sha256": "af191999866c84e928ce74599ac31d40ea2594b422f16ceab82d88bb79d797ef",
+          "bytes": 173
+        },
+        {
+          "path": "setup.cfg",
+          "url": "https://github.com/jalammar/ecco/blob/2a38a1360c8edb2e4ff4a08fba404b5164c21e06/setup.cfg",
+          "sha256": "1c159b46cb919fc4420d69476d64c42aa33b8155a01911706b5cc836047d789c",
+          "bytes": 758
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/jalammar/ecco/blob/2a38a1360c8edb2e4ff4a08fba404b5164c21e06/setup.py",
+          "sha256": "4444753f6c00ed4ec412454f12fdc975ab60cb29782f1b8c9eb7faf8395c1fcd",
+          "bytes": 2923
+        },
+        {
+          "path": "docs/requirements.txt",
+          "url": "https://github.com/jalammar/ecco/blob/2a38a1360c8edb2e4ff4a08fba404b5164c21e06/docs/requirements.txt",
+          "sha256": "4cfe4f60e6199bf838d7a9f5b923f82fac3fefc9f3438dc68408d0f895b5c677",
+          "bytes": 244
+        }
+      ],
+      "errors": []
+    },
+    "mesa/mesa": {
+      "repository": "mesa/mesa",
+      "revision": "a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 19,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/README.md",
+          "sha256": "10e6054aab9ad8fdd86bc605f2b72d01503cd8d1ada4fd9aa39b031b9efc81e2",
+          "bytes": 7528
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/CITATION.cff",
+          "sha256": "03a6dff8092f9c8fb30b6f3a73da43b99816f32bb6e1d609dc5757638cfbf6f7",
+          "bytes": 1906
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/pyproject.toml",
+          "sha256": "11cc664349ae5daa9267f8b49eaf0cb88fecda561c65490009c5194989ed586b",
+          "bytes": 4549
+        },
+        {
+          "path": "benchmarks/README.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/benchmarks/README.md",
+          "sha256": "e121a046bfe780853cfa428a6784e7079974593c98bbcffa8882639cc7aa925c",
+          "bytes": 3930
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/docs/README.md",
+          "sha256": "064231f4982d5e57203271d84d90749321f7f80a3064b70237fbed2d822a8c84",
+          "bytes": 1689
+        },
+        {
+          "path": "binder/environment.yml",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/binder/environment.yml",
+          "sha256": "3387a17bce4131a63a91671a61e8b585aa18940d41b38a0ea97ac4bdc4bddad8",
+          "bytes": 305
+        },
+        {
+          "path": "mesa/examples/README.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/README.md",
+          "sha256": "fb9d0febb6839456ac508dc4cadcaa9c5ab48d37b0200b82ea0f23e3de056eba",
+          "bytes": 4333
+        },
+        {
+          "path": ".github/styles/Mesa/README.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/.github/styles/Mesa/README.md",
+          "sha256": "e45c92973481e8fafd2ea0b89bf6e528411b2589e367513c9daeca216da11070",
+          "bytes": 2896
+        },
+        {
+          "path": "mesa/examples/advanced/alliance_formation/Readme.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/advanced/alliance_formation/Readme.md",
+          "sha256": "53e872c498948fd08636c23cb9be613cdc9cd9604a005779e9e4cf0c6b3a88ed",
+          "bytes": 2980
+        },
+        {
+          "path": "mesa/examples/advanced/epstein_civil_violence/Readme.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/advanced/epstein_civil_violence/Readme.md",
+          "sha256": "77a1a6d270e50a259360fa51ba97a8faa0ca46def5aa598d5ea2a43a22a0c345",
+          "bytes": 1774
+        },
+        {
+          "path": "mesa/examples/advanced/pd_grid/Readme.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/advanced/pd_grid/Readme.md",
+          "sha256": "1e04f95d006754dd45d9b744a96104c8ee377d452ccffa6e6e546dc85468e07e",
+          "bytes": 2290
+        },
+        {
+          "path": "mesa/examples/advanced/sugarscape_g1mt/Readme.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/advanced/sugarscape_g1mt/Readme.md",
+          "sha256": "3747c4dabd3bd577cd561f1d7cda94bb5a2f50834e7bcd368de2f10c4b70bd1b",
+          "bytes": 3655
+        },
+        {
+          "path": "mesa/examples/advanced/wolf_sheep/Readme.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/advanced/wolf_sheep/Readme.md",
+          "sha256": "b51594a10ae9b51a00d9f2e19234287ad28d4947cc2086c3008d9a6e474e262e",
+          "bytes": 2784
+        },
+        {
+          "path": "mesa/examples/basic/boid_flockers/Readme.md",
+          "url": "https://github.com/mesa/mesa/blob/a5dfcd6ad2bb7863a00d8735649d4c3ebaf014f8/mesa/examples/basic/boid_flockers/Readme.md",
+          "sha256": "83727f8ddaab894f7818c8b3710fa82938e9fbbad8a4f9eeeb20a77dcb3e6166",
+          "bytes": 898
+        }
+      ],
+      "errors": []
+    },
+    "Farama-Foundation/Gymnasium": {
+      "repository": "Farama-Foundation/Gymnasium",
+      "revision": "ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 9,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/README.md",
+          "sha256": "dd3052cd36f80a776d5884f8800798cc3855141dd0c3e09b5c14f1d6f152e4f3",
+          "bytes": 5932
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/CITATION.cff",
+          "sha256": "df1d1cd8b4099cafb4707fbf717f3f92a1ee6511cde03edc8c73e780711a1154",
+          "bytes": 3672
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/pyproject.toml",
+          "sha256": "a125a71188dba0bad65ef0826bfecfafc7530e5a455ca85cc2bf0e680eb15519",
+          "bytes": 4936
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/setup.py",
+          "sha256": "e26fe1fdd8cd803426e4936f0fc59253b34fb7f51796a6e4dec7a644a25fbbcc",
+          "bytes": 944
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/docs/README.md",
+          "sha256": "fb83c5defb1454bf479c0c5cec6e4e3ec9094d45b2e0c8c5e0fec37cb278470f",
+          "bytes": 2361
+        },
+        {
+          "path": "docs/requirements.txt",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/docs/requirements.txt",
+          "sha256": "e67749a463f2f5ea8dad17167d098878eb79f1b9f4ada69d387fdedc4fc278e7",
+          "bytes": 123
+        },
+        {
+          "path": "docs/tutorials/README.rst",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/docs/tutorials/README.rst",
+          "sha256": "be08dbfb02760870aeafd779b5a98d9070fb0709a87d293b2bb6cfe5e44cb03b",
+          "bytes": 20
+        },
+        {
+          "path": "docs/tutorials/gymnasium_basics/README.rst",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/docs/tutorials/gymnasium_basics/README.rst",
+          "sha256": "b1350bdc614fc1bf33c5a0360ae5905af17b96ec4eaf1bf766fc73b45713209b",
+          "bytes": 169
+        },
+        {
+          "path": "docs/tutorials/training_agents/README.rst",
+          "url": "https://github.com/Farama-Foundation/Gymnasium/blob/ec4715dda7cda0b36e2cd80af4c6bbff7e8a4fee/docs/tutorials/training_agents/README.rst",
+          "sha256": "ee79128af1c734ce65e201a43d46ad926312edca0e43b8f6099bee6a723a7e45",
+          "bytes": 230
+        }
+      ],
+      "errors": []
+    },
+    "Farama-Foundation/Minigrid": {
+      "repository": "Farama-Foundation/Minigrid",
+      "revision": "8ea099e114b7d6465afabc76957e3d689663534c",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 6,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/Farama-Foundation/Minigrid/blob/8ea099e114b7d6465afabc76957e3d689663534c/README.md",
+          "sha256": "7424ac0ffdf3c499e7c3dcefd0f77a86e1c8ff1334ff26827cb65bf5a56d6072",
+          "bytes": 5583
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/Farama-Foundation/Minigrid/blob/8ea099e114b7d6465afabc76957e3d689663534c/CITATION.cff",
+          "sha256": "4aebb2d40a02c2060251b998f7dfe3e93ad12f737384a66d337003180b81f55e",
+          "bytes": 1436
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/Farama-Foundation/Minigrid/blob/8ea099e114b7d6465afabc76957e3d689663534c/pyproject.toml",
+          "sha256": "f0eccd87326aebf555bdb564836bed3afa5961bfec4a3aea8843471c608819ba",
+          "bytes": 2694
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/Farama-Foundation/Minigrid/blob/8ea099e114b7d6465afabc76957e3d689663534c/setup.py",
+          "sha256": "cf06240bb6418d284fb8a2b9038f759df08b20bd369d678926e361f28bdd424b",
+          "bytes": 976
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/Farama-Foundation/Minigrid/blob/8ea099e114b7d6465afabc76957e3d689663534c/docs/README.md",
+          "sha256": "b957a8b5deff958f91259d81dc92c20821327e347c27602294cb6c5863fd7192",
+          "bytes": 718
+        },
+        {
+          "path": "docs/requirements.txt",
+          "url": "https://github.com/Farama-Foundation/Minigrid/blob/8ea099e114b7d6465afabc76957e3d689663534c/docs/requirements.txt",
+          "sha256": "4578eab0c6f9e77185cd13fd8762fd7a6be609fb87d9b09683ffb973fa10c055",
+          "bytes": 88
+        }
+      ],
+      "errors": []
+    },
+    "HumanCompatibleAI/overcooked_ai": {
+      "repository": "HumanCompatibleAI/overcooked_ai",
+      "revision": "739950a079cdaed5a44fcc662efc40244c205d06",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 11,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/README.md",
+          "sha256": "38790739f3d6241433f57095f1002b6e8460ab21df4cc9d3aeb76ea956162e72",
+          "bytes": 9206
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/pyproject.toml",
+          "sha256": "25252c0d9e6bbbe666f58d8a5474672808439840a813c523c76462d0b7d10e52",
+          "bytes": 1515
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/setup.py",
+          "sha256": "0e7c373156a1edc46d0b025f59f1f5226cf8969f420f58c7d280489b390f6dbd",
+          "bytes": 2186
+        },
+        {
+          "path": "src/human_aware_rl/README.md",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/human_aware_rl/README.md",
+          "sha256": "9d3c8bf06775f8c9940f76a08304881f3bfcbcb58a820e78f8989a48a4ab96ae",
+          "bytes": 7335
+        },
+        {
+          "path": "src/overcooked_demo/README.md",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/overcooked_demo/README.md",
+          "sha256": "9b1ad47b1119a99867e202acbed60422404b5784ccc1d1d7d5d6cc4676a25350",
+          "bytes": 7806
+        },
+        {
+          "path": "src/overcooked_demo/docker-compose.yml",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/overcooked_demo/docker-compose.yml",
+          "sha256": "8628cf86d43239a2669a328d836de8135c6a358ebcfdb0b74826f7669ac7dc18",
+          "bytes": 523
+        },
+        {
+          "path": "src/overcooked_demo/server/Dockerfile",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/overcooked_demo/server/Dockerfile",
+          "sha256": "a2a2caa4ff7169313b9457d23033151ea980cefcc92466d3b714591d2918e53b",
+          "bytes": 1088
+        },
+        {
+          "path": "src/overcooked_demo/server/requirements.txt",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/overcooked_demo/server/requirements.txt",
+          "sha256": "5c195e4d0a75fa03c70425db35caf06d2c936f9a0558a38fd374aa0bf947a5a8",
+          "bytes": 300
+        },
+        {
+          "path": "src/human_aware_rl/ppo/results/readme.txt",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/human_aware_rl/ppo/results/readme.txt",
+          "sha256": "b776ff2871bd7f35607eff5288c1745e409ef08968023a440cb169775c731705",
+          "bytes": 123
+        },
+        {
+          "path": "src/human_aware_rl/static/human_data/README.md",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/human_aware_rl/static/human_data/README.md",
+          "sha256": "de94990bb98a1c1abb4525402b2be99f455df798e00273dc95720d46008b48cb",
+          "bytes": 7789
+        },
+        {
+          "path": "src/overcooked_demo/server/static/assets/agents/README.md",
+          "url": "https://github.com/HumanCompatibleAI/overcooked_ai/blob/739950a079cdaed5a44fcc662efc40244c205d06/src/overcooked_demo/server/static/assets/agents/README.md",
+          "sha256": "1e40bbe2e20f5753b4222cc6044f6b6cf233f704f1cfd399a9afc1f25b55b97e",
+          "bytes": 2895
+        }
+      ],
+      "errors": []
+    },
+    "google-deepmind/mujoco": {
+      "repository": "google-deepmind/mujoco",
+      "revision": "d8083197be462ff3589681d5ccf61b82f7e68a93",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 33,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/README.md",
+          "sha256": "f50477192f4d3fbe21b436c83f78b0895c57e94f19ff5685e0742a259f5a8d88",
+          "bytes": 9724
+        },
+        {
+          "path": "mjx/README.md",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/mjx/README.md",
+          "sha256": "c8f280404e36d048b5a3924d4f301f2dd14aea9fac9718a4659f37030d949129",
+          "bytes": 2063
+        },
+        {
+          "path": "python/README.md",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/python/README.md",
+          "sha256": "1f30df91963dfb47d9b440914dc67ef3af0446f2302e8f4a0a9e2ab8654abd03",
+          "bytes": 3008
+        },
+        {
+          "path": "simulate/README.md",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/simulate/README.md",
+          "sha256": "160844f521c7abe4d09b8d62d94a49c84eb023bcab052993bff6978e05d2b7ab",
+          "bytes": 610
+        },
+        {
+          "path": "unity/README.md",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/unity/README.md",
+          "sha256": "c7199ca9bf536255365c04abed5bb0a8b9d2ef89b91fce34e36cec3e5d3b6711",
+          "bytes": 468
+        },
+        {
+          "path": "unity/README.md.meta",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/unity/README.md.meta",
+          "sha256": "3a96463dba0acccd9e44ef2fc02a81280415cd74a96d2682ed1ef9ac9ede4711",
+          "bytes": 158
+        },
+        {
+          "path": "wasm/README.md",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/wasm/README.md",
+          "sha256": "8aac6a48315d961e9f5d06b1df254f6033ce541e4e8b7ba8d376859d6ad6b570",
+          "bytes": 20260
+        },
+        {
+          "path": "doc/requirements.txt",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/doc/requirements.txt",
+          "sha256": "784ce1ab75e86d7bab80a172d2157383df7d9c48998a68a59fd92f851f4b37ed",
+          "bytes": 438
+        },
+        {
+          "path": "mjx/pyproject.toml",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/mjx/pyproject.toml",
+          "sha256": "4d51808c3c1c07a9618a934c1684abc82c6be1a37c68606419ecbc5cdb41260d",
+          "bytes": 2050
+        },
+        {
+          "path": "mjx/requirements.txt",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/mjx/requirements.txt",
+          "sha256": "f148333bf1253d01a702ad345b48142e9e2d747045521eb7d2f252c8504a211c",
+          "bytes": 29331
+        },
+        {
+          "path": "python/pyproject.toml",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/python/pyproject.toml",
+          "sha256": "67113bd7cb101364b6460d3bfdf4a102689014941cabdb74950e617c2a5ae471",
+          "bytes": 2472
+        },
+        {
+          "path": "python/setup.py",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/python/setup.py",
+          "sha256": "0423478ab8c90dfbda7d18d8d24aaf3f01934cdfbc1943918566735af85de17b",
+          "bytes": 15273
+        },
+        {
+          "path": "unity/package.json",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/unity/package.json",
+          "sha256": "dcbdbbb9694ed87394048f8b5d84bafd4006ba3c8d3667298695177ef0a6f6d6",
+          "bytes": 561
+        },
+        {
+          "path": "wasm/package.json",
+          "url": "https://github.com/google-deepmind/mujoco/blob/d8083197be462ff3589681d5ccf61b82f7e68a93/wasm/package.json",
+          "sha256": "605a524926137a665a3d410ac946b4eb7cfe4efe0a7ddd081bbed7b71d2d164a",
+          "bytes": 982
+        }
+      ],
+      "errors": []
+    },
+    "jspsych/jsPsych": {
+      "repository": "jspsych/jsPsych",
+      "revision": "04db97d10416b0ca812e3a8540d1c1d01b1e7a16",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 122,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/README.md",
+          "sha256": "99491fb2b2bb556cdcfd2b2ce67392c0e1bf77ad0e3623de48ff75224fc744ea",
+          "bytes": 5165
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/CITATION.cff",
+          "sha256": "ab720bbdc81a02f9491100a5ac7b707ffe6dd08bb9dff483c0d8c56257665ab1",
+          "bytes": 1424
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/package.json",
+          "sha256": "8f38ebf65aac55713a493fc9bd34edcf89f800e1ae7da0ce9f369553efeaa4b9",
+          "bytes": 1625
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/pyproject.toml",
+          "sha256": "9017af2c3c4e8daa13c52e37ec74113470725731ce6ff896a4363540d38ca219",
+          "bytes": 266
+        },
+        {
+          "path": ".changeset/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/.changeset/README.md",
+          "sha256": "bf33c79d7e0477dcad0e0b98c8d364db6fdb794d62ef68b6153d61e868b3bdf0",
+          "bytes": 510
+        },
+        {
+          "path": "examples/README-template.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/examples/README-template.md",
+          "sha256": "f19d75588e215b2f386a24b16b0d5122e17ab27c8e813d8f08f07de585799b62",
+          "bytes": 2635
+        },
+        {
+          "path": "packages/extension-mouse-tracking/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/extension-mouse-tracking/README.md",
+          "sha256": "1cbd3f968a85c8f086cee1eac7d1263904bd169bb1ea51aeabd52f4fc1104c26",
+          "bytes": 3231
+        },
+        {
+          "path": "packages/extension-record-video/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/extension-record-video/README.md",
+          "sha256": "7edf22329bcb307d79b21e6f9a70e70aecda7c8665eed95f2585e0543eb2db74",
+          "bytes": 2821
+        },
+        {
+          "path": "packages/extension-webgazer/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/extension-webgazer/README.md",
+          "sha256": "f3a86710461bd18fa00472782e82f08f6adfb79e779e66d645cc7f1bb7451b64",
+          "bytes": 2854
+        },
+        {
+          "path": "packages/plugin-animation/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/plugin-animation/README.md",
+          "sha256": "b9a07685966b68ad2c0453b873c9ee9f304a77196dbfa24e72325d5075b5b24f",
+          "bytes": 2852
+        },
+        {
+          "path": "packages/plugin-audio-button-response/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/plugin-audio-button-response/README.md",
+          "sha256": "b805e60cf38dd59aef5dbe94fb275863b605ec1add093127d64e52e808c7c174",
+          "bytes": 2973
+        },
+        {
+          "path": "packages/plugin-audio-keyboard-response/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/plugin-audio-keyboard-response/README.md",
+          "sha256": "6bcb53362ec8393778efb888fe24ef734478d3ba68e9bea8b201743993c3a700",
+          "bytes": 2975
+        },
+        {
+          "path": "packages/plugin-audio-slider-response/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/plugin-audio-slider-response/README.md",
+          "sha256": "de33b33c6ec65f83ad8d4d99409358050029fdb692f7c8af880868e285f30738",
+          "bytes": 2990
+        },
+        {
+          "path": "packages/plugin-browser-check/README.md",
+          "url": "https://github.com/jspsych/jsPsych/blob/04db97d10416b0ca812e3a8540d1c1d01b1e7a16/packages/plugin-browser-check/README.md",
+          "sha256": "94f0a3624c5533f8654d3e5f5dfd0c83906774d885ad36f3a0050bb61d13f754",
+          "bytes": 3269
+        }
+      ],
+      "errors": []
+    },
+    "NeuroTechX/moabb": {
+      "repository": "NeuroTechX/moabb",
+      "revision": "f027538273bde520cb7b20eea187895c6fa4b0dd",
+      "default_branch": "develop",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 11,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/README.md",
+          "sha256": "f30acdb8bd9962edc6a0ded092c3adecbcf91f260e10d382de949b67453e8006",
+          "bytes": 11235
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/CITATION.cff",
+          "sha256": "95206341526e243977f21e5d3d78a484c4003c9181cd3189bf6b745b39e55805",
+          "bytes": 4147
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/pyproject.toml",
+          "sha256": "d566313d0c90fb7dd696b262ee66bb24e4ca730cfe1d1d9d6fcc0d4a4a7d9c7d",
+          "bytes": 5740
+        },
+        {
+          "path": "examples/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/readme.rst",
+          "sha256": "b4793b6fef87938b0195d3153dfe32d9067c8db1a2ab362940377183214ea674",
+          "bytes": 607
+        },
+        {
+          "path": "scripts/README.md",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/scripts/README.md",
+          "sha256": "4401c44e61535cbae975f2be531700147e2d15ca6edf349f4b360da05f30c95e",
+          "bytes": 448
+        },
+        {
+          "path": "examples/advanced_examples/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/advanced_examples/readme.rst",
+          "sha256": "f6b7d1aa2922e2801382925c8778831e7bdaa1cc4f12ebca28df13a6a2b811f9",
+          "bytes": 329
+        },
+        {
+          "path": "examples/data_management_and_configuration/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/data_management_and_configuration/readme.rst",
+          "sha256": "beae4af98e1982c6803cd63c779262f73ae35be97c605f86db51e39aa96bb0d6",
+          "bytes": 331
+        },
+        {
+          "path": "examples/how_to_benchmark/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/how_to_benchmark/readme.rst",
+          "sha256": "25b7a4f7a65109b2a2edd7cdc296bba3ea61e7045221a25e92bafa916d8c341b",
+          "bytes": 389
+        },
+        {
+          "path": "examples/learning_curve/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/learning_curve/readme.rst",
+          "sha256": "f9adb46cffbece06b62771bbfed0ef03543fe5df40bae8561da85ddec4a443fc",
+          "bytes": 608
+        },
+        {
+          "path": "examples/paradigm_examples/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/paradigm_examples/readme.rst",
+          "sha256": "a877f0d418e487205c7e9ab73457a20bb8566f733ab91b61bf89b48496406adb",
+          "bytes": 513
+        },
+        {
+          "path": "examples/tutorials/readme.rst",
+          "url": "https://github.com/NeuroTechX/moabb/blob/f027538273bde520cb7b20eea187895c6fa4b0dd/examples/tutorials/readme.rst",
+          "sha256": "de0a1221b9d926189a7742f9bccb84a4d44b33b9d60fc244d1c844b9b6588d55",
+          "bytes": 386
+        }
+      ],
+      "errors": []
+    },
+    "mne-tools/mne-python": {
+      "repository": "mne-tools/mne-python",
+      "revision": "b2e955ea2ec634b93fb56276dce2afc3c5e28927",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 35,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.rst",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/README.rst",
+          "sha256": "ea9fdd39c8a500db6521854fe58ca33eea60f9c6815123d9d22708ba564a0b2a",
+          "bytes": 4511
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/CITATION.cff",
+          "sha256": "a23592dd8908efc6b18e720edc510d33df79dd8ba29898d9dc452a69b99a12c4",
+          "bytes": 22970
+        },
+        {
+          "path": "environment.yml",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/environment.yml",
+          "sha256": "e8cff362dc7779c5f3111a18dbcea9c2e6e350b257c3e30a4f5fe895ccf9f264",
+          "bytes": 1324
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/pyproject.toml",
+          "sha256": "db6bf871913b264510c700c4109197afdd89fa74dba2a91f0f6db0a794c4e35f",
+          "bytes": 14704
+        },
+        {
+          "path": "examples/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/README.txt",
+          "sha256": "209fd7b4b86fc9c6b3e94f835394434f06a7a621edb116e276384218ce39fc85",
+          "bytes": 794
+        },
+        {
+          "path": "logo/README.md",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/logo/README.md",
+          "sha256": "1ecda53931f4ca6ed30e190e51616f67a20bd1838370d909d48a7526f007242f",
+          "bytes": 712
+        },
+        {
+          "path": "tutorials/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/tutorials/README.txt",
+          "sha256": "2da058a202b9fc2e87a068efb4a6850d30bb4e4d0441256d1cdd15689bd0a36c",
+          "bytes": 856
+        },
+        {
+          "path": "examples/connectivity/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/connectivity/README.txt",
+          "sha256": "c0596065c3301b0aa8d7639d40d1daca732882f076c1d58742b44231ba23c230",
+          "bytes": 326
+        },
+        {
+          "path": "examples/datasets/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/datasets/README.txt",
+          "sha256": "840a5de023b1203585fb1e84c36434878ff1cc19ff25071cbbb4d5fac4d5205e",
+          "bytes": 102
+        },
+        {
+          "path": "examples/decoding/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/decoding/README.txt",
+          "sha256": "3163ff67d080ec1e7510511af9c923d0344a0983689a68127ff62d46b46a301f",
+          "bytes": 157
+        },
+        {
+          "path": "examples/forward/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/forward/README.txt",
+          "sha256": "81cf67b56a4d20f4b46c7926b3893f944ea436906f6177db4d1e69909ee63d03",
+          "bytes": 143
+        },
+        {
+          "path": "examples/inverse/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/inverse/README.txt",
+          "sha256": "2c74e7d732c292d3222b25d7433209f28179a704f66d0b92d811712298172220",
+          "bytes": 168
+        },
+        {
+          "path": "examples/io/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/io/README.txt",
+          "sha256": "202bf8b3330c3382bc26248a0bd78a8a056424d9b22fa8887c6e23175d6d05dd",
+          "bytes": 262
+        },
+        {
+          "path": "examples/preprocessing/README.txt",
+          "url": "https://github.com/mne-tools/mne-python/blob/b2e955ea2ec634b93fb56276dce2afc3c5e28927/examples/preprocessing/README.txt",
+          "sha256": "c46d7b8a041644040872530575ba152ccdebdd5bb283aa5df1ab9f3b45dc8493",
+          "bytes": 697
+        }
+      ],
+      "errors": []
+    },
+    "braindecode/braindecode": {
+      "repository": "braindecode/braindecode",
+      "revision": "adaa63a8ac7510d0976ee134f6a9ff8e916ef37d",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 9,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.rst",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/README.rst",
+          "sha256": "ef4e1f33ab29a38c3493f14ed123767b37ee3f93adee2be22ccbc4dbb5736d14",
+          "bytes": 6463
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/CITATION.cff",
+          "sha256": "6ea1c3406e0166d5ba7a7bd2033ccf8aef8a6211efa75d208a0ef1d998927e07",
+          "bytes": 3686
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/pyproject.toml",
+          "sha256": "479a36c77e6bfd9927f560dce931fe328b1564728be96b326338c17524b3842b",
+          "bytes": 5072
+        },
+        {
+          "path": "setup.cfg",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/setup.cfg",
+          "sha256": "889ccf66b31c33e5d94b64ff0231ba7f7b59529ce097f10a8dbc7969021485b2",
+          "bytes": 1230
+        },
+        {
+          "path": "examples/README.rst",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/examples/README.rst",
+          "sha256": "035e73b78ed8f50615bb137ff5909551c6093fa53e2b1517516218de77c1b7a4",
+          "bytes": 312
+        },
+        {
+          "path": "examples/advanced_training/README.txt",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/examples/advanced_training/README.txt",
+          "sha256": "6a4fd4490b26c1a647f27a8fd2308ce8b3497d10a2e19cbc72d85e046b97beae",
+          "bytes": 170
+        },
+        {
+          "path": "examples/applied_examples/README.txt",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/examples/applied_examples/README.txt",
+          "sha256": "bbdbde60416e8b67c2c8ea768d559ec0f3225b7c657cbd18944e2aacf9a62a60",
+          "bytes": 184
+        },
+        {
+          "path": "examples/datasets_io/README.txt",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/examples/datasets_io/README.txt",
+          "sha256": "ef6b4c9f9ca4bae2c78232ec8e462d412cbc90fdaf978cf5c294deb2462ee778",
+          "bytes": 119
+        },
+        {
+          "path": "examples/model_building/README.txt",
+          "url": "https://github.com/braindecode/braindecode/blob/adaa63a8ac7510d0976ee134f6a9ff8e916ef37d/examples/model_building/README.txt",
+          "sha256": "8b3d2c7e35e8dc214935a1815f8eaa468e0d81b5a96ff66f8854751f947c8257",
+          "bytes": 143
+        }
+      ],
+      "errors": []
+    },
+    "SWE-bench/SWE-bench": {
+      "repository": "SWE-bench/SWE-bench",
+      "revision": "02e7a74ffd0b707aab73d203fe87bdc7c76afc8e",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 508,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/README.md",
+          "sha256": "06841624d7b5130dfe3cc6714642e9a8fd2a608c95c66ae0180e409f12b73aaa",
+          "bytes": 13302
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/pyproject.toml",
+          "sha256": "58c4f4f283c6f214166376f83dad8b18bc85f9a7c2c66216343de0498fd9fe19",
+          "bytes": 2816
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/docs/README.md",
+          "sha256": "92175fc44614dfb3780b4f6eb2558afad64ec7f983a22e13f74841ccc357100a",
+          "bytes": 1616
+        },
+        {
+          "path": "docs/other_languages/README_CN.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/docs/other_languages/README_CN.md",
+          "sha256": "55cd7dc688a18574b0863b55d777b2750b4f19aa64910a2889c363b759d94823",
+          "bytes": 7661
+        },
+        {
+          "path": "docs/other_languages/README_JP.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/docs/other_languages/README_JP.md",
+          "sha256": "bc865f1ce87807263b86e62a64a5d7e5dbefd5b1bb8db00037c16f74b4e66c93",
+          "bytes": 8922
+        },
+        {
+          "path": "docs/other_languages/README_TW.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/docs/other_languages/README_TW.md",
+          "sha256": "a110c395858932720d6212b8ff3bd10d929584f7cf14c9c3c6996f4b2bbd22a3",
+          "bytes": 7676
+        },
+        {
+          "path": "swebench/collect/README.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/collect/README.md",
+          "sha256": "e859628a4e5a29a12bdef112ca1bd4cb59d9de663dbf5f0247a311115a5e6ba6",
+          "bytes": 4931
+        },
+        {
+          "path": "swebench/collect/make_lite/README.md",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/collect/make_lite/README.md",
+          "sha256": "1e2785e96952e9ddb9d535d9bc4c8a9702c3f0bb252d9769e7e8201f8b27c0c9",
+          "bytes": 1320
+        },
+        {
+          "path": "swebench/resources/swebench-og/astropy__astropy/12907/environment.yml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/resources/swebench-og/astropy__astropy/12907/environment.yml",
+          "sha256": "c2590b2aedc3e8c87ee9c1e81c6bbae444bb221fba91a155c3653c5ed75aceb7",
+          "bytes": 1388
+        },
+        {
+          "path": "swebench/resources/swebench-og/astropy__astropy/13033/environment.yml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/resources/swebench-og/astropy__astropy/13033/environment.yml",
+          "sha256": "c2590b2aedc3e8c87ee9c1e81c6bbae444bb221fba91a155c3653c5ed75aceb7",
+          "bytes": 1388
+        },
+        {
+          "path": "swebench/resources/swebench-og/astropy__astropy/13236/environment.yml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/resources/swebench-og/astropy__astropy/13236/environment.yml",
+          "sha256": "c2590b2aedc3e8c87ee9c1e81c6bbae444bb221fba91a155c3653c5ed75aceb7",
+          "bytes": 1388
+        },
+        {
+          "path": "swebench/resources/swebench-og/astropy__astropy/13398/environment.yml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/resources/swebench-og/astropy__astropy/13398/environment.yml",
+          "sha256": "3367b191c0dd8bd95ff94bda117cb535d2386607fd3e026c68429375643f8af1",
+          "bytes": 1388
+        },
+        {
+          "path": "swebench/resources/swebench-og/astropy__astropy/13453/environment.yml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/resources/swebench-og/astropy__astropy/13453/environment.yml",
+          "sha256": "3367b191c0dd8bd95ff94bda117cb535d2386607fd3e026c68429375643f8af1",
+          "bytes": 1388
+        },
+        {
+          "path": "swebench/resources/swebench-og/astropy__astropy/13579/environment.yml",
+          "url": "https://github.com/SWE-bench/SWE-bench/blob/02e7a74ffd0b707aab73d203fe87bdc7c76afc8e/swebench/resources/swebench-og/astropy__astropy/13579/environment.yml",
+          "sha256": "c2590b2aedc3e8c87ee9c1e81c6bbae444bb221fba91a155c3653c5ed75aceb7",
+          "bytes": 1388
+        }
+      ],
+      "errors": []
+    },
+    "openai/human-eval": {
+      "repository": "openai/human-eval",
+      "revision": "6d43fb980f9fee3c892a914eda09951f772ad10d",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 3,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/openai/human-eval/blob/6d43fb980f9fee3c892a914eda09951f772ad10d/README.md",
+          "sha256": "2649c7f6b03c8aecdc480e4f25333b113e4d89bf819ba911e4a7983adabd12ce",
+          "bytes": 4848
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/openai/human-eval/blob/6d43fb980f9fee3c892a914eda09951f772ad10d/requirements.txt",
+          "sha256": "eccea7623d46bd795f2257da161a162bae2429b1e5ffa5dd8ba92968e164d18f",
+          "bytes": 16
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/openai/human-eval/blob/6d43fb980f9fee3c892a914eda09951f772ad10d/setup.py",
+          "sha256": "cb6647a9cef9be06ecfecfcdce857444b0e1ec837f51465143d6126c29d92d41",
+          "bytes": 571
+        }
+      ],
+      "errors": []
+    },
+    "openai/grade-school-math": {
+      "repository": "openai/grade-school-math",
+      "revision": "3101c7d5072418e28b9008a6636bde82a006892c",
+      "default_branch": "master",
+      "archived": true,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/openai/grade-school-math/blob/3101c7d5072418e28b9008a6636bde82a006892c/README.md",
+          "sha256": "27e1676d572f2289210170ff6dbb8c2ef7d9f6950c0f08c978ea8ee6b39dca29",
+          "bytes": 6112
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/openai/grade-school-math/blob/3101c7d5072418e28b9008a6636bde82a006892c/setup.py",
+          "sha256": "c816a8dfc6e43897c3f8ff2303e33cbc9d7e1263401dd856fbe456cbc160acc9",
+          "bytes": 153
+        }
+      ],
+      "errors": []
+    },
+    "hendrycks/test": {
+      "repository": "hendrycks/test",
+      "revision": "4450500f923c49f1fb1dd3d99108a0bd9717b660",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 1,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/hendrycks/test/blob/4450500f923c49f1fb1dd3d99108a0bd9717b660/README.md",
+          "sha256": "59e7d8e808141d3eb8ba02bf38a53db6237d73cbe91d4d823693ead1f8f75182",
+          "bytes": 3256
+        }
+      ],
+      "errors": []
+    },
+    "allenai/natural-instructions": {
+      "repository": "allenai/natural-instructions",
+      "revision": "55a365637381ce7f3748fa2eac7aef1a113bbb82",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 6,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/allenai/natural-instructions/blob/55a365637381ce7f3748fa2eac7aef1a113bbb82/README.md",
+          "sha256": "bd5c0768d317f0184c00afd3233d166672aa63a6fee52fa368f3aa117111ccd7",
+          "bytes": 8809
+        },
+        {
+          "path": "splits/README.md",
+          "url": "https://github.com/allenai/natural-instructions/blob/55a365637381ce7f3748fa2eac7aef1a113bbb82/splits/README.md",
+          "sha256": "db3737ce9310717e3ef6ec6a787b816e8e9249fbbd7c200db365cbbb14ea018c",
+          "bytes": 3265
+        },
+        {
+          "path": "src/requirements.txt",
+          "url": "https://github.com/allenai/natural-instructions/blob/55a365637381ce7f3748fa2eac7aef1a113bbb82/src/requirements.txt",
+          "sha256": "9a804e75429dea7f462df3782c0e07bd4777f167ee0613c54c0b9565e81821c0",
+          "bytes": 14
+        },
+        {
+          "path": "eval/amt/README.md",
+          "url": "https://github.com/allenai/natural-instructions/blob/55a365637381ce7f3748fa2eac7aef1a113bbb82/eval/amt/README.md",
+          "sha256": "3d09496bdfa7b453b72e27e4c212e6f1b755d307fc28019606b6e5ef2b269510",
+          "bytes": 850
+        },
+        {
+          "path": "eval/automatic/README.md",
+          "url": "https://github.com/allenai/natural-instructions/blob/55a365637381ce7f3748fa2eac7aef1a113bbb82/eval/automatic/README.md",
+          "sha256": "7ebb51de037fddf8de9325535e9204eb68d4e4930b3d50607e03d68448547572",
+          "bytes": 1600
+        },
+        {
+          "path": "eval/leaderboard/Dockerfile",
+          "url": "https://github.com/allenai/natural-instructions/blob/55a365637381ce7f3748fa2eac7aef1a113bbb82/eval/leaderboard/Dockerfile",
+          "sha256": "6503c1971d3d54f33d40fedf95414cef3cc9b07d1790f8253217ffa0e600eea9",
+          "bytes": 243
+        }
+      ],
+      "errors": []
+    },
+    "yizhongw/Tk-Instruct": {
+      "repository": "yizhongw/Tk-Instruct",
+      "revision": "7c0e4000901e7c148fbb8964042ebfc433f8d98e",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 6,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/yizhongw/Tk-Instruct/blob/7c0e4000901e7c148fbb8964042ebfc433f8d98e/README.md",
+          "sha256": "896a1540a6f6f90c533cecea174cedca3ccd9549ac402abe21531b8960f05c33",
+          "bytes": 6546
+        },
+        {
+          "path": "Dockerfile",
+          "url": "https://github.com/yizhongw/Tk-Instruct/blob/7c0e4000901e7c148fbb8964042ebfc433f8d98e/Dockerfile",
+          "sha256": "f1f2c0c4652ec80acb3670bf7c9d365fee455d23b085bdebcc77825337c2bfd5",
+          "bytes": 577
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/yizhongw/Tk-Instruct/blob/7c0e4000901e7c148fbb8964042ebfc433f8d98e/requirements.txt",
+          "sha256": "8f2a244badd2d21d4794999827280af0d8b5a3ebec14cb85b3efcb6f704d0bf8",
+          "bytes": 221
+        },
+        {
+          "path": "src/rouge/README.md",
+          "url": "https://github.com/yizhongw/Tk-Instruct/blob/7c0e4000901e7c148fbb8964042ebfc433f8d98e/src/rouge/README.md",
+          "sha256": "3601791938c5db99a503d788f7acf47a4be050a69e8730ed946a5b339c68db21",
+          "bytes": 3363
+        },
+        {
+          "path": "src/rouge/requirements.txt",
+          "url": "https://github.com/yizhongw/Tk-Instruct/blob/7c0e4000901e7c148fbb8964042ebfc433f8d98e/src/rouge/requirements.txt",
+          "sha256": "436f92e71707ed093c0e8fa4e9ad9660272878a960b36ba0125aa95947d30130",
+          "bytes": 29
+        },
+        {
+          "path": "src/rouge/setup.py",
+          "url": "https://github.com/yizhongw/Tk-Instruct/blob/7c0e4000901e7c148fbb8964042ebfc433f8d98e/src/rouge/setup.py",
+          "sha256": "9daf081e6ef4f1d5428f3061c57dc60b1abaf147f97e70335e398a2d1606b49f",
+          "bytes": 1439
+        }
+      ],
+      "errors": []
+    },
+    "poloclub/diffusiondb": {
+      "repository": "poloclub/diffusiondb",
+      "revision": "bf0b01ee26119e16436fa67656ccb611f61be95f",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/poloclub/diffusiondb/blob/bf0b01ee26119e16436fa67656ccb611f61be95f/README.md",
+          "sha256": "46c32f212ccd3b7a3b10cfe6767b69103cdf830384a6b894d479492d5c8556cc",
+          "bytes": 17311
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/poloclub/diffusiondb/blob/bf0b01ee26119e16436fa67656ccb611f61be95f/requirements.txt",
+          "sha256": "e50e4cc19eed0a5625ef52776a6a6633129994f84b47a72e747e2cd411df1f83",
+          "bytes": 15
+        }
+      ],
+      "errors": []
+    },
+    "allenai/scifact": {
+      "repository": "allenai/scifact",
+      "revision": "68b98a56d93e0f9da0d2aab4e6c3294699a0f72e",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/allenai/scifact/blob/68b98a56d93e0f9da0d2aab4e6c3294699a0f72e/README.md",
+          "sha256": "3f0eb7f6d009b3785fede6592918b8b583e7193d26f14173fdf0c79aba1dcc79",
+          "bytes": 8671
+        },
+        {
+          "path": "requirements.txt",
+          "url": "https://github.com/allenai/scifact/blob/68b98a56d93e0f9da0d2aab4e6c3294699a0f72e/requirements.txt",
+          "sha256": "b3d02b5d6ae57c3d05bffe9bd34018ed1516b9f6644eb1d6e2f3a7415e764f3a",
+          "bytes": 559
+        }
+      ],
+      "errors": []
+    },
+    "huggingface/sentence-transformers": {
+      "repository": "huggingface/sentence-transformers",
+      "revision": "846c3434bb8f19417359da5f2b5b53fc3da4bad1",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 68,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/README.md",
+          "sha256": "4f17835afaab1aa49bc1f16dd5cbf6af6f2b3bdd7212e2e7ff2569e6c36b1604",
+          "bytes": 17366
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/pyproject.toml",
+          "sha256": "a3ba2d22030715ed7d43038495e3be4c6af94d9f66dc263f4bb57087bff306b5",
+          "bytes": 4981
+        },
+        {
+          "path": "skills/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/skills/README.md",
+          "sha256": "0415578468dc44ad9203cd4ebbecd1c4864a702c1ee6ea94bd4ad4f25f6b6cb6",
+          "bytes": 3673
+        },
+        {
+          "path": "examples/sentence_transformer/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sentence_transformer/README.md",
+          "sha256": "64a947ae1edc8ba248e2e4e82f2816d557759dffd84fb5d94feb310068bef011",
+          "bytes": 842
+        },
+        {
+          "path": "examples/cross_encoder/applications/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/cross_encoder/applications/README.md",
+          "sha256": "1b27d399e663db170a52fbe71697ca425fbba1a9721b998cf39db7c1bfc3f08e",
+          "bytes": 3668
+        },
+        {
+          "path": "examples/cross_encoder/training/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/cross_encoder/training/README.md",
+          "sha256": "443ad441e0a9ac88ac7d2ff5cc9fd23293dc0c6ec3ee6ed7c4dcd0455fc6a9ac",
+          "bytes": 1252
+        },
+        {
+          "path": "examples/multi_vector_encoder/applications/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/multi_vector_encoder/applications/README.md",
+          "sha256": "621b2045afbb785a6b06fcb1148c1360917fae9211843e0e9cdbe638a9fc59b6",
+          "bytes": 2513
+        },
+        {
+          "path": "examples/multi_vector_encoder/evaluation/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/multi_vector_encoder/evaluation/README.md",
+          "sha256": "0d0b4305c1bce549437f23322b2b47baaa7bfec1f16d85911995682958693ea0",
+          "bytes": 6732
+        },
+        {
+          "path": "examples/sentence_transformer/applications/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sentence_transformer/applications/README.md",
+          "sha256": "84766bf9065d84ff1645dd67b9bcc83cc8c575ef0dc276e1db78c2e9a01f90a8",
+          "bytes": 2244
+        },
+        {
+          "path": "examples/sentence_transformer/domain_adaptation/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sentence_transformer/domain_adaptation/README.md",
+          "sha256": "c5c0c4e3c22d5ac927c4e477a0dc3e25c5dbb9fb3f88d4d2a0868faf4ecfb599",
+          "bytes": 9009
+        },
+        {
+          "path": "examples/sentence_transformer/training/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sentence_transformer/training/README.md",
+          "sha256": "f4659b682f6112da0c2890dc406bc0411d66a20213a8e59357cb64b054fa8718",
+          "bytes": 2895
+        },
+        {
+          "path": "examples/sentence_transformer/unsupervised_learning/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sentence_transformer/unsupervised_learning/README.md",
+          "sha256": "12a0877122015ed1ba461745bb7a3ec1889e868b4781e3d450a116f062a5f542",
+          "bytes": 5467
+        },
+        {
+          "path": "examples/sparse_encoder/applications/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sparse_encoder/applications/README.md",
+          "sha256": "e94a3f946899da0793602a13222cdcb8073d52640f0c23a133adc77edbce50f7",
+          "bytes": 895
+        },
+        {
+          "path": "examples/sparse_encoder/evaluation/README.md",
+          "url": "https://github.com/huggingface/sentence-transformers/blob/846c3434bb8f19417359da5f2b5b53fc3da4bad1/examples/sparse_encoder/evaluation/README.md",
+          "sha256": "041a3ced05001fb6e01345e1e4a71415b19a09d31f962929f42a0290b8e66e64",
+          "bytes": 6495
+        }
+      ],
+      "errors": []
+    },
+    "EleutherAI/lm-evaluation-harness": {
+      "repository": "EleutherAI/lm-evaluation-harness",
+      "revision": "ad8737ae7fad24cf64e50fc7fc31397bff586b9e",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 249,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/README.md",
+          "sha256": "57c5cf1db6edb20393ca70851de820898bd8d10424a5a7574f9f566a6f8d70bd",
+          "bytes": 60912
+        },
+        {
+          "path": "CITATION.bib",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/CITATION.bib",
+          "sha256": "303c1a622d51fdce980a4ff99273793e97e2263eecfd4229d8af60c469b3e490",
+          "bytes": 744
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/pyproject.toml",
+          "sha256": "88b654cba602d6d1bd2ed8cd164f960ebfe325344430345d83e7be0c4a1e72e1",
+          "bytes": 5948
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/docs/README.md",
+          "sha256": "ec58c9dbabd49560c83ecdda18bb33df88420a631ad413fb492eb3b9e3ca1c89",
+          "bytes": 1008
+        },
+        {
+          "path": "scripts/clean_training_data/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/scripts/clean_training_data/README.md",
+          "sha256": "52a43972b2769971b5d752ee22167800781989931b6d755634b6941cf787a6dc",
+          "bytes": 1677
+        },
+        {
+          "path": "templates/new_yaml_task/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/templates/new_yaml_task/README.md",
+          "sha256": "0aa98a03e20b84027746a87455a0b45fc48fd9b1a0c888721ac5e1cb4daec88a",
+          "bytes": 1232
+        },
+        {
+          "path": "lm_eval/tasks/aclue/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/aclue/README.md",
+          "sha256": "fe596a2bd26441bdbfa4e1a90b94906c4342c6bd2308009ca12552ec8453b570",
+          "bytes": 2288
+        },
+        {
+          "path": "lm_eval/tasks/acpbench/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/acpbench/README.md",
+          "sha256": "3beea6a6ca945f7609fd23ee8cceec6e03b6b74486a072d6074ac2e00dbb3fc1",
+          "bytes": 5770
+        },
+        {
+          "path": "lm_eval/tasks/aexams/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/aexams/README.md",
+          "sha256": "efc3d1c9bfbce3e284e8c9107dec1f1b9fdd18443edc4ad6c97e1fa9d7c96048",
+          "bytes": 1896
+        },
+        {
+          "path": "lm_eval/tasks/afrimgsm/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/afrimgsm/README.md",
+          "sha256": "cf52f79acd3bdccca93d1464e985d4e869dd1dc3e2262e9d634f97227851a7d6",
+          "bytes": 3897
+        },
+        {
+          "path": "lm_eval/tasks/afrimmlu/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/afrimmlu/README.md",
+          "sha256": "d69547a24caa60d6608ff04efd52c2e8e0d3eccd5862423a4bd050cc8ff17c0c",
+          "bytes": 3332
+        },
+        {
+          "path": "lm_eval/tasks/afrixnli/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/afrixnli/README.md",
+          "sha256": "c0c3d710198512de63a0e817db67f018016c6046778f8b787a4d40667d663805",
+          "bytes": 4160
+        },
+        {
+          "path": "lm_eval/tasks/afrobench/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/afrobench/README.md",
+          "sha256": "daaf412560ca85838016cb9fece21e960d1ffb11f82a95518bdd83193a4b440f",
+          "bytes": 5216
+        },
+        {
+          "path": "lm_eval/tasks/agieval/README.md",
+          "url": "https://github.com/EleutherAI/lm-evaluation-harness/blob/ad8737ae7fad24cf64e50fc7fc31397bff586b9e/lm_eval/tasks/agieval/README.md",
+          "sha256": "0d4da46fab1afe2501c4136e5523ef40d23b544af450b0ec18f9f6c77dcbf29c",
+          "bytes": 5309
+        }
+      ],
+      "errors": []
+    },
+    "huggingface/datasets": {
+      "repository": "huggingface/datasets",
+      "revision": "d336dcb84cdd6647a685cf4c9e0e8c26cc105b06",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 9,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/README.md",
+          "sha256": "b44ee0cc106481037c92a7a3e045ee12c288c6f9963329081ff6e6744e39f344",
+          "bytes": 14466
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/CITATION.cff",
+          "sha256": "c2f049132daf13fe6082816576a158440af486722a884a850e0d160eb3db5659",
+          "bytes": 3896
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/pyproject.toml",
+          "sha256": "9830e49a1e3e1c64090659b86ebf8a3cb9ffc69de876816fdfd355a10f373b0a",
+          "bytes": 679
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/setup.py",
+          "sha256": "a2f39fc40aa3fae8f166f438b092857cc6a7f4eb6f7980e712b701bbc9253731",
+          "bytes": 10669
+        },
+        {
+          "path": "docs/README.md",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/docs/README.md",
+          "sha256": "8e4ee82bfa3253d32067e9fa752494f78edce2583dccca854e33aca13c1411e3",
+          "bytes": 10817
+        },
+        {
+          "path": "notebooks/README.md",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/notebooks/README.md",
+          "sha256": "70fc091efcf214d69141191d90687011d6f8f6197223a0f6c6d81b1f1c9711bf",
+          "bytes": 1821
+        },
+        {
+          "path": "templates/README.md",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/templates/README.md",
+          "sha256": "3d9b5431ef9ff6a2f47a4f40423340b6dc152290b926ec7bd1ca4883d51d92f3",
+          "bytes": 2672
+        },
+        {
+          "path": "templates/README_guide.md",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/templates/README_guide.md",
+          "sha256": "9979729739d7b49c31de221458b33350404a8fabcebcc3a24066749a9f6fb6b7",
+          "bytes": 12803
+        },
+        {
+          "path": "src/datasets/utils/resources/readme_structure.yaml",
+          "url": "https://github.com/huggingface/datasets/blob/d336dcb84cdd6647a685cf4c9e0e8c26cc105b06/src/datasets/utils/resources/readme_structure.yaml",
+          "sha256": "84d7fd9aca01670e637da910ac36f401ff13df6e535dd71a1ec00ed8c51c66f6",
+          "bytes": 3877
+        }
+      ],
+      "errors": []
+    },
+    "facebookresearch/faiss": {
+      "repository": "facebookresearch/faiss",
+      "revision": "b5a14632a6f2bfdc824c86d683b9d6e9205c2604",
+      "default_branch": "main",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 13,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/README.md",
+          "sha256": "24679e12982711be6b122268569b7865a14feccc8a0dd9688e15b58e95c35a75",
+          "bytes": 6370
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/pyproject.toml",
+          "sha256": "46590cc8cb0ac368cea0b5d8532f3234116fe0d1965de995c2d3b3b7999e91bf",
+          "bytes": 8302
+        },
+        {
+          "path": "benchs/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/benchs/README.md",
+          "sha256": "f742c3338395b30564bdf01b62f88f7968308aa3d96a470d42a21d6e163cfb54",
+          "bytes": 17244
+        },
+        {
+          "path": "contrib/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/contrib/README.md",
+          "sha256": "cec6652dfbd0f424ae2d634154c35979113b10808a5ba4a949dc26bb7ab4f757",
+          "bytes": 2832
+        },
+        {
+          "path": "demos/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/demos/README.md",
+          "sha256": "69b18b1ffb9039e6dd5536dcb31398bb4cd3af7254412dff82bb0060885edfe1",
+          "bytes": 664
+        },
+        {
+          "path": "benchs/bench_all_ivf/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/benchs/bench_all_ivf/README.md",
+          "sha256": "9a0c7448c93babf3d0a3b15a6140e92c557b503eecb91ca39cec1c77a0708415",
+          "bytes": 860
+        },
+        {
+          "path": "benchs/distributed_ondisk/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/benchs/distributed_ondisk/README.md",
+          "sha256": "245b2532b493e44d5a8bc3bbdcffd0e726adf8eab30a9c10c2e8c36633e4e4c7",
+          "bytes": 9563
+        },
+        {
+          "path": "benchs/link_and_code/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/benchs/link_and_code/README.md",
+          "sha256": "056a10109afd1068ae533ab1945a9cdbebd26f8c34bd96d849f4147a1b283890",
+          "bytes": 719
+        },
+        {
+          "path": "contrib/torch/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/contrib/torch/README.md",
+          "sha256": "71266659c43024e5bd50d62b2c05305b7428205c2a94b4e954afc72fe01e92bf",
+          "bytes": 212
+        },
+        {
+          "path": "demos/offline_ivf/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/demos/offline_ivf/README.md",
+          "sha256": "2dbc6d1f05e7a4ee87412858ad59bfcb4bc81c1c5762bd31b612df466d8ab950",
+          "bytes": 1677
+        },
+        {
+          "path": "demos/rocksdb_ivf/README.md",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/demos/rocksdb_ivf/README.md",
+          "sha256": "3ae79a1db84bee8f3497a39592fd967c1cff9a2aee53fbf1b22fcd3547b659d5",
+          "bytes": 603
+        },
+        {
+          "path": "faiss/python/setup.py",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/faiss/python/setup.py",
+          "sha256": "202e4f331acdf184337f8a14f7432ef37e529f7126587c70d1051bcef627a79c",
+          "bytes": 5267
+        },
+        {
+          "path": "faiss/cppcontrib/docker_dev/Dockerfile",
+          "url": "https://github.com/facebookresearch/faiss/blob/b5a14632a6f2bfdc824c86d683b9d6e9205c2604/faiss/cppcontrib/docker_dev/Dockerfile",
+          "sha256": "b976341324a800b91059930199326ef2684f4edfac85eae9abc9c4c53081f8d2",
+          "bytes": 671
+        }
+      ],
+      "errors": []
+    },
+    "mwaskom/seaborn": {
+      "repository": "mwaskom/seaborn",
+      "revision": "f04b6cd5484267a0885d1fed068e99dff3a1b226",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 4,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/mwaskom/seaborn/blob/f04b6cd5484267a0885d1fed068e99dff3a1b226/README.md",
+          "sha256": "fd0cb370a7d851a56995954604dc5cb386b90e119872a4e8067a9f2d58afefd6",
+          "bytes": 3531
+        },
+        {
+          "path": "CITATION.cff",
+          "url": "https://github.com/mwaskom/seaborn/blob/f04b6cd5484267a0885d1fed068e99dff3a1b226/CITATION.cff",
+          "sha256": "2db5e11d975aac2c608eededf7b98d012ce145378aa2aaf8665e36d84fc8cebc",
+          "bytes": 512
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/mwaskom/seaborn/blob/f04b6cd5484267a0885d1fed068e99dff3a1b226/pyproject.toml",
+          "sha256": "009f1c934e18a332e442f4f0a21f7c2c36e560a2202c312df591995385881866",
+          "bytes": 3981
+        },
+        {
+          "path": "doc/README.md",
+          "url": "https://github.com/mwaskom/seaborn/blob/f04b6cd5484267a0885d1fed068e99dff3a1b226/doc/README.md",
+          "sha256": "2136dab4408ee1988f80cbd6ed5da62ca4531a736c1673a1247909959236b0fb",
+          "bytes": 1156
+        }
+      ],
+      "errors": []
+    },
+    "lmcinnes/umap": {
+      "repository": "lmcinnes/umap",
+      "revision": "0ec53c2b306aa866ba170861fe33d9a6c992c282",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 4,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.rst",
+          "url": "https://github.com/lmcinnes/umap/blob/0ec53c2b306aa866ba170861fe33d9a6c992c282/README.rst",
+          "sha256": "94d22bb5ebadf8f642ac9c6215d10f84eb50adaf38dac88e8d0a8cb2d26573c3",
+          "bytes": 22261
+        },
+        {
+          "path": "pyproject.toml",
+          "url": "https://github.com/lmcinnes/umap/blob/0ec53c2b306aa866ba170861fe33d9a6c992c282/pyproject.toml",
+          "sha256": "fa09062ef5bf4c2e5e19f65799306a03ae504c44aff83f3d47aee18f5f52f3c2",
+          "bytes": 1839
+        },
+        {
+          "path": "setup.py",
+          "url": "https://github.com/lmcinnes/umap/blob/0ec53c2b306aa866ba170861fe33d9a6c992c282/setup.py",
+          "sha256": "3ec9aae4134ea9cbbb8b13acbe00e6039b950b8c811920825e487be26759c4d1",
+          "bytes": 187
+        },
+        {
+          "path": "examples/README.txt",
+          "url": "https://github.com/lmcinnes/umap/blob/0ec53c2b306aa866ba170861fe33d9a6c992c282/examples/README.txt",
+          "sha256": "b8584f58ce64f1542f01b9320d3bf9a0dfa7e37b6d6cdb763598e322cffe0d96",
+          "bytes": 245
+        }
+      ],
+      "errors": []
+    },
+    "distillpub/post--feature-visualization": {
+      "repository": "distillpub/post--feature-visualization",
+      "revision": "357e2b0b6391418996bae0d62c0d189647d7aa29",
+      "default_branch": "master",
+      "archived": false,
+      "tree_truncated": false,
+      "candidate_files": 2,
+      "file_limit": 14,
+      "files": [
+        {
+          "path": "README.md",
+          "url": "https://github.com/distillpub/post--feature-visualization/blob/357e2b0b6391418996bae0d62c0d189647d7aa29/README.md",
+          "sha256": "edc7bfec49a3abe0526b5862f79eb6f468ac28bfc462fdb9e7f9a4a28133c9d9",
+          "bytes": 812
+        },
+        {
+          "path": "package.json",
+          "url": "https://github.com/distillpub/post--feature-visualization/blob/357e2b0b6391418996bae0d62c0d189647d7aa29/package.json",
+          "sha256": "ef0600b09c6df8513ff8e3ed46a601eb16520b9c7d1df36414231c524ca37ab0",
+          "bytes": 1149
+        }
+      ],
+      "errors": []
+    }
+  }
+}

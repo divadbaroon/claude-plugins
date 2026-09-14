@@ -46,7 +46,8 @@ export function renderHeader(state, actions) {
           type: "button", class: "crumb-btn", title: "The goal",
           "aria-current": here === "goal" ? "page" : null, onclick: actions.showGoal,
         }, state.goal.title))),
-    h("div", {class:"header-actions"}, renderNotifications(state, actions), renderAccount(state, actions)));
+    h("div", {class:"header-actions"},
+      h("button", {type:"button",class:"ghost-btn","aria-haspopup":"dialog",onclick:actions.openNewProject}, "New Project"), renderNotifications(state, actions), renderAccount(state, actions)));
 }
 
 function renderNotifications(state, actions) {

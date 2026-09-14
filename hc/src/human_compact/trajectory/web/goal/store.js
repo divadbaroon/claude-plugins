@@ -32,6 +32,7 @@ export function initialState() {
     project: null,          // the project the workspace is in: { name, objective, plan }, or null
     view: "goal",           // "goal" | "goals" (this project's goals) | "projects" (every project)
     goals: [],              // the project's top-level goals: [{ id, title, status, why, subgoals, completed, done }]
+    newProject: null,       // local Railpack analysis modal; never a goal or build
     projects: null,         // what listProjects answered, once asked: [{ cwd, name, objective, goals, chats }]
     projectsHere: "",       // the cwd of the project this workspace is in
     projectsBusy: false,    // a project being opened
